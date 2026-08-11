@@ -270,11 +270,18 @@ test('AC8: every verb-consumed positional is declared and reaches its row as a p
   }
   assert.deepEqual(actual, { ...VERB_POSITIONALS }, 'a verb argument was added or lost — update the fixture deliberately');
 
+  // A picker command's verbs live on the CLI surface — in the TUI it is one row
+  // that opens a chooser (see `pickerRow`), so its positionals are answered by
+  // the picker rather than by a per-verb row. The CLI index still carries them,
+  // which is what this assertion reads.
   const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
+  const cli = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
   const byId = new Map(rows.map((r) => [r.id, r]));
+  const cliById = new Map(cli.map((r) => [r.id, r]));
   for (const [command, verbs] of Object.entries(VERB_POSITIONALS)) {
+    const picker = Boolean(getCommand(command)?.tuiPicker);
     for (const [verb, names] of Object.entries(verbs)) {
-      const row = byId.get(`verb:${command}:${verb}`);
+      const row = (picker ? cliById : byId).get(`verb:${command}:${verb}`);
       assert.deepEqual(
         row.argvTokens.filter((t) => t.kind === 'value').map((t) => t.positional),
         names,
@@ -309,7 +316,25 @@ test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', (
 test('AC8: every declared verb reaches the palette as its own row', () => {
   const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
   const byId = new Map(rows.map((r) => [r.id, r]));
+  // A PICKER COMMAND IS THE ONE EXCEPTION, and it is an exception to the
+  // RENDERING, not to the reachability this test exists to protect: `model`
+  // presents in the TUI as a single row that opens a chooser, where show is what
+  // it does on open, set is what choosing does and clear is a row inside it.
+  // Every verb is still reachable — through the picker here, and unchanged on
+  // the CLI surface, which the assertion below pins.
+  const pickers = new Set(
+    Object.keys(DECLARED_VERBS).filter((name) => getCommand(name)?.tuiPicker),
+  );
+  assert.deepEqual([...pickers], ['model'], 'a command became a picker — decide deliberately whether its verbs should leave the palette');
+  const cliRows = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
+  for (const name of pickers) {
+    for (const verb of DECLARED_VERBS[name]) {
+      assert.ok(cliRows.some((r) => r.id === `verb:${name}:${verb}`), `${name} ${verb} must survive on the CLI surface`);
+    }
+  }
+
   for (const [command, verbs] of Object.entries(DECLARED_VERBS)) {
+    if (pickers.has(command)) continue;
     for (const verb of verbs) {
       const row = byId.get(`verb:${command}:${verb}`);
       assert.ok(row, `${command} ${verb} must be a palette row`);
@@ -318,7 +343,9 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
       assert.ok(row.summary, `${command} ${verb} must carry its declared summary`);
     }
   }
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 66, '53 declared verbs + 13 row-bearing verb flags');
+  // 66 minus `model`'s three, which the picker row now stands for.
+  assert.equal(rows.filter((r) => r.kind === 'verb').length, 63, '50 palette-visible declared verbs + 13 row-bearing verb flags');
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 66, 'the CLI surface keeps every verb');
 });
 
 /**

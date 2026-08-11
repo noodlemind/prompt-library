@@ -74,9 +74,46 @@ export async function searchResultOf(argv) {
   return searchResult(argv);
 }
 
-export async function cmdSearch(argv) {
+/**
+ * The command that opens one result.
+ *
+ * A result is a location the harness can already read; what was missing was
+ * anything joining "20 result(s)" to the reading of one. `get` is that command
+ * — knowledge is addressed by its docid, everything else by its path, with the
+ * `:line` suffix trimmed because a line anchor is part of the DISPLAY of a
+ * location and not part of the file's name.
+ */
+function openArgvFor(row) {
+  if (row.source === 'knowledge' && row.id) return ['get', '--docid', String(row.id)];
+  const location = typeof row.location === 'string' ? row.location : '';
+  const file = location.replace(/:\d+(?::\d+)?$/, '').trim();
+  if (file) return ['get', '--path', file];
+  if (row.id) return ['get', '--docid', String(row.id)];
+  return null;
+}
+
+export async function cmdSearch(argv, ctx = {}) {
   const { flags } = searchContext(argv);
   const result = searchResult(argv);
+
+  // RESULTS ARE THINGS YOU OPEN, not lines you read. A ledger block printed
+  // four of twenty and folded the rest behind `ctrl+o`, which unfolds them and
+  // still leaves nothing to press — the search could find a file and then had
+  // no answer to "so open it". The surface decides how to offer these; the
+  // command's job is only to say what they point at. `?.` because the CLI lane
+  // passes no such hook and does not need one: there, the printed path IS the
+  // affordance, since a shell can act on it.
+  ctx.reportSelection?.({
+    kind: 'results',
+    title: `${result.total} result(s)`,
+    items: result.results
+      .map((row) => ({
+        label: String(row.location || row.id || ''),
+        note: [row.source, row.title].filter(Boolean).join(' · '),
+        argv: openArgvFor(row),
+      }))
+      .filter((item) => item.label && item.argv),
+  });
 
   if (flags.json) {
     console.log(redactedJson(result, { pretty: flags.verbose }));

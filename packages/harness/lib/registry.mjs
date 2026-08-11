@@ -31,6 +31,7 @@
  */
 import path from 'node:path';
 import { EXIT } from './style.mjs';
+import { normalizeChoices } from './value-sources.mjs';
 import {
   cmdOrient,
   computeOrientResult,
@@ -298,6 +299,22 @@ function assertValidEntry(entry, args) {
   }
   assertValidVerbs(entry, args);
   assertValidFlagMetadata(entry, args);
+  assertValidChoices(entry, args);
+}
+
+/**
+ * `choices` says where a value comes from, so the palette can OFFER it instead
+ * of asking for it to be remembered (lib/tui/values.mjs).
+ *
+ * Checked at registration for the same reason `requires` is: a typo'd source
+ * name would not throw anywhere, it would just produce an empty picker and
+ * silently fall back to typing — the exact failure this annotation exists to
+ * remove, reintroduced invisibly.
+ */
+function assertValidChoices(entry, args) {
+  for (const def of [...args.flags, ...args.positionals]) {
+    normalizeChoices(def.choices, { where: `registerCommand: "${entry.name}" ${def.name}` });
+  }
 }
 
 /** Register one command entry. Entries are data — see the module doc for the shape. */
@@ -1312,13 +1329,13 @@ registerCommand({
     positionals: [{ name: 'query', description: 'free-text query words (plan-ranking only)', required: false, default: '', variadic: true }],
     flags: [
       { name: '--phase', type: 'string', valueName: 'name', description: 'implement | verify', required: false, default: 'implement', tui: 'prompt' },
-      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt' },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt', choices: 'plan' },
       // Strictness dial, not a mode: gate does the same job either way, it
       // just refuses more. It reads as an adverb ("gate, strictly"), never
       // as a verb, so it stays off the palette — the same call made for
       // validate-plan's identical flag below.
       { name: '--strict-intent', type: 'boolean', description: 'fail locked plans missing intent fields', required: false, default: false, tui: 'cli-only' },
-      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt' },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt', choices: ['observe', 'warn', 'enforce'] },
     ],
   },
   handler: cmdGate,
@@ -1342,9 +1359,9 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--plan', type: 'string', valueName: 'path', description: 'plan file whose named checks run', required: false, default: null, tui: 'prompt' },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'plan file whose named checks run', required: false, default: null, tui: 'prompt', choices: 'plan' },
       { name: '--base', type: 'string', valueName: 'git-ref', description: 'compare changed files to this git ref', required: false, default: null, tui: 'prompt' },
-      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt' },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt', choices: ['observe', 'warn', 'enforce'] },
       // Undocumented in the old CATALOG, but read (lib/commands.mjs#cmdVerify)
       // and directly tested end to end.
       { name: '--learnings', type: 'string', valueName: 'a,b', description: 'learning ids cited by this verified change', required: false, default: null, tui: 'prompt' },
@@ -1361,8 +1378,8 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt' },
-      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt' },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt', choices: 'plan' },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt', choices: ['observe', 'warn', 'enforce'] },
       // Undocumented in the old CATALOG, but read (lib/validate-plan.mjs)
       // and directly tested end to end.
       // Strictness dial, same call as gate's identical flag above.
@@ -1380,7 +1397,7 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
-      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt' },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt', choices: 'plan' },
       // The one genuine mode switch here, and the summary above says so:
       // compound normally requires passed evidence, `--insight` records
       // without any. Two different jobs, so `compound insight` earns a row.
@@ -1395,14 +1412,14 @@ registerCommand({
       // invocations the handler accepts today.
       { name: '--title', type: 'string', valueName: 't', description: 'insight title (required with --insight)', required: false, default: null, tui: 'prompt' },
       { name: '--body', type: 'string', valueName: 'text', description: 'insight body text', required: false, default: null, tui: 'prompt' },
-      { name: '--body-file', type: 'string', valueName: 'path', description: 'read insight body from a file', required: false, default: null, tui: 'prompt' },
+      { name: '--body-file', type: 'string', valueName: 'path', description: 'read insight body from a file', required: false, default: null, tui: 'prompt', choices: 'path' },
       { name: '--category', type: 'string', valueName: 'c', description: 'docs/solutions/<category>/ (default insights)', required: false, default: null, tui: 'prompt' },
       { name: '--tags', type: 'string', valueName: 'a,b', description: 'comma-separated tags', required: false, default: null, tui: 'prompt' },
       { name: '--trigger', type: 'string', valueName: 't', description: 'applicability condition frontmatter', required: false, default: null, tui: 'prompt' },
       { name: '--claim', type: 'string', valueName: 't', description: 'one-line claim frontmatter', required: false, default: null, tui: 'prompt' },
       // Undocumented in the old CATALOG, but read (lib/compound.mjs, via
       // loadPolicy) for both --insight and evidence-bound compound.
-      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt' },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt', choices: ['observe', 'warn', 'enforce'] },
     ],
   },
   handler: cmdCompound,
@@ -1447,7 +1464,7 @@ registerCommand({
       // neither carries `requires` — getRequireArgs above already enforces
       // "at least one", which `requires` has no way to express.
       { name: '--docid', type: 'string', valueName: 'id', description: 'manifest doc id', required: false, default: null, tui: 'prompt' },
-      { name: '--path', type: 'string', valueName: 'rel', description: 'relative file path', required: false, default: null, tui: 'prompt' },
+      { name: '--path', type: 'string', valueName: 'rel', description: 'relative file path', required: false, default: null, tui: 'prompt', choices: 'path' },
       { name: '--lines', type: 'number', valueName: 'n', description: 'max lines (default 40)', required: false, default: 40, tui: 'prompt' },
       { name: '--max-bytes', type: 'number', valueName: 'n', description: 'max excerpt bytes (default 2048)', required: false, default: 2048, tui: 'prompt' },
     ],
@@ -1628,13 +1645,13 @@ registerCommand({
   args: {
     positionals: [
       { name: 'verb', description: RUN_VERBS.join('|'), required: false, default: 'list' },
-      { name: 'run-id', description: 'a run id or an unambiguous prefix', required: false, default: null },
+      { name: 'run-id', description: 'a run id or an unambiguous prefix', required: false, default: null, choices: 'run' },
     ],
     flags: [
       { name: '--status', type: 'string', valueName: 'status', description: `list: ${RUN_STATUSES.join('|')}`, required: false, default: null, tui: 'prompt', verbs: ['list'] },
       { name: '--command', type: 'string', valueName: 'name', description: 'list: only runs of this command', required: false, default: null, tui: 'prompt', verbs: ['list'] },
       { name: '--host', type: 'string', valueName: 'host', description: 'list: only runs from this host', required: false, default: null, tui: 'prompt', verbs: ['list'] },
-      { name: '--plan', type: 'string', valueName: 'path', description: 'list: only runs against this plan', required: false, default: null, tui: 'prompt', verbs: ['list'] },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'list: only runs against this plan', required: false, default: null, tui: 'prompt', verbs: ['list'], choices: 'plan' },
       { name: '--since', type: 'string', valueName: 'date', description: 'list: runs at or after this date', required: false, default: null, tui: 'prompt', verbs: ['list'] },
       { name: '--until', type: 'string', valueName: 'date', description: 'list: runs at or before this date', required: false, default: null, tui: 'prompt', verbs: ['list'] },
       { name: '--limit', type: 'number', valueName: 'n', description: 'list: how many runs to show (default 20)', required: false, default: 20, tui: 'prompt', verbs: ['list'] },
@@ -1652,8 +1669,12 @@ registerCommand({
 
 registerCommand({
   name: 'model',
-  summary: 'show which model answers, and change it — the providers you can actually use',
+  summary: 'choose the provider and model that answer',
   group: 'engineer loop',
+  // ONE PALETTE ROW, NOT FOUR. In the TUI this command is a picker: show is what
+  // it does on open, set is what choosing does, clear is a row inside it. The
+  // CLI keeps every verb. See `pickerRow` in lib/command-index.mjs.
+  tuiPicker: 'model',
   // `set`/`clear` write config; a bare `model` reads, which is the common call.
   sideEffect: 'mutate',
   capabilities: [],
@@ -1666,12 +1687,15 @@ registerCommand({
   ],
   args: {
     positionals: [
-      { name: 'verb', description: MODEL_VERBS.join('|'), required: false, default: 'show' },
-      { name: 'provider', description: 'the provider id, for set', required: false, default: null },
-      { name: 'model', description: 'the model id, for set; omit for the provider default', required: false, default: null },
+      { name: 'verb', description: MODEL_VERBS.join('|'), required: false, default: 'show', choices: MODEL_VERBS },
+      // The two questions the palette used to answer with a pipe-separated wall
+      // of thirteen ids in a usage error. `model` reads the provider chosen a
+      // question earlier, so the second list is the first answer's models.
+      { name: 'provider', description: 'the provider id, for set', required: false, default: null, choices: 'provider' },
+      { name: 'model', description: 'the model id, for set; omit for the provider default', required: false, default: null, choices: 'model' },
     ],
     flags: [
-      { name: '--scope', type: 'string', valueName: 'scope', description: `which file remembers the choice, ${SCOPES.join(' or ')}`, required: false, default: null, tui: 'prompt', verbs: ['set', 'clear'] },
+      { name: '--scope', type: 'string', valueName: 'scope', description: `which file remembers the choice, ${SCOPES.join(' or ')}`, required: false, default: null, tui: 'prompt', verbs: ['set', 'clear'], choices: 'scope' },
     ],
   },
   // A bare `harness model` is the picker view, and reading is what it does.
@@ -1728,15 +1752,24 @@ registerCommand({
   ],
   args: {
     positionals: [
-      { name: 'verb', description: CONFIG_VERBS.join('|'), required: true, default: null },
-      { name: 'key', description: CONFIG_KEYS.join('|'), required: false, default: null },
-      { name: 'value', description: 'the new value, for set', required: false, default: null },
+      { name: 'verb', description: CONFIG_VERBS.join('|'), required: true, default: null, choices: CONFIG_VERBS },
+      // The schema has always known both of these — every key, and for ten of
+      // them the exact set of legal values. `CONFIG_KEYS.join('|')` in a
+      // description was the whole of that knowledge reaching the operator.
+      { name: 'key', description: CONFIG_KEYS.join('|'), required: false, default: null, choices: 'config-key' },
+      { name: 'value', description: 'the new value, for set', required: false, default: null, choices: 'config-value' },
     ],
     flags: [
       // Scoped to `set`: it selects which FILE to write, so offering it on the
       // three read verbs would put a mutate-class option on a row the palette
       // paints as read — the escalation the command-index contract forbids.
-      { name: '--scope', type: 'string', valueName: 'scope', description: `set: which file to write, ${SCOPES.join(' or ')}`, required: false, default: null, tui: 'prompt', verbs: ['set'] },
+      // REQUIRED, because the handler requires it: `config set` refuses without
+      // a scope, and a registry that called it optional meant the palette
+      // collected a key and a value and then dispatched a usage error. `required`
+      // is a palette signal — `validateArgs` enforces `requires` and verb scope,
+      // never this — so declaring it truthfully costs the CLI nothing and stops
+      // the chooser from assembling a command it knows will be refused.
+      { name: '--scope', type: 'string', valueName: 'scope', description: `set: which file to write, ${SCOPES.join(' or ')}`, required: true, default: null, tui: 'prompt', verbs: ['set'], choices: 'scope' },
     ],
   },
   handler: cmdConfig,
@@ -2163,7 +2196,7 @@ registerCommand({
       // itself write anything — `--apply` is the sole writer. The class here
       // is what ADDING the option does to the invocation, not what the
       // operation it parameterizes eventually does.
-      { name: '--ops', type: 'string', valueName: 'path', description: 'ops JSON path (with --apply)', required: false, default: null, tui: 'prompt', sideEffect: 'read' },
+      { name: '--ops', type: 'string', valueName: 'path', description: 'ops JSON path (with --apply)', required: false, default: null, tui: 'prompt', sideEffect: 'read', choices: 'path' },
       // No `requires: ['--yes']` on --rebuild despite the usage line pairing
       // them: rebuild without --yes is not a usage error, it is the PREVIEW
       // ("rebuild resets N learnings … re-run with --yes"), and a registry
@@ -2235,7 +2268,7 @@ registerCommand({
       // Scoped, unlike --reason: `to` is read only inside lifecycle.mjs's
       // promote branch, so on any other action it is a flag that silently
       // does nothing — exactly what this registry declines to keep accepting.
-      { name: '--to', type: 'string', valueName: 'path', description: 'primitive path recorded on promote (behavior supersedes knowledge)', required: false, default: null, tui: 'prompt', verbs: ['promote'] },
+      { name: '--to', type: 'string', valueName: 'path', description: 'primitive path recorded on promote (behavior supersedes knowledge)', required: false, default: null, tui: 'prompt', verbs: ['promote'], choices: 'path' },
     ],
   },
   handler: cmdLearning,

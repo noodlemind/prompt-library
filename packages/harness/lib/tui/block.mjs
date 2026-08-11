@@ -168,14 +168,34 @@ export function shortId(run) {
   return String(run ?? '').slice(-6);
 }
 
-/** How many output rows a block shows right now, and what the fold line says. */
-export function foldState(block, { threshold = FOLD_THRESHOLD, head = FOLD_HEAD } = {}) {
+/** How much of a tail-bearing block's END still shows. See `foldState`. */
+export const FOLD_TAIL = 8;
+
+/**
+ * How many output rows a block shows right now, and what the fold line says.
+ *
+ * FOLDING THE HEAD IS RIGHT UNTIL THE PAYLOAD IS AT THE END. For `verify` or
+ * `search`, the first rows are the summary and folding the rest is exactly the
+ * mercy the threshold exists for. For `agent`, the first rows are the persona
+ * and the capabilities that did not run, and the ANSWER — the reason the
+ * command was typed — is at the bottom. Folding from the head there hid the
+ * answer behind `ctrl+o` and left three `not run` notices on screen, which read
+ * as a loop that had failed. It had not; it had succeeded and been buried.
+ *
+ * So a block may declare `keepTail`, and then the fold takes the MIDDLE: the
+ * head still says what ran, the tail still shows what came of it, and the
+ * elision sits between them where it belongs.
+ */
+export function foldState(block, { threshold = FOLD_THRESHOLD, head = FOLD_HEAD, tail = FOLD_TAIL } = {}) {
   const total = block.lines.length;
   // An explicit `folded` beats the threshold in both directions: `ctrl+o` is an
   // answer to the heuristic, not a request to re-run it.
   const folded = block.folded === null ? total > threshold : block.folded;
-  if (!folded || total <= head) return { folded: false, shown: total, hidden: 0 };
-  return { folded: true, shown: head, hidden: total - head };
+  if (!folded || total <= head) return { folded: false, shown: total, hidden: 0, tailShown: 0 };
+  if (!block.keepTail) return { folded: true, shown: head, hidden: total - head, tailShown: 0 };
+  // Nothing is gained by eliding fewer rows than the notice announcing it.
+  if (total <= head + tail + 1) return { folded: false, shown: total, hidden: 0, tailShown: 0 };
+  return { folded: true, shown: head, hidden: total - head - tail, tailShown: tail };
 }
 
 /**
@@ -219,7 +239,13 @@ export function renderBlock(block, {
   const pushStyled = (content) => {
     const visible = displayWidth(content);
     const body = visible <= inner ? content : `${clipTo(ui.stripAnsi(content), inner - 1)}…`;
-    const pad = ' '.repeat(Math.max(0, inner - Math.min(visible, inner)));
+    // MEASURE WHAT WAS PRODUCED, not what came in. The padding used to be
+    // computed from the ORIGINAL width, which is only the same number when
+    // nothing was clipped: `clipTo` stops before a wide character it cannot fit
+    // whole, so a clipped row could land a cell short, pad by zero, and leave
+    // the tint band ragged against its neighbours. One narrow row in a painted
+    // block reads as a rendering fault, because it is one.
+    const pad = ' '.repeat(Math.max(0, inner - displayWidth(body)));
     rows.push(ui.tintRow(tintState, `${gutter}${body}${pad}`));
   };
 
@@ -254,6 +280,10 @@ export function renderBlock(block, {
   });
   if (state.folded) {
     pushStyled(`  ${ui.paint('muted', `… ${state.hidden} more line${state.hidden === 1 ? '' : 's'}`)}${ui.paint('muted', ' (ctrl+o)')}`);
+    // The tail, for a block whose payload is at the end — see `foldState`.
+    for (const line of block.lines.slice(block.lines.length - state.tailShown)) {
+      pushStyled(shell ? `    ${line}` : `  ${line}`);
+    }
   }
 
   // 4 — the closing tally, and the one action that follows.

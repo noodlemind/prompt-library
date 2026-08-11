@@ -274,9 +274,6 @@ export function renderOverlay(overlay, { ui, width = 80, maxWidth = 110 } = {}) 
         : `${' '.repeat(nounWidth ? nounWidth + 2 : 0)}${rest}`;
     };
     const label = splitLabel();
-    const note = disabled
-      ? ui.paint('muted', row.reason || row.unavailable || 'unavailable')
-      : ui.paint('muted', row.note || row.summary || '');
     // CLIPPED, because `padTo` never truncates and `gap` is floored at one: an
     // over-long label pushed the closing `│` past the box width and broke the
     // border. The prompt row and the footer already clip; this one did not.
@@ -292,9 +289,17 @@ export function renderOverlay(overlay, { ui, width = 80, maxWidth = 110 } = {}) 
     const room = inner - displayWidth(head) - effectCells - 3;
     // A disabled row's REASON outranks its summary: "why can't I run this" is
     // the only question being asked once the row is greyed.
-    const source = disabled
-      ? (row.reason || row.unavailable || 'unavailable')
-      : (row.note || row.summary || '');
+    //
+    // A HEADING IS NOT AN UNAVAILABLE ROW, though both are non-selectable. Sent
+    // through the disabled branch, a section with no `reason` printed the word
+    // `unavailable` — so `github-copilot · unavailable` sat above the very
+    // models it was serving, and read as "this provider is not connected" when
+    // it meant "this line is a heading".
+    const source = row.section
+      ? (row.note || '')
+      : disabled
+        ? (row.reason || row.unavailable || 'unavailable')
+        : (row.note || row.summary || '');
     const plainNote = ui.stripAnsi(String(source));
     const clipped = room > 4 ? clipTo(plainNote, room) : '';
     // An ellipsis when it was cut, so a truncated note is never read as the

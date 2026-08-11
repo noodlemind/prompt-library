@@ -426,7 +426,13 @@ export function providerReadiness({ parentEnv = process.env } = {}) {
         id: provider.id,
         defaultModel: provider.defaultModel,
         ready: viaEnv || viaEditor,
-        how: viaEnv ? 'token in the environment' : viaEditor ? 'editor sign-in' : null,
+        // SAY WHAT IS KNOWN, WHICH IS PRESENCE. `editor sign-in` read as "you
+        // are signed in", and this check cannot know that: it sees a credential
+        // file an editor left behind, which may be months old and revoked.
+        // Verifying it means calling the provider, and core does not call a
+        // provider outside the agent loop — so the honest report is that a
+        // credential was found, and the loop is where it is discovered to work.
+        how: viaEnv ? 'token in the environment' : viaEditor ? 'editor credential found' : null,
         reason: viaEnv || viaEditor ? null : 'sign in to Copilot in an editor, or export a GitHub token',
       };
     }
@@ -444,9 +450,15 @@ export function providerReadiness({ parentEnv = process.env } = {}) {
 /** Does an editor hold a Copilot grant? A file's EXISTENCE and shape, never
  * its contents beyond the one field that says a login happened. */
 function copilotEditorLogin({ parentEnv = process.env } = {}) {
+  // THE ENVIRONMENT PASSED IN IS THE ENVIRONMENT USED. Reading `os.homedir()`
+  // directly meant this one check ignored its own argument: a caller handing in
+  // a clean environment still got the machine's real editor state, which made
+  // readiness untestable and let a sign-in from some other install decide what
+  // the picker offers.
+  const home = parentEnv.HOME || parentEnv.USERPROFILE || os.homedir();
   const dir = parentEnv.XDG_CONFIG_HOME
     ? path.join(parentEnv.XDG_CONFIG_HOME, 'github-copilot')
-    : path.join(os.homedir(), '.config', 'github-copilot');
+    : path.join(home, '.config', 'github-copilot');
   for (const file of ['apps.json', 'hosts.json']) {
     try {
       const parsed = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));

@@ -94,6 +94,12 @@ const SESSION_WORDS = Object.freeze({
   help: 'help',
   '?': 'help',
   clear: 'clear',
+  // `results` opens what the last search found. It is named in the block's own
+  // closing line (`20 to open → results`), and a word a surface TELLS you to
+  // type has to be a word it accepts — being a palette row is not enough, since
+  // the block does not say "press slash first".
+  results: 'results',
+  hits: 'results',
 });
 
 /** `replay` and `replay <id>` — re-run a block by name rather than by sigil. */

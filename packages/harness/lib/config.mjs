@@ -141,6 +141,31 @@ export const CONFIG_SCHEMA = Object.freeze({
    * statement about the work, not a grant of authority — and the credential
    * itself never lives here, only the choice of endpoint.
    */
+  /**
+   * The first gate: is the harness allowed to talk to a model at all?
+   *
+   * OFF BY DEFAULT, and that is the invariant rather than a preference. The
+   * harness is LLM-free — every command reads, indexes, gates and reports
+   * without a provider — and only the agent loop needs one. Making agent mode
+   * an explicit opt-in keeps the two states legible: with it off there is
+   * nothing to configure, nothing to sign into, and no picker offering models
+   * as though a choice among them were the next thing to do.
+   *
+   * The order it creates is the order people expect: enable agent mode, connect
+   * a provider, then choose among the models that provider actually serves.
+   * Skipping to the last step is what produced a menu of sixty greyed rows.
+   *
+   * `restrictive` in the merge sense: a project may not switch it on for you.
+   * Reaching a network with your credential is authority, and authority flows
+   * from the user scope down, never from a repository up.
+   */
+  'agent.enabled': {
+    type: 'boolean',
+    default: false,
+    merge: 'restrictive',
+    restrict: (a, b) => a && b,
+    description: 'allow the agent loop to call a provider; everything else in the harness runs without one',
+  },
   'agent.provider': {
     type: 'string',
     // COPILOT IS PRIMARY. It is the provider this project's users already

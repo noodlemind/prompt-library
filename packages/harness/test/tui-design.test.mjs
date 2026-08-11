@@ -19,6 +19,9 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createComposer } from '../lib/tui/composer.mjs';
 import { createBlock, renderBlock, foldState, formatDuration, recordSegments } from '../lib/tui/block.mjs';
 import { renderHeader, renderHint, renderFooter, twoColumn } from '../lib/tui/chrome.mjs';
@@ -1185,24 +1188,75 @@ test('FIELD: a skill row resolves to reading the skill instead of nowhere', asyn
   assert.equal(skill.sideEffect, 'read', 'reading is what actually happens');
 });
 
-test('FIELD: the model picker groups by provider, ready first, with the active pair marked', async () => {
+/**
+ * The picker follows one order, and refuses to skip a step in it: turn agent
+ * mode on, connect a provider, then choose among the models that provider
+ * actually serves. Each of these three tests pins one rung.
+ *
+ * The order is not ceremony. Reaching a provider is the only thing in the
+ * harness that needs a credential and a network, so it is the only thing that
+ * has to be asked for; and a model list is a property of the provider serving
+ * it, so offering one before a provider is connected is offering a guess.
+ */
+test('FIELD: with agent mode off the picker offers the switch, not a catalogue', async () => {
   const { modelPickerRows } = await import('../lib/model-cmd.mjs');
   const rows = modelPickerRows({
     workspace: process.cwd(),
     copilotHome: process.cwd(),
     parentEnv: { GROQ_API_KEY: 'k' },
   });
+  // The default is off, and everything else in the harness runs without a
+  // provider — so there is no model question to answer yet.
+  assert.equal(rows.filter((r) => r.model).length, 0, 'no models before agent mode is on');
+  assert.ok(rows.some((r) => r.enableAgent), 'the one thing to do is offered');
+});
 
-  const sections = rows.filter((r) => r.section);
-  assert.ok(sections.length >= 5, 'a section per provider');
-  const first = sections[0];
-  assert.equal(first.ready, true, 'providers you can actually use come first — a menu of failures is a menu of disappointments');
-
-  // Every non-heading row carries the pair it would set.
-  for (const row of rows.filter((r) => !r.section)) {
-    assert.ok(row.provider && row.model, `${row.label} names the pair it sets`);
+test('FIELD: agent mode on but nothing connected asks for a provider, not a model', async () => {
+  const { modelPickerRows } = await import('../lib/model-cmd.mjs');
+  const home = mkdtempSync(path.join(tmpdir(), 'harness-picker-'));
+  try {
+    mkdirSync(path.join(home, 'harness'), { recursive: true });
+    writeFileSync(path.join(home, 'harness', 'config.yaml'), 'agent.enabled: true\n');
+    const rows = modelPickerRows({ workspace: home, copilotHome: home, parentEnv: { HOME: home } });
+    // A provider that needs no credential (a local daemon) is connected by
+    // definition and may offer models. Every provider that DOES need one is
+    // absent from the model list entirely — which is the rule that matters:
+    // nothing you cannot reach is presented as something you could pick.
+    const { PROVIDERS } = await import('../lib/provider.mjs');
+    for (const row of rows.filter((r) => r.model)) {
+      assert.equal(PROVIDERS[row.provider].keyRequired, false, `${row.provider} needs a credential and must not offer models`);
+    }
+    assert.ok(rows.some((r) => r.section && /not connected/.test(r.label)), 'the rest are named as a group, not listed as choices');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
-  assert.ok(rows.some((r) => r.provider === 'groq'), 'a provider with a key present is offered');
+});
+
+test('FIELD: a connected provider shows its models; the rest collapse to one line', async () => {
+  const { modelPickerRows } = await import('../lib/model-cmd.mjs');
+  const home = mkdtempSync(path.join(tmpdir(), 'harness-picker-'));
+  try {
+    mkdirSync(path.join(home, 'harness'), { recursive: true });
+    writeFileSync(path.join(home, 'harness', 'config.yaml'), 'agent.enabled: true\nagent.provider: groq\n');
+    const rows = modelPickerRows({ workspace: home, copilotHome: home, parentEnv: { GROQ_API_KEY: 'k', HOME: home } });
+
+    const models = rows.filter((r) => r.model);
+    assert.ok(models.some((r) => r.provider === 'groq'), 'the newly connected provider offers its models');
+    // ONLY connected providers contribute models. `providerReadiness` is the
+    // single authority on that, so the assertion reads it rather than
+    // hard-coding which providers happen to be reachable on this machine.
+    const { providerReadiness } = await import('../lib/provider.mjs');
+    const ready = new Set(providerReadiness({ parentEnv: { GROQ_API_KEY: 'k', HOME: home } }).filter((p) => p.ready).map((p) => p.id));
+    for (const row of models) {
+      assert.ok(ready.has(row.provider), `${row.provider} is not connected and must contribute no models`);
+    }
+    // The rest are one heading, not eleven rows that cannot be chosen.
+    const collapsed = rows.filter((r) => r.section && /not connected/.test(r.label));
+    assert.equal(collapsed.length, 1, 'unconnected providers collapse to a single line');
+    assert.equal(rows.some((r) => r.unavailable), false, 'nothing unusable is listed as a choice');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('FIELD: arrow keys skip section headings — a heading is not a choice', () => {
@@ -1266,4 +1320,168 @@ test('ACCESS: the colourblind scheme gives up the green/red axis entirely', asyn
   // states. (The painted strings differ, of course: that is the whole point.)
   assert.equal(cvd.stripAnsi(cvd.glyph('ok')), dflt.stripAnsi(dflt.glyph('ok')));
   assert.equal(cvd.stripAnsi(cvd.glyph('error')), dflt.stripAnsi(dflt.glyph('error')));
+});
+
+
+test('BLOCK: every painted row is exactly the terminal width, whatever it holds', () => {
+  // A block's tint runs the full width, so one short row reads as a rendering
+  // fault. Clipping is where this breaks: `clipTo` stops BEFORE a wide
+  // character it cannot fit whole, so a row padded from the pre-clip width
+  // lands a cell short and the band goes ragged. Swept rather than
+  // spot-checked, because the failure only appears when a character straddles
+  // the boundary — width 40 was wrong while 41 was right.
+  const cases = ['\u65e5\u672c\u8a9e'.repeat(30), 'a'.repeat(300), '\u{1f389}'.repeat(40), 'mixed \u65e5\u672c text '.repeat(20)];
+  const ragged = [];
+  for (let width = 20; width <= 120; width += 1) {
+    for (const text of cases) {
+      const block = createBlock({ command: 'search x', argv: ['search', 'x'] });
+      block.lines.push(ui.line({ key: 'code', value: text }));
+      block.status = 'succeeded';
+      block.exitCode = 0;
+      for (const row of renderBlock(block, { ui, width })) {
+        if (displayWidth(row) !== width) ragged.push(`${width}:${displayWidth(row)}`);
+      }
+    }
+  }
+  assert.deepEqual(ragged, [], 'every row in a painted block fills the width exactly');
+});
+
+
+// ── "values come from pickers" — the contract, finally implemented ────────
+
+test('VALUES: a slot the registry can enumerate is never left to be typed', async () => {
+  // lib/command-index.mjs has said since it was written that a value slot is
+  // "filled in later from a picker (never typed)". What shipped completed the
+  // composer to `model set ` and left thirteen provider ids to be remembered;
+  // pressing enter then ran the incomplete command. Both halves are asserted:
+  // the slot declares where its answers come from, and nothing about the row
+  // suggests typing.
+  const { buildCommandIndex } = await import('../lib/command-index.mjs');
+  const { selectionPlan } = await import('../lib/tui/palette.mjs');
+  const rows = buildCommandIndex({ workspace: process.cwd() }).rows;
+  // Every value `config set` cannot run without, including the scope its
+  // handler refuses to default — a registry that called `--scope` optional had
+  // the chooser assemble a command it knew would be refused.
+  const config = selectionPlan(rows.find((r) => r.label === 'config set')).queue;
+  assert.deepEqual(config.map((q) => q.key), ['key', 'value', '--scope']);
+  for (const q of config) assert.ok(q.choices, `${q.key} must say where its answers come from`);
+
+  // The command from the report that started this is now a picker of its own,
+  // so its two slots are answered there — but the CLI index still carries them,
+  // and both still declare where their answers come from.
+  const cli = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
+  const modelSet = cli.find((r) => r.label === 'model set');
+  const slots = modelSet.argvTokens.filter((t) => t.kind === 'value');
+  assert.deepEqual(slots.map((t) => t.positional), ['provider', 'model']);
+  for (const slot of slots) assert.ok(slot.choices, `${slot.positional} must say where its answers come from`);
+});
+
+test('VALUES: the second question is answered in terms of the first', async () => {
+  // `model set <provider> <model>` is one decision in two steps — a model list
+  // is a property of the provider serving it, so the model picker reads the
+  // provider already chosen rather than offering every model that exists.
+  const { resolveValues } = await import('../lib/tui/values.mjs');
+  const scoped = resolveValues({ source: 'model', literal: null }, { values: { provider: 'groq' } });
+  const { PROVIDER_MODELS } = await import('../lib/provider.mjs');
+  assert.deepEqual(scoped.items.map((i) => i.value), [...PROVIDER_MODELS.groq]);
+  // Asked in isolation (a bare `--model` flag), it still offers something.
+  assert.ok(resolveValues({ source: 'model', literal: null }, {}).items.length > scoped.items.length);
+});
+
+test('VALUES: the config schema already knew every legal value', async () => {
+  // Ten keys declare `type: enum` with their own values array, and booleans
+  // accept exactly two words. Asking an operator to type `colorblind` when the
+  // schema can name it was never a decision, only an omission.
+  const { resolveValues } = await import('../lib/tui/values.mjs');
+  const scheme = resolveValues({ source: 'config-value', literal: null }, { values: { key: 'tui.scheme' } });
+  assert.deepEqual(scheme.items.map((i) => i.value), ['default', 'colorblind']);
+  const bool = resolveValues({ source: 'config-value', literal: null }, { values: { key: 'agent.enabled' } });
+  assert.deepEqual(bool.items.map((i) => i.value), ['true', 'false']);
+});
+
+test('VALUES: a source that cannot enumerate degrades to typing, never to a dead end', async () => {
+  const { resolveValues } = await import('../lib/tui/values.mjs');
+  // An unreadable workspace, a source with nothing in it: the command must
+  // still be reachable by typing, which is the behaviour that existed before
+  // pickers did and is kept as the floor under every one of them.
+  const empty = resolveValues({ source: 'plan', literal: null }, { workspace: path.join(tmpdir(), 'definitely-not-here') });
+  assert.deepEqual(empty.items, []);
+  assert.equal(empty.free, true, 'nothing to offer means type it, not refuse it');
+  // And an undeclared slot is simply free text, which is most of them.
+  assert.deepEqual(resolveValues(null, {}), { items: [], free: true });
+});
+
+test('VALUES: a closed set refuses an answer outside it; an open one accepts', async () => {
+  const { resolveValues } = await import('../lib/tui/values.mjs');
+  // Two config files exist and naming a third is a typo — accepting it would
+  // produce a confusing failure a layer down instead of a clear refusal here.
+  assert.equal(resolveValues({ source: 'scope', literal: null }, {}).free, false);
+  // A file the bounded walk did not reach is still a real file.
+  assert.equal(resolveValues({ source: 'path', literal: null }, { workspace: process.cwd(), query: 'lib/' }).free, true);
+});
+
+test('VALUES: an unknown source name fails at registration, not in the picker', async () => {
+  const { normalizeChoices } = await import('../lib/value-sources.mjs');
+  assert.throws(() => normalizeChoices('providrs', { where: 'x' }), /unknown value source/);
+  assert.throws(() => normalizeChoices([], { where: 'x' }), /non-empty strings/);
+  assert.deepEqual(normalizeChoices(['a', 'b']).literal, ['a', 'b']);
+});
+
+test('RESULTS: a search states what it found as things that can be opened', async () => {
+  // `search engineer` reported twenty results, printed four, folded sixteen —
+  // and offered no way to open any. The command now states its results as data;
+  // parsing them back out of rendered lines would put its formatting in the
+  // dispatch path.
+  const { cmdSearch } = await import('../lib/retrieval/search-cmd.mjs');
+  let selection = null;
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await cmdSearch(['engineer', '--workspace', process.cwd()], { reportSelection: (s) => { selection = s; } });
+  } finally {
+    console.log = log;
+  }
+  assert.ok(selection?.items?.length, 'a search with hits offers them');
+  for (const item of selection.items) {
+    assert.ok(item.label, 'every result names where it is');
+    assert.equal(item.argv[0], 'get', 'and resolves to the command that reads it');
+    assert.ok(item.argv.includes('--path') || item.argv.includes('--docid'));
+    assert.equal(/:\d+$/.test(item.argv[2] ?? ''), false, 'a line anchor is display, not part of a file name');
+  }
+});
+
+
+test('BLOCK: a block whose payload is at the end folds its middle, not its answer', () => {
+  // An agent block opens with the persona and the capabilities that could not
+  // run, and ends with the reply the command was typed for. Head-folding buried
+  // the answer behind ctrl+o and left three `not run` notices as the visible
+  // result — a successful run that read as a broken one.
+  const make = (keepTail) => {
+    const block = createBlock({ command: 'agent explain', argv: ['agent', 'explain'] });
+    block.lines.push(ui.line({ key: 'persona', value: 'engineer' }));
+    block.lines.push(ui.line({ state: 'warn', key: 'not run', value: 'gate' }));
+    for (let i = 0; i < 60; i += 1) block.lines.push(`    working ${i}`);
+    block.lines.push('    THE ANSWER');
+    block.status = 'succeeded';
+    block.exitCode = 0;
+    block.keepTail = keepTail;
+    return block;
+  };
+  const head = renderBlock(make(false), { ui, width: 90 }).join('\n');
+  assert.equal(head.includes('THE ANSWER'), false, 'head-folding hides a terminal payload');
+
+  const middle = renderBlock(make(true), { ui, width: 90 }).join('\n');
+  assert.ok(middle.includes('THE ANSWER'), 'the answer survives the fold');
+  assert.ok(middle.includes('persona'), 'and so does what ran');
+  // The elision sits BETWEEN them, not after the tail.
+  const elision = middle.indexOf('more lines');
+  assert.ok(elision > middle.indexOf('persona') && elision < middle.indexOf('THE ANSWER'));
+
+  // Nothing is elided when the fold would hide fewer rows than its own notice.
+  const small = createBlock({ command: 'agent x', argv: ['agent', 'x'] });
+  for (let i = 0; i < 14; i += 1) small.lines.push(`    line ${i}`);
+  small.status = 'succeeded';
+  small.exitCode = 0;
+  small.keepTail = true;
+  assert.equal(foldState(small).folded, false, 'a fold that saves nothing is not a fold');
 });

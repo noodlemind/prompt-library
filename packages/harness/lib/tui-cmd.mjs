@@ -41,6 +41,7 @@ import { createLedger, statusForExit } from './tui/ledger.mjs';
 import { renderBlock, foldState } from './tui/block.mjs';
 import { renderHeader, renderExit } from './tui/chrome.mjs';
 import { completePath } from './tui/complete.mjs';
+import { resolveValues } from './tui/values.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { readSession } from './session.mjs';
 import { resolveConfig } from './config.mjs';
@@ -388,6 +389,12 @@ export async function runLedger({
     // The DISPATCHED argv is what the block keeps for replay — `!echo hi` is
     // one string to read and another to run.
     const block = ledger.open({ command: display ?? rawArgv.join(' '), argv: rawArgv });
+    // AN AGENT'S ANSWER IS AT THE BOTTOM. Its block opens with the persona and
+    // the capabilities that could not run, so head-folding buried the reply the
+    // command was typed for and left `not run` notices as the visible result —
+    // a successful run that read as a broken one. `keepTail` folds the middle
+    // instead. See `foldState` in lib/tui/block.mjs.
+    if (name === 'agent') block.keepTail = true;
     activeController = new AbortController();
     session.beginLive(block);
 
@@ -431,6 +438,14 @@ export async function runLedger({
         // it from the exit code — a child exiting 8 through `exec` is not a
         // harness timeout, and only the command knows which it was.
         reportStatus: (reported) => { reportedStatus = reported; },
+        // What this run FOUND, as things that can be opened. A block's lines are
+        // rendered text and parsing them back into paths would put the
+        // command's formatting in the dispatch path — the same mistake the
+        // command index refuses when it declines to rebuild argv from a label.
+        // So the command states its results as data or the surface offers none.
+        reportSelection: (selection) => {
+          if (selection?.items?.length) block.selection = selection;
+        },
       });
     } catch (error) {
       exitCode = Number.isInteger(error?.exit) ? error.exit : 1;
@@ -481,6 +496,15 @@ export async function runLedger({
     if (cancelled) return `cancelled · ${rows} line${rows === 1 ? '' : 's'} · journal entry appended`;
     if (exitCode !== 0) return `${rows} line${rows === 1 ? '' : 's'} ${ui.arrow} exit ${exitCode}`;
     const fold = foldState(block);
+    // A BLOCK THAT FOUND THINGS SAYS HOW TO OPEN THEM. This is the one place
+    // the tally earns its line on a success: "20 result(s)" above sixteen folded
+    // rows was a report with no exit, and the gesture that opens one is worth
+    // exactly as much as the operator's knowing it exists.
+    const found = block.selection?.items?.length ?? 0;
+    if (found) {
+      const shown = fold.folded ? `${rows} lines · ${fold.hidden} folded · ` : '';
+      return `${shown}${found} to open ${ui.arrow} results`;
+    }
     return fold.folded ? `${rows} lines · ${fold.hidden} folded` : null;
   };
 
@@ -503,8 +527,12 @@ export async function runLedger({
    * does the same for the words the session owns. They rank after the real
    * commands unless the query asks for them.
    */
+  // `model` is NOT here. It is a real command that the index now projects as a
+  // single picker row (`tuiPicker`), and listing it a second time as a session
+  // word put two `model` rows in the palette — one of which was a duplicate of
+  // the other in everything but its wording.
   const SESSION_ROWS = Object.freeze([
-    { label: 'model', session: 'model', note: 'choose the provider and model that answer', sideEffect: null },
+    { label: 'results', session: 'results', note: 'open one of the last search’s results', sideEffect: null },
     { label: 'replay', signature: '[id]', session: 'replay', note: 're-run the last block, or one by id', sideEffect: null },
     { label: 'exit', session: 'exit', note: 'close the session · also ctrl+d', sideEffect: null },
     { label: 'clear', session: 'clear', note: 'clear the viewport · scrollback survives', sideEffect: null },
@@ -559,6 +587,10 @@ export async function runLedger({
   /** True while the composer holds an inline completion (`search ▏`) — the
    * next submitted line answers it, so the prompt clears then. */
   let inlineHint = false;
+  /** The value picker currently open, and whether it accepts an answer that is
+   * not on its list. Held here rather than read off the overlay because the
+   * choose handler closes the overlay before it inspects the choice. */
+  let valuePicker = null;
 
   /**
    * Ask for a value WHERE THE ANSWER IS TYPED. The first build committed the
@@ -569,16 +601,116 @@ export async function runLedger({
    * placeholder; piped sessions keep the printed line, which is their whole
    * interface.
    */
+  /**
+   * Ask for one value — as a PICKER whenever the registry knows the answers.
+   *
+   * This is the half of the palette contract that never shipped.
+   * lib/command-index.mjs has always said a value slot is "filled in later from
+   * a picker (never typed)", and what existed instead completed the composer to
+   * `model set ` and left the operator to remember thirteen provider ids. The
+   * list was never unknown — `providerReadiness` enumerates it, the config
+   * schema declares ten enums outright — it was simply never offered.
+   *
+   * Free text remains the floor, not the fallback of last resort: a source that
+   * cannot enumerate (an empty journal, an unreadable directory) degrades to the
+   * prompt that has always been here, so a picker failing costs convenience and
+   * never a command.
+   */
   const askPrompt = (prompt, title = '') => {
     const note = prompt.description
       || (prompt.type === 'boolean' ? 'yes / no' : prompt.required ? 'required' : 'optional — blank skips');
+    if (interactive && openValuePicker(prompt, title)) return;
     if (interactive) {
       session.setPrompt({ title, label: prompt.label, note });
       return;
     }
     say(ui.line({ state: prompt.required ? 'warn' : 'pending', key: '?', value: prompt.label, note }));
   };
+
+  /**
+   * The value picker. Returns false when there is nothing to offer, which is
+   * how `askPrompt` falls back to typing.
+   *
+   * A boolean is a two-row picker rather than a yes/no prompt — the same
+   * gesture as every other value, and one fewer spelling to remember (`y`,
+   * `yes`, `true` and `1` were all accepted, which is four ways to answer a
+   * question that has two answers).
+   */
+  const openValuePicker = (prompt, title = '') => {
+    if (!prompt) return false;
+    const resolved = prompt.type === 'boolean'
+      ? { items: [{ value: true, label: 'yes', note: '' }, { value: false, label: 'no', note: '' }], free: false }
+      : resolveValues(prompt.choices, { workspace, values: pending?.values ?? {} });
+    if (!resolved.items.length) return false;
+
+    const rows = resolved.items.map((it) => ({
+      label: it.label,
+      note: it.note,
+      unavailable: it.unavailable,
+      // `value` alone would collide with the model picker's own rows; this key
+      // is what the choose handler reads back.
+      valueChoice: it.value,
+    }));
+    // An optional value gets an explicit way to say "none" — otherwise a picker
+    // is a worse prompt than the blank line it replaced, which could always be
+    // skipped by pressing Enter.
+    if (!prompt.required) rows.push({ label: 'skip', note: 'leave this unset', valueChoice: SKIP_VALUE });
+
+    const hint = resolved.free ? 'type to filter or to enter your own' : 'type to filter';
+    const overlay = createOverlay({
+      title: title ? `${title} · ${prompt.label}` : prompt.label,
+      rows,
+      kind: 'value',
+      page: 12,
+      filter: (query) => {
+        const q = String(query ?? '').toLowerCase();
+        if (!q) return rows;
+        return rows.filter((r) => r.label.toLowerCase().includes(q) || String(r.note ?? '').toLowerCase().includes(q));
+      },
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} navigate · ${ui.unicode ? '↵' : 'enter'} select · ${hint} · esc cancels`,
+    });
+    valuePicker = { prompt, free: resolved.free };
+    session.openOverlay(overlay);
+    return true;
+  };
   const clearPrompt = () => { if (interactive) session.setPrompt(null); };
+
+  /** The sentinel a picker's "skip" row carries. A real answer of `undefined`
+   * and a deliberate skip have to be told apart, and `null` is a legal value
+   * for some flags. */
+  const SKIP_VALUE = Symbol('skip');
+
+  /**
+   * Record one answer and move to the next question, or run.
+   *
+   * Shared by the two ways an answer arrives — typed into the composer, or
+   * chosen from a picker — because the queue's rules (either/or gates, the
+   * final dispatch) are the same however the value was produced, and two copies
+   * would drift.
+   */
+  const answerPending = async (value) => {
+    if (!pending) return;
+    const prompt = pending.queue[pending.index];
+    if (value !== SKIP_VALUE && value !== undefined) pending.values[prompt.key] = value;
+
+    // Either/or gates (`get`'s --docid OR --path): stop as soon as the CLI would
+    // accept what we have, rather than forcing every optional field.
+    if (pending.untilResolves) {
+      const attempt = resolveSelection(pending.row, pending.values);
+      if (attempt.argv && !attempt.invalid && !(attempt.missing?.length)) {
+        const { row, values } = pending;
+        pending = null;
+        await finishSelection(row, values);
+        return;
+      }
+    }
+
+    pending.index += 1;
+    if (pending.index < pending.queue.length) { askPrompt(pending.queue[pending.index], pending.row.label); return; }
+    const { row, values } = pending;
+    pending = null;
+    await finishSelection(row, values);
+  };
 
   const finishSelection = async (row, values) => {
     clearPrompt();
@@ -626,7 +758,15 @@ export async function runLedger({
     // printed exchange is the whole interface.
     if (interactive) {
       const tokens = choice.argvTokens || [];
+      // A SLOT WITH A PICKER IS NEVER COMPLETED INLINE. This shortcut is right
+      // for `search <query>` — nobody can enumerate what you want to search for,
+      // so completing to `search ▏` and letting you type is the shortest path.
+      // It was wrong for `model set <provider>`, where it wrote `model set ` and
+      // asked an operator to remember thirteen ids; pressing ↵ then ran the
+      // incomplete command, which is the usage error in the report that started
+      // this. Where the answers are knowable, they get offered.
       const inlineSafe = tokens.every((t) => t.kind !== 'flag')
+        && plan.queue.every((q) => !q.choices)
         && plan.queue.every((q) => tokens.some((t) => t.kind === 'value' && t.positional === q.key));
       if (inlineSafe) {
         const words = tokens.filter((t) => t.kind === 'command' || t.kind === 'subcommand').map((t) => t.value);
@@ -695,14 +835,68 @@ export async function runLedger({
     return overlay;
   };
 
+  /**
+   * The results of a run, as things to open.
+   *
+   * `search engineer` reported twenty results, printed four, folded sixteen
+   * behind `ctrl+o` — and offered no way to open any of them. Unfolding showed
+   * more text; it never made the text actionable. A retrieval surface that can
+   * find a file and not open it has done the hard half and stopped.
+   *
+   * The block that produced them owns them (`block.selection`), so this works
+   * for an older search as well as the last one, and a block from a session
+   * that predates the hook simply has none.
+   */
+  const openResults = (block) => {
+    const target = block ?? ledger.blocks.filter((b) => b.selection?.items?.length).at(-1) ?? null;
+    if (!target?.selection?.items?.length) {
+      say(ui.line({
+        state: 'warn',
+        key: 'results',
+        value: 'nothing to open',
+        note: block ? 'this block reported no results' : 'run a search first',
+      }));
+      return null;
+    }
+    const items = target.selection.items;
+    const rows = items.map((item) => ({ label: item.label, note: item.note, openArgv: item.argv }));
+    // A piped session has no overlay to walk, so it gets the same treatment the
+    // palette gets there: the rows are printed and a number picks one. The
+    // capability is the same; only the gesture differs with the surface.
+    if (!interactive) {
+      pipedPalette = rows.slice(0, PALETTE_PAGE);
+      pipedPalette.forEach((row, i) => say(ui.line({
+        key: String(i + 1),
+        value: row.label,
+        note: row.note,
+      })));
+      say(ui.paint('muted', `type 1–${pipedPalette.length} to open one`));
+      return null;
+    }
+    const overlay = createOverlay({
+      title: `${shortCommand(target.command)} · ${target.selection.title || `${items.length} result(s)`}`,
+      rows,
+      kind: 'results',
+      page: 12,
+      filter: (query) => {
+        const q = String(query ?? '').toLowerCase();
+        if (!q) return rows;
+        return rows.filter((r) => r.label.toLowerCase().includes(q) || String(r.note ?? '').toLowerCase().includes(q));
+      },
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} navigate · ${ui.unicode ? '↵' : 'enter'} open · type to filter · esc closes`,
+    });
+    session.openOverlay(overlay);
+    return overlay;
+  };
+
   const openBlockNav = () => {
     const rows = blockRows();
     if (!rows.length) { say(ui.paint('muted', 'nothing in the ledger yet')); return null; }
     const overlay = createOverlay({
       title: 'blocks',
       rows,
-      actions: { y: 'copy', m: 'mark', r: 'rerun', q: 'quit', 'ctrl+o': 'fold', t: 'tree' },
-      footer: `${ui.unicode ? '↑↓' : 'up/down'} walk · ${ui.unicode ? '↵' : 'enter'} inspect · ctrl+o fold · y copy · m mark · r re-run · t tree · q quit · esc closes`,
+      actions: { y: 'copy', m: 'mark', r: 'rerun', q: 'quit', 'ctrl+o': 'fold', t: 'tree', o: 'open' },
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} walk · ${ui.unicode ? '↵' : 'enter'} inspect · o open results · ctrl+o fold · y copy · m mark · r re-run · t tree · q quit · esc closes`,
     });
     session.openOverlay(overlay);
     return overlay;
@@ -839,12 +1033,72 @@ export async function runLedger({
         continue;
       }
 
+      // An overlay was dismissed. Only a value picker leaves anything behind:
+      // the command it was collecting for is abandoned with it, rather than
+      // staying armed to swallow the next line typed.
+      if (event.intent === 'close') {
+        if (valuePicker) {
+          valuePicker = null;
+          if (pending) { pending = null; clearPrompt(); say(ui.paint('muted', 'cancelled')); }
+        }
+        continue;
+      }
+
       if (event.intent === 'choose') {
+        const picker = valuePicker;
+        valuePicker = null;
         session.closeOverlay();
         const row = event.row;
+
+        // A VALUE, NOT A COMMAND. Checked before the null-row dismissal below,
+        // because a free source (a path, a model id) must accept what was typed
+        // when the list has nothing matching it — the provider is the authority
+        // on which models it serves, and the walk that found no file is not
+        // proof the file is absent.
+        if (picker) {
+          if (row && row.valueChoice !== undefined) {
+            if (row.unavailable) {
+              say(ui.line({ state: 'warn', key: 'blocked', value: row.label, note: row.unavailable }));
+              askPrompt(picker.prompt, pending?.row?.label ?? '');
+              continue;
+            }
+            await answerPending(row.valueChoice);
+            continue;
+          }
+          const typed = String(event.query ?? '').trim();
+          if (picker.free && typed) { await answerPending(typed); continue; }
+          // Esc, or Enter on nothing: the question is abandoned, and so is the
+          // command it belonged to. Leaving `pending` armed would make the next
+          // ordinary line silently answer a question no longer on screen.
+          if (pending) { pending = null; clearPrompt(); say(ui.paint('muted', 'cancelled')); }
+          continue;
+        }
+
         if (!row) continue; // Enter on an empty palette list is a dismissal
         if (row.session === 'exit') break;
-        if (row.session === 'model') { openModelPicker(); continue; }
+        // A row the index marked as a picker opens it instead of dispatching.
+        if (row.picker === 'model') { openModelPicker(); continue; }
+        if (row.enableAgent) {
+          // Through the ordinary config command, so the write is atomic, scoped
+          // and shows up in `config show` with its provenance like any other.
+          //
+          // `--scope user` is required and it is also the right answer: turning
+          // agent mode on is granting authority to reach a network with your
+          // credential, and `agent.enabled` merges restrictively precisely so a
+          // repository cannot grant it on your behalf. Omitting the scope was a
+          // usage error — the same defect as offering `model set` with no
+          // provider, committed one layer up.
+          await runArgv(['config', 'set', 'agent.enabled', 'true', '--scope', 'user']);
+          readActiveModel();
+          refreshStatus();
+          continue;
+        }
+        if (row.clear) {
+          await runArgv(['model', 'clear']);
+          readActiveModel();
+          refreshStatus();
+          continue;
+        }
         if (row.provider && row.model) {
           // Persisted through the ordinary command, so scope precedence,
           // atomic writes and `config show` provenance all apply.
@@ -853,6 +1107,8 @@ export async function runLedger({
           refreshStatus();
           continue;
         }
+        if (row.openArgv) { await runArgv(row.openArgv); continue; }
+        if (row.session === 'results') { openResults(null); continue; }
         if (row.session === 'replay') { await rerun(ledger.lastCommand()); continue; }
         if (row.session === 'clear') { doClear(); continue; }
         if (row.session === 'help') { emitHelp(); continue; }
@@ -881,6 +1137,7 @@ export async function runLedger({
           say(ui.line({ key: 'copy', value: block.command, note: 'select with the terminal — scrollback is intact' }));
           continue;
         }
+        if (event.action === 'open' && block) { session.closeOverlay(); openResults(block); continue; }
         if (event.action === 'rerun' && block) { session.closeOverlay(); await rerun(block); continue; }
         if (event.action === 'tree' && block) { session.closeOverlay(); openRunTree(block.run || block.id); continue; }
         session.closeOverlay();
@@ -914,6 +1171,8 @@ export async function runLedger({
             askPrompt(prompt, pending.row.label);
             continue;
           }
+          await answerPending(SKIP_VALUE);
+          continue;
         } else if (prompt.type === 'boolean') {
           const t = trimmed.toLowerCase();
           if (!['y', 'yes', 'true', '1', 'n', 'no', 'false', '0'].includes(t)) {
@@ -923,28 +1182,10 @@ export async function runLedger({
           }
           // Boolean, not the strings "true"/"false": resolveArgv treats any
           // truthy value as "include the flag", and the string "false" is truthy.
-          pending.values[prompt.key] = ['y', 'yes', 'true', '1'].includes(t);
-        } else {
-          pending.values[prompt.key] = trimmed;
+          await answerPending(['y', 'yes', 'true', '1'].includes(t));
+          continue;
         }
-
-        // Either/or gates (`get`'s --docid OR --path): stop as soon as the CLI
-        // would accept what we have, rather than forcing every optional field.
-        if (pending.untilResolves) {
-          const attempt = resolveSelection(pending.row, pending.values);
-          if (attempt.argv && !attempt.invalid && !(attempt.missing?.length)) {
-            const { row, values } = pending;
-            pending = null;
-            await finishSelection(row, values);
-            continue;
-          }
-        }
-
-        pending.index += 1;
-        if (pending.index < pending.queue.length) { askPrompt(pending.queue[pending.index], pending.row.label); continue; }
-        const { row, values } = pending;
-        pending = null;
-        await finishSelection(row, values);
+        await answerPending(trimmed);
         continue;
       }
 
@@ -983,7 +1224,9 @@ export async function runLedger({
         pipedPalette = null;
         if (!choice) { say(ui.line({ state: 'warn', key: 'palette', value: 'no such row' })); continue; }
         if (choice.session === 'exit') break;
-        if (choice.session === 'model') { openModelPicker(); continue; }
+        if (choice.openArgv) { await runArgv(choice.openArgv); continue; }
+        if (choice.picker === 'model') { openModelPicker(); continue; }
+        if (choice.session === 'results') { openResults(null); continue; }
         if (choice.session === 'replay') { await rerun(ledger.lastCommand()); continue; }
         if (choice.session === 'clear') { doClear(); continue; }
         if (choice.session === 'help') { emitHelp(); continue; }
@@ -1008,6 +1251,8 @@ export async function runLedger({
         // exactly as they do to `harness bash`. A TUI that spawned its own
         // shell would be a second behaviour path.
         await runArgv(['bash', '--', parsed.script], { display: `!${parsed.script}` });
+      } else if (parsed.kind === 'results') {
+        openResults(null);
       } else if (parsed.kind === 'help') {
         emitHelp();
       } else if (parsed.kind === 'clear') {

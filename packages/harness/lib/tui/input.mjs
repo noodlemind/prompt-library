@@ -238,8 +238,21 @@ export function createInput({
 
     if (overlay) {
       const owner = overlay.handleKey(str, key);
-      if (owner.intent === 'close') { overlay = null; frame(() => { erase(); paint(); }); return; }
-      if (owner.intent === 'choose') { deliver({ intent: 'choose', row: owner.row }); return; }
+      // CLOSING IS AN EVENT. It used to be silent, which was fine while every
+      // overlay was a view: dismissing one left nothing behind. A value picker
+      // leaves the half-collected command it was asking for, and a loop that
+      // never hears about the dismissal keeps that question armed — the next
+      // ordinary line then answers a prompt that is no longer on screen.
+      if (owner.intent === 'close') {
+        overlay = null;
+        frame(() => { erase(); paint(); });
+        deliver({ intent: 'close' });
+        return;
+      }
+      // The typed filter rides along: a picker over a source that cannot
+      // enumerate everything (paths, model ids) accepts what was typed when
+      // nothing on the list matches it.
+      if (owner.intent === 'choose') { deliver({ intent: 'choose', row: owner.row, query: overlay?.query ?? '' }); return; }
       if (owner.intent === 'action') { deliver({ intent: 'action', action: owner.action, row: owner.row }); return; }
       if (owner.changed) frame(() => { erase(); paint(); });
       return;

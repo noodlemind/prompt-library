@@ -160,6 +160,8 @@ export function promptsFor(row) {
       required: t.required !== false,
       type: 'string',
       description: t.valueName || '',
+      // Where the answer can be picked from, when the registry declared it.
+      choices: t.choices ?? null,
     }));
   const fromPrompts = (row.prompts || []).map((p) => ({
     key: p.flag,
@@ -170,6 +172,7 @@ export function promptsFor(row) {
     required: Boolean(p.required),
     type: p.type || 'string',
     description: p.description || '',
+    choices: p.choices ?? null,
   }));
   const seen = new Set();
   return [...fromTokens, ...fromPrompts].filter((p) => {

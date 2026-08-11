@@ -452,7 +452,19 @@ test('the palette omits lifecycle and machine-only commands; the CLI keeps them'
     assert.equal(tui.rows.some((r) => r.noun === name), false, `${name} must not appear on the palette`);
     assert.ok(cli.rows.some((r) => r.id === `command:${name}`), `${name} must still appear on the CLI`);
   }
-  assert.equal(cli.rows.length - tui.rows.length, LIFECYCLE_ONLY.length, 'the CLI surface is the palette plus exactly these six');
+  // The two surfaces differ by exactly two deliberate things: the lifecycle
+  // commands above, and the verb rows a picker command folds into one row.
+  // Anything else appearing here means a capability went missing from a surface
+  // by accident, which is what this count exists to catch.
+  const foldedByPickers = listCommands()
+    .filter((name) => getCommand(name).tuiPicker)
+    .reduce((sum, name) => sum + cli.rows.filter((r) => r.noun === name).length - 1, 0);
+  assert.equal(foldedByPickers, 3, 'model folds show/set/clear into its picker row');
+  assert.equal(
+    cli.rows.length - tui.rows.length,
+    LIFECYCLE_ONLY.length + foldedByPickers,
+    'the CLI surface is the palette plus the lifecycle commands and the rows pickers fold',
+  );
 });
 
 test('nothing marked userInvocable: false reaches the tui surface', () => {

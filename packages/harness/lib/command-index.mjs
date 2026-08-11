@@ -35,6 +35,7 @@
 import fs from 'node:fs';
 import { listCommands, getCommand, SIDE_EFFECTS, SURFACES } from './registry.mjs';
 import { createEnvelope, STATUS } from './envelope.mjs';
+import { normalizeChoices } from './value-sources.mjs';
 import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
 
 /** What a row represents. Verb rows come from two structurally different
@@ -134,6 +135,9 @@ function valueTokenFor(def) {
     flag: def.name,
     valueName: def.valueName || 'value',
     required: Boolean(def.required),
+    // Where the answer comes from, when the registry knows. This is what turns
+    // "type it" into "pick it" — see lib/tui/values.mjs.
+    choices: normalizeChoices(def.choices),
   };
 }
 
@@ -148,7 +152,7 @@ function valueTokenFor(def) {
  * an invocation their own handler refuses.
  */
 function positionalToken(p) {
-  return { kind: 'value', positional: p.name, valueName: p.name, required: true };
+  return { kind: 'value', positional: p.name, valueName: p.name, required: true, choices: normalizeChoices(p.choices) };
 }
 
 /** The positional slots one declared verb consumes, resolved by name against
@@ -180,6 +184,7 @@ function optionRow(entry, def) {
     required: Boolean(def.required),
     sideEffect: SIDE_EFFECTS.includes(def.sideEffect) ? def.sideEffect : entry.sideEffect,
     description: def.description || '',
+    choices: normalizeChoices(def.choices),
   };
   const requires = requiresList(def);
   if (requires.length) row.requires = [...requires];
@@ -374,9 +379,44 @@ function flagVerbRow(entry, def, under) {
   };
 }
 
+/**
+ * A command whose TUI form is a picker: ONE row, and the picker is what it
+ * opens.
+ *
+ * `model` produced five rows — an injected session word, the bare command, and
+ * `set` / `show` / `clear` — for a capability that is one gesture. Every
+ * reference CLI treats `/model` as a single entry that opens a chooser, because
+ * show/set/clear are not three things to decide between: showing is what the
+ * picker does on open, setting is what choosing does, and clearing is a row
+ * inside it. The CLI keeps all three verbs, where scripting needs them and
+ * `--help` explains them; only the palette collapses.
+ *
+ * The row still resolves to real argv (`['model']`), so a surface with no
+ * picker — a piped session, a test — reaches the same capability the same way.
+ */
+function pickerRow(entry) {
+  return {
+    id: `command:${entry.name}`,
+    kind: 'command',
+    noun: entry.name,
+    verb: null,
+    label: entry.name,
+    summary: entry.summary || '',
+    sideEffect: SIDE_EFFECTS.includes(entry.bareSideEffect) ? entry.bareSideEffect : entry.sideEffect,
+    group: entry.group || 'general',
+    argv: [entry.name],
+    argvTokens: [{ kind: 'command', value: entry.name }],
+    prompts: [],
+    refinements: [],
+    /** The surface opens this picker instead of dispatching. */
+    picker: entry.tuiPicker,
+  };
+}
+
 /** Every row one registry entry contributes: itself, its declared verbs, and
  * its `tui: 'verb'` flags (one row per verb a scoped flag applies to). */
-function rowsForEntry(entry) {
+function rowsForEntry(entry, surface) {
+  if (entry.tuiPicker && surface === 'tui') return [pickerRow(entry)];
   const declaredVerbs = entry.verbs || [];
   const byVerb = new Map(declaredVerbs.map((v) => [v.verb, v]));
   const verbFlags = flagsOf(entry).filter((def) => isVerbFlag(entry, def));
@@ -553,7 +593,7 @@ export function buildCommandIndex({ surface = 'tui', workspace = process.cwd() }
     const entry = getCommand(name);
     if (!entry || !entryOnSurface(entry, surface)) continue;
     commandNames.add(entry.name);
-    rows.push(...rowsForEntry(entry));
+    rows.push(...rowsForEntry(entry, surface));
   }
 
   let skillsRoot = null;

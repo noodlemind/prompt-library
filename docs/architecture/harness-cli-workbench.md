@@ -538,6 +538,28 @@ Contract:
   declared aliases outrank prefix matches.
 - **Values come from pickers.** A verb needing a value opens a chooser populated
   from live state (branch keys, learning ids, plan paths) — never a typed flag.
+  The registry declares the KIND of value a slot wants (`choices: 'provider'`, or
+  a literal set); `lib/tui/values.mjs` knows how to enumerate that kind, because
+  registration is pure data and enumerating needs the workspace and environment.
+  A later question may be answered in terms of an earlier one — the model list is
+  the chosen provider's. Typing is never taken away: every list filters as you
+  type, an open source (a path, a model id) accepts an answer that is not on it,
+  and a source that cannot enumerate degrades to the free-text prompt rather than
+  to a dead end.
+- **A command whose TUI form is a chooser contributes ONE row** (`tuiPicker`).
+  `model` is one gesture, not four: showing is what the picker does on open,
+  setting is what choosing does, clearing is a row inside it. The CLI keeps every
+  verb, where scripting needs them.
+- **Only a connected provider offers models.** The order is: enable agent mode
+  (`agent.enabled`, off by default — everything else in the harness runs without a
+  provider), connect a provider, then choose among the models it serves. A model
+  list is a property of the provider serving it, so offering one earlier is
+  offering a guess. Providers you have not connected collapse to a single line.
+- **Results are things you open.** A command states what it found as data
+  (`ctx.reportSelection`), never as lines to be parsed back; the block says how
+  many can be opened, and `results` — or `o` in the block navigator — opens a
+  chooser over them. A retrieval surface that can find a file and not open it has
+  done the hard half and stopped.
 - **Dependent options are refinements, not entries.**
 - **Every row carries its side-effect class** — `read`, `mutate`, `execute` — so
   the consequence of a command is visible before it runs. It is the last thing a

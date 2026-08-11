@@ -48,6 +48,9 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
 
   return {
     schema: 1,
+    /** The first gate — see `agent.enabled` in lib/config.mjs. Everything below
+     * describes a provider that is only ever contacted by the agent loop. */
+    agentEnabled: Boolean(values['agent.enabled']),
     provider: activeId,
     model: values['agent.model'] || active?.defaultModel || null,
     modelIsDefault: !values['agent.model'],
@@ -69,33 +72,75 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
 export function modelPickerRows({ workspace, copilotHome, parentEnv = process.env } = {}) {
   const status = modelStatus({ workspace, copilotHome, parentEnv });
   const catalog = modelCatalog({ parentEnv });
-  const ordered = [...catalog].sort((a, b) => {
-    if (a.ready !== b.ready) return a.ready ? -1 : 1;
+  const ready = catalog.filter((p) => p.ready);
+  const unready = catalog.filter((p) => !p.ready);
+
+  // GATE ONE: agent mode. With it off there is no model question to answer —
+  // the harness reads, indexes, gates and reports without ever calling a
+  // provider, and offering a catalogue here would suggest the opposite. One row
+  // saying what to turn on beats sixteen saying what you could have chosen.
+  if (!status.agentEnabled) {
+    return [
+      { section: true, label: 'agent mode is off', note: 'the harness runs without a provider until you turn it on', ready: false, disabled: true },
+      { label: 'enable agent mode', enableAgent: true, note: 'config set agent.enabled true --scope user' },
+    ];
+  }
+
+  // GATE TWO: a connected provider. Until one exists there are no models to
+  // choose between — a model list is a property of the provider serving it, so
+  // showing one before connecting is showing a guess.
+  if (!ready.length) {
+    return [
+      { section: true, label: 'no provider connected', note: 'connect one, then its models appear here', ready: false, disabled: true },
+      ...unready.map((provider) => ({ label: provider.id, note: provider.reason, unavailable: provider.reason })),
+    ];
+  }
+
+  // The active provider leads; the rest alphabetically. Sorting the active one
+  // to the front is what lets the picker open on the model in use.
+  ready.sort((a, b) => {
     if (a.id === status.provider) return -1;
     if (b.id === status.provider) return 1;
     return a.id.localeCompare(b.id);
   });
 
   const rows = [];
-  for (const provider of ordered) {
-    rows.push({
-      section: true,
-      label: provider.id,
-      note: provider.ready ? provider.how : provider.reason,
-      ready: provider.ready,
-      disabled: true,
-    });
+  for (const provider of ready) {
+    rows.push({ section: true, label: provider.id, note: provider.how, ready: true, disabled: true });
     for (const model of provider.models) {
       const active = provider.id === status.provider && model === status.model;
-      rows.push({
-        label: model,
-        provider: provider.id,
-        model,
-        note: active ? 'active' : provider.ready ? '' : provider.reason,
-        unavailable: provider.ready ? null : provider.reason,
-        active,
-      });
+      rows.push({ label: model, provider: provider.id, model, note: active ? 'active' : '', active });
     }
+  }
+
+  // A PROVIDER YOU HAVE NOT CONNECTED SHOWS NOTHING TO PICK. The picker used to
+  // be mostly made of things that do not work: eleven providers times their
+  // model lists, every row greyed and captioned with the name of a variable to
+  // export, burying the handful that could actually be chosen. Listing the
+  // providers alone was the same noise in a thinner coat — eleven rows you
+  // still cannot select.
+  //
+  // What survives is ONE line, and it is a section heading rather than a row
+  // precisely because it is not a choice: it says the others exist and names
+  // the command that explains them. Connect one and it appears here with its
+  // models, which is the whole mental model — set up a provider, see its
+  // models, pick one.
+  if (unready.length) {
+    rows.push({
+      section: true,
+      label: `${unready.length} more provider${unready.length === 1 ? '' : 's'} not connected`,
+      note: 'harness model show — what each one needs',
+      ready: false,
+      disabled: true,
+    });
+  }
+
+  // `clear` lives INSIDE the picker rather than beside it in the palette. It is
+  // the third thing this command does, and a chooser that can set but not unset
+  // sends you back to the command line for the other half of one decision.
+  if (status.source !== 'default') {
+    rows.push({ section: true, label: 'forget the choice', note: `remembered in ${status.source}`, ready: true, disabled: true });
+    rows.push({ label: 'use the built-in default', clear: true, note: 'github-copilot · provider default model' });
   }
   return rows;
 }
@@ -129,7 +174,12 @@ function render(result, ui) {
       // pending dots, because "available" is not an outcome.
       state: isActive ? (provider.ready ? 'ok' : 'warn') : provider.ready ? 'pending' : undefined,
       key: provider.id,
-      value: provider.defaultModel,
+      // ONLY A CONNECTED PROVIDER NAMES A MODEL. Printing `claude-sonnet-5`
+      // beside a note saying its credential is unset offered a model in the same
+      // breath as saying it cannot be reached, and made ten unusable rows look
+      // like ten choices. What an unconnected provider has to say is what it
+      // needs, which is already in the note.
+      value: provider.ready ? provider.defaultModel : '',
       note: provider.ready ? provider.how : provider.reason,
       keyWidth,
     }));
