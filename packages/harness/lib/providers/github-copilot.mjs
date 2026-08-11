@@ -258,6 +258,17 @@ async function handle(message) {
         if (!id || seen.has(id)) continue;
         const endpoints = Array.isArray(m?.supported_endpoints) ? m.supported_endpoints : null;
         if (endpoints && !endpoints.some((e) => String(e).includes('/chat/completions'))) continue;
+        // A MODEL THE ACCOUNT HAS NOT ENABLED IS NOT A CHOICE. `policy.state`
+        // is how Copilot reports a model that exists but needs the user or the
+        // org to accept its terms first — `claude-sonnet-5` comes back
+        // `disabled` for this account — and calling one returns "The requested
+        // model is not supported", which reads as a harness bug rather than a
+        // switch nobody has flipped. Absent policy means no gate to pass.
+        if (m?.policy && m.policy.state !== 'enabled') continue;
+        // Only chat models: /chat/completions is the one thing the harness
+        // posts to, so an embedding model listed here would be a row that
+        // cannot answer.
+        if (m?.capabilities?.type && m.capabilities.type !== 'chat') continue;
         seen.add(id);
         models.push({
           id,
