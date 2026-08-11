@@ -181,7 +181,7 @@ export function modelResultOf(result) {
 }
 
 function render(result, ui) {
-  const keyWidth = keyWidthFor(['provider', 'model', ...result.providers.map((p) => p.id)]);
+  const keyWidth = keyWidthFor(['provider', 'model', 'catalog', ...result.providers.map((p) => p.id)]);
   console.log(ui.line({
     state: result.ready ? 'ok' : 'warn',
     key: 'model',
@@ -189,6 +189,27 @@ function render(result, ui) {
     note: result.ready
       ? `${result.source}${result.modelIsDefault ? ' · provider default model' : ''}`
       : result.reason,
+    keyWidth,
+  }));
+  // WHERE THIS LIST CAME FROM, AND WHEN. `modelStatus` has computed
+  // `catalogSource`/`catalogAge` since the catalogue became fetchable, and
+  // nothing rendered either of them — so the one surface that answers "which
+  // models can I use" showed the answer with no way to tell a list taken
+  // minutes ago from one taken weeks ago, or from a built-in guess. That is the
+  // exact blurring lib/model-cache.mjs's module note says a reader must never
+  // do, and it cost real time: a stale catalogue read as a hard limit of the
+  // provider, and the conclusion drawn from it was wrong.
+  //
+  // The picker already says this in its section headings; saying it the same
+  // way here is the "one treatment per surface" rule, not a second dialect.
+  const fetched = result.catalogSource === 'fetched';
+  console.log(ui.line({
+    state: fetched ? undefined : 'warn',
+    key: 'catalog',
+    value: fetched ? `fetched ${result.catalogAge ?? 'at an unknown time'}` : 'built-in list',
+    note: fetched
+      ? 'harness model refresh to update'
+      : 'harness model refresh asks the provider what it actually serves',
     keyWidth,
   }));
   console.log('');
