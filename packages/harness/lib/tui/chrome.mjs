@@ -166,6 +166,9 @@ export function renderFooter(snapshot = {}, {
   // The version sits bottom-right — OpenCode's and Grok's home for it. In a
   // real workspace the right column was otherwise empty, and a two-column
   // footer with nothing on the right is a one-column footer.
+  // The model first, the version last: which model answers changes what the
+  // next agent run does; the version only changes what you are running.
+  if (snapshot.model) right.push(ui.paint('info', snapshot.model));
   if (snapshot.version) right.push(ui.paint('muted', `harness ${snapshot.version}`));
 
   if (!fixed.length && !lifecycle.length && !right.length) return '';

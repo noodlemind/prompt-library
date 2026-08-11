@@ -207,6 +207,20 @@ export async function runLedger({
     try { return readSession(workspace)?.plan || null; } catch { return null; }
   };
 
+  /** The configured provider and model, refreshed alongside the rest of the
+   * lifecycle facts rather than on every repaint. */
+  let activeModel = null;
+  const readActiveModel = () => {
+    try {
+      const provider = settings['agent.provider'] || 'github-copilot';
+      const model = settings['agent.model'] || '';
+      activeModel = model ? `${provider} · ${model}` : provider;
+    } catch {
+      activeModel = null;
+    }
+  };
+  readActiveModel();
+
   const refreshStatus = () => {
     const gate = gateOf();
     const plan = planOf();
@@ -219,6 +233,12 @@ export async function runLedger({
       run: last?.run ? last.run.slice(0, 6) : null,
       runStatus: last?.status ?? null,
       version,
+      // WHICH MODEL WOULD ANSWER, always visible — Antigravity, Grok, Amp and
+      // OpenCode all keep it in a corner for the same reason: it is the one
+      // fact that changes what `agent` costs and how it behaves, and it is
+      // invisible everywhere else. Computed once per status refresh, not per
+      // paint, because it reads configuration.
+      model: activeModel,
     });
     session.setHint({
       gate,
@@ -521,7 +541,7 @@ export async function runLedger({
       query,
       rows: paletteRows(query),
       filter: (q) => paletteRows(q),
-      footer: `${ui.unicode ? '↑↓' : 'up/down'} walk · ${ui.unicode ? '↵' : 'enter'} run · esc closes · run: plan: search: check: learn: narrow`,
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} navigate · ${ui.unicode ? '↵' : 'enter'} run · tab complete · esc close · run: plan: search: learn: narrow`,
       page: PALETTE_PAGE,
     });
     session.openPalette({ overlay, filter: (q) => paletteRows(q) });
@@ -757,6 +777,8 @@ export async function runLedger({
       if (event.intent === 'palette') { openPaletteOverlay(''); continue; }
       if (event.intent === 'navigate') { openBlockNav(); continue; }
 
+      if (event.intent === 'clear') { doClear(); continue; }
+
       if (event.intent === 'fold') {
         const last = ledger.lastCommand();
         if (last) { last.folded = !foldState(last).folded; emit(last); }
@@ -766,6 +788,25 @@ export async function runLedger({
       if (event.intent === 'complete') {
         const hits = completePath(event.prefix ?? '', { workspace });
         session.composer.setCompletion(hits);
+        continue;
+      }
+
+      // TAB: put the row's text in the composer and keep typing. The command
+      // is completed, never dispatched — which is what an operator wants for
+      // every row that still needs an argument.
+      if (event.intent === 'complete-row') {
+        const row = event.row;
+        const words = (row?.argvTokens || [])
+          .filter((t) => t.kind === 'command' || t.kind === 'subcommand')
+          .map((t) => t.value);
+        if (words.length) {
+          session.composer.setValue(`${words.join(' ')} `);
+          const sig = signatureOf(row);
+          session.setPrompt(sig
+            ? { title: words.join(' '), label: sig, note: '↵ runs' }
+            : null);
+          inlineHint = Boolean(sig);
+        }
         continue;
       }
 

@@ -129,6 +129,7 @@ export function createInput({
       rows.push(...composer.render());
     }
     const footer = renderFooter(status, { ui, width: w, items: footerItems });
+    // (the model is part of `status`; see setStatus in the loop)
     if (footer) rows.push(footer);
     return rows;
   };
@@ -251,7 +252,19 @@ export function createInput({
         if (r.changed) frame(() => { erase(); paint(); });
         return;
       }
-      if (name === 'return' || name === 'enter' || name === 'tab') {
+      // TAB COMPLETES, ENTER RUNS. Antigravity states both in its own footer
+      // (`enter Select · tab Complete`) and the distinction is the fix for the
+      // complaint that choosing a row "auto-sent" a half-finished command:
+      // Tab puts the row's text in the composer and leaves you typing its
+      // arguments; Enter is the commitment. A palette with one key for both
+      // has to guess which you meant, and guessed wrong for every command
+      // that takes an argument.
+      if (name === 'tab') {
+        const chosen = palette.overlay.selected;
+        if (chosen) { palette = null; deliver({ intent: 'complete-row', row: chosen }); return; }
+        return;
+      }
+      if (name === 'return' || name === 'enter') {
         const chosen = palette.overlay.selected;
         dropPalette();
         deliver({ intent: 'choose', row: chosen });
@@ -279,6 +292,7 @@ export function createInput({
     if (owner.intent === 'navigate') { deliver({ intent: 'navigate' }); return; }
     if (owner.intent === 'escape') { deliver({ intent: 'escape' }); return; }
     if (owner.intent === 'fold') { deliver({ intent: 'fold' }); return; }
+    if (owner.intent === 'clear') { deliver({ intent: 'clear' }); return; }
     if (owner.intent === 'complete') { deliver({ intent: 'complete', prefix: owner.prefix }); return; }
     if (owner.intent === 'cancel') { deliver({ intent: 'cancel', hadInput: owner.hadInput }); return; }
     if (owner.submitted !== undefined) { deliver({ line: owner.submitted }); return; }

@@ -221,6 +221,18 @@ export function createComposer({
     if (ctrl && name === 'u') { lines[row] = lines[row].slice(col); col = 0; return { changed: true }; }
     if (ctrl && name === 'k') { lines[row] = lines[row].slice(0, col); return { changed: true }; }
     if (ctrl && name === 'o') return { intent: 'fold', changed: false };
+    // Ctrl-L clears the viewport and Ctrl-J inserts a newline: both are
+    // readline reflexes every reference honours (Antigravity binds them as
+    // `cli.clear_screen` and `prompt.newline`), and both were reachable here
+    // only through a typed word or a chord terminals disagree about.
+    if (ctrl && name === 'l') return { intent: 'clear', changed: false };
+    if (ctrl && name === 'j') {
+      const rest = lines[row].slice(col);
+      lines[row] = lines[row].slice(0, col);
+      lines.splice(row + 1, 0, rest);
+      row += 1; col = 0;
+      return { changed: true };
+    }
 
     if (name === 'escape') {
       // Esc interrupts a running command; the loop decides, because only it
