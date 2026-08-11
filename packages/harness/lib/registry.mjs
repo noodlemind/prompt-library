@@ -69,6 +69,10 @@ import { cmdResources, resourcesResultOf, resourcesExitFor, RESOURCES_VERBS } fr
 import { CONFIG_KEYS, SCOPES } from './config.mjs';
 import { RUN_STATUSES } from './run-journal.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
+import {
+  cmdEdit, editResultOf, cmdWrite, writeResultOf, cmdUndo, undoResultOf,
+  exitFor as editExitFor, literalFlag,
+} from './edit-cmd.mjs';
 import { cmdAgent, agentResultOf, agentExitFor, agentJournalArgv, taskFromArgv } from './agent-cmd.mjs';
 import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TURNS, DEFAULT_PERSONA } from './agent-loop.mjs';
 import { PROVIDERS } from './provider.mjs';
@@ -406,7 +410,14 @@ export function validateArgs(entry, argv) {
     if (def.type !== 'boolean' || eq === -1) present.add(def.name);
     if (def.type !== 'boolean' && eq === -1) {
       const next = argv[i + 1];
-      const nextIsValue = next !== undefined && !next.startsWith('--');
+      // `valueIsLiteral` marks a flag whose value is arbitrary TEXT — file
+      // content, a replacement string — rather than a name the harness chose
+      // the vocabulary for. Those consume the next token whatever it looks
+      // like, because a diff hunk may legitimately begin with `--` and the
+      // ordinary rule would classify it as an undeclared flag and refuse the
+      // whole invocation. Opt-in per flag, so no existing command's parse
+      // changes: only `edit`/`write`'s payload flags set it.
+      const nextIsValue = next !== undefined && (def.valueIsLiteral === true || !next.startsWith('--'));
       if (nextIsValue) i++;
     }
   }
@@ -917,6 +928,23 @@ function getRequireArgs(rest, flags) {
   if (!flags.docid && !flags.path) {
     return 'get requires --docid <id> or --path <relative-path>';
   }
+}
+
+// edit / write: their payload flags carry arbitrary text, so `parseFlags` —
+// which knows a fixed vocabulary — cannot see them at all. These re-read the
+// argv with the same `literalFlag` the handlers use, and return the same
+// message text lib/edit-cmd.mjs#planEdit/#planWrite raise, so classifying the
+// mistake as E_USAGE/exit 2 here is a pure classification fix rather than a
+// second, subtly different guard.
+function editRequireArgs(rest) {
+  if (!literalFlag(rest, '--path')) return 'edit requires --path <relative-path>';
+  if (literalFlag(rest, '--old') === null) return 'edit requires --old <text>';
+  if (literalFlag(rest, '--new') === null) return 'edit requires --new <text>';
+}
+
+function writeRequireArgs(rest) {
+  if (!literalFlag(rest, '--path')) return 'write requires --path <relative-path>';
+  if (literalFlag(rest, '--content') === null) return 'write requires --content <text>';
 }
 
 // plan-new: --slug and --intent have no default (unlike --type/--risk/date,
@@ -1466,12 +1494,82 @@ registerCommand({
       { name: '--docid', type: 'string', valueName: 'id', description: 'manifest doc id', required: false, default: null, tui: 'prompt' },
       { name: '--path', type: 'string', valueName: 'rel', description: 'relative file path', required: false, default: null, tui: 'prompt', choices: 'path' },
       { name: '--lines', type: 'number', valueName: 'n', description: 'max lines (default 40)', required: false, default: 40, tui: 'prompt' },
+      { name: '--offset', type: 'number', valueName: 'n', description: 'first line of the window, 1-indexed (default 1)', required: false, default: 1, tui: 'prompt' },
       { name: '--max-bytes', type: 'number', valueName: 'n', description: 'max excerpt bytes (default 2048)', required: false, default: 2048, tui: 'prompt' },
     ],
   },
   handler: cmdGet,
   resultOf: getResultOf,
   requireArgs: getRequireArgs,
+});
+
+// The mutate-class file surface. It sits between `get` (read) and
+// `exec`/`bash` (execute) deliberately: those three plus these are the whole
+// set of ways the harness touches a working tree, and they are declared in
+// escalating order of what they can do.
+registerCommand({
+  name: 'edit',
+  summary: 'replace one exact, unique piece of text in a file',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--path', type: 'string', valueName: 'rel', description: 'the file to change, relative to the workspace', required: true, default: null, tui: 'prompt', choices: 'path', valueIsLiteral: true },
+      // `valueIsLiteral` on both payload flags: a replacement is arbitrary
+      // text, and a diff line beginning with `--` is ordinary content rather
+      // than a flag the caller forgot to declare.
+      { name: '--old', type: 'string', valueName: 'text', description: 'the exact text to replace; it must appear exactly once', required: true, default: null, tui: 'prompt', valueIsLiteral: true },
+      { name: '--new', type: 'string', valueName: 'text', description: 'what to put in its place', required: true, default: null, tui: 'prompt', valueIsLiteral: true },
+    ],
+  },
+  handler: cmdEdit,
+  resultOf: editResultOf,
+  requireArgs: editRequireArgs,
+  exitOf: editExitFor,
+});
+
+registerCommand({
+  name: 'write',
+  summary: 'create a file, or replace one whose current content you can prove',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--path', type: 'string', valueName: 'rel', description: 'the file to write, relative to the workspace', required: true, default: null, tui: 'prompt', choices: 'path', valueIsLiteral: true },
+      { name: '--content', type: 'string', valueName: 'text', description: 'the complete new contents of the file', required: true, default: null, tui: 'prompt', valueIsLiteral: true },
+      // Not `required`, and that asymmetry is the control: absent means "this
+      // file must not already exist". Supplying it is how a caller says "I read
+      // this file, and these are the bytes I intend to replace".
+      { name: '--expect', type: 'string', valueName: 'sha256', description: 'the digest of the content being replaced — required to overwrite an existing file', required: false, default: null, tui: 'prompt' },
+    ],
+  },
+  handler: cmdWrite,
+  resultOf: writeResultOf,
+  requireArgs: writeRequireArgs,
+  exitOf: editExitFor,
+});
+
+registerCommand({
+  name: 'undo',
+  summary: 'put back what the most recent edit or write replaced',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  // NOT an agent tool. Undo is the operator's recourse when the agent got it
+  // wrong, and a model that can undo its own last change can also quietly
+  // reverse a change it was asked to keep. `cli` and `tui` only.
+  surfaces: ['cli', 'tui'],
+  args: { positionals: [], flags: [] },
+  handler: cmdUndo,
+  resultOf: undoResultOf,
+  exitOf: editExitFor,
 });
 
 registerCommand({

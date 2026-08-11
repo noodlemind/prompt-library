@@ -81,7 +81,7 @@ harness index [--status]
 harness search <query>
 harness lookup <kind> <identifier>
 harness tree <workspace|knowledge|run|resources>
-harness get --docid <id> | --path <path>
+harness get --docid <id> | --path <path> [--offset <n>] [--lines <n>]
 harness orient --query <task>
 ```
 
@@ -171,6 +171,69 @@ Features:
 - Human, JSON and TUI rendering
 
 `tree` is the single navigation verb: `harness tree resources` is canonical, and the resources family does not carry a duplicate `resources tree` subcommand.
+
+### File mutation
+
+```text
+harness edit  --path <rel> --old <text> --new <text>
+harness write --path <rel> --content <text> [--expect <sha256>]
+harness undo
+```
+
+`get` reads, `edit` and `write` change, `exec` and `bash` run. Those five are
+the whole set of ways the harness touches a working tree, and they are declared
+in escalating order of consequence — `read`, then `mutate`, then `execute`.
+
+These are commands, not agent-only capabilities, and that is the point. The
+agent loop maps each of its tools onto a command argv, so `edit` and `write`
+reach the model through the same code an operator runs from the CLI or picks
+from the palette. There is one write path and `controls` sees all of it.
+
+#### `edit`
+
+Features:
+
+- Exact-string replacement, never a regex or a line number
+- The match must be **unique** — zero or several occurrences refuse, and nothing
+  is written (enforced)
+- Read-before-edit enforced structurally: a unique `--old` cannot be produced
+  without having read the file
+- Workspace containment, symlink-refusing, on every path (enforced)
+- Per-file exclusive lock across the read-verify-write (enforced)
+- Refuses files containing NUL bytes rather than corrupting them
+- Audit event carrying the path, the outcome and the digests either side — never
+  the content
+- Undo entry recorded before the change lands
+
+#### `write`
+
+```text
+harness write --path notes/new.md --content "first line"
+harness write --path README.md --content "..." --expect 9f86d081884c
+```
+
+Features:
+
+- Creating a new file requires nothing beyond the content
+- Replacing an existing file requires `--expect`, the digest of the content being
+  replaced (enforced) — a compare-and-swap, so a concurrent modification is
+  caught rather than silently overwritten
+- `harness get --json` reports the `sha256` that `--expect` consumes
+- Same containment, locking, audit and undo controls as `edit`
+
+#### `undo`
+
+Features:
+
+- Restores what the most recent `edit` or `write` replaced, or removes a file
+  that a `write` created
+- Refuses when the file has changed since — an undo over someone else's later
+  work is a second unreviewed write, not an undo
+- Not itself pushed onto the stack, so running it twice reverses two mutations
+  rather than toggling one
+- **Not offered to the agent.** It is the operator's recourse when the agent got
+  it wrong; a model able to reverse its own last change can also quietly reverse
+  one it was asked to keep.
 
 ### Checks and execution
 

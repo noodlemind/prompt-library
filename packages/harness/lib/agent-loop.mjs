@@ -49,8 +49,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EXIT } from './style.mjs';
 import { execResultOf, bashResultOf } from './exec-cmd.mjs';
+import { editResultOf, writeResultOf } from './edit-cmd.mjs';
+import { getResultOf } from './retrieval/compat-results.mjs';
 
 export const AGENT_SCHEMA = 1;
+
+/**
+ * The window the `read` tool asks for.
+ *
+ * `renderToolResult` bounds what actually reaches the model at 16 kB, so asking
+ * `get` for a little more than that costs nothing and means the truncation
+ * happens in ONE place with one notice attached, rather than twice with the
+ * inner one silent. The line count is high enough that most source files arrive
+ * whole; `offset` exists for the ones that do not.
+ */
+export const READ_DEFAULT_LINES = 800;
+export const READ_MAX_BYTES = 20_000;
 export const DEFAULT_PERSONA = 'engineer';
 export const DEFAULT_MAX_TURNS = 30;
 export const DEFAULT_MAX_SECONDS = 1800;
@@ -104,13 +118,75 @@ export const BENCHMARK_PROFILE = Object.freeze({
 /**
  * The tools the model may call.
  *
- * Exactly the harness's two governed execution surfaces, described in the terms
- * the model has to reason in. There is no `read_file`/`write_file` pair: the
- * container already has `cat` and `tee`, and adding harness-native file tools
- * would create a second write path that `controls` does not see — which is the
- * one property this loop cannot give up.
+ * Every one of them is a HARNESS COMMAND, mapped onto an argv by
+ * `dispatchToolCall` below. That is the invariant this list exists to keep: a
+ * tool inherits the audit event, the run journal, the environment allowlist and
+ * the side-effect class of the command it maps to, and no capability reaches
+ * the model that an operator cannot also reach from the CLI.
+ *
+ * An earlier version of this file carried only `bash` and `exec`, and refused a
+ * `read_file`/`write_file` pair on the grounds that harness-native file tools
+ * would create a second write path `controls` never sees. THE REASONING WAS
+ * RIGHT AND THE CONCLUSION WAS WRONG: the answer was not to withhold file
+ * tools, it was to make them commands. `read`, `edit` and `write` below are
+ * `harness get`, `harness edit` and `harness write` — the same code an operator
+ * runs, so there is still exactly one write path and `controls` still sees it.
+ *
+ * What the two-tool version cost is not theoretical. Every file change had to
+ * be expressed as shell escaping, and a live run given a one-line documentation
+ * edit emitted malformed shell six times running and wrote nothing.
  */
 export const AGENT_TOOLS = Object.freeze([
+  Object.freeze({
+    name: 'read',
+    description:
+      'Read a file from the workspace. The reply states which line range you were shown and how many lines the file has, '
+      + 'so if the range does not cover the end, call read again with `offset` set past it — do not assume you have seen the file. '
+      + 'It also returns the sha256 of the WHOLE file, which is what `write` wants in `expect` when replacing an existing file. '
+      + 'Prefer this over `cat` — it cannot be broken by quoting.',
+    schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'file path relative to the workspace root' },
+        offset: { type: 'number', description: 'first line to return, 1-indexed (default 1)' },
+        lines: { type: 'number', description: `maximum lines to return (default ${READ_DEFAULT_LINES})` },
+      },
+      required: ['path'],
+    },
+  }),
+  Object.freeze({
+    name: 'edit',
+    description:
+      'Replace one exact piece of text in an existing file. `old` must appear EXACTLY ONCE in the file — '
+      + 'if it appears zero times or more than once the edit is refused and nothing changes, so extend `old` '
+      + 'with surrounding lines until it is unique. Match byte-exactly, including indentation. '
+      + 'This is the tool for changing a file; do not use `bash` with sed or a redirect.',
+    schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'file path relative to the workspace root' },
+        old: { type: 'string', description: 'the exact existing text, unique within the file' },
+        new: { type: 'string', description: 'the text to put in its place' },
+      },
+      required: ['path', 'old', 'new'],
+    },
+  }),
+  Object.freeze({
+    name: 'write',
+    description:
+      'Write a file in full. Creating a NEW file needs nothing else. Replacing an EXISTING file requires '
+      + '`expect` — the sha256 `read` reported — which proves you are replacing the content you actually saw; '
+      + 'without it the write is refused. Use `edit` for a change to part of a file.',
+    schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'file path relative to the workspace root' },
+        content: { type: 'string', description: 'the complete contents of the file' },
+        expect: { type: 'string', description: 'sha256 of the content being replaced; required when the file exists' },
+      },
+      required: ['path', 'content'],
+    },
+  }),
   Object.freeze({
     name: 'bash',
     description:
@@ -332,22 +408,67 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
   const input = call.input && typeof call.input === 'object' ? call.input : {};
   const base = ['--workspace', workspace];
   if (copilotHome) base.push('--copilot-home', copilotHome);
-  const timeout = resolveToolTimeout({ requested: input.timeout, ceiling: timeoutSeconds });
-  if (timeout !== null) base.push('--timeout', String(timeout));
 
   let argv;
   let run;
-  if (call.name === 'bash') {
-    if (typeof input.script !== 'string' || !input.script.trim()) {
-      return { dispatched: false, reason: 'bash requires a non-empty `script`', fatal: false };
+  let timeout = null;
+  // Whether a THROWN error ends the run. For the execution tools it does: a
+  // denied shell, an unparseable configuration, a cwd outside the workspace are
+  // the harness saying no, and it will keep saying no. The file tools are the
+  // opposite — they answer an expected refusal (no such file, no unique match,
+  // a stale digest) with a `failed` RESULT, so anything they throw is a
+  // malformed call, which the model can fix on the next turn. Ending a run
+  // because a model guessed a filename wrong wastes the budget on a correctable
+  // mistake.
+  let fatalOnThrow = true;
+  if (call.name === 'bash' || call.name === 'exec') {
+    timeout = resolveToolTimeout({ requested: input.timeout, ceiling: timeoutSeconds });
+    const execBase = timeout === null ? base : [...base, '--timeout', String(timeout)];
+    if (call.name === 'bash') {
+      if (typeof input.script !== 'string' || !input.script.trim()) {
+        return { dispatched: false, reason: 'bash requires a non-empty `script`', fatal: false };
+      }
+      argv = [...execBase, '--', input.script];
+      run = bashResultOf;
+    } else {
+      const list = Array.isArray(input.argv) ? input.argv.filter((a) => typeof a === 'string') : [];
+      if (!list.length) return { dispatched: false, reason: 'exec requires a non-empty `argv` array of strings', fatal: false };
+      argv = [...execBase, '--', ...list];
+      run = execResultOf;
     }
-    argv = [...base, '--', input.script];
-    run = bashResultOf;
   } else {
-    const list = Array.isArray(input.argv) ? input.argv.filter((a) => typeof a === 'string') : [];
-    if (!list.length) return { dispatched: false, reason: 'exec requires a non-empty `argv` array of strings', fatal: false };
-    argv = [...base, '--', ...list];
-    run = execResultOf;
+    fatalOnThrow = false;
+    const rel = typeof input.path === 'string' ? input.path.trim() : '';
+    if (!rel) return { dispatched: false, reason: `${call.name} requires a \`path\` relative to the workspace root`, fatal: false };
+    if (call.name === 'read') {
+      // `get`'s own defaults — 40 lines, 2048 bytes — are sized for a knowledge
+      // store excerpt, and the byte cap clamps them to about twenty lines of
+      // prose. A model given those read the top of a 782-line document six
+      // times running, never reached the part it was asked to change, and spent
+      // the whole turn budget doing it. The window a MODEL needs is the file,
+      // bounded by what it can be shown at once.
+      argv = [...base, '--path', rel, '--max-bytes', String(READ_MAX_BYTES)];
+      const lines = Number.isFinite(input.lines) && input.lines > 0 ? Math.floor(input.lines) : READ_DEFAULT_LINES;
+      argv.push('--lines', String(lines));
+      if (Number.isFinite(input.offset) && input.offset > 1) argv.push('--offset', String(Math.floor(input.offset)));
+      run = readResultOf;
+    } else if (call.name === 'edit') {
+      if (typeof input.old !== 'string' || input.old === '') {
+        return { dispatched: false, reason: 'edit requires a non-empty `old` — the exact existing text to replace', fatal: false };
+      }
+      if (typeof input.new !== 'string') {
+        return { dispatched: false, reason: 'edit requires `new` — the replacement text (use an empty string to delete)', fatal: false };
+      }
+      argv = [...base, '--path', rel, '--old', input.old, '--new', input.new];
+      run = editResultOf;
+    } else {
+      if (typeof input.content !== 'string') {
+        return { dispatched: false, reason: 'write requires `content` — the complete contents of the file', fatal: false };
+      }
+      argv = [...base, '--path', rel, '--content', input.content];
+      if (typeof input.expect === 'string' && input.expect) argv.push('--expect', input.expect);
+      run = writeResultOf;
+    }
   }
 
   const bound = deadlineSignal(remainingSeconds, ctx.signal);
@@ -358,10 +479,49 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
   } catch (error) {
     // A refusal from the governed surface — denied, misconfigured, or confined
     // — is fatal to the loop. See the note above.
-    return { dispatched: false, reason: error.message, hint: error.hint ?? null, fatal: true, code: error.code ?? null };
+    return { dispatched: false, reason: error.message, hint: error.hint ?? null, fatal: fatalOnThrow, code: error.code ?? null };
   } finally {
     bound?.done?.();
   }
+}
+
+/**
+ * `harness get`, normalized into the outcome shape every other tool returns.
+ *
+ * `get`'s own result is the retrieval envelope (`docid`, `excerpt`, `sha256`),
+ * which predates this loop and is depended on by the CLI and the json lane, so
+ * it is adapted HERE rather than changed there. The adaptation is presentation
+ * only: the same command runs, and the excerpt handed to the model is the same
+ * excerpt an operator would see.
+ */
+async function readResultOf(argv, ctx = {}) {
+  const result = await getResultOf(argv, ctx);
+  const from = result.offset ?? 1;
+  const to = from + (result.lines ?? 0) - 1;
+  const total = result.totalLines ?? result.lines ?? 0;
+  // The header says WHERE this window sits, not merely that it was truncated.
+  // "truncated" alone is what a model reads as "that is the file" — it has no
+  // way to know it saw twenty lines of eight hundred, and no reason to ask for
+  // the rest. Naming the range and the total is what turns a second read into
+  // an obvious next move.
+  const header = total > to || from > 1
+    ? `${result.path} — lines ${from}-${to} of ${total}. Call read again with \`offset\` to see more.`
+    : `${result.path} — ${total} lines, complete.`;
+  return {
+    schema: 1,
+    mode: 'read',
+    path: result.path,
+    status: 'ok',
+    exitCode: 0,
+    sha256: result.sha256 ?? null,
+    truncated: result.truncated ?? false,
+    output: [
+      { line: header },
+      { line: `sha256: ${result.sha256 ?? 'unknown'}` },
+      { line: '' },
+      { line: result.excerpt },
+    ],
+  };
 }
 
 /** What the model is shown after a tool runs: the outcome scalars and the

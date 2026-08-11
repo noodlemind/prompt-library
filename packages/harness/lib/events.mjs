@@ -57,6 +57,14 @@ export const EVENT_TYPES = new Set([
   // should not have to trust a boolean inside a payload to find them.
   'exec',
   'bash',
+  // The file mutation audit. Separate types for the same reason `exec` and
+  // `bash` are separate: "what did this run change on disk" is a different
+  // question from "what did it run", and an auditor should be able to answer it
+  // by filtering rather than by inspecting payloads. `undo` is its own type
+  // because reversing a change is a decision worth finding on its own.
+  'edit',
+  'write',
+  'undo',
   // Trust changes (P3AC6). Granting or withdrawing a project's authority is a
   // security decision, and a security decision with no record is one nobody can
   // review after the fact.
@@ -185,6 +193,13 @@ export function writeEvent(workspace, flags, payload) {
     // them, so `harness events --failures` and the summaries keep working
     // without knowing this field exists.
     'exec',
+    // The file-mutation descriptor on `edit`/`write`/`undo` audit events, the
+    // exact counterpart of `exec` above: which path, what happened to it, and
+    // the digests either side of the change. Namespaced for the same reason —
+    // and content-free for a different one: an event log is durable, and a
+    // record of every line the harness ever wrote is the likeliest place for a
+    // pasted credential to outlive the file it was removed from.
+    'file',
     'removed',
     'reason',
     // The trust-change descriptor: which project, and which way it moved.

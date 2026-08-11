@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { agentResultOf, taskFromArgv } from '../lib/agent-cmd.mjs';
+import { hasCommand } from '../lib/registry.mjs';
 import {
   AGENT_TOOLS,
   BENCHMARK_PROFILE,
@@ -421,12 +422,27 @@ test('the loop builds no provider wire shape — every one of them lives in the 
   }
 });
 
-test('the declared tools are exactly the two governed execution surfaces', () => {
-  assert.deepEqual(AGENT_TOOLS.map((t) => t.name).sort(), ['bash', 'exec']);
+test('the declared tools are exactly the governed surfaces, and every one of them is a command', () => {
+  assert.deepEqual(AGENT_TOOLS.map((t) => t.name).sort(), ['bash', 'edit', 'exec', 'read', 'write']);
   for (const tool of AGENT_TOOLS) {
     assert.ok(tool.description.length > 40, 'a tool the model must reason about needs its constraints described');
     assert.equal(tool.schema.type, 'object');
   }
+  // The invariant the list exists to keep: a tool name that does not map to a
+  // registered command would be a capability reachable by the model and by
+  // nobody else — the second write path lib/agent-loop.mjs refuses to create.
+  // `read` is the one alias, because `harness get` is the command that reads
+  // and renaming it for the model would be worse than saying so here.
+  const commandFor = { bash: 'bash', exec: 'exec', read: 'get', edit: 'edit', write: 'write' };
+  for (const tool of AGENT_TOOLS) {
+    assert.ok(hasCommand(commandFor[tool.name]), `${tool.name} must dispatch to a registered command`);
+  }
+});
+
+test('undo is deliberately not a tool the model can call', () => {
+  assert.equal(AGENT_TOOLS.some((t) => t.name === 'undo'), false);
+  assert.ok(hasCommand('undo'), 'but it is still a command an operator can run');
+  assert.equal(getCommand('undo').surfaces.includes('agent'), false);
 });
 
 test('tool output handed back to the model is bounded', () => {

@@ -39,11 +39,11 @@
  */
 export const VALUE_FLAGS = Object.freeze(new Set([
   '--agent', '--allow-env', '--autonomy', '--base', '--body', '--body-file', '--branch',
-  '--category', '--claim', '--collection', '--command', '--copilot-home', '--criteria',
+  '--category', '--claim', '--collection', '--command', '--content', '--copilot-home', '--criteria',
   '--cursor', '--cwd', '--date', '--depth', '--docid', '--domain', '--enforcement',
-  '--gap', '--host', '--ids', '--impacted', '--intent', '--layer', '--learnings',
+  '--expect', '--gap', '--host', '--ids', '--impacted', '--intent', '--layer', '--learnings',
   '--limit', '--lines', '--match', '--max-bytes', '--max-seconds', '--max-turns',
-  '--min-score', '--model', '--ops', '--output', '--path', '--phase', '--plan',
+  '--min-score', '--model', '--new', '--offset', '--old', '--ops', '--output', '--path', '--phase', '--plan',
   '--provider', '--query', '--reason', '--risk', '--scope', '--session', '--since',
   '--slug', '--source', '--stale', '--status', '--tags', '--target', '--timeout',
   '--title', '--to', '--tool-timeout', '--trigger', '--type', '--until', '--why',

@@ -20,6 +20,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { agentResultOf } from '../lib/agent-cmd.mjs';
 import { PROVIDERS, providerEnv, resolveBaseUrl, startProvider } from '../lib/provider.mjs';
+import { AGENT_TOOLS } from '../lib/agent-loop.mjs';
 
 const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
 
@@ -301,7 +302,10 @@ test('the system prompt travels as a system message in this format, without the 
     const first = stub.seen[0].body.messages[0];
     assert.equal(first.role, 'system');
     assert.match(first.content, /OUT OF SCOPE/);
-    assert.ok(Array.isArray(stub.seen[0].body.tools) && stub.seen[0].body.tools.length === 2);
+    // Derived from the loop's own list rather than pinned to a number: this
+    // test is about the SHAPE the adapter serializes into, and a hardcoded
+    // count made adding a tool look like an adapter regression.
+    assert.ok(Array.isArray(stub.seen[0].body.tools) && stub.seen[0].body.tools.length === AGENT_TOOLS.length);
     assert.equal(stub.seen[0].body.tools[0].type, 'function', 'this format nests the schema under `function`');
     assert.ok(stub.seen[0].body.tools[0].function.parameters, 'and calls it `parameters`, not `input_schema`');
   } finally {

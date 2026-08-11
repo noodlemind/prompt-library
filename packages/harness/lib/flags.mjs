@@ -225,6 +225,8 @@ export function parseFlags(argv) {
     else if (a === '--path') flags.path = scan[++i];
     else if (a.startsWith('--lines=')) flags.lines = parsePositiveInt(a.split('=')[1], '--lines');
     else if (a === '--lines') flags.lines = parsePositiveInt(scan[++i], '--lines');
+    else if (a.startsWith('--offset=')) flags.offset = parsePositiveInt(a.split('=')[1], '--offset');
+    else if (a === '--offset') flags.offset = parsePositiveInt(scan[++i], '--offset');
     else if (a.startsWith('--max-bytes=')) flags.maxBytes = parsePositiveInt(a.split('=')[1], '--max-bytes');
     else if (a === '--max-bytes') flags.maxBytes = parsePositiveInt(scan[++i], '--max-bytes');
     else if (a.startsWith('--host=')) flags.host = a.split('=').slice(1).join('=');
