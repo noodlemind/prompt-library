@@ -215,6 +215,12 @@ export const PROVIDERS = Object.freeze({
  * still accepts an id that is not listed here, because the provider is the
  * authority on what it serves and this file is only trying to save typing.
  *
+ * NOT THE AUTHORITY, AND NO LONGER PRETENDING TO BE. `harness model refresh`
+ * asks the provider what it actually serves and caches the answer
+ * (lib/model-cache.mjs), which is what a picker shows once it exists. This
+ * table is the answer of last resort for a provider that has never been asked
+ * — enough to make `model set` a choice rather than a guess on a first run.
+ *
  * Ordered best-known-first; the provider's own `defaultModel` leads.
  */
 export const PROVIDER_MODELS = Object.freeze({
@@ -234,12 +240,33 @@ export const PROVIDER_MODELS = Object.freeze({
   lmstudio: ['qwen/qwen3-8b'],
 });
 
-/** Every (provider, model) pair a picker can offer, ready-first. */
-export function modelCatalog({ parentEnv = process.env } = {}) {
-  return providerReadiness({ parentEnv }).map((provider) => ({
-    ...provider,
-    models: PROVIDER_MODELS[provider.id] ?? [provider.defaultModel],
-  }));
+/**
+ * Every (provider, model) pair a picker can offer, ready-first — and where each
+ * list came from.
+ *
+ * PREFERS WHAT WAS FETCHED. `cache` is the catalogue `harness model refresh`
+ * recorded (lib/model-cache.mjs); the built-in table is what remains for a
+ * provider nobody has asked yet. `source` travels with the models so a surface
+ * can say which it is showing, because "these are your models" and "this is a
+ * list shipped with the harness" are different claims.
+ *
+ * Reading never fetches: this function touches no network on any path, which is
+ * what keeps every read path LLM-free.
+ */
+export function modelCatalog({ parentEnv = process.env, cache = {} } = {}) {
+  return providerReadiness({ parentEnv }).map((provider) => {
+    const cached = cache?.[provider.id];
+    if (cached?.models?.length) {
+      return { ...provider, models: cached.models, labels: cached.labels ?? {}, source: 'fetched', fetchedAt: cached.fetchedAt ?? null };
+    }
+    return {
+      ...provider,
+      models: PROVIDER_MODELS[provider.id] ?? [provider.defaultModel],
+      labels: {},
+      source: 'built-in',
+      fetchedAt: null,
+    };
+  });
 }
 
 /** Loopback is the one place a plaintext base URL is not a mistake. */
@@ -518,10 +545,65 @@ export function startProvider({
     complete(request, options = {}) {
       return plugin.request('complete', { model: model || provider.defaultModel, ...request }, options);
     },
+    /** What this account can actually use. An adapter that has not implemented
+     * it answers `unknown method`, and the caller keeps whatever it already
+     * had rather than losing a catalogue to a provider that cannot list one. */
+    models(options = {}) {
+      return plugin.request('models', {}, options);
+    },
     close() {
       plugin.close();
     },
   };
+}
+
+/**
+ * Ask a provider what it serves.
+ *
+ * THE ONE PLACE A CATALOGUE COMES FROM. A model list is not a fact about this
+ * repository — Copilot's differs by plan and by org policy, and every provider
+ * adds and retires models on its own schedule — so writing one down produces a
+ * list that is wrong in both directions at once and presents it with total
+ * confidence. `PROVIDER_MODELS` survives only as the answer of last resort, for
+ * a provider that has never been asked and cannot be reached.
+ *
+ * This is a DELIBERATE, USER-INVOKED network call, and it lives here because
+ * this module is the seam: already the only caller of `startPlugin`, the only
+ * holder of credentials, and the only thing that knows an adapter exists. Core
+ * stays LLM-free — nothing calls this on a read path, no command triggers it as
+ * a side effect, and `harness model refresh` is the only route to it.
+ *
+ * Never partially updates: a failed refresh throws and the cache is untouched,
+ * because a half-written catalogue is worse than a stale one.
+ */
+export async function fetchModels({
+  provider: providerId,
+  packageRoot = null,
+  parentEnv = process.env,
+  timeoutMs = 30_000,
+  startProviderFn = null,
+} = {}) {
+  const start = startProviderFn
+    || (() => startProvider({ provider: providerId, packageRoot, parentEnv, timeoutMs }));
+  const handle = start();
+  try {
+    const result = await handle.models();
+    const entries = Array.isArray(result?.models) ? result.models : [];
+    const models = [];
+    const labels = {};
+    for (const entry of entries) {
+      const id = typeof entry === 'string' ? entry : String(entry?.id ?? '');
+      if (!id || models.includes(id)) continue;
+      models.push(id);
+      if (entry && typeof entry.label === 'string' && entry.label) labels[id] = entry.label;
+    }
+    if (!models.length) {
+      throw Object.assign(new Error(`${providerId} returned no models`), { code: 'E_TARGET', exit: 1 });
+    }
+    return { provider: providerId, models, labels, fetchedAt: new Date().toISOString() };
+  } finally {
+    handle.close();
+  }
 }
 
 /**

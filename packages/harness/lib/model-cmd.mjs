@@ -19,7 +19,8 @@
  * provenance all work here for free. The credential never touches this file.
  */
 import path from 'node:path';
-import { PROVIDERS, providerReadiness, modelCatalog } from './provider.mjs';
+import { PROVIDERS, providerReadiness, modelCatalog, fetchModels } from './provider.mjs';
+import { readModelCache, writeModelCache, cacheAge } from './model-cache.mjs';
 import { resolveConfig, setConfigValue } from './config.mjs';
 import { isProjectTrusted } from './trust.mjs';
 import { resolveCopilotHome } from './paths.mjs';
@@ -27,7 +28,7 @@ import { parseFlags } from './flags.mjs';
 import { positionalsOf, verbOf } from './positionals.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 
-export const MODEL_VERBS = Object.freeze(['show', 'set', 'clear']);
+export const MODEL_VERBS = Object.freeze(['show', 'set', 'clear', 'refresh']);
 
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
@@ -41,6 +42,7 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
   const values = resolved?.values ?? {};
   const provenance = resolved?.provenance ?? {};
 
+  const cache = readModelCache(copilotHome);
   const activeId = values['agent.provider'] || 'github-copilot';
   const readiness = providerReadiness({ parentEnv });
   const byId = new Map(readiness.map((r) => [r.id, r]));
@@ -58,6 +60,10 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
     ready: Boolean(active?.ready),
     reason: active?.reason ?? null,
     providers: readiness,
+    /** Where the active provider's catalogue came from, and when. */
+    catalogSource: cache[activeId]?.models?.length ? 'fetched' : 'built-in',
+    catalogAge: cacheAge(cache[activeId]?.fetchedAt ?? null),
+    cache,
   };
 }
 
@@ -71,7 +77,7 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
  */
 export function modelPickerRows({ workspace, copilotHome, parentEnv = process.env } = {}) {
   const status = modelStatus({ workspace, copilotHome, parentEnv });
-  const catalog = modelCatalog({ parentEnv });
+  const catalog = modelCatalog({ parentEnv, cache: status.cache });
   const ready = catalog.filter((p) => p.ready);
   const unready = catalog.filter((p) => !p.ready);
 
@@ -106,10 +112,23 @@ export function modelPickerRows({ workspace, copilotHome, parentEnv = process.en
 
   const rows = [];
   for (const provider of ready) {
-    rows.push({ section: true, label: provider.id, note: provider.how, ready: true, disabled: true });
+    // THE HEADING SAYS WHERE ITS LIST CAME FROM. A built-in list can be both
+    // missing models the account has and offering models it does not, and a
+    // picker that shows the two kinds identically invites acting on a guess.
+    const provenance = provider.source === 'fetched'
+      ? `${provider.how} \u00b7 models ${provider.fetchedAt ? cacheAge(provider.fetchedAt) : 'fetched'}`
+      : `${provider.how} \u00b7 built-in list \u2014 model refresh`;
+    rows.push({ section: true, label: provider.id, note: provenance, ready: true, disabled: true });
     for (const model of provider.models) {
       const active = provider.id === status.provider && model === status.model;
-      rows.push({ label: model, provider: provider.id, model, note: active ? 'active' : '', active });
+      const label = provider.labels?.[model];
+      rows.push({
+        label: model,
+        provider: provider.id,
+        model,
+        note: [active ? 'active' : '', label && label !== model ? label : ''].filter(Boolean).join(' \u00b7 '),
+        active,
+      });
     }
   }
 
@@ -218,6 +237,50 @@ export async function cmdModel(argv, ctx = {}) {
       render(result, ui);
     }
     return result.ready ? EXIT.ok : EXIT.ok; // showing is never a failure
+  }
+
+  /**
+   * `harness model refresh [provider]` — ask the provider what it serves.
+   *
+   * THE ONE COMMAND THAT FETCHES A CATALOGUE, and the reason the built-in table
+   * is no longer presented as truth. Copilot's model list differs by plan and
+   * by org policy; every provider adds and retires models on its own schedule.
+   * A list written into this repository is wrong in both directions at once,
+   * and shows that wrongness with the same confidence as a correct one.
+   *
+   * It is explicit and user-invoked, which is what keeps the LLM-free property
+   * intact: no read path reaches this, and nothing calls it as a side effect.
+   * A refusal is reported as itself — an expired Copilot credential says so
+   * here rather than surfacing later as a model that does not exist.
+   */
+  if (verb === 'refresh') {
+    const target = positionals[0] || modelStatus({ workspace, copilotHome }).provider;
+    if (!(target in PROVIDERS)) {
+      throw usageError(`unknown provider: ${target}`, `known providers: ${Object.keys(PROVIDERS).join(', ')}`);
+    }
+    const readiness = providerReadiness().find((p) => p.id === target);
+    if (!readiness?.ready) {
+      throw Object.assign(new Error(`${target} is not connected`), {
+        code: 'E_DENIED',
+        exit: EXIT.needsApproval,
+        hint: readiness?.reason || 'connect the provider, then refresh',
+      });
+    }
+    const fetched = await fetchModels({ provider: target });
+    writeModelCache(copilotHome, fetched);
+    console.log(ui.line({
+      state: 'ok',
+      key: 'refresh',
+      value: `${target} · ${fetched.models.length} model(s)`,
+      note: 'from the provider',
+    }));
+    for (const id of fetched.models.slice(0, 12)) {
+      console.log(ui.line({ state: 'pending', key: '', value: id, note: fetched.labels[id] || undefined }));
+    }
+    if (fetched.models.length > 12) {
+      console.log(ui.paint('muted', `  … ${fetched.models.length - 12} more · model show`));
+    }
+    return EXIT.ok;
   }
 
   const scope = flags.scope === 'project' ? 'project' : 'user';

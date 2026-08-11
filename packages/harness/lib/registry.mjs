@@ -1684,6 +1684,9 @@ registerCommand({
     { verb: 'show', summary: 'the active provider and model, and every provider you can reach', sideEffect: 'read' },
     { verb: 'set', summary: 'make a provider (and optionally a model) the default', positionals: ['provider', 'model'] },
     { verb: 'clear', summary: 'forget the choice and fall back to the built-in default' },
+    // The one command that reaches a provider outside the agent loop, and it is
+    // explicit for that reason — a catalogue is not a fact about this repo.
+    { verb: 'refresh', summary: 'ask a provider which models it actually serves, and remember the answer', positionals: ['provider'] },
   ],
   args: {
     positionals: [

@@ -459,7 +459,7 @@ test('the palette omits lifecycle and machine-only commands; the CLI keeps them'
   const foldedByPickers = listCommands()
     .filter((name) => getCommand(name).tuiPicker)
     .reduce((sum, name) => sum + cli.rows.filter((r) => r.noun === name).length - 1, 0);
-  assert.equal(foldedByPickers, 3, 'model folds show/set/clear into its picker row');
+  assert.equal(foldedByPickers, 4, 'model folds show/set/clear/refresh into its picker row');
   assert.equal(
     cli.rows.length - tui.rows.length,
     LIFECYCLE_ONLY.length + foldedByPickers,

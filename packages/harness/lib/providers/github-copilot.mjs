@@ -220,6 +220,66 @@ async function handle(message) {
   }
   if (message.type === 'shutdown') process.exit(0);
   if (message.type !== 'request') return;
+  if (message.method === 'models') {
+    // WHAT THIS ACCOUNT CAN ACTUALLY USE. Copilot's catalogue differs by plan
+    // (Individual, Business, Enterprise) and an org policy can disable models
+    // per seat, so no list written into this repository could be right for
+    // every user — it would be simultaneously missing models and offering
+    // unsupported ones. The endpoint knows; nothing in the harness does.
+    try {
+      const bearer = await bearerToken();
+      const res = await httpRequest(`${BASE_URL}/models`, {
+        method: 'GET',
+        headers: { ...COPILOT_HEADERS, authorization: `Bearer ${bearer}` },
+      });
+      if (res.status < 200 || res.status >= 300) throw new Error(`${PROVIDER_ID}: HTTP ${res.status}`);
+      const parsed = JSON.parse(res.text);
+      // The shape is `{data: [...]}`, but a gateway or a proxy may hand back a
+      // bare array or a `models` key. Accepting all three costs nothing and
+      // turns "returned no models" — which reads as an empty account — back
+      // into the parsing question it actually is.
+      const list = Array.isArray(parsed?.data) ? parsed.data
+        : Array.isArray(parsed) ? parsed
+          : Array.isArray(parsed?.models) ? parsed.models : [];
+      if (!list.length) {
+        throw new Error(`${PROVIDER_ID}: /models returned no list (keys: ${Object.keys(parsed || {}).join(',') || 'none'})`);
+      }
+      // WHAT THE HARNESS CAN CALL, which is not what an editor would show you.
+      // `model_picker_enabled` was the obvious filter and it is the wrong one:
+      // it is Copilot's answer for its OWN picker, and this account returns 52
+      // models with the flag false on every single one — filtering by it left
+      // an empty catalogue and the misleading report that the account has no
+      // models. `supported_endpoints` is the question actually being asked,
+      // since the harness only ever posts to /chat/completions.
+      const seen = new Set();
+      const models = [];
+      for (const m of list) {
+        const id = String(m?.id ?? '');
+        if (!id || seen.has(id)) continue;
+        const endpoints = Array.isArray(m?.supported_endpoints) ? m.supported_endpoints : null;
+        if (endpoints && !endpoints.some((e) => String(e).includes('/chat/completions'))) continue;
+        seen.add(id);
+        models.push({
+          id,
+          label: typeof m?.name === 'string' ? m.name : null,
+          // Kept only as an ORDERING hint — the models an editor would surface
+          // are a reasonable "most useful first", but never a gate.
+          preferred: m?.model_picker_enabled === true,
+          preview: m?.preview === true,
+        });
+      }
+      // Preferred first, then alphabetically, so the list is stable between
+      // refreshes rather than mirroring whatever order the API replied in.
+      models.sort((a, b) => (a.preferred === b.preferred ? a.id.localeCompare(b.id) : a.preferred ? -1 : 1));
+      if (!models.length) {
+        throw new Error(`${PROVIDER_ID}: ${list.length} entries, none callable (first keys: ${Object.keys(list[0] || {}).join(',') || 'none'})`);
+      }
+      send({ type: 'result', id: message.id, result: { models } });
+    } catch (error) {
+      send({ type: 'error', id: message.id, message: error.message });
+    }
+    return;
+  }
   if (message.method !== 'complete') {
     send({ type: 'error', id: message.id, message: `unknown method: ${message.method}` });
     return;

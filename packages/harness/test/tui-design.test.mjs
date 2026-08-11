@@ -1608,3 +1608,86 @@ test('BLOCK: prose wraps, a ledger row clips — clipping a paragraph loses it',
   const out = renderBlock(ledgerRow, { ui: painted, width: 70 });
   assert.ok(out.some((r) => r.includes('…')), 'a painted row is clipped, not wrapped');
 });
+
+
+// ── the catalogue is fetched, not written down ────────────────────────────
+
+test('CATALOG: a fetched list wins over the built-in one, and says which it is', async () => {
+  // A model list is not a fact about this repository: Copilot's differs by plan
+  // and by org policy, and the hand-written table was simultaneously missing
+  // models the account had and offering ones it did not.
+  const { modelCatalog, PROVIDER_MODELS } = await import('../lib/provider.mjs');
+
+  const builtIn = modelCatalog({ parentEnv: {} }).find((p) => p.id === 'github-copilot');
+  assert.deepEqual(builtIn.models, [...PROVIDER_MODELS['github-copilot']]);
+  assert.equal(builtIn.source, 'built-in', 'an unasked provider says so');
+
+  const cache = {
+    'github-copilot': {
+      models: ['claude-opus-5', 'gpt-5.2'],
+      labels: { 'claude-opus-5': 'Claude Opus 5' },
+      fetchedAt: '2026-08-11T12:00:00.000Z',
+    },
+  };
+  const fetched = modelCatalog({ parentEnv: {}, cache }).find((p) => p.id === 'github-copilot');
+  assert.deepEqual(fetched.models, ['claude-opus-5', 'gpt-5.2']);
+  assert.equal(fetched.source, 'fetched');
+  assert.equal(fetched.fetchedAt, '2026-08-11T12:00:00.000Z');
+  assert.equal(fetched.labels['claude-opus-5'], 'Claude Opus 5');
+});
+
+test('CATALOG: the cache round-trips, updates one provider, and degrades to nothing', async () => {
+  const { readModelCache, writeModelCache, cacheAge } = await import('../lib/model-cache.mjs');
+  const home = mkdtempSync(path.join(tmpdir(), 'harness-cache-'));
+  try {
+    // Never fetched, and an unreadable cache, are the same answer: a working
+    // catalogue rather than an error.
+    assert.deepEqual(readModelCache(home), {});
+    mkdirSync(path.join(home, 'harness'), { recursive: true });
+    writeFileSync(path.join(home, 'harness', 'models.json'), '{ not json');
+    assert.deepEqual(readModelCache(home), {});
+
+    writeModelCache(home, { provider: 'groq', models: ['a', 'b'], fetchedAt: '2026-08-11T12:00:00.000Z' });
+    writeModelCache(home, { provider: 'github-copilot', models: ['c'], fetchedAt: '2026-08-11T12:30:00.000Z' });
+    const cache = readModelCache(home);
+    // Refreshing one provider must not discard what is known about another.
+    assert.deepEqual(cache.groq.models, ['a', 'b']);
+    assert.deepEqual(cache['github-copilot'].models, ['c']);
+
+    assert.equal(cacheAge(null), null, 'never fetched has no age');
+    assert.equal(cacheAge('2026-08-11T12:00:00.000Z', Date.parse('2026-08-11T12:00:30.000Z')), 'just now');
+    assert.equal(cacheAge('2026-08-11T12:00:00.000Z', Date.parse('2026-08-11T14:00:00.000Z')), '2h ago');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('CATALOG: fetchModels normalizes an adapter answer, and refuses an empty one', async () => {
+  const { fetchModels } = await import('../lib/provider.mjs');
+  let closed = false;
+  const handle = (models) => () => ({
+    models: async () => ({ models }),
+    close: () => { closed = true; },
+  });
+
+  const out = await fetchModels({
+    provider: 'github-copilot',
+    startProviderFn: handle([
+      { id: 'a', label: 'Ay' },
+      'b',
+      { id: 'a' }, // duplicates collapse
+      { id: '' }, // and empties are dropped
+    ]),
+  });
+  assert.deepEqual(out.models, ['a', 'b']);
+  assert.equal(out.labels.a, 'Ay');
+  assert.ok(out.fetchedAt);
+  assert.equal(closed, true, 'the adapter process is always closed');
+
+  // An empty answer THROWS rather than caching nothing: a provider listing no
+  // models is a failure to report, not a catalogue to remember.
+  await assert.rejects(
+    () => fetchModels({ provider: 'github-copilot', startProviderFn: handle([]) }),
+    /no models/,
+  );
+});
