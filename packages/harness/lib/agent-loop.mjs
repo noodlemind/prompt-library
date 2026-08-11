@@ -51,6 +51,7 @@ import { EXIT } from './style.mjs';
 import { execResultOf, bashResultOf } from './exec-cmd.mjs';
 import { editResultOf, writeResultOf } from './edit-cmd.mjs';
 import { getResultOf } from './retrieval/compat-results.mjs';
+import { searchResultOf } from './retrieval/search-cmd.mjs';
 
 export const AGENT_SCHEMA = 1;
 
@@ -137,6 +138,21 @@ export const BENCHMARK_PROFILE = Object.freeze({
  * edit emitted malformed shell six times running and wrote nothing.
  */
 export const AGENT_TOOLS = Object.freeze([
+  Object.freeze({
+    name: 'search',
+    description:
+      'Find where something is in this workspace — ranked across code, plans and knowledge. '
+      + 'Returns `path:line` locations with a snippet of each. USE THIS BEFORE `read` whenever you do not already '
+      + 'know the exact path: reading a guessed filename fails, and guessing repeatedly is how a run exhausts its turns. '
+      + 'A location it returns is a path `read` accepts verbatim.',
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'what to look for, in words — not a regex or a glob' },
+      },
+      required: ['query'],
+    },
+  }),
   Object.freeze({
     name: 'read',
     description:
@@ -436,6 +452,12 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
       argv = [...execBase, '--', ...list];
       run = execResultOf;
     }
+  } else if (call.name === 'search') {
+    fatalOnThrow = false;
+    const query = typeof input.query === 'string' ? input.query.trim() : '';
+    if (!query) return { dispatched: false, reason: 'search requires a non-empty `query`', fatal: false };
+    argv = [...base, query];
+    run = searchToolResultOf;
   } else {
     fatalOnThrow = false;
     const rel = typeof input.path === 'string' ? input.path.trim() : '';
@@ -483,6 +505,36 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
   } finally {
     bound?.done?.();
   }
+}
+
+/** How many hits the model is shown. `search` ranks, so the tail of a
+ * sixty-hit answer is noise that costs context; fifteen is enough to contain
+ * the right file and short enough to read. */
+const SEARCH_ROWS = 15;
+
+/**
+ * `harness search`, rendered as locations a `read` call can use verbatim.
+ *
+ * The ranked envelope carries scores, cursors and generation hashes, none of
+ * which a model can act on. What it needs is `path:line` and enough of the line
+ * to tell one hit from another — so that is what it gets, in the order the
+ * ranker put them.
+ */
+async function searchToolResultOf(argv, ctx = {}) {
+  const result = await searchResultOf(argv, ctx);
+  const hits = (result.results || []).slice(0, SEARCH_ROWS);
+  const lines = hits.map((r) => `${r.location || r.id}  ${String(r.snippet || '').replace(/\s+/g, ' ').slice(0, 120)}`);
+  const header = hits.length
+    ? `${result.total} match${result.total === 1 ? '' : 'es'}${result.total > hits.length ? `, showing ${hits.length}` : ''}`
+    : 'no matches — try different words';
+  return {
+    schema: 1,
+    mode: 'search',
+    status: 'ok',
+    exitCode: 0,
+    total: result.total ?? hits.length,
+    output: [{ line: header }, { line: '' }, ...lines.map((line) => ({ line }))],
+  };
 }
 
 /**

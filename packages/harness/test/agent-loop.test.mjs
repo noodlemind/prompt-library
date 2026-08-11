@@ -423,7 +423,7 @@ test('the loop builds no provider wire shape — every one of them lives in the 
 });
 
 test('the declared tools are exactly the governed surfaces, and every one of them is a command', () => {
-  assert.deepEqual(AGENT_TOOLS.map((t) => t.name).sort(), ['bash', 'edit', 'exec', 'read', 'write']);
+  assert.deepEqual(AGENT_TOOLS.map((t) => t.name).sort(), ['bash', 'edit', 'exec', 'read', 'search', 'write']);
   for (const tool of AGENT_TOOLS) {
     assert.ok(tool.description.length > 40, 'a tool the model must reason about needs its constraints described');
     assert.equal(tool.schema.type, 'object');
@@ -433,7 +433,7 @@ test('the declared tools are exactly the governed surfaces, and every one of the
   // nobody else — the second write path lib/agent-loop.mjs refuses to create.
   // `read` is the one alias, because `harness get` is the command that reads
   // and renaming it for the model would be worse than saying so here.
-  const commandFor = { bash: 'bash', exec: 'exec', read: 'get', edit: 'edit', write: 'write' };
+  const commandFor = { bash: 'bash', exec: 'exec', read: 'get', search: 'search', edit: 'edit', write: 'write' };
   for (const tool of AGENT_TOOLS) {
     assert.ok(hasCommand(commandFor[tool.name]), `${tool.name} must dispatch to a registered command`);
   }

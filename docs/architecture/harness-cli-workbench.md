@@ -172,6 +172,31 @@ Features:
 
 `tree` is the single navigation verb: `harness tree resources` is canonical, and the resources family does not carry a duplicate `resources tree` subcommand.
 
+### Agent tools
+
+The turn loop's tools are these same commands. `dispatchToolCall` maps each one
+onto a command argv, so a tool inherits the audit event, the run journal, the
+environment allowlist and the side-effect class of the command it maps to, and
+no capability reaches the model that an operator cannot also reach.
+
+```text
+search  →  harness search      find a path before reading it
+read    →  harness get         a window of a file, plus its sha256
+edit    →  harness edit        one exact, unique replacement
+write   →  harness write       create, or replace what you can prove
+bash    →  harness bash        a shell line
+exec    →  harness exec        one program, no shell
+```
+
+`undo` is deliberately **not** a tool. It is the operator's recourse when the
+agent got it wrong, and a model able to reverse its own last change can also
+quietly reverse one it was asked to keep.
+
+`search` is listed first because it is the one that makes `read` usable: given
+`read` and no way to find a path, a model guesses filenames. A read-only
+question spent eight turns and 143k tokens on `read` calls for files that did
+not exist; with `search` it answered correctly in three turns and 10k tokens.
+
 ### File mutation
 
 ```text
@@ -573,6 +598,30 @@ accepts today it still accepts; nothing is removed, renamed, or deprecated. The
 model invokes `harness <command> --flags` through the agent lane and never sees
 the palette; a person in a shell keeps `--help` and shell completion. The
 palette exists because the TUI is the one surface with neither.
+
+**Typing a row is choosing it.** A line that names a command the palette offers
+but does not supply its values opens the same value queue that choosing the row
+opens, carrying whatever was already typed:
+
+```text
+config set                 →  key picker, then value, then scope
+config set tui.scheme      →  value picker (the key is already answered)
+model set                  →  the model picker
+edit                       →  path, then old, then new
+```
+
+Before this, the two paths disagreed: `config set` chosen from the palette asked
+for its three values, while `config set` typed printed
+`E_USAGE: config set requires a key`. The registry knew what was missing on both
+paths; only one of them asked. **No palette row may dead-end when typed** —
+`packages/harness/test/typed-line.test.mjs` walks every row in the index and
+fails if one does.
+
+Only a *missing value* routes. An unknown flag, a value the registry states
+outright and the operator got wrong, more words than the command has places for,
+and anything after `--` all still produce the usage error they should: the
+operator asserted something specific, and a picker over the top would hide the
+mistake rather than correct it.
 
 **No `--` is ever typed in the TUI.** The index contains options so a capability
 can be *found*; it must never require one to be *written*. The palette presents

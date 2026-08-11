@@ -196,29 +196,37 @@ export function promptsFor(row) {
  * argv when nothing is needed; `queue` is the ordered list of prompts to ask;
  * `untilResolves` means later prompts may be skipped once resolve succeeds.
  */
-export function selectionPlan(row) {
+export function selectionPlan(row, values = {}) {
   if (!row) return { ready: null, queue: [], untilResolves: false, invalid: 'no row' };
 
+  // `values` is what is ALREADY known — empty when a row is chosen from the
+  // palette, pre-filled from the words already typed when a line routes here
+  // (lib/tui/typed-line.mjs). Both callers must get the same answer to "what
+  // does this still need", which is why there is one function rather than two:
+  // the divergence between the palette and the typed line is the defect this
+  // parameter exists to make unrepresentable.
+  const known = (key) => values[key] !== undefined && values[key] !== null && values[key] !== '';
+
   const all = promptsFor(row);
-  const required = all.filter((p) => p.required);
+  const required = all.filter((p) => p.required && !known(p.key));
   if (required.length) {
     return { ready: null, queue: required, untilResolves: false, invalid: null };
   }
 
-  const empty = resolveSelection(row, {});
+  const empty = resolveSelection(row, values);
   if (empty.argv) return { ready: empty.argv, queue: [], untilResolves: false, invalid: null };
   if (empty.missing?.length) {
     const byKey = new Map(all.map((p) => [p.key, p]));
-    const queue = empty.missing.map((key) => byKey.get(key) || {
+    const queue = empty.missing.filter((key) => !known(key)).map((key) => byKey.get(key) || {
       key, label: humanLabel(key), required: true, type: 'string', description: '',
     });
-    return { ready: null, queue, untilResolves: false, invalid: null };
+    if (queue.length) return { ready: null, queue, untilResolves: false, invalid: null };
   }
 
   // Either/or and similar requireArgs gates: no single prompt is required, but
   // the empty form is invalid. Offer the optional non-boolean prompts and stop
   // as soon as resolveSelection accepts the values.
-  const optional = all.filter((p) => !p.required && p.type !== 'boolean');
+  const optional = all.filter((p) => !p.required && p.type !== 'boolean' && !known(p.key));
   if (optional.length) {
     return { ready: null, queue: optional, untilResolves: true, invalid: null };
   }

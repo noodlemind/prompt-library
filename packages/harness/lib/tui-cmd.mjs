@@ -35,6 +35,7 @@ import { parseFlags } from './flags.mjs';
 import { createStyle, EXIT } from './style.mjs';
 import { dispatch, hasCommand, getCommand } from './registry.mjs';
 import { openPalette, resolveSelection, selectionPlan, signatureOf } from './tui/palette.mjs';
+import { routeTypedLine } from './tui/typed-line.mjs';
 import { createTally, interpretLine, stripControl, tokenize } from './tui/session.mjs';
 import { createOverlay, splitPrefix, applyPrefix, treeRows, filterSectioned } from './tui/overlay.mjs';
 import { createLedger, statusForExit } from './tui/ledger.mjs';
@@ -235,6 +236,29 @@ export async function runLedger({
   };
   readActiveModel();
 
+  /**
+   * Is the ledger in agent mode?
+   *
+   * THE GATE DECIDES WHAT A BARE LINE MEANS. With agent mode off, the ledger is
+   * a command surface and an unknown word is a typo — answered as one, exactly
+   * as before. With it on, a known command is still a command and anything else
+   * is a question. One config key, two coherent behaviours, and no third state
+   * where the same keystroke means different things for reasons the operator
+   * cannot see.
+   *
+   * Declared HERE, above `refreshStatus`, because that function reads it to
+   * decide what the composer may offer and runs once during startup — below its
+   * old position it was still in the temporal dead zone, and the ledger died
+   * before painting its first frame.
+   */
+  const agentMode = () => {
+    try {
+      return modelStatus({ workspace, copilotHome: resolveCopilotHome(copilotHome) }).agentEnabled === true;
+    } catch {
+      return false;
+    }
+  };
+
   const refreshStatus = () => {
     const gate = gateOf();
     const plan = planOf();
@@ -258,6 +282,8 @@ export async function runLedger({
       gate,
       shell: settings['exec.bash_enabled'] === false ? 'denied' : 'allowed',
       rerun: last?.command ? shortCommand(last.command) : null,
+      // What a bare line will actually do, so the composer can offer it or not.
+      agent: agentMode(),
     });
     readActiveModel();
   };
@@ -751,7 +777,7 @@ export async function runLedger({
     if (resolved) await runArgv(resolved);
   };
 
-  const beginSelection = async (choice) => {
+  const beginSelection = async (choice, prefill = {}) => {
     if (choice?.unavailable) {
       // Listed and greyed, with its reason — choosing one explains rather than
       // runs. Hiding it would teach that the capability does not exist.
@@ -762,8 +788,8 @@ export async function runLedger({
       say(ui.line({ state: 'warn', key: 'tui', value: 'already open', note: 'the session ledger is this surface — pick another command' }));
       return;
     }
-    const plan = selectionPlan(choice);
-    if (plan.ready) { await finishSelection(choice, {}); return; }
+    const plan = selectionPlan(choice, prefill);
+    if (plan.ready) { await finishSelection(choice, prefill); return; }
     if (!plan.queue.length) {
       say(ui.line({ state: 'warn', key: 'needs', value: choice.label, note: plan.invalid || 'nothing to run' }));
       return;
@@ -776,7 +802,10 @@ export async function runLedger({
     // only for flag-valued commands (`plan-new` needs --type/--slug/--intent),
     // where typed positionals would not map, and for piped sessions, where the
     // printed exchange is the whole interface.
-    if (interactive) {
+    // Never when values are already in hand: the shortcut rewrites the composer
+    // to the command's WORDS, which for a line the operator typed themselves
+    // would silently delete the value they had already supplied.
+    if (interactive && !Object.keys(prefill).length) {
       const tokens = choice.argvTokens || [];
       // A SLOT WITH A PICKER IS NEVER COMPLETED INLINE. This shortcut is right
       // for `search <query>` — nobody can enumerate what you want to search for,
@@ -802,7 +831,7 @@ export async function runLedger({
         }
       }
     }
-    pending = { row: choice, queue: plan.queue, index: 0, values: {}, untilResolves: plan.untilResolves };
+    pending = { row: choice, queue: plan.queue, index: 0, values: { ...prefill }, untilResolves: plan.untilResolves };
     if (!interactive) say(ui.paint('muted', `${plan.queue.length} value(s) needed · blank skips optional · exit cancels`));
     askPrompt(plan.queue[0], choice.label);
   };
@@ -986,23 +1015,6 @@ export async function runLedger({
    * that turns it on is the answer to what was actually asked; `unknown Looks`
    * answered a question nobody had.
    */
-  /**
-   * Is the ledger in agent mode?
-   *
-   * THE GATE DECIDES WHAT A BARE LINE MEANS. With agent mode off, the ledger is
-   * a command surface and an unknown word is a typo — answered as one, exactly
-   * as before. With it on, a known command is still a command and anything else
-   * is a question. One config key, two coherent behaviours, and no third state
-   * where the same keystroke means different things for reasons the operator
-   * cannot see.
-   */
-  const agentMode = () => {
-    try {
-      return modelStatus({ workspace, copilotHome: resolveCopilotHome(copilotHome) }).agentEnabled === true;
-    } catch {
-      return false;
-    }
-  };
 
   const askAgent = async (text) => {
     const status = modelStatus({ workspace, copilotHome: resolveCopilotHome(copilotHome) });
@@ -1351,8 +1363,29 @@ export async function runLedger({
         say(ui.line({ state: 'warn', key: 'tui', value: 'already open', note: 'the session ledger is this surface' }));
       } else if (parsed.argv?.length && !hasCommand(parsed.argv[0]) && agentMode()) {
         await askAgent(line);
+      } else if (parsed.argv?.length > 1 && !hasCommand(parsed.argv[0])) {
+        // A SENTENCE, WITH THE GATE SHUT. Dispatch answers `unknown command:
+        // what`, naming the first word of a question as though it were a
+        // misspelled command — the failure the composer's placeholder was
+        // written to prevent, reappearing the moment agent mode is off. The
+        // refusal teaches instead: it names which of the two things this
+        // session is, and the gesture that makes it the other.
+        //
+        // SEVERAL words, not one: a lone unknown word is a typo, and `unknown
+        // frobnicate` is the right answer to it. Nobody typos four words into a
+        // command they meant to run.
+        say(ui.line({ state: 'warn', key: 'ask', value: 'agent mode is off', note: 'shift+tab turns it on · ! runs a shell line · / for commands' }));
       } else {
-        await runArgv(parsed.argv);
+        // A typed line that names a real command but still needs a value goes
+        // to the SAME queue the palette uses, carrying the words already typed
+        // — rather than to the usage error the CLI would print. `config set`
+        // typed and `config set` chosen are the same request, and until now
+        // only one of them worked. `routeTypedLine` declines everything that is
+        // a genuine mistake, so a wrong flag still fails as a wrong flag.
+        const routed = interactive ? routeTypedLine(parsed.argv, { workspace }) : null;
+        if (routed?.picker === 'model') openModelPicker();
+        else if (routed) await beginSelection(routed.row, routed.values);
+        else await runArgv(parsed.argv);
       }
     }
   } finally {

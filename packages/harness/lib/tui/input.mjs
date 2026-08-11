@@ -127,7 +127,16 @@ export function createInput({
         composer.setPlaceholder(`${prompt.label}${prompt.note ? ` — ${prompt.note}` : ''} · ↵ submits · exit cancels`);
       } else {
         composer.setRuleLabel([hintState.mode, hintState.shell === 'denied' ? 'shell denied' : null].filter(Boolean).join(' · '));
-        composer.setPlaceholder(null);
+        // THE PLACEHOLDER PROMISES ONLY WHAT THIS SESSION CAN DO. Its default
+        // lists asking first, on the stated grounds that a bare line asks — but
+        // that is only true while the agent gate is open. With the gate shut, a
+        // typed sentence comes back as `unknown what`, which is the exact
+        // failure the default was written to prevent, reproduced in the other
+        // configuration. So the offer changes with the gate, and names the
+        // gesture that reopens it.
+        composer.setPlaceholder(hintState.agent === false
+          ? 'run a command · / for the palette · shift+tab to ask'
+          : null);
       }
       rows.push(...composer.render());
     }
