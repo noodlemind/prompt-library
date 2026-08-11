@@ -407,6 +407,14 @@ export async function runLedger({
     // a successful run that read as a broken one. `keepTail` folds the middle
     // instead. See `foldState` in lib/tui/block.mjs.
     if (name === 'agent') block.keepTail = true;
+    // AN ENUMERATION IS NOT OUTPUT TO BE FOLDED — it IS the answer. `config
+    // show` printed 20 lines and hid 14, so `agent.enabled` was reported as
+    // missing by someone looking straight at the command that lists it. The
+    // fold exists to stop 400 lines of test output burying the ledger; a
+    // command whose whole purpose is "show me the set" is the opposite case.
+    // `folded = false` is the explicit override `foldState` already honours.
+    const listing = new Set(['config', 'model']);
+    if (listing.has(name) && !rest.some((a) => a === 'set' || a === 'clear')) block.folded = false;
     activeController = new AbortController();
     session.beginLive(block);
 

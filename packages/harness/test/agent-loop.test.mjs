@@ -314,6 +314,13 @@ test('P5AC10: `agent` is a registered execute-class command, so bin/harness.mjs 
 
 test('P5AC10: a real dispatch appears in `run list` as an agent run', () => {
   const { ws, home } = scaffold('agent-journal');
+  // AGENT MODE IS OFF BY DEFAULT, and this test dispatches for real — so it has
+  // to grant the authority the gate exists to withhold. Written into the
+  // fixture home rather than relaxed in the product: the whole point of the
+  // gate is that reaching a provider is opted into, and a test that needed it
+  // waived would be testing a harness nobody ships.
+  fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'harness', 'config.yaml'), 'agent.enabled: true\n');
   // No network is needed and none is relied on: the 1-second wall clock bounds
   // the provider request, so this ends as `provider-error` or `time-budget`
   // whether the host can reach the API or not. Either way the run is journaled.

@@ -202,6 +202,26 @@ export function planAgent(argv) {
  * proves the turn sequence, the stop conditions, and the governed dispatch
  * without a key or a network, and the real path is one line.
  */
+/**
+ * Refuse to reach a provider unless agent mode was turned on deliberately.
+ *
+ * Reported as a permission outcome, not a usage error, because nothing about
+ * the command was malformed — the harness has simply not been granted the
+ * authority to call out. The hint names both routes, since an operator who hits
+ * this from the CLI may well be living in the ledger.
+ */
+function assertAgentEnabled({ workspace, copilotHome }) {
+  const home = resolveCopilotHome(copilotHome);
+  const trusted = isProjectTrusted({ workspace, copilotHome: home });
+  const resolved = resolveConfig({ copilotHome: home, workspace, projectTrusted: trusted });
+  if (resolved?.values?.['agent.enabled'] === true) return;
+  throw Object.assign(new Error('agent mode is off'), {
+    code: 'E_DENIED',
+    exit: EXIT.needsApproval,
+    hint: 'harness config set agent.enabled true --scope user  (or shift+tab in the ledger)',
+  });
+}
+
 export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, runOrientFn = runOrient } = {}) {
   const p = planAgent(argv);
   const persona = resolvePersona(p.copilotHome, p.personaName);
@@ -259,8 +279,24 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
     toolTimeoutSeconds: p.toolTimeoutSeconds,
     ctx,
     signal: ctx.signal ?? null,
+    // THE GATE IS HERE, at the exact moment a provider process would start.
+    //
+    // `agent.enabled` is off by default and everything else in the harness runs
+    // without a model — that is the invariant, and until now it was enforced
+    // only in the TUI (the picker, and whether a bare line is a question).
+    // `harness agent` itself never consulted it, so the CLI would happily reach
+    // a provider with the switch off: a gate that governs one door and not the
+    // other is not a gate.
+    //
+    // Placed inside the default factory rather than at the top of the command
+    // so it guards the thing it is actually about — starting a provider — and
+    // so an injected provider (tests, embedders) is unaffected, because a
+    // fixture is not a network call.
     startProviderFn:
-      startProviderFn || (() => startProvider({ provider: p.providerId, model: p.model, timeoutMs: p.maxSeconds * 1000 })),
+      startProviderFn || (() => {
+        assertAgentEnabled({ workspace: p.workspace, copilotHome: p.copilotHome });
+        return startProvider({ provider: p.providerId, model: p.model, timeoutMs: p.maxSeconds * 1000 });
+      }),
     onTurn: (turn, { text }) => emitTurn(ctx, p, turn, text),
   });
 }

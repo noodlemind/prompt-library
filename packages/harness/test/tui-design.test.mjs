@@ -1722,3 +1722,45 @@ test('PICKER: typing narrows a sectioned list, and a heading only survives its c
   // someone typing "GPT-4o" means the model whatever its id spells.
   assert.deepEqual(filterSectioned(rows, 'GPT-4o').map((r) => r.label), ['github-copilot', 'gpt-4o']);
 });
+
+
+test('GATE: the harness will not reach a provider until agent mode is turned on', async () => {
+  // The invariant is that the harness is LLM-free and only the agent loop needs
+  // a provider. `agent.enabled` enforced that in the TUI — the picker, and
+  // whether a bare line is a question — and NOT in `harness agent`, so the CLI
+  // reached a provider with the switch off. A gate that governs one door and
+  // not the other is not a gate.
+  const { agentResultOf } = await import('../lib/agent-cmd.mjs');
+  const home = mkdtempSync(path.join(tmpdir(), 'harness-gate-'));
+  const ws = mkdtempSync(path.join(tmpdir(), 'harness-gate-ws-'));
+  const run = () => agentResultOf(
+    ['say hi', '--workspace', ws, '--copilot-home', home, '--max-turns', '1', '--max-seconds', '5'],
+    {},
+  );
+  try {
+    // Off by DEFAULT — nothing was written to say so.
+    await assert.rejects(run, (error) => {
+      assert.equal(error.code, 'E_DENIED', 'a refusal to act, not a malformed command');
+      assert.match(error.message, /agent mode is off/);
+      // The refusal has to teach: an operator who hits this needs the switch,
+      // and may well be living in the ledger rather than the CLI.
+      assert.match(error.hint, /agent\.enabled true/);
+      assert.match(error.hint, /shift\+tab/);
+      return true;
+    });
+
+    // Turned on, the gate stops refusing — proving it gates on the key rather
+    // than on something incidental to the fixture.
+    mkdirSync(path.join(home, 'harness'), { recursive: true });
+    writeFileSync(path.join(home, 'harness', 'config.yaml'), 'agent.enabled: true\n');
+    // It may now succeed (a credential is present) or fail for a provider
+    // reason (none is) — either is the gate opening. Only E_DENIED would mean
+    // it had not.
+    await run().catch((error) => {
+      assert.notEqual(error.code, 'E_DENIED', `still gated after enabling: ${error.message}`);
+    });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
