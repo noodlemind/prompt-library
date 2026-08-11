@@ -25,11 +25,25 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { EventEmitter } from 'node:events';
 import { writeModelCache, readModelCache, cacheAge } from '../lib/model-cache.mjs';
+import { startProvider, isAutoModel } from '../lib/provider.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
+
+/** A child the plugin host can wire up without a process existing. Only the
+ * streams `startPlugin` attaches to are needed — nothing is ever written. */
+function fakeChild() {
+  const child = new EventEmitter();
+  child.pid = 424242;
+  child.stdin = Object.assign(new EventEmitter(), { write() {}, end() {} });
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding() {} });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding() {} });
+  child.kill = () => {};
+  return child;
+}
 
 function show(copilotHome) {
   return spawnSync(process.execPath, [binPath, 'model', 'show', '--no-color', '--copilot-home', copilotHome], {
@@ -87,6 +101,40 @@ test('every provenance field the status computes reaches the rendered output', (
   assert.ok(json.catalogAge, 'the status object computes an age');
   assert.match(rendered, new RegExp(json.catalogSource), 'and the source appears on screen');
   assert.match(rendered, new RegExp(json.catalogAge), 'and so does the age');
+});
+
+// `auto` is the word every comparable tool uses, and it must never reach the
+// wire: Copilot's API has no `auto` route and answers "The requested model is
+// not supported", which reads as a broken harness rather than a spelling it
+// does not know.
+test('auto is resolved to the provider default, never sent as a model id', () => {
+  const spawned = [];
+  const handle = startProvider({
+    provider: 'github-copilot',
+    model: 'auto',
+    spawnFn: (cmd, args, opts) => {
+      spawned.push({ cmd, args, opts });
+      return fakeChild();
+    },
+  });
+  assert.equal(handle.model, 'gpt-4o', 'auto means the provider chooses, and it chose its default');
+  assert.notEqual(handle.model, 'auto', 'the literal word must not survive into a request');
+  handle.close();
+});
+
+test('auto is recognised however it is typed', () => {
+  for (const spelling of ['auto', 'AUTO', ' Auto ']) assert.equal(isAutoModel(spelling), true, spelling);
+  for (const other of ['gpt-4o', '', null, undefined, 'automatic']) assert.equal(isAutoModel(other), false, String(other));
+});
+
+test('an explicit model is still passed through untouched', () => {
+  const handle = startProvider({
+    provider: 'github-copilot',
+    model: 'gpt-4.1',
+    spawnFn: () => fakeChild(),
+  });
+  assert.equal(handle.model, 'gpt-4.1');
+  handle.close();
 });
 
 test('the cache round-trips what was written, and dates it', () => {

@@ -279,13 +279,41 @@ async function handle(message) {
           preview: m?.preview === true,
         });
       }
+      // METADATA IS A PRE-FILTER, NEVER THE VERDICT. Measured on a real
+      // account: of 24 models the fields above admit, 10 refuse an actual
+      // completion — `claude-haiku-4.5` and `gpt-5-mini` arrive
+      // `policy.state: enabled`, chat-capable, listing /chat/completions, and
+      // answer "The requested model is not supported"; `gpt-4` carries no
+      // gate of any kind and refuses too. No field in the record predicts the
+      // outcome in either direction, so the catalogue's promise — "these are
+      // the models you can use" — is only honest if each survivor has
+      // ANSWERED. One max_tokens:1 completion per candidate, a few at a time;
+      // `model refresh` is explicit and rare, and a wrong list costs more
+      // than a probe. A model that fails the probe for a transient reason
+      // reappears on the next refresh, so the cost of a false negative is one
+      // stale entry, not a lost capability.
+      const verified = [];
+      const queue = [...models];
+      const PROBE_CONCURRENCY = 4;
+      await Promise.all(Array.from({ length: PROBE_CONCURRENCY }, async () => {
+        for (let m = queue.shift(); m !== undefined; m = queue.shift()) {
+          try {
+            const probe = await httpRequest(`${BASE_URL}/chat/completions`, {
+              method: 'POST',
+              headers: { ...COPILOT_HEADERS, authorization: `Bearer ${await bearerToken()}`, 'content-type': 'application/json' },
+              body: JSON.stringify({ model: m.id, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+            });
+            if (probe.status >= 200 && probe.status < 300) verified.push(m);
+          } catch { /* unreachable counts as uncallable */ }
+        }
+      }));
       // Preferred first, then alphabetically, so the list is stable between
       // refreshes rather than mirroring whatever order the API replied in.
-      models.sort((a, b) => (a.preferred === b.preferred ? a.id.localeCompare(b.id) : a.preferred ? -1 : 1));
-      if (!models.length) {
-        throw new Error(`${PROVIDER_ID}: ${list.length} entries, none callable (first keys: ${Object.keys(list[0] || {}).join(',') || 'none'})`);
+      verified.sort((a, b) => (a.preferred === b.preferred ? a.id.localeCompare(b.id) : a.preferred ? -1 : 1));
+      if (!verified.length) {
+        throw new Error(`${PROVIDER_ID}: ${list.length} entries, none answered a probe call (${models.length} passed the metadata filter)`);
       }
-      send({ type: 'result', id: message.id, result: { models } });
+      send({ type: 'result', id: message.id, result: { models: verified } });
     } catch (error) {
       send({ type: 'error', id: message.id, message: error.message });
     }

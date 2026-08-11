@@ -1301,7 +1301,12 @@ test('FIELD: the catalog is a starting point, never an inventory that phones hom
   for (const provider of catalog) {
     assert.ok(provider.models.length >= 1, `${provider.id} offers something`);
   }
-  assert.ok(PROVIDER_MODELS['github-copilot'].includes('gpt-4o'));
+  // The one thing the static table may claim about Copilot is `auto`. The
+  // previous six-entry guess offered five models the measured account cannot
+  // call — a menu of refusals presented with a real one's confidence. Every
+  // actual id now arrives only through `model refresh`, which verifies each
+  // candidate with a probe call before listing it.
+  assert.deepEqual([...PROVIDER_MODELS['github-copilot']], ['auto']);
 });
 
 test('ACCESS: the colourblind scheme gives up the green/red axis entirely', async () => {
@@ -1630,10 +1635,15 @@ test('CATALOG: a fetched list wins over the built-in one, and says which it is',
     },
   };
   const fetched = modelCatalog({ parentEnv: {}, cache }).find((p) => p.id === 'github-copilot');
-  assert.deepEqual(fetched.models, ['claude-opus-5', 'gpt-5.2']);
+  // `auto` leads every fetched list. It is a harness spelling no provider will
+  // ever include in its own answer, so the catalogue is the one place it can
+  // join — and the first row of every comparable tool's picker is "let the
+  // provider choose".
+  assert.deepEqual(fetched.models, ['auto', 'claude-opus-5', 'gpt-5.2']);
   assert.equal(fetched.source, 'fetched');
   assert.equal(fetched.fetchedAt, '2026-08-11T12:00:00.000Z');
   assert.equal(fetched.labels['claude-opus-5'], 'Claude Opus 5');
+  assert.match(fetched.labels.auto, /provider default/, 'auto says what it resolves to');
 });
 
 test('CATALOG: the cache round-trips, updates one provider, and degrades to nothing', async () => {

@@ -62,6 +62,24 @@ export const PROVIDER_TIMEOUT_MS = 300_000;
  * loopback interface has no account to bill and no credential to check.
  * Demanding a fake key to talk to Ollama would be ceremony.
  */
+/**
+ * The model id that means "you choose".
+ *
+ * Every comparable tool spells it `auto`, and a person moving between them
+ * expects the word to work. It is a HARNESS-SIDE spelling, never a wire value:
+ * `--model auto` resolves to the provider's default before the request is
+ * built, because no provider's API accepts it and passing it through produced
+ * "The requested model is not supported" — an error about the model when the
+ * problem was the vocabulary.
+ */
+export const AUTO_MODEL = 'auto';
+
+/** Whether a caller asked the harness to choose. Trimmed and case-insensitive:
+ * this is a word a person types. */
+export function isAutoModel(model) {
+  return typeof model === 'string' && model.trim().toLowerCase() === AUTO_MODEL;
+}
+
 export const PROVIDERS = Object.freeze({
   anthropic: {
     id: 'anthropic',
@@ -224,7 +242,13 @@ export const PROVIDERS = Object.freeze({
  * Ordered best-known-first; the provider's own `defaultModel` leads.
  */
 export const PROVIDER_MODELS = Object.freeze({
-  'github-copilot': ['gpt-4o', 'gpt-5', 'claude-sonnet-4.5', 'claude-opus-4.1', 'gemini-2.5-pro', 'o3-mini'],
+  // NO GUESSED LIST FOR COPILOT. Its serving set is per-account, per-plan and
+  // per-policy, and the previous six-entry guess offered five models the
+  // measured account cannot call — a menu of refusals presented with the same
+  // confidence as a real one. Until `model refresh` has ASKED, the only claim
+  // the harness can honestly make is `auto`: let the provider answer with its
+  // default, which is also the row every comparable tool leads with.
+  'github-copilot': [AUTO_MODEL],
   anthropic: ['claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5-20251001'],
   openai: ['gpt-5', 'gpt-5-mini', 'o3', 'o4-mini'],
   openrouter: ['anthropic/claude-sonnet-4.5', 'openai/gpt-5', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat'],
@@ -257,12 +281,21 @@ export function modelCatalog({ parentEnv = process.env, cache = {} } = {}) {
   return providerReadiness({ parentEnv }).map((provider) => {
     const cached = cache?.[provider.id];
     if (cached?.models?.length) {
-      return { ...provider, models: cached.models, labels: cached.labels ?? {}, source: 'fetched', fetchedAt: cached.fetchedAt ?? null };
+      // `auto` LEADS EVERY FETCHED LIST. It is a harness spelling, not a wire
+      // value (see AUTO_MODEL), so no provider will ever include it in its own
+      // answer — prepending here is the one place it can join the catalogue,
+      // and a picker whose first row is "let the provider choose" is the shape
+      // every comparable tool converged on.
+      const models = cached.models.includes(AUTO_MODEL) ? cached.models : [AUTO_MODEL, ...cached.models];
+      const labels = { [AUTO_MODEL]: `provider default (${provider.defaultModel})`, ...(cached.labels ?? {}) };
+      return { ...provider, models, labels, source: 'fetched', fetchedAt: cached.fetchedAt ?? null };
     }
     return {
       ...provider,
       models: PROVIDER_MODELS[provider.id] ?? [provider.defaultModel],
-      labels: {},
+      labels: PROVIDER_MODELS[provider.id]?.includes(AUTO_MODEL)
+        ? { [AUTO_MODEL]: `provider default (${provider.defaultModel})` }
+        : {},
       source: 'built-in',
       fetchedAt: null,
     };
@@ -499,7 +532,7 @@ function copilotEditorLogin({ parentEnv = process.env } = {}) {
 
 export function startProvider({
   provider: providerId = 'anthropic',
-  model = null,
+  model: requestedModel = null,
   packageRoot = null,
   timeoutMs = PROVIDER_TIMEOUT_MS,
   parentEnv = process.env,
@@ -507,6 +540,13 @@ export function startProvider({
   spawnFn = undefined,
 } = {}) {
   const provider = resolveProvider(providerId);
+  // `auto` is resolved HERE, not sent. Every other tool that offers the word
+  // resolves it client-side and puts a concrete id on the wire; Copilot's API
+  // has no `auto` route and answers "The requested model is not supported",
+  // which reads as a broken harness rather than an unsupported spelling.
+  // Normalising to null lets the existing `model || provider.defaultModel`
+  // below do the choosing, so `auto` and "unset" cannot drift apart.
+  const model = isAutoModel(requestedModel) ? null : requestedModel;
   // F4 (Codex phase-5 review): `new URL(...).pathname` is percent-ENCODED, so
   // an install under `C:\Users\Jane Doe\` resolved to `Jane%20Doe` and every
   // `harness agent` run failed with "provider adapter missing". `fileURLToPath`
@@ -580,7 +620,11 @@ export async function fetchModels({
   provider: providerId,
   packageRoot = null,
   parentEnv = process.env,
-  timeoutMs = 30_000,
+  // Wide enough for the Copilot adapter's verification sweep: `models` is no
+  // longer one GET — each candidate answers a max_tokens:1 probe before it may
+  // appear, ~24 probes a few at a time. A refresh is explicit and rare; a
+  // timeout that kills the sweep halfway returns the worse catalogue faster.
+  timeoutMs = 180_000,
   startProviderFn = null,
 } = {}) {
   const start = startProviderFn
