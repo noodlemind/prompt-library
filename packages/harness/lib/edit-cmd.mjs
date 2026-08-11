@@ -177,7 +177,13 @@ function failed(mode, relPath, reason, message, hint) {
  */
 function acquireLock(workspace, relPath) {
   const dir = path.join(workspace, LOCK_DIR);
-  const file = path.join(dir, `${crypto.createHash('sha1').update(relPath).digest('hex').slice(0, 32)}.lock`);
+  // Hash the RESOLVED path, not the spelling the caller used: `a.txt`,
+  // `./a.txt` and `sub/../a.txt` are one file, and hashing the raw string gave
+  // each of them its own lock — serialization that fails exactly when two
+  // callers disagree about how to write the path, which is the likeliest way
+  // for two callers to arrive at all.
+  const key = path.resolve(workspace, relPath);
+  const file = path.join(dir, `${crypto.createHash('sha1').update(key).digest('hex').slice(0, 32)}.lock`);
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch {
@@ -209,7 +215,13 @@ function acquireLock(workspace, relPath) {
       }
     }
   }
-  return { held: false, degraded: 'could not take the lock', release: () => {} };
+  // Both attempts lost the race to re-create a lock we had judged stale, which
+  // means another process is actively taking it. Report BUSY so the caller
+  // refuses: proceeding here would be a read-verify-write running unserialized
+  // against a writer we have positive evidence is live — the exact interleaving
+  // the lock exists to prevent. Only a missing lock DIRECTORY degrades to
+  // proceeding, because that says nothing about contention.
+  return { held: false, degraded: 'could not take the lock', busy: true, release: () => {} };
 }
 
 /** Resolve a workspace-relative path, or null when it escapes. Kept as one
@@ -407,7 +419,11 @@ export function runWrite({ workspace, path: relPath, content, expect = null, dry
   if (!full) {
     return failed('write', relPath, 'escapes-workspace', `refusing to write outside the workspace: ${relPath}`, 'paths are relative to the workspace root, and may not traverse above it or through a symlink');
   }
-  if (expect !== null && expect.length < MIN_EXPECT_CHARS) {
+  // A digest is a hex string, and hex has no case. A caller who pasted an
+  // uppercase one was told the file had changed, which sent them to look for a
+  // concurrent writer that did not exist.
+  const expected = expect === null ? null : expect.trim().toLowerCase();
+  if (expected !== null && expected.length < MIN_EXPECT_CHARS) {
     return failed('write', relPath, 'expect-too-short', `--expect needs at least ${MIN_EXPECT_CHARS} characters of the sha256`, 'harness get --path <file> --json reports the full digest');
   }
 
@@ -420,7 +436,7 @@ export function runWrite({ workspace, path: relPath, content, expect = null, dry
     if (target.exists && target.binary) {
       return failed('write', relPath, 'binary', `${relPath} contains NUL bytes; refusing to replace it through a text API`, null);
     }
-    if (target.exists && expect === null) {
+    if (target.exists && expected === null) {
       return failed(
         'write',
         relPath,
@@ -431,16 +447,16 @@ export function runWrite({ workspace, path: relPath, content, expect = null, dry
     }
     if (target.exists) {
       const current = sha256(target.content);
-      if (!current.startsWith(expect)) {
+      if (!current.startsWith(expected)) {
         return failed(
           'write',
           relPath,
           'stale',
           `${relPath} has changed since it was read`,
-          `--expect was ${expect}, the file is now ${current.slice(0, 12)} — read it again before replacing it`,
+          `--expect was ${expected}, the file is now ${current.slice(0, 12)} — read it again before replacing it`,
         );
       }
-    } else if (expect !== null) {
+    } else if (expected !== null) {
       // A digest for a file that is not there. The caller believes they are
       // replacing something, and creating it instead would satisfy the letter
       // of the request while doing the opposite of what they checked for — the
@@ -648,7 +664,13 @@ function planEdit(argv) {
   requirePath(relPath, 'edit');
   const old = literalFlag(argv, '--old');
   const next = literalFlag(argv, '--new');
-  if (old === null) throw usageError('edit requires --old <text>', 'harness edit --path <file> --old <text> --new <text>');
+  // Empty is refused with the same message as absent, deliberately. An empty
+  // search string matches at every position, so the unique-match rule reported
+  // it as "appears more than once" — a true statement that sends the caller
+  // looking for a duplicate in their file instead of at their own argument.
+  // `--new` and `--content` may legitimately be empty (deleting text, an empty
+  // file), so only this one carries the check.
+  if (!old) throw usageError('edit requires --old <text>', 'harness edit --path <file> --old <text> --new <text>');
   if (next === null) throw usageError('edit requires --new <text>', 'harness edit --path <file> --old <text> --new <text>');
   return { flags, workspace, relPath, old, next };
 }

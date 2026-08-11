@@ -18,6 +18,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { agentResultOf } from '../lib/agent-cmd.mjs';
 import { PROVIDERS, providerEnv, resolveBaseUrl, startProvider } from '../lib/provider.mjs';
 import { AGENT_TOOLS } from '../lib/agent-loop.mjs';
@@ -75,7 +76,7 @@ function scaffold(prefix) {
 // --- the registry ---------------------------------------------------------
 
 test('every provider resolves to an adapter that exists on disk', () => {
-  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   for (const provider of Object.values(PROVIDERS)) {
     assert.ok(fs.existsSync(path.join(root, 'lib', provider.adapter)), `${provider.id} → ${provider.adapter}`);
     assert.ok(provider.defaultModel, `${provider.id} needs a default model or --provider alone is unusable`);
@@ -91,7 +92,7 @@ test('the OpenAI-compatible providers share ONE adapter, and copilot only adds a
   // github-copilot differs only in how the credential comes to exist: its
   // adapter IMPORTS the wire shaping from the shared one rather than copying
   // it, pinned here so the import cannot quietly become a fork.
-  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const copilot = fs.readFileSync(path.join(root, 'lib', 'providers', 'github-copilot.mjs'), 'utf8');
   assert.match(copilot, /from '\.\/openai-compatible\.mjs'/);
   assert.doesNotMatch(copilot, /function toWireMessages/, 'shaping lives once');
@@ -254,7 +255,10 @@ test('the loop completes a task end to end against a server that actually answer
   const { ws, home } = scaffold('adapter-e2e');
   const marker = path.join(ws, 'proof.txt');
   const stub = await stubServer((body, n) => {
-    if (n === 1) return [200, openAiToolCall('bash', JSON.stringify({ script: `echo proven > ${marker}` }))];
+    // Quoted: the marker sits under the OS temp directory, which on a Windows
+    // runner routinely contains a space, and an unquoted redirect target would
+    // split into two words and write to the wrong place.
+    if (n === 1) return [200, openAiToolCall('bash', JSON.stringify({ script: `echo proven > "${marker}"` }))];
     return [200, openAiText('the file is written')];
   });
   try {

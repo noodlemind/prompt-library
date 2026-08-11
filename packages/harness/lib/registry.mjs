@@ -938,7 +938,7 @@ function getRequireArgs(rest, flags) {
 // second, subtly different guard.
 function editRequireArgs(rest) {
   if (!literalFlag(rest, '--path')) return 'edit requires --path <relative-path>';
-  if (literalFlag(rest, '--old') === null) return 'edit requires --old <text>';
+  if (!literalFlag(rest, '--old')) return 'edit requires --old <text>';
   if (literalFlag(rest, '--new') === null) return 'edit requires --new <text>';
 }
 

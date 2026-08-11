@@ -75,9 +75,15 @@ export function runGet({ workspace, copilotHome, flags }) {
   const start = Math.min(offset - 1, allLines.length);
   const lines = allLines.slice(start, start + maxLines);
   let excerpt = lines.join('\n');
-  if (Buffer.byteLength(excerpt, 'utf8') > maxBytes) {
+  const clipped = Buffer.byteLength(excerpt, 'utf8') > maxBytes;
+  if (clipped) {
     excerpt = truncateUtf8(excerpt, maxBytes);
   }
+  // Derived from the WINDOW, not from comparing the excerpt to the raw file.
+  // The split above normalizes CRLF to LF, so a complete read of a CRLF file
+  // never equals its own source and reported itself truncated — which is the
+  // one thing a caller uses this field to rule out.
+  const truncated = clipped || start > 0 || start + lines.length < allLines.length;
 
   return {
     docid: entry.docid || entry.id || docid || null,
@@ -85,7 +91,10 @@ export function runGet({ workspace, copilotHome, flags }) {
     title: entry.title || path.basename(fullPath),
     excerpt,
     bytes: Buffer.byteLength(excerpt, 'utf8'),
-    lines: excerpt.split('\n').length,
+    // An empty window has zero lines. `''.split('\n')` is `['']`, so the old
+    // expression reported 1 for a read entirely past the end of the file, and
+    // the agent lane rendered it as "lines 9999-9999".
+    lines: excerpt === '' ? 0 : excerpt.split('\n').length,
     // Where this window sits in the file. Without these a caller cannot tell a
     // complete small file from the top of a large one, which is the difference
     // between "I have read this" and "I have read the first screen of this".
@@ -97,6 +106,6 @@ export function runGet({ workspace, copilotHome, flags }) {
     // saw. `truncated` says whether this read covered the file, so a caller can
     // tell "I have seen all of this" from "I have seen the beginning of it".
     sha256: createHash('sha256').update(raw, 'utf8').digest('hex'),
-    truncated: excerpt !== raw,
+    truncated,
   };
 }
