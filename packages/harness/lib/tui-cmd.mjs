@@ -34,7 +34,7 @@ import { createInput } from './tui/input.mjs';
 import { parseFlags } from './flags.mjs';
 import { createStyle, EXIT } from './style.mjs';
 import { dispatch, hasCommand, getCommand } from './registry.mjs';
-import { openPalette, resolveSelection, selectionPlan } from './tui/palette.mjs';
+import { openPalette, resolveSelection, selectionPlan, signatureOf } from './tui/palette.mjs';
 import { createTally, interpretLine, stripControl, tokenize } from './tui/session.mjs';
 import { createOverlay, splitPrefix, applyPrefix, treeRows } from './tui/overlay.mjs';
 import { createLedger, statusForExit } from './tui/ledger.mjs';
@@ -131,6 +131,7 @@ export async function runLedger({
     ascii: !ui.unicode,
     footerItems: settings['tui.statusline'],
     paletteChord: settings['tui.palette_chord'] ?? 'ctrl+p',
+    classify: classifyWord,
     altScreen: settings['tui.alt_screen'] === true,
     // Ctrl-C and Esc during a running command reach the abort controller here,
     // not through SIGINT: raw mode stays on for the whole dispatch so the live
@@ -176,6 +177,24 @@ export async function runLedger({
   const say = (rows) => {
     session.commit([...(Array.isArray(rows) ? rows : [rows]), ...separator()]);
   };
+
+  /**
+   * What a typed word IS, answered from the registry rather than a list.
+   *
+   * A hand-kept vocabulary would drift the moment a command was added; asking
+   * the registry means a new command lights up the day it is registered.
+   */
+  function classifyWord(word, { first = false, head = '' } = {}) {
+    if (!word) return null;
+    if (word.startsWith('--')) return 'flag';
+    if (['exit', 'quit', 'help', 'clear'].includes(word)) return 'session';
+    if (first) return hasCommand(word) ? 'command' : null;
+    // A verb only counts after ITS OWN command — `run` is a command and
+    // `checks run` is a verb; painting the second as a command would say
+    // something false about what is about to happen.
+    if (!head || !hasCommand(head)) return null;
+    return (getCommand(head)?.verbs || []).some((v) => v.verb === word) ? 'verb' : null;
+  }
 
   // ── session chrome ────────────────────────────────────────────────────
   const git = safeGit(workspace);
@@ -473,6 +492,7 @@ export async function runLedger({
     const palette = openPalette({ workspace, query: rest });
     const rows = applyPrefix(palette.rows, prefix).map((row) => ({
       ...row,
+      signature: signatureOf(row),
       note: stripFlagSyntax(row.summary),
       reason: row.unavailable || null,
     }));
@@ -906,6 +926,10 @@ export async function runLedger({
         const hits = completePath(parsed.target, { workspace });
         if (!hits.length) say(ui.line({ state: 'warn', key: 'file', value: parsed.target, note: 'no match in this workspace' }));
         else hits.forEach((h) => say(ui.line({ state: 'pending', key: h.kind, value: h.path })));
+      } else if (parsed.argv?.[0] === 'tui') {
+        // The palette no longer offers it, but the word is still typeable —
+        // and a nested ledger would steal the same stdin and never return.
+        say(ui.line({ state: 'warn', key: 'tui', value: 'already open', note: 'the session ledger is this surface' }));
       } else {
         await runArgv(parsed.argv);
       }

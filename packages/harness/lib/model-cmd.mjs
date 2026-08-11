@@ -41,7 +41,7 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
   const values = resolved?.values ?? {};
   const provenance = resolved?.provenance ?? {};
 
-  const activeId = values['agent.provider'] || 'anthropic';
+  const activeId = values['agent.provider'] || 'github-copilot';
   const readiness = providerReadiness({ parentEnv });
   const byId = new Map(readiness.map((r) => [r.id, r]));
   const active = byId.get(activeId) ?? null;
@@ -125,7 +125,7 @@ export async function cmdModel(argv, ctx = {}) {
   const scope = flags.scope === 'project' ? 'project' : 'user';
 
   if (verb === 'clear') {
-    setConfigValue({ scope, key: 'agent.provider', value: 'anthropic', copilotHome, workspace });
+    setConfigValue({ scope, key: 'agent.provider', value: 'github-copilot', copilotHome, workspace });
     setConfigValue({ scope, key: 'agent.model', value: '', copilotHome, workspace });
     console.log(ui.line({ state: 'ok', key: 'model', value: 'cleared', note: `${scope} scope · back to the built-in default` }));
     return EXIT.ok;

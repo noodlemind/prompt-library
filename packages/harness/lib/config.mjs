@@ -143,7 +143,12 @@ export const CONFIG_SCHEMA = Object.freeze({
    */
   'agent.provider': {
     type: 'string',
-    default: 'anthropic',
+    // COPILOT IS PRIMARY. It is the provider this project's users already
+    // have — the hydration target is Copilot, the personas are Copilot
+    // agents — and it is the only one that needs no key exported: an editor
+    // sign-in is the credential. A default nobody can use is a default that
+    // teaches people to pass a flag.
+    default: 'github-copilot',
     merge: 'override',
     description: 'default provider for `harness agent` (see: harness model)',
   },

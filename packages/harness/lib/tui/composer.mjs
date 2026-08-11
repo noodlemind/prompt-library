@@ -60,6 +60,18 @@ export function createComposer({
   // honoured as an ALIAS when the line is empty — there is nothing to kill
   // then, so both muscle memories can be right.
   paletteChord = 'ctrl+p',
+  /**
+   * Is this word a real command, verb, or flag? The loop supplies it from the
+   * registry; without it every line paints as plain text.
+   *
+   * WHY THE EDITOR PAINTS AT ALL: Claude Code colours a recognised slash
+   * command the moment it is complete, so you know BEFORE pressing Enter
+   * whether you typed a capability or a sentence. The harness had one input
+   * that accepted both governed commands and shell escapes and rendered them
+   * identically — a typo and a real command looked the same until the block
+   * came back with `unknown`.
+   */
+  classify = null,
 } = {}) {
   const glyphs = ascii ? ASCII : UNICODE;
   // Lines are arrays of grapheme clusters, not strings: every cursor movement,
@@ -328,10 +340,16 @@ export function createComposer({
       body.push(`${paint('info', caret)}${paint('muted', placeholder)}`);
     } else {
       lines.forEach((clusters, i) => {
-        const wrapped = wrapCells(asText(clusters), inner);
+        const text = asText(clusters);
+        const wrapped = wrapCells(text, inner);
         wrapped.forEach((piece, j) => {
           const prefix = i === 0 && j === 0 ? paint('info', caret) : ' '.repeat(caretCells);
-          body.push(`${prefix}${piece}`);
+          // Highlighting applies to an UNWRAPPED first row only: painting
+          // across a wrap boundary would need the escape state carried between
+          // rows, and a long multiline command is the case where the shape is
+          // already obvious.
+          const shown = i === 0 && wrapped.length === 1 ? highlight(piece) : piece;
+          body.push(`${prefix}${shown}`);
         });
       });
     }
@@ -344,6 +362,40 @@ export function createComposer({
     if (completion?.items?.length) out.push(...renderCompletion());
     if (hint) out.push(hint);
     return out;
+  }
+
+  /**
+   * Paint the parts of a line the harness recognises.
+   *
+   * Four classes, each already meaning something in the design system: a
+   * COMMAND or session word is `info` (the colour of a thing you can act on),
+   * a VERB is `ok` (it completes a command into something runnable), a FLAG is
+   * `warn` (it changes what happens), and a sigil is `info` because it is the
+   * strongest signal of all. Everything unrecognised stays plain ink — which
+   * is itself the signal: a command that does not light up is a command that
+   * does not exist.
+   */
+  function highlight(text) {
+    if (!classify || !text) return text;
+    // Shell escapes and re-runs are their own grammar: paint the sigil and
+    // leave the script alone, because the shell owns what follows.
+    const sigil = /^(!!|!|@|\/)/.exec(text);
+    if (sigil) {
+      return `${paint('info', sigil[1])}${text.slice(sigil[1].length)}`;
+    }
+    // The line's HEAD is what makes a later word a verb: `run` is a command,
+    // `checks run` is a verb, and the classifier cannot tell them apart
+    // without knowing which word came first.
+    const head = (text.trim().split(/\s+/)[0] || '');
+    let index = -1;
+    return text.replace(/\S+/g, (word) => {
+      index += 1;
+      const kind = classify(word, { first: index === 0, head });
+      if (kind === 'command' || kind === 'session') return paint('info', word);
+      if (kind === 'verb') return paint('ok', word);
+      if (kind === 'flag') return paint('warn', word);
+      return word;
+    });
   }
 
   /** The `@` list, drawn under the editor as an inline chooser rather than an

@@ -94,6 +94,38 @@ export function resolveSelection(row, values = {}) {
 }
 
 /**
+ * What a row still needs, in the shape a person types it.
+ *
+ * THE DISCOVERABILITY PROBLEM THIS SOLVES: a palette row said `model set` and
+ * `plan-new` and nothing more, so an operator who had not memorised the CLI
+ * could not tell that one wants two words and the other wants three named
+ * values. Every reference palette shows the shape — Claude Code puts the
+ * arguments beside the command, OpenCode groups and searches them — because a
+ * list of verbs you cannot complete is a list of dead ends.
+ *
+ * Positionals render as `<required>` / `[optional]`, required flags by name.
+ * Optional flags are summarised as a count rather than listed: a row is a
+ * glance, and `--limit --explain --source --collection` after every search
+ * would bury the one thing that matters.
+ */
+export function signatureOf(row) {
+  if (!row) return '';
+  const parts = [];
+  for (const token of row.argvTokens || []) {
+    if (token.kind !== 'value') continue;
+    const name = token.valueName || token.positional || String(token.flag ?? '').replace(/^--/, '');
+    parts.push(token.required === false ? `[${name}]` : `<${name}>`);
+  }
+  const flags = row.prompts || [];
+  for (const flag of flags.filter((f) => f.required)) {
+    parts.push(`${flag.flag} <${String(flag.flag).replace(/^--/, '')}>`);
+  }
+  const optional = flags.filter((f) => !f.required).length;
+  if (optional) parts.push(`[+${optional}]`);
+  return parts.join(' ');
+}
+
+/**
  * The name a person is asked for.
  *
  * A flag definition may carry its aliases in the name (`-c, --collection`), and

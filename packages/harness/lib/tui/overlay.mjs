@@ -364,7 +364,10 @@ export function renderPaletteRows(overlay, { ui, width = 80 } = {}) {
   if (!rows.length) {
     return [ui.tintRow('panel', padTo(`  ${ui.paint('muted', 'nothing matches')}`, width))];
   }
-  const labelW = Math.min(26, Math.max(...rows.map((r) => displayWidth(String(r.label ?? '')))));
+  // The label column holds the command AND what it needs, so the shape is
+  // visible before the choice rather than discovered by failing.
+  const labelOf = (r) => (r.signature ? `${r.label} ${r.signature}` : String(r.label ?? ''));
+  const labelW = Math.min(38, Math.max(...rows.map((r) => displayWidth(labelOf(r)))));
   const out = [];
   for (const [i, row] of rows.entries()) {
     const chosen = overlay.offset + i === overlay.index;
@@ -373,13 +376,24 @@ export function renderPaletteRows(overlay, { ui, width = 80 } = {}) {
       ? ui.paint(row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : 'error', row.sideEffect)
       : '';
     const effectW = row.sideEffect ? row.sideEffect.length + 1 : 0;
-    const label = clipTo(String(row.label ?? ''), labelW);
-    const labelOut = disabled ? ui.paint('muted', padTo(label, labelW)) : padTo(label, labelW);
+    // The signature is dim beside a bright command — Amp's namespace/verb
+    // contrast, applied to command/arguments.
+    const plainLabel = clipTo(labelOf(row), labelW);
+    const pad = ' '.repeat(Math.max(0, labelW - displayWidth(plainLabel)));
+    let labelOut;
+    if (disabled) {
+      labelOut = ui.paint('muted', plainLabel) + pad;
+    } else if (row.signature && plainLabel.startsWith(row.label)) {
+      const tail = plainLabel.slice(String(row.label).length);
+      labelOut = `${row.label}${ui.paint('muted', tail)}${pad}`;
+    } else {
+      labelOut = plainLabel + pad;
+    }
     const descRoom = Math.max(8, width - 2 - labelW - 2 - effectW - 1);
     const source = disabled ? (row.reason || row.unavailable || 'unavailable') : (row.note || row.summary || '');
     const plain = ui.stripAnsi(String(source));
     const desc = displayWidth(plain) > descRoom ? `${clipTo(plain, descRoom - 1)}…` : plain;
-    const body = `  ${labelOut}  ${ui.paint(disabled ? 'muted' : 'muted', desc)}`;
+    const body = `  ${labelOut}  ${ui.paint('muted', desc)}`;
     const gap = Math.max(1, width - displayWidth(body) - effectW);
     const line = `${body}${' '.repeat(gap)}${effect}${effect ? ' ' : ''}`;
     out.push(ui.tintRow(chosen ? 'selected' : 'panel', padTo(line, width)));

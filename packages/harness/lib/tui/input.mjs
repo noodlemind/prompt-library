@@ -52,13 +52,15 @@ export function createInput({
   history = [],
   footerItems,
   paletteChord = 'ctrl+p',
+  /** Word → 'command' | 'verb' | 'flag' | 'session' | null, from the registry. */
+  classify = null,
   altScreen = false,
   onInterrupt = null,
 } = {}) {
   const width = () => Math.max(40, output.columns || 80);
   const height = () => Math.max(8, output.rows || 24);
   const composer = createComposer({
-    width: width(), ascii, history, paint: (t, s) => ui.paint(t, s), paletteChord,
+    width: width(), ascii, history, paint: (t, s) => ui.paint(t, s), paletteChord, classify,
   });
   let status = {};
   let hintState = { mode: 'deliver', gate: null, shell: 'allowed', rerun: null };

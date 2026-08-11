@@ -177,7 +177,7 @@ export function planAgent(argv) {
   // Without the middle rung an operator on a Copilot subscription retyped
   // `--provider github-copilot` on every invocation — see `harness model`.
   const configured = agentDefaults({ argv });
-  const providerId = stringFlag(argv, '--provider') || configured.provider || 'anthropic';
+  const providerId = stringFlag(argv, '--provider') || configured.provider || 'github-copilot';
   if (!(providerId in PROVIDERS)) {
     throw usageError(`unknown provider: ${providerId}`, `known providers: ${Object.keys(PROVIDERS).join(', ')}`);
   }

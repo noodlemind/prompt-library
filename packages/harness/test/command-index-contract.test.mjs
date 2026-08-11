@@ -426,7 +426,9 @@ test('an unknown surface is rejected rather than silently defaulted', () => {
 
 // --- surfaces -------------------------------------------------------------
 
-const LIFECYCLE_ONLY = ['install', 'upgrade', 'uninstall', 'init-repo', 'resolve'];
+// `tui` joins them: a ledger offering "open the session ledger" in its own
+// palette is a row that can only refuse, and it crowds out one that could act.
+const LIFECYCLE_ONLY = ['install', 'upgrade', 'uninstall', 'init-repo', 'resolve', 'tui'];
 
 test('the palette omits lifecycle and machine-only commands; the CLI keeps them', () => {
   const tui = buildCommandIndex({ surface: 'tui', workspace: packageRoot });
@@ -436,7 +438,7 @@ test('the palette omits lifecycle and machine-only commands; the CLI keeps them'
     assert.equal(tui.rows.some((r) => r.noun === name), false, `${name} must not appear on the palette`);
     assert.ok(cli.rows.some((r) => r.id === `command:${name}`), `${name} must still appear on the CLI`);
   }
-  assert.equal(cli.rows.length - tui.rows.length, LIFECYCLE_ONLY.length, 'the CLI surface is the palette plus exactly these five');
+  assert.equal(cli.rows.length - tui.rows.length, LIFECYCLE_ONLY.length, 'the CLI surface is the palette plus exactly these six');
 });
 
 test('nothing marked userInvocable: false reaches the tui surface', () => {

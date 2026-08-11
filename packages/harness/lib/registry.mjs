@@ -1507,6 +1507,11 @@ registerCommand({
 
 registerCommand({
   name: 'tui',
+  // NOT OFFERED INSIDE ITSELF. A ledger listing "open the session ledger" in
+  // its own palette is a row that can only refuse — the loop already answers
+  // "already open" — and it crowded out a row that could act. Every reference
+  // palette lists what you can do FROM HERE, never how you got here.
+  surfaces: ['cli', 'agent'],
   summary: 'open the session ledger — a scrolling transcript that dispatches through this same registry',
   group: 'engineer loop',
   // The ledger can run ANY command, so its policy maximum is the maximum of

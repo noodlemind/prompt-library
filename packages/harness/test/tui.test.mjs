@@ -394,9 +394,16 @@ test('either/or rows like get stop collecting once resolveSelection accepts', as
   assert.match(text, /[>❯] get/);
 });
 
-test('nested tui from the palette is refused rather than hanging on the same stdin', async () => {
+test('the ledger is not offered inside itself, and typing it is still refused', async () => {
+  // The palette no longer carries `tui` at all — a row that can only refuse is
+  // a row that crowds out one that could act. The typed path keeps its guard,
+  // because `tui` remains a real command someone can spell out.
+  const { buildCommandIndex } = await import('../lib/command-index.mjs');
+  const rows = buildCommandIndex({ surface: 'tui', workspace: process.cwd() }).rows;
+  assert.equal(rows.some((r) => r.noun === 'tui'), false, 'no palette row opens the surface you are already in');
+
   const calls = [];
-  const text = await ledger(['/tui', '1', 'exit'], {
+  const text = await ledger(['tui', 'exit'], {
     dispatcher: async (argv) => { calls.push(argv); return 0; },
   });
   assert.deepEqual(calls, [], 'opening the ledger from inside the ledger must not dispatch');
