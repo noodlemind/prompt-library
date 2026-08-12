@@ -162,6 +162,7 @@ export async function runLedger({
     const gate = gateOf();
     const plan = planOf();
     const last = ledger.lastCommand();
+    const agentOn = agentMode();
     session.setStatus({
       workspace: tildePath(workspace),
       branch: git.branch,
@@ -170,14 +171,17 @@ export async function runLedger({
       run: last?.run ? last.run.slice(0, 6) : null,
       runStatus: last?.status ?? null,
       version,
-            model: activeModel,
+      model: activeModel,
+      agent: agentOn,
+      authority: agentOn ? 'assist' : 'commands',
     });
     session.setHint({
       gate,
       shell: settings['exec.bash_enabled'] === false ? 'denied' : 'allowed',
       rerun: last?.command ? shortCommand(last.command) : null,
       // What a bare line will actually do, so the composer can offer it or not.
-      agent: agentMode(),
+      agent: agentOn,
+      mode: agentOn ? 'agent on' : 'agent off',
     });
     readActiveModel();
   };
@@ -271,7 +275,7 @@ export async function runLedger({
     if (!hasCommand(name)) {
       const block = ledger.open({ command: display ?? rawArgv.join(' '), argv: rawArgv });
       ledger.append(block, ui.line({ state: 'error', key: 'unknown', value: name, note: 'type / to see what exists' }));
-      ledger.close(block, { status: 'failed', exitCode: EXIT.usage, tally: ui.summary({ ok: 0, err: 1, exit: EXIT.usage }) });
+      ledger.close(block, { status: 'usage', exitCode: EXIT.usage, tally: ui.summary({ ok: 0, err: 1, exit: EXIT.usage }) });
       tally.record(EXIT.usage, {});
       emit(block);
       return block;
@@ -935,6 +939,14 @@ export async function runLedger({
         emitHelp();
       } else if (parsed.kind === 'clear') {
         doClear();
+      } else if (parsed.kind === 'agent-mode-set') {
+        const enable = parsed.enabled === true;
+        await runArgv(
+          ['config', 'set', 'agent.enabled', enable ? 'true' : 'false', '--scope', 'user'],
+          { display: enable ? 'agent mode on' : 'agent mode off' },
+        );
+        readActiveModel();
+        refreshStatus();
       } else if (parsed.kind === 'reference') {
         const hits = completePath(parsed.target, { workspace });
         if (!hits.length) say(ui.line({ state: 'warn', key: 'file', value: parsed.target, note: 'no match in this workspace' }));
@@ -962,20 +974,23 @@ export async function runLedger({
 
   // ── helpers that need the closure ─────────────────────────────────────
   function emitHelp() {
-        const rows = [
-      ['help', 'type a command directly, or:'],
+    const rows = [
+      ['help / ?', 'this keymap and grammar'],
       ['/', 'open the command palette'],
-      ['/<text>', 'filter the palette (run: plan: search: check: res: learn:)'],
+      ['/<text>', 'filter the palette (run: plan: search: check: learn:)'],
       ['!', 'enter bash mode — every line runs through governed bash · esc leaves'],
       ['!<command>', 'run one shell command without entering the mode'],
+      ['agent on|off', 'toggle optional agent (same as shift+tab)'],
+      ['config set key value', 'user scope by default; --scope project for the repo'],
+      ['config set key=value', 'sugar form; spaces around = also work'],
+      ['@<path>', 'complete a file path'],
       ['replay', 're-run the previous block'],
       ['replay <id>', 're-run any block by id, from its record line'],
-      ['@<path>', 'complete a file path'],
       ['results', 'open one of the last search\u2019s results'],
+      ['shift+tab', 'agent mode on or off \u2014 whether a bare line is a question'],
       ['ctrl+\u2191', 'walk the ledger blocks'],
       ['ctrl+o', 'fold or unfold the last block'],
       ['esc esc', 'open the run tree'],
-            ['shift+tab', 'agent mode on or off \u2014 whether a bare line is a question'],
       ['esc', 'interrupt a running command'],
       ['ctrl+d', 'close the session'],
       ['clear', 'clear the viewport (keeps scrollback)'],

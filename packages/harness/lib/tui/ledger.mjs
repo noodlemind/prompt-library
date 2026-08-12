@@ -1,9 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { startRun, finishRun, newRunId, readJournal, foldRuns } from '../run-journal.mjs';
+import {
+  startRun,
+  finishRun,
+  newRunId,
+  readJournal,
+  foldRuns,
+  runStatusForExit as journalStatusForExit,
+} from '../run-journal.mjs';
 import { createBlock, newBlockId, formatActor } from './block.mjs';
 import { detectActor } from '../event-registry.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
+import { EXIT } from '../style.mjs';
 
 /** How many prior runs a fresh session restores. Enough that yesterday's work
  * is on screen; few enough that opening the ledger is not a history dump. */
@@ -40,10 +48,19 @@ const STATUS_FROM_RUN = {
   'timed-out': 'timed-out',
   blocked: 'blocked',
   inconclusive: 'inconclusive',
+  usage: 'usage',
   running: 'running',
 };
 
-export { runStatusForExit as statusForExit } from '../run-journal.mjs';
+/**
+ * Map process exit to ledger block status. Usage (exit 2) projects as `usage`
+ * so the TUI can show a correction card — not work-failed "inconclusive".
+ * Journal automation still receives exit 2.
+ */
+export function statusForExit(code, opts = {}) {
+  if (!opts.cancelled && !opts.timedOut && code === EXIT.usage) return 'usage';
+  return journalStatusForExit(code, opts);
+}
 
 export function createLedger({
   workspace = process.cwd(),
@@ -131,18 +148,28 @@ export function createLedger({
     return block;
   }
 
-  /** Close a block and its run. `status` is the journal vocabulary. */
+  /** Close a block and its run.
+   * `status` may be ledger vocabulary (`ok`, `usage`) or journal vocabulary
+   * (`succeeded`, `inconclusive`). The journal only stores RUN_STATUSES. */
   function close(block, { status, exitCode = null, tally = null, next = null } = {}) {
     if (!block) return null;
     const durationMs = block._startedMs ? now() - block._startedMs : null;
-    block.status = STATUS_FROM_RUN[status] || 'failed';
+    // Display: prefer explicit ledger words (usage, ok) over journal aliases.
+    if (status === 'usage') block.status = 'usage';
+    else if (status === 'ok' || status === 'succeeded') block.status = 'ok';
+    else block.status = STATUS_FROM_RUN[status] || status || 'failed';
     block.exit = exitCode;
     block.durationMs = durationMs;
     if (tally) block.tally = tally;
     if (next) block.next = next;
-        if (block.run && block._runOpened) {
+    if (block.run && block._runOpened) {
+      const journalStatus = status === 'usage'
+        ? 'inconclusive'
+        : status === 'ok'
+          ? 'succeeded'
+          : status;
       try {
-        finishRun(workspace, { run: block.run, status, exitCode, durationMs });
+        finishRun(workspace, { run: block.run, status: journalStatus, exitCode, durationMs });
       } catch { /* see openRun() — durability is best effort, the session is not */ }
     }
     return block;

@@ -3,7 +3,7 @@ import { displayWidth, clipTo, padTo } from './width.mjs';
 /** The footer's left column, in the order the design fixes. Configurable per
  * the mock's `statusline items` setting — Warp makes this configurable because
  * it is taste, and the same argument applies here. */
-export const DEFAULT_FOOTER_ITEMS = Object.freeze(['plan', 'gate', 'run', 'knowledge']);
+export const DEFAULT_FOOTER_ITEMS = Object.freeze(['plan', 'gate', 'agent', 'run', 'knowledge']);
 
 const GATE_GLYPH = {
   pass: ['ok', 'ok'],
@@ -56,11 +56,18 @@ export function renderHint({
   gate = null, // accepted and unused: the gate's textual home is the footer
   shell = 'allowed',
   rerun = null,
+  agent = null,
 } = {}) {
   void gate;
   void shell;
   void rerun;
-    const parts = [ui.paint('muted', mode)];
+  // Prefer explicit agent boolean from the session; fall back to mode label.
+  const agentLabel = agent === true || agent === 'on'
+    ? 'agent on'
+    : agent === false || agent === 'off'
+      ? 'agent off'
+      : mode;
+  const parts = [ui.paint(agent === true || agent === 'on' ? 'info' : 'muted', agentLabel)];
 
   const keys = [
     `${ui.paint('muted', ui.unicode ? '↵' : 'enter')} ${ui.paint('muted', 'run')}`,
@@ -82,6 +89,15 @@ export function footerSegments(snapshot = {}, items = DEFAULT_FOOTER_ITEMS) {
     plan: () => (plan ? { token: 'muted', text: `plan ${plan}`, state: planLocked ? 'ok' : null } : null),
     gate: () => (gate ? { token: (GATE_GLYPH[gate] || ['warn'])[0], text: `gate ${gate === 'pass' ? 'ok' : gate}` } : null),
     run: () => (run ? { token: 'muted', text: `run ${run}`, state: runStatus } : null),
+    agent: () => {
+      if (snapshot.agent === true || snapshot.agent === 'on') {
+        return { token: 'info', text: 'agent on' };
+      }
+      if (snapshot.agent === false || snapshot.agent === 'off') {
+        return { token: 'muted', text: 'agent off' };
+      }
+      return null;
+    },
     knowledge: () => (snapshot.knowledge ? { token: 'muted', text: snapshot.knowledge } : null),
   };
   return items.map((k) => build[k]?.()).filter(Boolean);

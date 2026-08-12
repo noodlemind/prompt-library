@@ -11,6 +11,8 @@ const STATUS = {
   succeeded: ['ok', 'ok', 'ok'],
   failed: ['failed', 'error', 'muted'],
   blocked: ['failed', 'error', 'muted'],
+  /** Usage / bad argv — repairable; not a failed engineering task. */
+  usage: ['usage', 'warn', 'warn'],
   inconclusive: ['failed', 'warn', 'warn'],
   cancelled: ['cancelled', 'error', 'muted'],
   'timed-out': ['failed', 'warn', 'warn'],

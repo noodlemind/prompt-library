@@ -1,9 +1,22 @@
 /** Compose the row from whatever the session actually knows. Missing facts are
  * omitted rather than rendered as `unknown`, which reads as a broken lookup. */
-export function statusSegments({ workspace = null, branch = null, gate = null, plan = null, runs = null } = {}) {
+export function statusSegments({
+  workspace = null,
+  branch = null,
+  gate = null,
+  plan = null,
+  runs = null,
+  agent = null,
+  authority = null,
+  mode = null,
+} = {}) {
   const segments = [];
-    if (workspace) segments.push({ token: 'info', text: workspace });
+  if (workspace) segments.push({ token: 'info', text: workspace });
   if (branch) segments.push({ token: 'muted', text: branch });
+  if (agent === true || agent === 'on') segments.push({ token: 'info', text: 'agent on' });
+  else if (agent === false || agent === 'off') segments.push({ token: 'muted', text: 'agent off' });
+  if (mode) segments.push({ token: 'muted', text: mode });
+  if (authority) segments.push({ token: 'muted', text: authority });
   if (gate) {
     segments.push({ token: gate === 'pass' ? 'ok' : 'warn', text: gate === 'pass' ? 'gate ok' : `gate ${gate}` });
   }

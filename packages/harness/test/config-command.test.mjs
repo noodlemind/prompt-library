@@ -166,11 +166,14 @@ test('set preserves the keys it is not changing', () => {
   assert.equal(values['exec.bash_enabled'], false);
 });
 
-test('set requires an explicit scope — guessing writes the wrong file', () => {
+test('set defaults to user scope when --scope is omitted (TUI/TUX sugar)', () => {
   const s = scopes();
   const res = run(['config', 'set', 'exec.timeout_seconds', '30'], s);
-  assert.equal(res.status, EXIT.usage);
-  assert.match(res.stdout + res.stderr, /--scope/);
+  assert.equal(res.status, 0, res.stderr + res.stdout);
+  assert.match(res.stdout, /exec\.timeout_seconds/);
+  assert.match(res.stdout, /user/);
+  const body = fs.readFileSync(path.join(s.copilotHome, 'harness', 'config.yaml'), 'utf8');
+  assert.match(body, /timeout_seconds:\s*30/);
 });
 
 test('set reports the effective value after the write, not just what it wrote', () => {
@@ -234,4 +237,45 @@ test('a denied bash reports the denial rather than a syntax complaint about the 
     const res = run(['bash'], s);
   assert.equal(res.status, EXIT.needsApproval);
   assert.match(res.stdout + res.stderr, /disabled by configuration/);
+});
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('a project cannot loosen a restrictive key past the default when no user value exists', async () => {
+  const { approveProject } = await import('../lib/trust.mjs');
+  const s = scopes();
+  writeProjectConfig(s, 'version: 1\nexec.timeout_seconds: 3600\n');
+  approveProject(s);
+  const { values, provenance } = resolveConfig({ ...s, projectTrusted: true });
+  assert.equal(values['exec.timeout_seconds'], 600, 'restrictive arithmetic must not depend on a second scope existing');
+  assert.match(provenance['exec.timeout_seconds'].note, /less restrictive/);
+});
+
+test('the user scope is still free to raise a limit above the default', () => {
+  const s = scopes();
+  setConfigValue({ scope: 'user', key: 'exec.timeout_seconds', value: '900', ...s });
+  assert.equal(resolveConfig(s).values['exec.timeout_seconds'], 900);
+});
+
+test('inherited Object.prototype keys are rejected by the config schema, not silently accepted', () => {
+  for (const key of ['constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
+    assert.equal(Object.hasOwn(CONFIG_SCHEMA, key), false, `${key} must not be an own key`);
+    assert.throws(() => coerceValue(key, 'anything'), (e) => e.code === 'E_USAGE',
+      `${key} must not resolve via inheritance and skip validation`);
+  }
+});
+
+test('a config file naming a prototype key reports it as unknown instead of storing it', () => {
+  const s = scopes();
+  fs.mkdirSync(path.join(s.copilotHome, 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(s.copilotHome, 'harness', 'config.yaml'), 'toString: 1\nconstructor: 2\n');
+  const cfg = resolveConfig(s);
+  assert.equal(cfg.errors.length, 2, 'an unknown key is reported, never silently accepted');
+  for (const e of cfg.errors) assert.match(e, /unknown key/);
+});
+
+test('a list is normalized whether one scope or two contributed it', () => {
+  const s = scopes();
+  setConfigValue({ scope: 'user', key: 'exec.allow_env', value: 'A,A', ...s });
+  assert.deepEqual(resolveConfig(s).values['exec.allow_env'], ['A']);
 });

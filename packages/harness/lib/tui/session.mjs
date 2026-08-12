@@ -44,8 +44,16 @@ const SESSION_WORDS = Object.freeze({
   help: 'help',
   '?': 'help',
   clear: 'clear',
-    results: 'results',
+  results: 'results',
   hits: 'results',
+});
+
+/** Product verbs that compile to registry argv (host-first TUX). */
+const AGENT_MODE_WORDS = Object.freeze({
+  'agent on': { kind: 'agent-mode-set', enabled: true },
+  'agent off': { kind: 'agent-mode-set', enabled: false },
+  '/agent on': { kind: 'agent-mode-set', enabled: true },
+  '/agent off': { kind: 'agent-mode-set', enabled: false },
 });
 
 /** `replay` and `replay <id>` — re-run a block by name rather than by sigil. */
@@ -55,7 +63,10 @@ export function interpretLine(rawLine) {
   const line = stripControl(rawLine).trim();
   if (!line) return { kind: 'empty' };
 
-    const sessionKey = line.startsWith('/') ? line.slice(1).trim() : line;
+  const agentVerb = AGENT_MODE_WORDS[line.toLowerCase()];
+  if (agentVerb) return { ...agentVerb };
+
+  const sessionKey = line.startsWith('/') ? line.slice(1).trim() : line;
   if (Object.hasOwn(SESSION_WORDS, sessionKey) && !sessionKey.includes(' ')) {
     return { kind: SESSION_WORDS[sessionKey] };
   }
