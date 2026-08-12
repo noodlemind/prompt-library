@@ -1,6 +1,6 @@
 {
   "name": "@dev-kit/harness",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Adaptive Engineer Harness — install and upgrade GitHub Copilot skills, agents, and team knowledge globally",
   "homepage": "https://github.com/noodlemind/prompt-library",
   "license": "UNLICENSED",

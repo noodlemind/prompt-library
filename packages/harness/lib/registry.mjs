@@ -1242,10 +1242,12 @@ registerCommand({
   name: 'config',
   summary: 'show, read, or change harness configuration across the user and project scopes',
   group: 'engineer loop',
-    sideEffect: 'mutate',
+  // Ledger: one Settings modal (keys + values), not config set/get/show rows.
+  tuiPicker: 'config',
+  sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-    usage: '<show|get|set|validate> [key] [value] [--scope <scope>]',
+  usage: '<show|get|set|validate> [key] [value] [--scope <scope>]',
   verbs: [
     { verb: 'show', summary: 'every key, its effective value, and which scope supplied it', sideEffect: 'read' },
     { verb: 'get', summary: 'one key: its effective value and provenance', sideEffect: 'read', positionals: ['key'] },

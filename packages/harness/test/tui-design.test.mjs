@@ -1109,20 +1109,22 @@ test('BLOCK: every painted row is exactly the terminal width, whatever it holds'
 
 test('VALUES: a slot the registry can enumerate is never left to be typed', async () => {
   const { buildCommandIndex } = await import('../lib/command-index.mjs');
-  const { selectionPlan, resolveSelection } = await import('../lib/tui/palette.mjs');
-  const rows = buildCommandIndex({ surface: 'tui', workspace: process.cwd() }).rows;
-  const setRow = rows.find((r) => r.id === 'verb:config:set');
-  assert.ok(setRow, 'TUI exposes Set config as a folded verb row');
-  // Soft default: --scope is not asked on the ledger (defaults to user).
-  const plan = selectionPlan(setRow);
-  assert.deepEqual(plan.queue.map((q) => q.key).filter((k) => k !== 'key' && k !== 'value' && k !== '--scope'), []);
-  // key + value come from argv tokens / prompts with choices
-  const resolved = resolveSelection(setRow, { key: 'agent.enabled', value: 'false' });
-  assert.ok(resolved.argv, resolved.invalid);
-  assert.ok(resolved.argv.includes('--scope'));
-  assert.ok(resolved.argv.includes('user'));
+  const { resolveSelection } = await import('../lib/tui/palette.mjs');
+  const { configSettingsRows } = await import('../lib/tui/modals.mjs');
+  // Settings is a modal, not config set/get/show rows on the main palette.
+  const tui = buildCommandIndex({ surface: 'tui', workspace: process.cwd() }).rows;
+  assert.ok(tui.some((r) => r.picker === 'config' && r.label === 'Settings'));
+  const { tempDir } = await import('./helpers/index.mjs');
+  const ws = tempDir('cfg-modal-');
+  const home = tempDir('cfg-modal-home-');
+  assert.ok(configSettingsRows({ workspace: ws, copilotHome: home }).some((r) => r.configKey === 'agent.enabled'));
 
   const cli = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
+  const setRow = cli.find((r) => r.id === 'verb:config:set');
+  const resolved = resolveSelection(setRow, { key: 'agent.enabled', value: 'false' });
+  assert.ok(resolved.argv, resolved.invalid);
+  assert.ok(resolved.argv.includes('--scope') && resolved.argv.includes('user'));
+
   const modelSet = cli.find((r) => r.id === 'verb:model:set' || r.label === 'model set');
   const slots = modelSet.argvTokens.filter((t) => t.kind === 'value');
   assert.deepEqual(slots.map((t) => t.positional), ['provider', 'model']);

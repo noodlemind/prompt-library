@@ -296,12 +296,35 @@ function flagVerbRow(entry, def, under, { surface = 'cli' } = {}) {
 }
 
 function pickerRow(entry) {
+  return modalFamilyRow(entry, entry.tuiPicker);
+}
+
+/**
+ * Family modal row — one palette entry opens a settings/action sheet.
+ * Avoids dumping CLI verbs (config set/get/show, checks list/run, …) into `/`.
+ */
+function modalFamilyRow(entry, picker) {
+  const labels = {
+    config: 'Settings',
+    model: 'Model',
+    checks: 'Checks',
+    trust: 'Trust',
+    run: 'Runs',
+    todo: 'Todos',
+    inspect: 'Inspect',
+    resources: 'Resources',
+    knowledge: 'Knowledge',
+    learning: 'Learning',
+    lookup: 'Lookup',
+    undo: 'Undo list',
+    tree: 'Tree',
+  };
   return {
     id: `command:${entry.name}`,
     kind: 'command',
     noun: entry.name,
     verb: null,
-    label: entry.name,
+    label: labels[entry.name] || tuiLabel(entry.name),
     summary: entry.summary || '',
     sideEffect: SIDE_EFFECTS.includes(entry.bareSideEffect) ? entry.bareSideEffect : entry.sideEffect,
     group: entry.group || 'general',
@@ -309,8 +332,7 @@ function pickerRow(entry) {
     argvTokens: [{ kind: 'command', value: entry.name }],
     prompts: [],
     refinements: [],
-    /** The surface opens this picker instead of dispatching. */
-    picker: entry.tuiPicker,
+    picker,
   };
 }
 
@@ -318,20 +340,27 @@ function pickerRow(entry) {
  * Every row one registry entry contributes.
  *
  * **CLI surface:** parent command + every verb (full machine inventory).
- * **TUI surface:** fold inwards — when verbs exist, show only the verb product
- * rows (not a bare `checks <verb>` parent that dumps CLI grammar into the ledger).
+ * **TUI surface:** multi-verb families collapse to one modal entry (Settings,
+ * Checks, Runs, …). Explicit `tuiPicker` (model, config) uses a specialized sheet.
  * Single-action commands stay one human-labeled row.
  */
 function rowsForEntry(entry, surface) {
-  if (entry.tuiPicker && surface === 'tui') return [pickerRow(entry)];
   const declaredVerbs = entry.verbs || [];
+  // Specialized modals (settings keys, model catalog).
+  if (surface === 'tui' && entry.tuiPicker) {
+    return [modalFamilyRow(entry, entry.tuiPicker)];
+  }
+  // Generic action sheet for any multi-verb family (industry pattern).
+  if (surface === 'tui' && declaredVerbs.length >= 2 && entry.tuiFold !== false) {
+    return [modalFamilyRow(entry, 'verbs')];
+  }
+
   const byVerb = new Map(declaredVerbs.map((v) => [v.verb, v]));
   const verbFlags = flagsOf(entry).filter((def) => isVerbFlag(entry, def));
   const rowFlags = new Set(verbFlags.map((def) => def.name));
   const opts = { surface };
   const rows = [];
 
-  // Fold: multi-verb commands only expose their verbs on the ledger palette.
   const foldParent = surface === 'tui' && declaredVerbs.length > 0;
   if (!foldParent) {
     rows.push(commandRow(entry, promptsFor(entry, null), orphanRefinementsFor(entry, rowFlags), opts));

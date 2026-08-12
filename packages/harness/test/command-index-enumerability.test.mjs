@@ -227,18 +227,14 @@ test('AC8: every verb-consumed positional is declared and reaches its row as a p
   }
   assert.deepEqual(actual, { ...VERB_POSITIONALS }, 'a verb argument was added or lost — update the fixture deliberately');
 
-  // A picker command's verbs live on the CLI surface — in the TUI it is one row
-  // that opens a chooser (see `pickerRow`), so its positionals are answered by
-  // the picker rather than by a per-verb row. The CLI index still carries them,
-  // which is what this assertion reads.
-  const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
+  // Positionals live on verb rows. On the TUI those rows sit inside modals;
+  // the CLI index is the source of truth for argv token shape.
   const cli = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
-  const byId = new Map(rows.map((r) => [r.id, r]));
   const cliById = new Map(cli.map((r) => [r.id, r]));
   for (const [command, verbs] of Object.entries(VERB_POSITIONALS)) {
-    const picker = Boolean(getCommand(command)?.tuiPicker);
     for (const [verb, names] of Object.entries(verbs)) {
-      const row = (picker ? cliById : byId).get(`verb:${command}:${verb}`);
+      const row = cliById.get(`verb:${command}:${verb}`);
+      assert.ok(row, `${command} ${verb} must exist on the CLI index`);
       assert.deepEqual(
         row.argvTokens.filter((t) => t.kind === 'value').map((t) => t.positional),
         names,
@@ -279,19 +275,31 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
   // it does on open, set is what choosing does and clear is a row inside it.
   // Every verb is still reachable — through the picker here, and unchanged on
   // the CLI surface, which the assertion below pins.
-  const pickers = new Set(
-    Object.keys(DECLARED_VERBS).filter((name) => getCommand(name)?.tuiPicker),
+  // TUI: multi-verb families (and explicit tuiPicker) collapse to one modal row.
+  // Verbs remain fully reachable on the CLI surface and inside the modal sheet.
+  const modalFamilies = new Set(
+    Object.keys(DECLARED_VERBS).filter((name) => {
+      const entry = getCommand(name);
+      if (!entry) return false;
+      if (entry.tuiPicker) return true;
+      return (entry.verbs || []).length >= 2 && entry.tuiFold !== false;
+    }),
   );
-  assert.deepEqual([...pickers], ['model'], 'a command became a picker — decide deliberately whether its verbs should leave the palette');
+  assert.ok(modalFamilies.has('model'), 'model stays a specialized picker');
+  assert.ok(modalFamilies.has('config'), 'config is a settings modal');
   const cliRows = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
-  for (const name of pickers) {
-    for (const verb of DECLARED_VERBS[name]) {
+  for (const name of modalFamilies) {
+    for (const verb of DECLARED_VERBS[name] || []) {
       assert.ok(cliRows.some((r) => r.id === `verb:${name}:${verb}`), `${name} ${verb} must survive on the CLI surface`);
     }
+    assert.ok(
+      rows.some((r) => r.id === `command:${name}` && r.picker),
+      `${name} must be a single modal entry on the TUI palette`,
+    );
   }
 
   for (const [command, verbs] of Object.entries(DECLARED_VERBS)) {
-    if (pickers.has(command)) continue;
+    if (modalFamilies.has(command)) continue;
     for (const verb of verbs) {
       const row = byId.get(`verb:${command}:${verb}`);
       assert.ok(row, `${command} ${verb} must be a palette row`);
@@ -300,8 +308,9 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
       assert.ok(row.summary, `${command} ${verb} must carry its declared summary`);
     }
   }
-  // declared verbs + row-bearing verb flags; model verbs collapse to picker on TUI.
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 73, 'palette-visible declared verbs + row-bearing verb flags (+ inspect)');
+  // Modal families leave the verb strip; remaining verb rows + flag-verbs only.
+  const tuiVerbs = rows.filter((r) => r.kind === 'verb').length;
+  assert.ok(tuiVerbs < 40, `TUI verb strip should fold heavily (got ${tuiVerbs})`);
   assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 77, 'the CLI surface keeps every verb (+ inspect)');
 });
 
@@ -323,14 +332,16 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
  * it is a declared capability that has lost its own name.
  */
 test('AC8: every verb-dispositioned flag owns a row or refines a verb row', () => {
-  const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
+  // Reachability is measured on the CLI index (full expansion). The TUI may
+  // collapse a family into a modal, but the flag still has a CLI/modal row.
+  const { rows } = buildCommandIndex({ surface: 'cli', workspace: process.cwd() });
   const rowless = [];
   for (const [command, flagNames] of Object.entries(VERB_FLAGS)) {
     const owned = rows.filter((r) => r.noun === command);
     for (const flag of flagNames) {
       const asRow = owned.some((r) => r.argv?.includes(flag));
       const refinesAVerbRow = owned.some(
-        (r) => r.kind === 'verb' && r.refinements.some((o) => o.flag === flag),
+        (r) => r.kind === 'verb' && (r.refinements || []).some((o) => o.flag === flag),
       );
       assert.ok(asRow || refinesAVerbRow, `${command} ${flag} must stay reachable from the index`);
       if (!asRow && !refinesAVerbRow) rowless.push(`${command} ${flag}`);

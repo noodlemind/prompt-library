@@ -34,6 +34,7 @@ import {
 } from './tui/host-mode.mjs';
 import { createQuestion, answerQuestion, questionLines, questionEvent } from './tui/question.mjs';
 import { gateActionRows, parseGateAction, gatePromptLines } from './tui/gate-actions.mjs';
+import { configSettingsRows, verbActionRows } from './tui/modals.mjs';
 
 /** `/Users/me/x` reads better as `~/x`, and the header has one row. */
 const tildePath = (full) => {
@@ -696,13 +697,106 @@ export async function runLedger({
       kind: 'model',
       page: 14,
       actions: null,
-            filter: (query) => filterSectioned(rows, query),
+      filter: (query) => filterSectioned(rows, query),
       footer: `${ui.unicode ? '↑↓' : 'up/down'} navigate · ${ui.unicode ? '↵' : 'enter'} select · type to filter · esc close`,
     });
-        const activeAt = rows.findIndex((r) => r.active);
+    const activeAt = rows.findIndex((r) => r.active);
     if (activeAt > 0) for (let i = 0; i < activeAt; i += 1) overlay.handleKey(null, { name: 'down' });
     session.openOverlay(overlay);
     return overlay;
+  };
+
+  /** Settings modal — keys + effective values (Grok/Claude pattern, not config set/get/show). */
+  const openConfigPicker = () => {
+    const home = resolveCopilotHome(copilotHome);
+    const rows = configSettingsRows({ workspace, copilotHome: home });
+    const overlay = createOverlay({
+      title: 'settings',
+      rows,
+      kind: 'config',
+      page: 14,
+      actions: null,
+      filter: (query) => filterSectioned(rows, query),
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} · ${ui.unicode ? '↵' : 'enter'} change · type to filter · esc close`,
+    });
+    session.openOverlay(overlay);
+    return overlay;
+  };
+
+  /** Action sheet for multi-verb families (checks, trust, runs, todos, …). */
+  const openVerbSheet = (noun) => {
+    const rows = verbActionRows(noun, { workspace });
+    if (!rows.length) {
+      say(ui.line({ state: 'warn', key: noun, value: 'no actions' }));
+      return null;
+    }
+    const overlay = createOverlay({
+      title: noun,
+      rows,
+      kind: 'verbs',
+      page: 12,
+      actions: null,
+      filter: (query) => filterSectioned(rows, query),
+      footer: `${ui.unicode ? '↑↓' : 'up/down'} · ${ui.unicode ? '↵' : 'enter'} run · type to filter · esc close`,
+    });
+    session.openOverlay(overlay);
+    return overlay;
+  };
+
+  const openPicker = (picker, row = null) => {
+    if (picker === 'model') return openModelPicker();
+    if (picker === 'config') return openConfigPicker();
+    if (picker === 'verbs' && row?.noun) return openVerbSheet(row.noun);
+    return null;
+  };
+
+  /** After picking a settings key, ask for a new value and write user scope. */
+  const editConfigKey = async (key) => {
+    const home = resolveCopilotHome(copilotHome);
+    const resolved = resolveValues(
+      { source: 'config-value', literal: null },
+      { workspace, copilotHome: home, values: { key } },
+    );
+    if (resolved.items?.length && !resolved.free) {
+      const rows = resolved.items.map((item) => ({
+        label: item.label || String(item.value),
+        note: item.note || '',
+        valueChoice: item.value,
+        configKey: key,
+      }));
+      const overlay = createOverlay({
+        title: key,
+        rows,
+        kind: 'config-value',
+        page: 12,
+        filter: (query) => filterSectioned(rows, query),
+        footer: `${ui.unicode ? '↑↓' : 'up/down'} · ${ui.unicode ? '↵' : 'enter'} set · esc cancel`,
+      });
+      session.openOverlay(overlay);
+      // Stash key for choose handler via overlay rows already carrying configKey
+      return;
+    }
+    // Free-text value
+    pending = {
+      row: {
+        id: 'verb:config:set',
+        noun: 'config',
+        verb: 'set',
+        label: 'Set config value',
+        argvTokens: [
+          { kind: 'command', value: 'config' },
+          { kind: 'subcommand', value: 'set' },
+          { kind: 'value', positional: 'key', required: true },
+          { kind: 'value', positional: 'value', required: true },
+        ],
+        prompts: [],
+      },
+      queue: [{ key: 'value', label: 'value', required: true, type: 'string', description: key }],
+      index: 0,
+      values: { key, '--scope': 'user' },
+      untilResolves: false,
+    };
+    askPrompt(pending.queue[0], key);
   };
 
   const openResults = (block) => {
@@ -914,8 +1008,25 @@ export async function runLedger({
 
         if (!row) continue; // Enter on an empty palette list is a dismissal
         if (row.session === 'exit') break;
-        // A row the index marked as a picker opens it instead of dispatching.
-        if (row.picker === 'model') { openModelPicker(); continue; }
+        // Settings value pick (enum/bool) — write immediately.
+        if (row.configKey && row.valueChoice !== undefined) {
+          await runArgv(
+            ['config', 'set', row.configKey, String(row.valueChoice), '--scope', 'user'],
+            { display: `settings ${row.configKey}=${row.valueChoice}` },
+          );
+          refreshStatus();
+          continue;
+        }
+        // Settings key → open value editor / free-text prompt.
+        if (row.configKey) {
+          await editConfigKey(row.configKey);
+          continue;
+        }
+        // Product modal (Settings, Checks, Runs, Model, …) — not CLI verb dump.
+        if (row.picker) {
+          openPicker(row.picker, row);
+          continue;
+        }
         if (row.enableAgent !== undefined) {
                     await runArgv(['config', 'set', 'agent.enabled', row.enableAgent ? 'true' : 'false', '--scope', 'user'], {
             display: row.enableAgent ? 'agent mode on' : 'agent mode off',
@@ -1040,7 +1151,7 @@ export async function runLedger({
         if (!choice) { say(ui.line({ state: 'warn', key: 'palette', value: 'no such row' })); continue; }
         if (choice.session === 'exit') break;
         if (choice.openArgv) { await runArgv(choice.openArgv); continue; }
-        if (choice.picker === 'model') { openModelPicker(); continue; }
+        if (choice.picker) { openPicker(choice.picker, choice); continue; }
         if (choice.session === 'results') { openResults(null); continue; }
         if (choice.session === 'replay') { await rerun(ledger.lastCommand()); continue; }
         if (choice.session === 'clear') { doClear(); continue; }
@@ -1120,8 +1231,9 @@ export async function runLedger({
                 say(ui.line({ state: 'warn', key: 'ask', value: 'agent mode is off', note: 'shift+tab cycles modes · ! shell · / commands' }));
       } else {
                 const routed = interactive ? routeTypedLine(parsed.argv, { workspace, index: indexForRouting() }) : null;
-        if (routed?.picker === 'model') openModelPicker();
+        if (routed?.picker) openPicker(routed.picker, routed.row);
         else if (routed) await beginSelection(routed.row, routed.values);
+        else if (parsed.argv?.length === 1 && parsed.argv[0] === 'config') openConfigPicker();
         else await runArgv(parsed.argv);
       }
     }

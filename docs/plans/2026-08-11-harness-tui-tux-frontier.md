@@ -348,3 +348,12 @@ Rules:
 - Signatures: `key · value` only — **no `--scope`**, no angle brackets.
 - Soft-default `--scope user` when resolving config set from the palette.
 - CLI surface unchanged (full inventory for scripts).
+
+### 2026-08-12 — Modal families (Settings, Checks, Runs, …)
+
+Industry pattern: **one palette entry → modal**, not `config set|get|show` rows.
+
+- **Settings** (`config`): key list with effective values; enter to change; show/validate as actions.
+- **Model**: existing specialized picker.
+- **All multi-verb families** (`checks`, `trust`, `run`, `todo`, `inspect`, `tree`, `knowledge`, …): single palette row → action sheet of human-named verbs.
+- Main `/` palette shrinks to ~50 product entries instead of a CLI dump.
