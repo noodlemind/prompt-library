@@ -912,7 +912,18 @@ whatever the operator exported into harness-authored variables, and the
 adapter's zero-setup fallback is the editor's own credential store on disk
 (`~/.config/github-copilot/`). The deny-all child environment governs what the
 adapter *inherits*; the documented disk fallback is how a machine that never
-exported anything still works, and it is a path the seam names, not a key.
+exported anything still works, and it is a path the seam names, not a key. The
+exchanged bearer also names the account's own API endpoint (`proxy-ep=…` inside
+the token — how Individual, Business and Enterprise plans route differently),
+and the adapter prefers it over the generic host; an explicit
+`HARNESS_PROVIDER_BASE_URL` still wins.
+
+**One wire format per adapter, today.** Copilot's `/models` advertises some
+models on other wire surfaces (`/v1/messages`, `/responses`); a second wire
+would be a second adapter behind the same seam, selected per model family. It
+is deliberately deferred: probed on a live account, the alternate wires
+unlocked nothing the chat/completions wire refused — the entitlement gap is
+server-side, not a routing problem.
 
 `harness agent` is the loop that consumes the seam — orient, model call,
 governed tool call through `exec`/`bash`, one journal record per turn, stop on

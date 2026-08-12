@@ -281,7 +281,11 @@ function shapeResult(response) {
       .filter((b) => b?.type === 'tool_use')
       .map((b) => ({ id: b.id, name: b.name, input: b.input ?? {} })),
     blocks,
-    stopReason: response?.stop_reason ?? null,
+    // `length` is the loop's NEUTRAL truncation spelling — the loop refuses to
+    // dispatch tool calls from a truncated message, and it must not have to
+    // know this wire spells the same stop `max_tokens`. Normalized here, where
+    // the wire vocabulary is allowed to exist.
+    stopReason: response?.stop_reason === 'max_tokens' ? 'length' : (response?.stop_reason ?? null),
     usage: {
       inputTokens: response?.usage?.input_tokens ?? null,
       outputTokens: response?.usage?.output_tokens ?? null,

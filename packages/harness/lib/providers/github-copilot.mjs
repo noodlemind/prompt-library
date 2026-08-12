@@ -42,7 +42,31 @@ import {
 } from './openai-compatible.mjs';
 
 const PROVIDER_ID = 'github-copilot';
-const BASE_URL = process.env.HARNESS_PROVIDER_BASE_URL || 'https://api.githubcopilot.com';
+const DEFAULT_BASE_URL = 'https://api.githubcopilot.com';
+
+/**
+ * The account's own API endpoint, read out of the bearer itself.
+ *
+ * The exchanged token is a semicolon-delimited metadata string, and one field
+ * is literally the endpoint this account is meant to call:
+ * `proxy-ep=proxy.individual.githubcopilot.com;...` — Individual, Business and
+ * Enterprise plans each route differently, and the token names the route
+ * (learned from Pi's implementation, verified against a live exchange). The
+ * `proxy.` host answers the editor's own protocol; its `api.` sibling is the
+ * REST surface this adapter speaks.
+ */
+export function endpointFromBearer(bearer) {
+  const match = /proxy-ep=([^;]+)/.exec(String(bearer ?? ''));
+  if (!match) return null;
+  return `https://${match[1].replace(/^proxy\./, 'api.')}`;
+}
+
+/** Operator override first, then the endpoint the bearer named, then the
+ * generic default — an explicit `HARNESS_PROVIDER_BASE_URL` is the operator
+ * speaking and always wins. */
+function apiBaseUrl() {
+  return process.env.HARNESS_PROVIDER_BASE_URL || cached?.endpoint || DEFAULT_BASE_URL;
+}
 const EXCHANGE_URL = 'https://api.github.com/copilot_internal/v2/token';
 const REQUEST_TIMEOUT_MS = Number(process.env.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS) || 120_000;
 
@@ -65,8 +89,11 @@ const REQUEST_TIMEOUT_MS = Number(process.env.HARNESS_PROVIDER_REQUEST_TIMEOUT_M
  * environment where nothing newer can be discovered, and they are labelled
  * stale because they are.
  */
-const FLOOR_EDITOR_VERSION = '1.99.3'; // stale floor — last verified 2026-08
-const FLOOR_PLUGIN_VERSION = '0.26.7'; // stale floor — last verified 2026-08
+// The floor matches Pi's current pins rather than our older ones: the 466
+// gate has been observed firing in the range between the two, so a floor
+// below it is a floor that can already be underwater.
+const FLOOR_EDITOR_VERSION = '1.107.0'; // stale floor — last verified 2026-08
+const FLOOR_PLUGIN_VERSION = '0.35.0'; // stale floor — last verified 2026-08
 
 function copilotHeaders() {
   const editor = process.env.HARNESS_COPILOT_EDITOR_VERSION || FLOOR_EDITOR_VERSION;
@@ -76,10 +103,25 @@ function copilotHeaders() {
     'editor-plugin-version': `copilot-chat/${plugin}`,
     'copilot-integration-id': 'vscode-chat',
     'user-agent': `GitHubCopilotChat/${plugin}`,
-    'openai-intent': 'conversation-panel',
+    // What the ecosystem's integrations send today (verified against Pi's,
+    // and against a live call): an explicit API version, and the intent the
+    // editing surfaces declare rather than the chat panel's.
+    'x-github-api-version': '2026-06-01',
+    'openai-intent': 'conversation-edits',
   };
 }
 const COPILOT_HEADERS = copilotHeaders();
+
+/**
+ * Who initiated this request — `user` when the last turn is a person's words,
+ * `agent` when it is tool results coming back. Copilot's billing and abuse
+ * heuristics read this header; an integration that reports everything as
+ * user-initiated is describing an agent loop as a person typing very fast.
+ */
+export function initiatorFor(wireMessages) {
+  const last = Array.isArray(wireMessages) ? wireMessages[wireMessages.length - 1] : null;
+  return last?.role === 'tool' ? 'agent' : 'user';
+}
 
 function configDir() {
   const xdg = process.env.XDG_CONFIG_HOME;
@@ -107,7 +149,7 @@ function findOauthToken() {
   return null;
 }
 
-let cached = null; // { bearer, expiresAtMs }
+let cached = null; // { bearer, expiresAtMs, endpoint }
 
 function httpRequest(url, { method = 'GET', headers = {}, body = null, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const u = new URL(url);
@@ -143,9 +185,16 @@ function httpRequest(url, { method = 'GET', headers = {}, body = null, timeoutMs
 
 /** A bearer for the Copilot API, minted or cached. */
 async function bearerToken() {
-  if (process.env.HARNESS_COPILOT_BEARER) return process.env.HARNESS_COPILOT_BEARER;
+  if (process.env.HARNESS_COPILOT_BEARER) {
+    // A pre-minted bearer may still name its endpoint; remember it so
+    // apiBaseUrl() can route to the account's own host.
+    if (!cached?.endpoint) {
+      cached = { ...(cached ?? { expiresAtMs: 0 }), endpoint: endpointFromBearer(process.env.HARNESS_COPILOT_BEARER) };
+    }
+    return process.env.HARNESS_COPILOT_BEARER;
+  }
 
-  if (cached && Date.now() < cached.expiresAtMs - 60_000) return cached.bearer;
+  if (cached?.bearer && Date.now() < cached.expiresAtMs - 60_000) return cached.bearer;
 
   const oauth = findOauthToken();
   if (!oauth) {
@@ -179,6 +228,7 @@ async function bearerToken() {
     // a string, which `Number.isFinite` rejects untouched — silently discarding
     // a real expiry for the 20-minute guess.
     expiresAtMs: Number.isFinite(Number(parsed.expires_at)) ? Number(parsed.expires_at) * 1000 : Date.now() + 20 * 60_000,
+    endpoint: endpointFromBearer(parsed.token),
   };
   return cached.bearer;
 }
@@ -204,10 +254,15 @@ async function callModel({ model, system, messages, tools, maxTokens, temperatur
   // a fresh one.
   const run = async () => {
     const bearer = await bearerToken();
-    const url = new URL(`${BASE_URL}/chat/completions`);
+    const url = new URL(`${apiBaseUrl()}/chat/completions`);
     return streamCompletion({
       url,
-      headers: { ...COPILOT_HEADERS, 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
+      headers: {
+        ...COPILOT_HEADERS,
+        'x-initiator': initiatorFor(wireMessages),
+        'content-type': 'application/json',
+        authorization: `Bearer ${bearer}`,
+      },
       transport: url.protocol === 'http:' ? http : https,
       payload,
       providerId: PROVIDER_ID,
@@ -254,7 +309,7 @@ async function handle(message) {
     // unsupported ones. The endpoint knows; nothing in the harness does.
     try {
       const bearer = await bearerToken();
-      const res = await httpRequest(`${BASE_URL}/models`, {
+      const res = await httpRequest(`${apiBaseUrl()}/models`, {
         method: 'GET',
         headers: { ...COPILOT_HEADERS, authorization: `Bearer ${bearer}` },
       });
@@ -324,9 +379,10 @@ async function handle(message) {
       await Promise.all(Array.from({ length: PROBE_CONCURRENCY }, async () => {
         for (let m = queue.shift(); m !== undefined; m = queue.shift()) {
           try {
-            const probe = await httpRequest(`${BASE_URL}/chat/completions`, {
+            const probe = await httpRequest(`${apiBaseUrl()}/chat/completions`, {
               method: 'POST',
-              headers: { ...COPILOT_HEADERS, authorization: `Bearer ${await bearerToken()}`, 'content-type': 'application/json' },
+              // A probe is the harness asking, not a person typing.
+              headers: { ...COPILOT_HEADERS, 'x-initiator': 'agent', authorization: `Bearer ${await bearerToken()}`, 'content-type': 'application/json' },
               body: JSON.stringify({ model: m.id, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
               // A probe gets seconds, not the idle default: a model that
               // cannot start one token in 8s is not usable as an agent model,

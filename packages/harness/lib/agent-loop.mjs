@@ -688,6 +688,38 @@ export async function runAgentLoop({
         break;
       }
 
+      // A TRUNCATED MESSAGE'S TOOL CALLS ARE NEVER DISPATCHED (Pi's rule,
+      // agent-loop.ts `failToolCallsFromTruncatedMessage`, adopted after
+      // reading its source). A response stopped at the token limit can carry a
+      // tool call whose streamed arguments were cut mid-JSON — and the
+      // salvage parsing between here and the wire can turn that into an input
+      // that VALIDATES while being silently incomplete: an `edit` whose `old`
+      // lost its last lines matches nothing (annoying), but a `write` whose
+      // `content` lost its last lines writes a truncated file and reports
+      // success (destructive). Each call is answered with an error result
+      // instead, so the model re-issues them under a fresh budget. `length` is
+      // the NEUTRAL spelling: each adapter maps its own wire's truncation stop
+      // onto it, because a loop that knew another provider's vocabulary would
+      // be that provider's loop wearing a neutral name.
+      if (completion?.stopReason === 'length') {
+        const refusals = calls.map((call) => ({
+          id: call.id,
+          output: 'this response hit the output-token limit, so the arguments of every tool call in it may be truncated — none were run; re-issue the calls',
+          isError: true,
+        }));
+        turns.push(recordTurn({
+          turnIndex,
+          turnStartedAt,
+          now,
+          tools: calls.map((call) => ({ tool: call.name, dispatched: false, reason: 'truncated by the output-token limit' })),
+          usage: completion?.usage ?? null,
+          ended: false,
+        }));
+        onTurn?.(turns[turns.length - 1], { text: finalText });
+        messages.push({ role: 'user', toolResults: refusals });
+        continue;
+      }
+
       const toolResults = [];
       const toolRecords = [];
       let fatal = null;

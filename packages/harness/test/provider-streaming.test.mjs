@@ -18,6 +18,30 @@ import {
   shapeResult,
 } from '../lib/providers/openai-compatible.mjs';
 import { foldAnthropicEvent, anthropicStreamToResponse } from '../lib/providers/anthropic.mjs';
+import { endpointFromBearer, initiatorFor } from '../lib/providers/github-copilot.mjs';
+
+// --- the Copilot request identity (learned from Pi, verified live) ----------
+
+test('the bearer names its own endpoint, and the parse honors it', () => {
+  assert.equal(
+    endpointFromBearer('tid=abc;proxy-ep=proxy.individual.githubcopilot.com;exp=123'),
+    'https://api.individual.githubcopilot.com',
+    'the token routes the account — Individual, Business and Enterprise each differently',
+  );
+  assert.equal(
+    endpointFromBearer('tid=abc;proxy-ep=proxy.enterprise.githubcopilot.com;rt=1'),
+    'https://api.enterprise.githubcopilot.com',
+  );
+  assert.equal(endpointFromBearer('tid=abc;exp=123'), null, 'no field, no claim — the generic default stands');
+  assert.equal(endpointFromBearer(null), null);
+});
+
+test('the initiator says who is asking: a person, or the loop feeding back tool results', () => {
+  assert.equal(initiatorFor([{ role: 'user', content: 'do it' }]), 'user');
+  assert.equal(initiatorFor([{ role: 'assistant' }, { role: 'tool', content: 'exit 0' }]), 'agent',
+    'an agent loop that reports everything as user-initiated is describing itself as a person typing very fast');
+  assert.equal(initiatorFor([]), 'user');
+});
 
 // --- the OpenAI-format fold -------------------------------------------------
 

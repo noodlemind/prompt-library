@@ -105,6 +105,42 @@ test('P5AC9: the loop orients, acts through a tool, and stops when the model ask
   assert.equal(result.usage.outputTokens, 10, 'usage accumulates across turns');
 });
 
+// Adopted from Pi's loop (`failToolCallsFromTruncatedMessage`): a response
+// stopped at the token limit can carry a tool call whose streamed arguments
+// were cut mid-JSON and salvage-parsed into something that VALIDATES while
+// being incomplete. A `write` whose content lost its tail would write a
+// truncated file and report success.
+test('a length-truncated message has its tool calls refused, not dispatched', async () => {
+  const { ws, home } = scaffold('agent-truncated');
+  const provider = scriptedProvider([
+    {
+      text: '',
+      toolCalls: [
+        { id: 't1', name: 'write', input: { path: 'half.txt', content: 'the beginning of somethi' } },
+        { id: 't2', name: 'bash', input: { script: 'echo hi' } },
+      ],
+      blocks: [],
+      stopReason: 'length',
+      usage: { inputTokens: 5, outputTokens: 5 },
+    },
+    (request) => {
+      // The refusal reaches the model as per-call errors it can act on.
+      const results = request.messages.at(-1)?.toolResults ?? [];
+      assert.equal(results.length, 2, 'every call in the truncated message is answered');
+      assert.ok(results.every((r) => r.isError), 'all answered as errors');
+      assert.match(results[0].output, /token limit|truncated/i);
+      return say('re-issuing nothing, done');
+    },
+  ]);
+  const result = await agentResultOf(argvFor(ws, home, 'do a thing'), {}, { startProviderFn: provider.start });
+
+  assert.equal(result.stopReason, 'done');
+  assert.equal(fs.existsSync(path.join(ws, 'half.txt')), false, 'the truncated write must never touch the disk');
+  const truncatedTurn = result.turns[0];
+  assert.ok(truncatedTurn.tools.every((t) => t.dispatched === false), 'the journal says the calls were refused');
+  assert.match(truncatedTurn.tools[0].reason, /truncated/);
+});
+
 test('P5AC9: the tool result is fed back, so a non-zero exit continues the loop instead of ending it', async () => {
   const { ws, home } = scaffold('agent-nonzero');
   const provider = scriptedProvider([
