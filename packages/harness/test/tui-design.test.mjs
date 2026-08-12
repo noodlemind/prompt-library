@@ -1108,15 +1108,22 @@ test('BLOCK: every painted row is exactly the terminal width, whatever it holds'
 // ── "values come from pickers" — the contract, finally implemented ────────
 
 test('VALUES: a slot the registry can enumerate is never left to be typed', async () => {
-    const { buildCommandIndex } = await import('../lib/command-index.mjs');
-  const { selectionPlan } = await import('../lib/tui/palette.mjs');
-  const rows = buildCommandIndex({ workspace: process.cwd() }).rows;
-    const config = selectionPlan(rows.find((r) => r.label === 'config set')).queue;
-  assert.deepEqual(config.map((q) => q.key), ['key', 'value', '--scope']);
-  for (const q of config) assert.ok(q.choices, `${q.key} must say where its answers come from`);
+  const { buildCommandIndex } = await import('../lib/command-index.mjs');
+  const { selectionPlan, resolveSelection } = await import('../lib/tui/palette.mjs');
+  const rows = buildCommandIndex({ surface: 'tui', workspace: process.cwd() }).rows;
+  const setRow = rows.find((r) => r.id === 'verb:config:set');
+  assert.ok(setRow, 'TUI exposes Set config as a folded verb row');
+  // Soft default: --scope is not asked on the ledger (defaults to user).
+  const plan = selectionPlan(setRow);
+  assert.deepEqual(plan.queue.map((q) => q.key).filter((k) => k !== 'key' && k !== 'value' && k !== '--scope'), []);
+  // key + value come from argv tokens / prompts with choices
+  const resolved = resolveSelection(setRow, { key: 'agent.enabled', value: 'false' });
+  assert.ok(resolved.argv, resolved.invalid);
+  assert.ok(resolved.argv.includes('--scope'));
+  assert.ok(resolved.argv.includes('user'));
 
-    const cli = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
-  const modelSet = cli.find((r) => r.label === 'model set');
+  const cli = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
+  const modelSet = cli.find((r) => r.id === 'verb:model:set' || r.label === 'model set');
   const slots = modelSet.argvTokens.filter((t) => t.kind === 'value');
   assert.deepEqual(slots.map((t) => t.positional), ['provider', 'model']);
   for (const slot of slots) assert.ok(slot.choices, `${slot.positional} must say where its answers come from`);

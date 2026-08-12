@@ -25,24 +25,41 @@ export function openPalette({ workspace = process.cwd(), query = '' } = {}) {
 
 export function resolveSelection(row, values = {}) {
   if (!row) return { argv: null, missing: [], invalid: null };
+  const filled = { ...values };
+  // Ledger soft defaults — keep CLI strict; TUI fills what config-cmd already defaults.
+  if (row.noun === 'config' && row.verb === 'set' && !filled['--scope'] && !filled.scope) {
+    filled['--scope'] = 'user';
+  }
+
   const missing = [];
   for (const token of row.argvTokens || []) {
     if (token.kind !== 'value') continue;
     const key = token.flag ?? token.positional;
-    const value = values[key];
+    const value = filled[key];
     if (value === undefined || value === null || value === '') missing.push(key);
+  }
+  // Only require prompts that are requiredInTui (scope is soft).
+  for (const p of row.prompts || []) {
+    if (p.requiredInTui === false) continue;
+    if (!p.required) continue;
+    const key = p.flag || p.key;
+    if (filled[key] === undefined || filled[key] === null || filled[key] === '') missing.push(key);
   }
   if (missing.length) return { argv: null, missing, invalid: null };
 
-  const argv = resolveArgv(row, values);
+  const argv = resolveArgv(row, filled);
   if (!argv || !argv.length) return { argv: null, missing: [], invalid: 'this row resolves to no command' };
+  // Ensure soft-defaulted scope lands on argv for config set.
+  if (row.noun === 'config' && row.verb === 'set' && !argv.includes('--scope')) {
+    argv.push('--scope', filled['--scope'] || 'user');
+  }
   const [name, ...rest] = argv;
   const entry = getCommand(name);
   if (!entry) return { argv: null, missing: [], invalid: `unknown command: ${name}` };
   try {
     validateArgs(entry, rest);
     if (typeof entry.requireArgs === 'function') {
-            const message = entry.requireArgs(rest, parseFlags(rest));
+      const message = entry.requireArgs(rest, parseFlags(rest));
       if (message) return { argv: null, missing: [], invalid: message };
     }
   } catch (error) {
@@ -52,26 +69,31 @@ export function resolveSelection(row, values = {}) {
 }
 
 /**
- * Human signature for the palette — never flag soup.
- * People see "write  path · content", not "write--path <path> --content …".
+ * Human signature for the palette — never flag soup, never angle-bracket CLI.
+ * People see "path · content", not "write--path <path> --content …".
  */
 export function signatureOf(row) {
   if (!row) return '';
   const parts = [];
   for (const token of row.argvTokens || []) {
     if (token.kind !== 'value') continue;
+    // Verb already lives in the product label ("Set config value").
+    if (token.positional === 'verb') continue;
     const name = humanLabel(token.valueName || token.positional || token.flag);
-    if (!name) continue;
+    if (!name || name === 'verb') continue;
     parts.push(token.required === false ? `[${name}]` : name);
   }
   const flags = row.prompts || [];
-  for (const flag of flags.filter((f) => f.required)) {
+  for (const flag of flags) {
+    // Soft / defaulted prompts (scope) stay off the signature strip.
+    if (flag.requiredInTui === false) continue;
+    if (!flag.required) continue;
+    if (flag.tui === 'cli-only') continue;
     const name = humanLabel(flag.flag || flag.valueName || flag.label);
     if (name) parts.push(name);
   }
-  const optional = flags.filter((f) => !f.required).length;
+  const optional = flags.filter((f) => !f.required && f.requiredInTui !== false && f.tui !== 'cli-only').length;
   if (optional) parts.push(`+${optional}`);
-  // Space-separated value names only; callers must not concatenate without a gap.
   return parts.join(' · ');
 }
 
@@ -114,10 +136,10 @@ export function promptsFor(row) {
 export function selectionPlan(row, values = {}) {
   if (!row) return { ready: null, queue: [], untilResolves: false, invalid: 'no row' };
 
-    const known = (key) => values[key] !== undefined && values[key] !== null && values[key] !== '';
+  const known = (key) => values[key] !== undefined && values[key] !== null && values[key] !== '';
 
-  const all = promptsFor(row);
-  const required = all.filter((p) => p.required && !known(p.key));
+  const all = promptsFor(row).filter((p) => p.tui !== 'cli-only' && p.requiredInTui !== false);
+  const required = all.filter((p) => p.required && p.requiredInTui !== false && !known(p.key));
   if (required.length) {
     return { ready: null, queue: required, untilResolves: false, invalid: null };
   }

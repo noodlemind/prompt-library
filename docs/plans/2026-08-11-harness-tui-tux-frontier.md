@@ -332,3 +332,19 @@ Rules:
 - **runs** / **resume &lt;id&gt;** → `run list` / `run resume`.
 - Docs: Session Ledger TUX in concept doc + package README.
 - Tests: `tui-tux-phase2.test.mjs`; enumerability fixtures for inspect.
+
+### 2026-08-12 — TUX regression inventory + fold palette inwards
+
+**Ledger inventory (what already exists):** Session blocks, palette `/`, bash `!`, Shift+Tab modes, results picker, run journal hydrate, product verbs (agent/mode/gate/inspect/runs), search compact ledger, usage status projection.
+
+**Pain found in dogfood:**
+1. Palette was a **flat CLI dump** (every verb + `--scope` + `<key>` grammar).
+2. Search/more/cursor and chrome noise (earlier fixes 0.8.3).
+3. Bare `bash` / `tree test` usage walls (0.8.4 ergonomics).
+
+**Fold (this change):**
+- TUI multi-verb commands: **no bare parent** (`checks <verb>` gone); only product verb rows.
+- Human labels: `Set config value`, `Run a check`, `List past runs`, …
+- Signatures: `key · value` only — **no `--scope`**, no angle brackets.
+- Soft-default `--scope user` when resolving config set from the palette.
+- CLI surface unchanged (full inventory for scripts).
