@@ -1548,6 +1548,11 @@ registerCommand({
       // file must not already exist". Supplying it is how a caller says "I read
       // this file, and these are the bytes I intend to replace".
       { name: '--expect', type: 'string', valueName: 'sha256', description: 'the digest of the content being replaced — required to overwrite an existing file', required: false, default: null, tui: 'prompt' },
+      // The consequence gate for a replacement that loses most of a file: a
+      // digest match proves the caller read the file, not all of it, and a
+      // bounded read truncates. Stated intent, same philosophy as the
+      // unique-match rule.
+      { name: '--allow-shrink', type: 'boolean', description: 'confirm replacing an existing file with much smaller content is intended', required: false, default: false, tui: 'cli-only' },
     ],
   },
   handler: cmdWrite,

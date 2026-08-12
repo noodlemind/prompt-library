@@ -141,6 +141,59 @@ test('a length-truncated message has its tool calls refused, not dispatched', as
   assert.match(truncatedTurn.tools[0].reason, /truncated/);
 });
 
+// The other half of the benchmark failure: 15 consecutive explore turns with
+// no pressure to converge, because nothing ever told the model the budget
+// existed. Both nudges are deterministic messages in the transcript, so they
+// are visible to the model AND to anyone reading the run afterwards.
+test('six explore-only turns draw a stall nudge; approaching the turn budget draws a budget nudge', async () => {
+  const { ws, home } = scaffold('agent-nudges');
+  fs.writeFileSync(path.join(ws, 'a.txt'), 'seed\n');
+  const reads = Array.from({ length: 6 }, (_, i) => callTool(`r${i}`, 'read', { path: 'a.txt' }));
+  const provider = scriptedProvider([
+    ...reads,
+    (request) => {
+      const texts = request.messages.filter((m) => typeof m.text === 'string').map((m) => m.text);
+      assert.ok(
+        texts.some((t) => /6 consecutive turns reading and searching/.test(t)),
+        'after six explore-only turns the transcript must say so',
+      );
+      assert.ok(
+        texts.some((t) => /prefer `edit` over rewriting a file with `write`/.test(t)),
+        'and steer toward the surgical tool',
+      );
+      return callTool('b1', 'bash', { script: 'echo acting' });
+    },
+    callTool('b2', 'bash', { script: 'echo more' }),
+    (request) => {
+      // Turn 9 of 10: eight turns are spent, two remain — the threshold.
+      const texts = request.messages.filter((m) => typeof m.text === 'string').map((m) => m.text);
+      assert.ok(
+        texts.some((t) => /Budget check: 2 of 10 turns remain/.test(t)),
+        'the model is told the budget before it is spent, not in the stop reason after',
+      );
+      return say('done');
+    },
+  ]);
+  const result = await agentResultOf(argvFor(ws, home, 'poke around', ['--max-turns', '10']), {}, { startProviderFn: provider.start });
+  assert.equal(result.stopReason, 'done');
+});
+
+test('a run that acts steadily is never nudged', async () => {
+  const { ws, home } = scaffold('agent-no-nudge');
+  const provider = scriptedProvider([
+    callTool('t1', 'bash', { script: 'echo one' }),
+    callTool('t2', 'bash', { script: 'echo two' }),
+    (request) => {
+      const texts = request.messages.filter((m) => typeof m.text === 'string').map((m) => m.text);
+      assert.equal(texts.some((t) => /consecutive turns reading|Budget check/.test(t)), false,
+        'nudges are for measured pathologies, not background noise');
+      return say('done');
+    },
+  ]);
+  const result = await agentResultOf(argvFor(ws, home, 'do work', ['--max-turns', '30']), {}, { startProviderFn: provider.start });
+  assert.equal(result.stopReason, 'done');
+});
+
 test('P5AC9: the tool result is fed back, so a non-zero exit continues the loop instead of ending it', async () => {
   const { ws, home } = scaffold('agent-nonzero');
   const provider = scriptedProvider([

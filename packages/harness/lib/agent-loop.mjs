@@ -207,13 +207,16 @@ export const AGENT_TOOLS = Object.freeze([
     description:
       'Write a file in full. Creating a NEW file needs nothing else. Replacing an EXISTING file requires '
       + '`expect` — the sha256 `read` reported — which proves you are replacing the content you actually saw; '
-      + 'without it the write is refused. Use `edit` for a change to part of a file.',
+      + 'without it the write is refused. Use `edit` for a change to part of a file. A write that would replace '
+      + 'an existing file with MUCH SMALLER content is refused unless `allow_shrink` is true — never rewrite a '
+      + 'file you have not read to its last line.',
     schema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'file path relative to the workspace root' },
         content: { type: 'string', description: 'the complete contents of the file' },
         expect: { type: 'string', description: 'sha256 of the content being replaced; required when the file exists' },
+        allow_shrink: { type: 'boolean', description: 'confirm that replacing this file with much smaller content is intended' },
       },
       required: ['path', 'content'],
     },
@@ -504,6 +507,7 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
       }
       argv = [...base, '--path', rel, '--content', input.content];
       if (typeof input.expect === 'string' && input.expect) argv.push('--expect', input.expect);
+      if (input.allow_shrink === true) argv.push('--allow-shrink');
       run = writeResultOf;
     }
   }
@@ -644,12 +648,54 @@ export async function runAgentLoop({
   let detail = null;
   let finalText = '';
   const usage = { inputTokens: 0, outputTokens: 0 };
+  let budgetNudged = false;
+
+  /**
+   * How many turns at the tail of the run only looked — read or search, never
+   * a mutation, never a shell. The streak is what the stall nudge below reads.
+   */
+  const exploreStreak = () => {
+    let streak = 0;
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      const tools = turns[i].tools;
+      if (tools.length && tools.every((t) => t.tool === 'read' || t.tool === 'search')) streak += 1;
+      else break;
+    }
+    return streak;
+  };
 
   try {
     while (!stop) {
       if (signal?.aborted) { stop = 'cancelled'; break; }
       if (turns.length >= maxTurns) { stop = 'turn-budget'; break; }
       if (now() >= deadline) { stop = 'time-budget'; break; }
+
+      // CONVERGENCE PRESSURE — the internal, deterministic precursor of a
+      // steering seam (Pi drains caller-supplied steering messages here; the
+      // harness has no caller to drain yet, but the loop itself has two things
+      // worth saying). Both were measured, not imagined: a benchmark run spent
+      // 15 consecutive turns reading and searching, then burned its last turns
+      // on a rushed destructive write — because nothing ever told the model
+      // the budget existed or that looking was no longer free.
+      const nudges = [];
+      const remainingTurns = maxTurns - turns.length;
+      if (!budgetNudged && turns.length > 0 && remainingTurns <= Math.max(2, Math.floor(maxTurns / 4))) {
+        budgetNudged = true;
+        nudges.push(
+          `Budget check: ${remainingTurns} of ${maxTurns} turns remain. Converge now — make the change, run the verification, and finish.`,
+        );
+      }
+      // Fires at 6, 12, 18 … so a model that goes back to wandering after the
+      // first nudge is told again rather than indulged.
+      const streak = exploreStreak();
+      if (streak > 0 && streak % 6 === 0) {
+        nudges.push(
+          `You have spent ${streak} consecutive turns reading and searching without changing anything. `
+          + 'State the change you intend, then make it with `edit` — prefer `edit` over rewriting a file with `write`. '
+          + 'Further exploration is spending the budget the change itself needs.',
+        );
+      }
+      if (nudges.length) messages.push({ role: 'user', text: nudges.join('\n\n') });
 
       const turnIndex = turns.length + 1;
       const turnStartedAt = now();

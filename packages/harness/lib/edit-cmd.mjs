@@ -52,7 +52,7 @@ import crypto from 'node:crypto';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
-import { parseFlags } from './flags.mjs';
+import { parseFlags, hasFlag } from './flags.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
 import { readFileNoFollow, writeFileContained, appendFileContained } from './fs-safe.mjs';
 import { ensureHarnessDir } from './session.mjs';
@@ -420,7 +420,24 @@ export function runEdit({ workspace, path: relPath, old, next, dryRun = false })
  * this" is indistinguishable from "I did not know it was there" once the bytes
  * are gone. A NEW file needs nothing: there is no content to be ignorant of.
  */
-export function runWrite({ workspace, path: relPath, content, expect = null, dryRun = false }) {
+/**
+ * When a replacement is suspicious enough to demand stated intent.
+ *
+ * Measured failure, not a hypothetical: an agent run replaced a 777-line
+ * module with a 50-line reconstruction through a write whose `--expect`
+ * legitimately matched — the digest proves the caller READ the file, not that
+ * they read ALL of it, and a bounded `read` shows ~450 lines of a 33KB file
+ * before truncating. Both thresholds must hold: proportional (under half the
+ * bytes) so a rewrite that keeps most of the content passes, and absolute
+ * (over 2KB lost) so small files are not nannied about ordinary edits.
+ * Deliberate shrinks state it — `--allow-shrink` — the same two-step as the
+ * unique-match rule: the arguments themselves must carry the intent.
+ */
+function isSuspiciousShrink(beforeBytes, afterBytes) {
+  return afterBytes < beforeBytes / 2 && beforeBytes - afterBytes > 2048;
+}
+
+export function runWrite({ workspace, path: relPath, content, expect = null, allowShrink = false, dryRun = false }) {
   const workspaceResolved = path.resolve(workspace);
   const full = resolveTarget(workspaceResolved, relPath);
   if (!full) {
@@ -476,6 +493,20 @@ export function runWrite({ workspace, path: relPath, content, expect = null, dry
         `${relPath} does not exist, but --expect says it should hold known content`,
         'the file was removed or renamed since it was read — drop --expect to create it fresh',
       );
+    }
+
+    if (target.exists && !allowShrink) {
+      const beforeBytes = Buffer.byteLength(target.content, 'utf8');
+      const afterBytes = Buffer.byteLength(content, 'utf8');
+      if (isSuspiciousShrink(beforeBytes, afterBytes)) {
+        return failed(
+          'write',
+          relPath,
+          'shrink',
+          `refusing to replace ${relPath} (${beforeBytes} bytes) with much smaller content (${afterBytes} bytes)`,
+          'a digest match proves the file was read, not that all of it was — use `edit` for a change to part of it, or pass --allow-shrink if replacing it with less is genuinely intended',
+        );
+      }
     }
 
     if (dryRun) {
@@ -724,7 +755,7 @@ function planWrite(argv) {
   requirePath(relPath, 'write');
   const content = literalFlag(argv, '--content');
   if (content === null) throw usageError('write requires --content <text>', 'harness write --path <file> --content <text>');
-  return { flags, workspace, relPath, content, expect: literalFlag(argv, '--expect') };
+  return { flags, workspace, relPath, content, expect: literalFlag(argv, '--expect'), allowShrink: hasFlag(argv, '--allow-shrink') };
 }
 
 export async function editResultOf(argv, ctx = {}) {
@@ -736,7 +767,7 @@ export async function editResultOf(argv, ctx = {}) {
 
 export async function writeResultOf(argv, ctx = {}) {
   const p = planWrite(argv);
-  const result = runWrite({ workspace: p.workspace, path: p.relPath, content: p.content, expect: p.expect, dryRun: p.flags.dryRun });
+  const result = runWrite({ workspace: p.workspace, path: p.relPath, content: p.content, expect: p.expect, allowShrink: p.allowShrink, dryRun: p.flags.dryRun });
   emitAudit(ctx, result);
   return result;
 }
