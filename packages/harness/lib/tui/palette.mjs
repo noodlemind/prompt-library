@@ -51,21 +51,28 @@ export function resolveSelection(row, values = {}) {
   return { argv, missing: [], invalid: null };
 }
 
+/**
+ * Human signature for the palette — never flag soup.
+ * People see "write  path · content", not "write--path <path> --content …".
+ */
 export function signatureOf(row) {
   if (!row) return '';
   const parts = [];
   for (const token of row.argvTokens || []) {
     if (token.kind !== 'value') continue;
-    const name = token.valueName || token.positional || String(token.flag ?? '').replace(/^--/, '');
-    parts.push(token.required === false ? `[${name}]` : `<${name}>`);
+    const name = humanLabel(token.valueName || token.positional || token.flag);
+    if (!name) continue;
+    parts.push(token.required === false ? `[${name}]` : name);
   }
   const flags = row.prompts || [];
   for (const flag of flags.filter((f) => f.required)) {
-    parts.push(`${flag.flag} <${String(flag.flag).replace(/^--/, '')}>`);
+    const name = humanLabel(flag.flag || flag.valueName || flag.label);
+    if (name) parts.push(name);
   }
   const optional = flags.filter((f) => !f.required).length;
-  if (optional) parts.push(`[+${optional}]`);
-  return parts.join(' ');
+  if (optional) parts.push(`+${optional}`);
+  // Space-separated value names only; callers must not concatenate without a gap.
+  return parts.join(' · ');
 }
 
 function humanLabel(flagOrPositional) {

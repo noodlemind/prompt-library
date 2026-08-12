@@ -1059,8 +1059,16 @@ export async function runLedger({
         } else {
           await rerun(target);
         }
+      } else if (parsed.kind === 'bash-enter') {
+        session.composer.setBashMode(true);
+        say(ui.paint('muted', '  bash mode · type a shell command · esc leaves'));
       } else if (parsed.kind === 'shell') {
-                await runArgv(['bash', '--', parsed.script], { display: `!${parsed.script}` });
+        if (!parsed.script) {
+          session.composer.setBashMode(true);
+          say(ui.paint('muted', '  bash mode · type a shell command · esc leaves'));
+        } else {
+          await runArgv(['bash', '--', parsed.script], { display: `!${parsed.script}` });
+        }
       } else if (parsed.kind === 'results') {
         openResults(null);
       } else if (parsed.kind === 'help') {
@@ -1093,6 +1101,11 @@ export async function runLedger({
         else hits.forEach((h) => say(ui.line({ state: 'pending', key: h.kind, value: h.path })));
       } else if (parsed.argv?.[0] === 'tui') {
                 say(ui.line({ state: 'warn', key: 'tui', value: 'already open', note: 'the session ledger is this surface' }));
+      } else if (parsed.argv?.length === 1 && parsed.argv[0] === 'bash') {
+        session.composer.setBashMode(true);
+        say(ui.paint('muted', '  bash mode · type a shell command · esc leaves'));
+      } else if (parsed.argv?.length === 1 && parsed.argv[0] === 'tree') {
+        await runArgv(['tree', 'workspace'], { display: 'tree workspace' });
       } else if (parsed.argv?.length && !hasCommand(parsed.argv[0]) && agentMode() && modeChrome(hostMode).agent) {
         if (hostMode === 'plan') {
           say(ui.line({
@@ -1126,20 +1139,24 @@ export async function runLedger({
       ['help / ?', 'this keymap and grammar'],
       ['/', 'open the command palette'],
       ['/<text>', 'filter the palette (run: plan: search: check: learn:)'],
+      ['/', 'open the command palette'],
+      ['/<text>', 'filter the palette (run: plan: search: check: learn:)'],
       ['!', 'enter bash mode — every line runs through governed bash · esc leaves'],
       ['!<command>', 'run one shell command without entering the mode'],
+      ['bash', 'same as ! — enter bash mode'],
+      ['tree', 'workspace file tree · also: tree knowledge'],
+      ['tree lib', 'workspace tree under a path'],
+      ['search <query>', 'search · then type results'],
       ['agent on|off', 'toggle optional agent'],
       ['mode commands|assist|plan', 'host modes · shift+tab cycles'],
       ['gate menu', 'approve / comment / quit for the active plan'],
-      ['inspect [config|permissions|workspace]', 'effective values and provenance'],
-      ['runs / resume', 'list prior runs · resume <id> judges safety'],
-      ['question prompt|a|b', 'structured multi-choice checkpoint'],
-      ['config set key value', 'user scope by default; --scope project for the repo'],
-      ['config set key=value', 'sugar form; spaces around = also work'],
+      ['inspect config', 'effective values and provenance'],
+      ['runs', 'list prior runs'],
+      ['config set key=value', 'user scope by default'],
       ['@<path>', 'complete a file path'],
+      ['results', 'open one of the last search\u2019s results'],
       ['replay', 're-run the previous block'],
       ['replay <id>', 're-run any block by id, from its record line'],
-      ['results', 'open one of the last search\u2019s results'],
       ['shift+tab', 'cycle host mode: commands → assist → plan'],
       ['ctrl+\u2191', 'walk the ledger blocks'],
       ['ctrl+o', 'fold or unfold the last block'],

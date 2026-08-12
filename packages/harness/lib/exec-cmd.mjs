@@ -100,8 +100,10 @@ function plan(argv, { shell }) {
 
   if (childArgs === null || childArgs.length === 0) {
     throw usageError(
-      shell ? 'bash requires a script after --' : 'exec requires a command after --',
-      shell ? 'harness bash -- "<script>"' : 'harness exec -- <program> [args...]',
+      shell ? 'bash needs a script to run' : 'exec needs a program to run',
+      shell
+        ? 'in the ledger: type ! then a command  ·  or: bash -- "ls -la"'
+        : 'exec -- <program> [args...]',
     );
   }
     if (shell && childArgs.length !== 1) {

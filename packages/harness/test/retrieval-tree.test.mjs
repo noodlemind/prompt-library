@@ -116,14 +116,16 @@ test('an unknown subject names the subjects that exist', (t) => {
   assert.throws(() => runTree({ subject: 'plans', workspace: ws, home, copilotHome }), (err) => {
     assert.equal(err.code, 'E_USAGE');
     assert.match(err.message, /unknown tree subject: plans/);
-    assert.match(err.hint, /workspace, knowledge/);
+    assert.match(err.hint, /workspace or knowledge/);
     return true;
   });
     assert.throws(() => runTree({ subject: 'run', workspace: ws, home, copilotHome }), (err) => {
     assert.match(err.hint, /Phase 4a/);
     return true;
   });
-  assert.throws(() => runTree({ workspace: ws, home, copilotHome }), (err) => err.code === 'E_USAGE');
+  // Bare tree defaults to workspace subject (TUX: tree without args is usable).
+  const bare = runTree({ workspace: ws, home, copilotHome });
+  assert.equal(bare.subject, 'workspace');
   assert.deepEqual([...TREE_SUBJECTS], ['workspace', 'knowledge']);
 });
 

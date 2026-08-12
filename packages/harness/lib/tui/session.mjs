@@ -151,7 +151,28 @@ export function interpretLine(rawLine) {
     };
   }
   if (line.startsWith('!')) {
-    return { kind: 'shell', script: line.slice(1).trim() };
+    const script = line.slice(1).trim();
+    // Bare `!` enters bash mode in the composer; that path is handled by input.
+    // `!cmd` runs one governed script.
+    if (!script) return { kind: 'bash-enter' };
+    return { kind: 'shell', script };
+  }
+
+  // Bare product verbs — friendlier than kernel usage walls.
+  if (lower === 'bash') return { kind: 'bash-enter' };
+  if (lower === 'tree' || lower === 'tree workspace') {
+    return { kind: 'command', argv: ['tree', 'workspace'] };
+  }
+  if (lower === 'tree knowledge') {
+    return { kind: 'command', argv: ['tree', 'knowledge'] };
+  }
+  // `tree src` / `tree lib/foo` → workspace tree scoped to that path
+  if (lower.startsWith('tree ')) {
+    const rest = line.slice(5).trim();
+    if (rest === 'workspace' || rest === 'knowledge') {
+      return { kind: 'command', argv: ['tree', rest] };
+    }
+    if (rest) return { kind: 'command', argv: ['tree', 'workspace', rest] };
   }
 
   if (line.startsWith('/')) {

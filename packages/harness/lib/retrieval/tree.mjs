@@ -316,18 +316,33 @@ function knowledgeTree({ workspace, copilotHome, home, target, depth, maxNodes }
 }
 
 export function runTree({ subject, target = null, depth, workspace, copilotHome, home, maxNodes } = {}) {
-  if (!subject) {
-    throw usageError('tree requires a subject', `harness tree <${TREE_SUBJECTS.join('|')}>`);
+  // Default subject for bare `tree` — the workspace map is the common case.
+  let resolvedSubject = subject || 'workspace';
+  let resolvedTarget = target;
+  // Non-subject first tokens: path under workspace if it looks like a path,
+  // otherwise a clear usage error (not a cryptic subject list alone).
+  if (resolvedSubject && !TREE_SUBJECTS.includes(resolvedSubject)) {
+    if (PENDING_SUBJECTS[resolvedSubject]) {
+      const pending = PENDING_SUBJECTS[resolvedSubject];
+      throw usageError(
+        `tree subject "${resolvedSubject}" is not available yet`,
+        `${pending} · today: tree workspace | tree knowledge`,
+      );
+    }
+    const looksLikePath = /[./]/.test(resolvedSubject)
+      || (workspace && fs.existsSync(path.join(workspace, resolvedSubject)));
+    if (looksLikePath) {
+      resolvedTarget = resolvedTarget || resolvedSubject;
+      resolvedSubject = 'workspace';
+    } else {
+      throw usageError(
+        `unknown tree subject: ${resolvedSubject}`,
+        `use workspace or knowledge · for a folder try: tree workspace ${resolvedSubject}`,
+      );
+    }
   }
-  if (!TREE_SUBJECTS.includes(subject)) {
-    const pending = PENDING_SUBJECTS[subject];
-    throw usageError(
-      `unknown tree subject: ${subject}`,
-      pending
-        ? `${subject} arrives with ${pending}; today: ${TREE_SUBJECTS.join(', ')}`
-        : `one of ${TREE_SUBJECTS.join(', ')}`,
-    );
-  }
+  subject = resolvedSubject;
+  target = resolvedTarget;
   const levels = resolveDepth(depth);
   if (subject === 'workspace') return workspaceTree({ workspace, target, depth: levels, maxNodes });
   return knowledgeTree({ workspace, copilotHome, home, target, depth: levels, maxNodes });

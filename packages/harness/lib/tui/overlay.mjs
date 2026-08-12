@@ -1,4 +1,5 @@
 import { displayWidth, clipTo, padTo } from './width.mjs';
+import { containsFlagSyntax } from './palette.mjs';
 
 /** Rows shown at once. An overlay taller than a glance is a list, and a list is
  * what the palette exists instead of. */
@@ -270,8 +271,13 @@ export function renderPaletteRows(overlay, { ui, width = 80 } = {}) {
   if (!rows.length) {
     return [ui.tintRow('panel', padTo(`  ${ui.paint('muted', 'nothing matches')}`, width))];
   }
-    const labelOf = (r) => (r.signature ? `${r.label} ${r.signature}` : String(r.label ?? ''));
-  const labelW = Math.min(38, Math.max(...rows.map((r) => displayWidth(labelOf(r)))));
+    // Noun left, human signature muted — never concatenate flags onto the name.
+    const labelOf = (r) => {
+      const sig = r.signature && !containsFlagSyntax(r.signature) ? String(r.signature).trim() : '';
+      if (!sig) return String(r.label ?? '');
+      return `${r.label}  ${sig}`;
+    };
+  const labelW = Math.min(36, Math.max(12, ...rows.map((r) => displayWidth(labelOf(r)))));
   const out = [];
   for (const [i, row] of rows.entries()) {
     const chosen = overlay.offset + i === overlay.index;
@@ -286,14 +292,16 @@ export function renderPaletteRows(overlay, { ui, width = 80 } = {}) {
       ? ui.paint(row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : 'error', row.sideEffect)
       : '';
     const effectW = row.sideEffect ? row.sideEffect.length + 1 : 0;
-        const plainLabel = clipTo(labelOf(row), labelW);
+    const plainLabel = clipTo(labelOf(row), labelW);
     const pad = ' '.repeat(Math.max(0, labelW - displayWidth(plainLabel)));
     let labelOut;
     if (disabled) {
       labelOut = ui.paint('muted', plainLabel) + pad;
     } else if (row.signature && plainLabel.startsWith(row.label)) {
-      const tail = plainLabel.slice(String(row.label).length);
-      labelOut = `${row.label}${ui.paint('muted', tail)}${pad}`;
+      // Keep an explicit gap so "write" + "path · content" never becomes "write--path".
+      const rawTail = plainLabel.slice(String(row.label).length).replace(/^\s*/, '');
+      const tail = rawTail ? `  ${rawTail}` : '';
+      labelOut = `${ui.paint('info', row.label)}${ui.paint('muted', tail)}${pad}`;
     } else {
       labelOut = plainLabel + pad;
     }
