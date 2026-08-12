@@ -37,8 +37,7 @@ function writeRealFixEpisode(ws, rel, body) {
 }
 
 function learningFile(harnessHome, ws, id) {
-  // Same store layout knowledge/store.mjs writes to: <home>/knowledge/<repoId>/learnings/<domain>/<slug>.md
-  const knowledgeRoot = path.join(harnessHome, 'knowledge');
+    const knowledgeRoot = path.join(harnessHome, 'knowledge');
   const repoDirs = fs.readdirSync(knowledgeRoot);
   const [domain, slug] = id.split('/');
   for (const repoDir of repoDirs) {
@@ -54,19 +53,12 @@ function setStatus(harnessHome, ws, id, status) {
   fs.writeFileSync(file, raw.replace(/status: provisional/, `status: ${status}`), 'utf8');
 }
 
-/** Seeds one active + one provisional + one retired + one stale-anchored
- * learning, all sharing TRIGGER so a single query overlaps every one of
- * them — the four exclusion/decomposition paths orient --explain must
- * cover in one pass. */
 function seededContext() {
   const ws = tempDir('oe-ws-');
   const home = tempDir('oe-home-');
   const harnessHome = tempDir('oe-hh-');
 
-  // Anchor setup for the stale-anchored learning: a real source file, and an
-  // episode doc that mentions it (so consolidate --apply extracts it as an
-  // anchor) — mirrors test/stale-anchors.test.mjs.
-  writeFile(ws, 'src/widgetd.mjs', 'export function drainQueue() {}\n');
+    writeFile(ws, 'src/widgetd.mjs', 'export function drainQueue() {}\n');
   const staleAnchorEpisodeBody =
     '---\ntitle: "widget queue backlog spike"\ndate: 2026-07-20\n---\n\n## Problem\n\nFixed by draining; see src/widgetd.mjs.\n';
   writeFile(ws, 'docs/solutions/widgetd/queue-backlog.md', staleAnchorEpisodeBody);
@@ -115,8 +107,6 @@ function seededContext() {
 
   setStatus(harnessHome, ws, ACTIVE_ID, 'active');
   setStatus(harnessHome, ws, RETIRED_ID, 'retired');
-  // widgetb stays provisional (default). widgetd stays provisional too —
-  // its stale-anchor exclusion is independent of status.
 
   // Break the anchor, then index — the store's real path to a stale exclusion.
   fs.rmSync(path.join(ws, 'src/widgetd.mjs'), { force: true });
@@ -225,13 +215,6 @@ test('orient records learningsBytes on the event, and report tallies an injected
   assert.match(plainReport.stdout, /tok injected across 2 orients · 0 consolidations/);
 });
 
-// --- learningsBytes must measure the pack that actually shipped, not what
-// orient merely attempted to inject before the 2KB truncation ran. ---
-
-/** A minimal single-learning fixture (distinct from seededContext's four-
- * learning explain fixture) whose exact untruncated pack size is a known,
- * stable constant for this trigger/body/episode — used as the control
- * ("full section") value the truncation tests below compare against. */
 function singleLearningContext() {
   const ws = tempDir('oeb-ws-');
   const home = tempDir('oeb-home-');
@@ -258,13 +241,6 @@ function singleLearningContext() {
   return { ws, home, harnessHome };
 }
 
-/** Writes a real active plan (status in-progress, plan_lock true, phase 1)
- * whose "## Memory Cards" section is a single `n`-character unbroken line
- * (orient's 12-line memoryExcerpt slice keeps it whole, since it has no
- * embedded newlines). Padding this shifts how many pack bytes are spent
- * BEFORE the "## Learnings (memory)" section is ever reached — the lever
- * needed to push that section past the 2KB truncation cap, or land the cut
- * point inside it. */
 function writePaddedActivePlan(ws, n) {
   const plansDir = path.join(ws, 'docs', 'plans');
   fs.mkdirSync(plansDir, { recursive: true });
@@ -287,12 +263,6 @@ function lastOrientEvent(ws) {
   return events.filter((e) => e.type === 'orient').at(-1);
 }
 
-/** Independently locates the "## Learnings (memory)" section inside a raw
- * pack string — from the header to the next "## " heading, the truncation
- * marker, or end of string, whichever comes first. Deliberately does NOT
- * call the implementation's own context-pack.mjs helper: this re-derives
- * the same contract from scratch so the assertions below are a real
- * black-box check, not a tautology against the code under test. */
 function locateLearningsSectionBytes(pack) {
   const start = pack.indexOf('## Learnings (memory)');
   if (start === -1) return 0;
@@ -318,11 +288,7 @@ test('learningsBytes equals the actual section bytes persisted in context-pack.m
 });
 
 test('a large plan body pushes the learnings section past the 2KB cap: learningsBytes reports 0, matching the pack that actually shipped', () => {
-  // Reproduces the coordinator's finding: a large plan body earlier in the
-  // pack can consume the whole 2KB budget before the learnings section is
-  // ever reached, so the section never survives into the written pack even
-  // though `learnings` was genuinely ranked and non-empty.
-  const c = singleLearningContext();
+    const c = singleLearningContext();
   writePaddedActivePlan(c.ws, 2500);
 
   const res = run(c, ['orient', '--query', QUERY]);
@@ -347,11 +313,7 @@ test('a mid-section truncation cut: learningsBytes reports only the bytes that a
   const fullBytes = JSON.parse(controlRes.stdout).learningsBytes;
   assert.ok(fullBytes > 0);
 
-  // n=1200 is an empirically-tuned pad against this exact fixture: large
-  // enough to trigger the 2KB truncation, small enough that the cut lands
-  // INSIDE the learnings section — the header survives, "## Next tools"
-  // never appears, and only part of the section's content makes it through.
-  const c = singleLearningContext();
+    const c = singleLearningContext();
   writePaddedActivePlan(c.ws, 1200);
   const res = run(c, ['orient', '--query', QUERY]);
   assert.equal(res.status, 0, res.stderr || res.stdout);

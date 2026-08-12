@@ -1,18 +1,3 @@
-/**
- * P1.6 (AC8) — verify streams and cancels.
- *
- * Covers what no other test file does: lib/runner.mjs actually wired into
- * lib/verify.mjs's named-check execution path (replacing blocking
- * spawnSync), `verify --output jsonl` streaming row-per-event, a per-check
- * timeout reporting `timed-out` distinctly from a generic failure, and
- * Ctrl-C (SIGINT -> AbortSignal) cancellation: status `cancelled`, exit
- * 130, evidence never written, and (via the widened event wiring) a
- * `command.result` event carrying `result: 'warn'` (legacyResultForStatus).
- *
- * Every test here is designed to resolve in well under 5s — cancellation
- * tests abort a plain, handler-less sleeping child, which dies to SIGTERM
- * almost immediately (no need to wait out the runner's 2s SIGKILL grace).
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -138,10 +123,6 @@ No open findings.
   return rel;
 }
 
-// One isolated user scope for this whole file. Set as COPILOT_HOME so every
-// in-process `runVerify` AND every spawned CLI call resolves here instead of
-// the developer's real ~/.copilot — which, now that trust lives there, would
-// make the suite's behavior depend on the machine running it.
 const FIXTURE_COPILOT_HOME = tempDir('vstream-home-');
 process.env.COPILOT_HOME = FIXTURE_COPILOT_HOME;
 
@@ -159,10 +140,7 @@ function initGit(workspace) {
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const value = 1;\n');
   assert.equal(run(['add', '.']).status, 0);
   assert.equal(run(['commit', '-qm', 'baseline']).status, 0);
-  // P3AC6: named checks execute repo-authored argv and are gated on trust.
-  // These fixtures test STREAMING, not the gate — `test/trust.test.mjs` owns
-  // that — so the workspace is approved as soon as it exists.
-  approveProject({ workspace, copilotHome: FIXTURE_COPILOT_HOME });
+    approveProject({ workspace, copilotHome: FIXTURE_COPILOT_HOME });
 }
 
 function readEventsRaw(workspace) {
@@ -189,14 +167,6 @@ test('runVerify (async) still passes a real check through the async runner, byte
   assert.equal(statusForVerifyResult(result), 'ok');
 });
 
-// --- Critical regression: evidence artifacts must redact check output -----
-//
-// lib/evidence.mjs#writeEvidence persisted `result` (including every named
-// check's raw stdout/stderr) to `.harness/evidence/*.json` with no
-// redaction — a durable, on-disk artifact, unlike a terminal scrollback.
-// A check that echoes a secret-shaped value (a misconfigured tool leaking a
-// token into its own output, for instance) landed verbatim in that file.
-
 test('writeEvidence redacts a secret-shaped check stdout before persisting to .harness/evidence/*.json', async () => {
   const workspace = tempDir('verify-stream-evidence-redact-');
   const plan = writeVersionedPlan(workspace, { required: ['leaky-check'] });
@@ -208,11 +178,7 @@ test('writeEvidence redacts a secret-shaped check stdout before persisting to .h
   const result = await runVerify({ workspace, flags: { plan, base: 'HEAD', dryRun: false, enforcement: 'enforce', workspace } });
   assert.equal(result.outcome, 'passed');
   const check = result.checks.find((c) => c.id === 'leaky-check');
-  // The in-memory result (what a live `verify`/`verify --json` process
-  // renders to its own stdout) is deliberately left unredacted here — this
-  // Critical fix's scope is the PERSISTED artifact, not the live process's
-  // own console output, which is unaffected by this change.
-  assert.match(check.stdout, /token=abcdef1234567890/, 'precondition: the raw secret really was captured in memory');
+    assert.match(check.stdout, /token=abcdef1234567890/, 'precondition: the raw secret really was captured in memory');
 
   assert.ok(result.evidencePath, 'runVerify must have written evidence for a passed, non-cancelled run');
   const evidenceFull = path.join(workspace, result.evidencePath);
@@ -241,9 +207,7 @@ test('a per-check timeout reports the legacy "timeout" status AND the unified "t
   assert.equal(check.status, 'timeout', 'legacy per-check status vocabulary is unchanged');
   assert.equal(unifiedStatusForCheck(check), 'timed-out', 'AC8: timeout maps to the unified status distinctly, never "failed"');
   assert.notEqual(unifiedStatusForCheck(check), 'failed');
-  // AC8: the whole run's terminal status also reports timed-out distinctly
-  // (not a generic "failed") when a check timeout is what kept it from passing.
-  assert.equal(statusForVerifyResult(result), 'timed-out');
+    assert.equal(statusForVerifyResult(result), 'timed-out');
 });
 
 // --- AC8: verify --output jsonl streams row-per-event ----------------------
@@ -279,13 +243,6 @@ test('verify --output jsonl streams start/progress/row events plus a terminal re
   assert.equal(terminal.exitCode, 0);
 });
 
-// A stream that emitted `start` must always emit a terminal `result` row
-// (lib/envelope.mjs's contract). `jsonl.start(...)` is written before
-// runVerify, so a throwing runVerify used to leave the error on stderr and the
-// stdout stream unterminated — a consumer reading rows waited forever. The
-// failure here is real and reachable: `.harness/evidence` occupied by a FILE
-// makes writeEvidence's mkdir throw from inside runVerify (the same shape as a
-// read-only or full filesystem).
 test('verify --output jsonl still terminates the stream with a result row when runVerify throws', () => {
   const workspace = tempDir('verify-stream-jsonl-throw-');
   const plan = writeVersionedPlan(workspace, { required: ['unit-tests'] });
@@ -323,11 +280,7 @@ test('verify --output jsonl reports a timed-out check as a distinct row and term
     [binPath, 'verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--output', 'jsonl'],
     { encoding: 'utf8' }
   );
-  // Fix-wave Important #5: a genuinely timed-out run must exit EXIT.timedOut
-  // (8) — pre-fix it fell through to outcome inconclusive -> exit 2 while
-  // the terminal row said timed-out, so the exit code and the stream
-  // contradicted each other.
-  assert.equal(res.status, 8, `expected EXIT.timedOut (8), got ${res.status}. stdout: ${res.stdout} stderr: ${res.stderr}`);
+    assert.equal(res.status, 8, `expected EXIT.timedOut (8), got ${res.status}. stdout: ${res.stdout} stderr: ${res.stderr}`);
   const rows = res.stdout.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
   const checkRow = rows.find((r) => r.event === 'row' && r.check === 'slow-check' && r.status);
   assert.ok(checkRow, `expected a 'row' event for slow-check: ${res.stdout}`);
@@ -397,9 +350,7 @@ test('runVerify: an AbortSignal fired mid-check cancels the run, skips evidence,
     flags: { plan, base: 'HEAD', dryRun: false, enforcement: 'enforce', workspace },
     signal: controller.signal,
   });
-  // Give slow-check a moment to actually spawn before cancelling — proves a
-  // check genuinely in flight is interrupted, not just a pre-aborted no-op.
-  await delay(150);
+    await delay(150);
   controller.abort();
   const result = await resultPromise;
 
@@ -411,10 +362,7 @@ test('runVerify: an AbortSignal fired mid-check cancels the run, skips evidence,
   assert.ok(!checkIds.includes('never-runs'), 'a later check must never start once cancellation is observed');
   assert.equal(fs.existsSync(path.join(workspace, '.harness', 'evidence')), false, 'no evidence directory at all for a cancelled run');
 
-  // Minor fix: the aborted-in-flight check's own jsonl row must report the
-  // unified 'cancelled' status, not the generic 'failed' every other
-  // 'unavailable' reason falls through to — it was interrupted, not failed.
-  const slowCheck = result.checks.find((c) => c.id === 'slow-check');
+    const slowCheck = result.checks.find((c) => c.id === 'slow-check');
   assert.equal(slowCheck.status, 'unavailable', 'legacy per-check status vocabulary is unchanged');
   assert.equal(unifiedStatusForCheck(slowCheck), 'cancelled');
   assert.notEqual(unifiedStatusForCheck(slowCheck), 'failed');
@@ -426,31 +374,6 @@ test('unifiedStatusForCheck: an "unavailable" check that was NOT cancelled still
   assert.equal(unifiedStatusForCheck({ status: 'unavailable', cancelled: true }), 'cancelled');
 });
 
-// --- AC8: full CLI SIGINT -> exit 130, event telemetry, no evidence -------
-//
-// Signal DELIVERY is the only part of this that is not portable; every
-// assertion below is identical on both platforms.
-//
-// POSIX: `child.kill('SIGINT')` delivers a real SIGINT, and the harness's
-// `process.once('SIGINT', () => controller.abort())` bridge
-// (bin/harness.mjs) turns it into the AbortSignal that cancels the run.
-//
-// win32: there is no POSIX signal delivery. libuv's uv__kill() maps
-// SIGINT/SIGTERM/SIGKILL onto TerminateProcess() (src/win/process.c), so
-// `child.kill('SIGINT')` destroys the harness outright — no handler runs, and
-// the parent sees exit code `null` with signal 'SIGINT' instead of 130. That
-// is a limitation of the DELIVERY mechanism, not a harness gap: a genuine
-// console Ctrl-C on Windows does reach Node, via the console control handler
-// dispatching CTRL_C_EVENT -> uv__signal_dispatch(SIGINT) -> Node emitting
-// 'SIGINT' on `process`. The win32 branch reproduces exactly that terminal
-// in-process dispatch through a NODE_OPTIONS `--import` preload, so the
-// harness's real Ctrl-C contract stays covered on Windows rather than
-// skipped. The preload only fires once bin/harness.mjs has actually installed
-// its listener, so a harness that stopped registering one would never be
-// interrupted, run its 5s check to completion, and fail the exit-130
-// assertion. The win32-only companion test after this one pins the kill()
-// semantics that force the split.
-
 const isWindows = process.platform === 'win32';
 
 /** Environment for the harness child that arranges SIGINT delivery. POSIX
@@ -461,13 +384,7 @@ function sigintDeliveryEnv() {
   const preload = path.join(tempDir('verify-cancel-preload-'), 'emit-sigint.mjs');
   fs.writeFileSync(
     preload,
-    // Wait for bin/harness.mjs to install its SIGINT listener, then let the
-    // first named check actually get in flight before interrupting, so this
-    // cancels real work rather than racing process startup (same intent as
-    // the POSIX 300ms delay). Unref'd: this must never keep a process alive,
-    // including the check subprocesses that inherit NODE_OPTIONS and never
-    // register a SIGINT listener at all.
-    [
+        [
       "const poll = setInterval(() => {",
       "  if (process.listenerCount('SIGINT') === 0) return;",
       '  clearInterval(poll);',
@@ -499,10 +416,7 @@ test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --outp
 
   const exitPromise = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
   if (!isWindows) {
-    // Give the child a moment to spawn node and start the named check before
-    // interrupting it — this is a real cancellation of work in flight, not a
-    // race against process startup.
-    await delay(300);
+        await delay(300);
     child.kill('SIGINT');
   }
   const code = await exitPromise;
@@ -524,10 +438,6 @@ test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --outp
   assert.equal(verifyEvent.result, 'warn');
 });
 
-// Pins the win32 platform behaviour that forces the delivery split above. If a
-// future Node/libuv ever delivers a graceful SIGINT to a child on Windows,
-// this test fails and the preload in sigintDeliveryEnv() should be dropped in
-// favour of the plain POSIX `child.kill('SIGINT')` path.
 test(
   'CLI (win32): child.kill("SIGINT") force-terminates the harness — the platform reason SIGINT delivery differs there',
   { skip: isWindows ? false : 'win32-only: pins Windows TerminateProcess-based kill() semantics' },
@@ -554,13 +464,6 @@ test(
     );
   }
 );
-
-// --- Fix-wave Important #9 (AC8): check output IS streamed, redacted -------
-//
-// Pre-fix, runNamedCheck supplied no onStdout/onStderr to the runner, so
-// `verify --output jsonl` emitted a start marker and then only the terminal
-// status — a long-running check produced no output rows at all, violating
-// AC8's live-streaming requirement.
 
 test('verify --output jsonl streams a check\'s stdout/stderr as bounded, REDACTED output rows', () => {
   const workspace = tempDir('verify-stream-output-rows-');
@@ -593,9 +496,7 @@ test('verify --output jsonl streams a check\'s stdout/stderr as bounded, REDACTE
   assert.ok(stdoutLines.includes('token=«redacted:kv-secret»'), `secret-bearing output must stream masked: ${JSON.stringify(stdoutLines)}`);
   assert.ok(stderrLines.includes('warn line'), `stderr must stream too: ${JSON.stringify(stderrLines)}`);
 
-  // Ordering: output rows land between the check's progress marker and its
-  // status row — live streaming, not an after-the-fact dump.
-  const progressIdx = rows.findIndex((r) => r.event === 'progress' && r.check === 'chatty-check');
+    const progressIdx = rows.findIndex((r) => r.event === 'progress' && r.check === 'chatty-check');
   const statusIdx = rows.findIndex((r) => r.event === 'row' && r.check === 'chatty-check' && r.status);
   const firstOutputIdx = rows.findIndex((r) => r.event === 'row' && r.stream);
   assert.ok(progressIdx < firstOutputIdx && firstOutputIdx < statusIdx, 'output rows must sit between progress and the status row');
@@ -606,9 +507,7 @@ test('createCheckOutputStreamer: a secret split across two chunks WITHIN one lin
   const { redactText } = createRedactor({ env: {} });
   const streamer = createCheckOutputStreamer({ check: 'c', onEvent: (event, fields) => events.push({ event, ...fields }), redactText });
 
-  // The secret straddles the chunk boundary — neither fragment alone matches
-  // the kv-secret pattern.
-  streamer.onStdout('prefix token=abcdef');
+    streamer.onStdout('prefix token=abcdef');
   streamer.onStdout('1234567890 suffix\n');
   streamer.flush();
 
@@ -631,12 +530,7 @@ test('createCheckOutputStreamer: flush() redacts a trailing partial line (no new
 test('createCheckOutputStreamer: output is bounded — one truncated marker row, then silence', () => {
   const events = [];
   const { redactText } = createRedactor({ env: {} });
-  // The budget counts each row's FULL serialized width — line content plus the
-  // JSON envelope — and reserves the truncation marker up front, so the bytes
-  // actually written never exceed maxBytes. One 'a'*25 row serializes to 92
-  // bytes and the marker to 74: a budget of 200 admits one such row (92 + 74 =
-  // 166) and truncates at the second (184 + 74 = 258).
-  const streamer = createCheckOutputStreamer({
+    const streamer = createCheckOutputStreamer({
     check: 'c',
     onEvent: (event, fields) => events.push({ event, ...fields }),
     redactText,
@@ -655,10 +549,6 @@ test('createCheckOutputStreamer: output is bounded — one truncated marker row,
   assert.equal(events.at(-1).truncated, true, 'the marker is the last thing emitted');
 });
 
-// Codex P2: the budget priced a row as `raw line bytes + an envelope measured
-// around an EMPTY line`, counting every character JSON escaping expands at its
-// PRE-escape width. Backslash-heavy output therefore wrote roughly twice the
-// cap while the counter still read comfortably under budget.
 test('createCheckOutputStreamer: escaped characters are budgeted at their serialized width, not their raw width', () => {
   const events = [];
   const { redactText } = createRedactor({ env: {} });
@@ -683,8 +573,6 @@ test('createCheckOutputStreamer: escaped characters are budgeted at their serial
   assert.equal(events.at(-1).truncated, true, 'the cut is still marked');
 });
 
-// Codex P2: splitting only on \n left the CR of every CRLF pair on the line, so
-// the same check produced different JSONL rows on Windows than on POSIX.
 test('createCheckOutputStreamer: a CRLF delimiter never leaves its CR on the row', () => {
   const events = [];
   const { redactText } = createRedactor({ env: {} });
@@ -722,14 +610,6 @@ test('createCheckOutputStreamer: a single overlong line is clipped AFTER redacti
   assert.ok(!events[0].line.includes('abcdef'), 'clipping must happen after masking');
   assert.ok(Buffer.byteLength(events[0].line, 'utf8') <= 24);
 });
-
-// --- Fix-wave P1: multi-line PEM blocks stream masked, not line-by-line raw --
-//
-// verify.mjs split check output into lines BEFORE redaction, so redact.mjs's
-// whole-block PEM pattern never matched — a 3-line dummy key emitted raw as 3
-// JSONL rows. The streamer is now block-aware: it holds every line from a
-// BEGIN…PRIVATE KEY opener to its END footer (bounded) and masks the block as
-// one row.
 
 const PEM_KEY_LINES = [
   '-----BEGIN RSA PRIVATE KEY-----',
@@ -785,13 +665,6 @@ test('verify --output jsonl: a check emitting a multi-line PEM key streams it ma
   assert.doesNotMatch(res.stdout, /BEGIN RSA PRIVATE KEY/, 'the raw BEGIN marker must not stream either');
   assert.match(res.stdout, /«redacted:private-key»/, 'the multi-line key must stream masked');
 });
-
-// --- Fix-wave P2: UTF-8 clipping is O(n), not O(n²) -------------------------
-//
-// clipToBytes removed one UTF-16 unit and recomputed Buffer.byteLength each
-// iteration (~78ms for a 64 KiB newline-free chunk, blocking streaming and
-// cancellation). It now walks code points once and slices on a byte-accurate
-// boundary.
 
 test('createCheckOutputStreamer: clipping a huge newline-free chunk is O(n), not O(n²)', () => {
   const events = [];

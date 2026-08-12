@@ -1,127 +1,278 @@
-/**
- * Binding the composer to a real terminal (P4bAC10, P4bAC12).
- *
- * This is the ONLY part of the ledger that needs a TTY, and it is deliberately
- * the part with the least thinking in it: read a keypress, hand it to the
- * composer, repaint what the composer says to paint. Every decision — what a
- * key means, what the block looks like, how tall it is — lives in
- * `composer.mjs`, where a test can reach it without a pty. The phase-4b
- * reopening happened because that split did not exist and the untestable half
- * was the whole product.
- *
- * REPAINT IN PLACE, IN THE MAIN BUFFER. The composer occupies the last N lines
- * of the terminal; a repaint moves the cursor up N, clears to the end of the
- * screen, and draws again. Nothing above is touched, so scrollback, selection
- * and the terminal's own search keep working — which is what P4bAC2 always
- * meant and what the alt-screen alternative would have cost.
- *
- * WRITING TO THE TRANSCRIPT GOES THROUGH `write`, which erases the block first
- * and repaints after. A caller that wrote to the stream directly would leave
- * the composer's old pixels stranded mid-scrollback, so the session's `write`
- * is the one that must be used.
- */
 import readline from 'node:readline';
 import { createComposer } from './composer.mjs';
-import { renderStatus } from './status.mjs';
+import { renderFooter, renderHint } from './chrome.mjs';
+import { renderOverlay, renderPaletteRows } from './overlay.mjs';
+import { renderBlock, runningHeader } from './block.mjs';
 
-const ESC = '';
+const ESC = '\x1b';
+
+/** How much of a running command's output stays on screen while it runs. The
+ * rest is in the block; this is the tail you watch. */
+export const LIVE_TAIL = 8;
 
 export function createInput({
   input,
   output,
   ui,
   interactive = Boolean(input.isTTY),
-  label = '',
-  hint = '',
   ascii = false,
   history = [],
+  footerItems,
+  paletteChord = 'ctrl+p',
+  /** Word → 'command' | 'verb' | 'flag' | 'session' | null, from the registry. */
+  classify = null,
+  altScreen = false,
+  onInterrupt = null,
 } = {}) {
-  const width = () => Math.max(24, Math.min(output.columns || 80, 120));
+  const width = () => Math.max(40, output.columns || 80);
+  const height = () => Math.max(8, output.rows || 24);
   const composer = createComposer({
-    width: width(), ascii, history, label, hint, paint: (t, s) => ui.paint(t, s),
+    width: width(), ascii, history, paint: (t, s) => ui.paint(t, s), paletteChord, classify,
   });
   let status = {};
+  let hintState = { mode: 'deliver', gate: null, shell: 'allowed', rerun: null };
+  /** The value being collected, or null. While set, the composer's rule label
+   * names the command and the placeholder asks the question — the answer is
+   * typed exactly where the question is asked. */
+  let prompt = null;
+  let overlay = null;      // modal picker: run tree, block navigation
+  let palette = null;      // composer-attached list: { overlay, filter }
+  let live = null;
   let painted = 0;
-  // Where the cursor was PARKED inside the block by the last paint, counted in
-  // lines down from the block's first row. `erase` has to walk back exactly
-  // this far; assuming the cursor sat below the block (which it never does,
-  // because parking it is the last thing paint does) overshot by the same
-  // amount and left the old box on screen — so the next paint drew a second
-  // box inside the first.
-  let parkedRow = 0;
-  let resolveLine = null;
+  /** The next free row for committed content, 1-based absolute. */
+  let contentRow = 1;
+  let resolveEvent = null;
   let closed = false;
-  let suspended = false;
+  let rawWrite = null;
+  const emit = (text) => (rawWrite ?? output.write.bind(output))(text);
 
-  const blockLines = () => {
-    const lines = composer.render();
-    const statusLine = renderStatus(status, { width: width(), paint: (t, s) => ui.paint(t, s) });
-    return statusLine ? [...lines, `  ${statusLine}`] : lines;
+  /** One visual update, delivered atomically — CSI ?2026 holds rendering until
+   * the frame completes; terminals without it ignore the sequence. */
+  const frame = (fn) => {
+    const sync = interactive && Boolean(output.isTTY);
+    if (sync) emit(`${ESC}[?2026h`);
+    try {
+      fn();
+    } finally {
+      if (sync) emit(`${ESC}[?2026l`);
+    }
   };
+
+  const moveTo = (row, col = 1) => emit(`${ESC}[${row};${col}H`);
+
+  /** The rows of the bottom region, in order. */
+  const regionLines = () => {
+    const w = width();
+    const rows = [];
+    if (live?.block) {
+      rows.push(runningHeader(live.block, { ui, width: w, lineCount: live.block.lines.length }));
+      const tail = live.block.lines.slice(-LIVE_TAIL);
+      for (const line of tail) {
+        rows.push(...renderBlock(
+          { ...live.block, command: '', lines: [line], tally: null, next: null, kind: 'note-row' },
+          { ui, width: w, showRecord: false },
+        ));
+      }
+    }
+    if (overlay) {
+      rows.push(...renderOverlay(overlay, { ui, width: w }));
+    } else {
+            if (palette) rows.push(...renderPaletteRows(palette.overlay, { ui, width: w }));
+      composer.setWidth(w);
+      composer.setHint(renderHint({ ui, width: w, ...hintState }));
+            if (composer.bashMode) {
+        composer.setRuleLabel('bash');
+        composer.setPlaceholder(null);
+      } else if (prompt) {
+        composer.setRuleLabel(`${hintState.mode} · ${prompt.title}`);
+        composer.setPlaceholder(`${prompt.label}${prompt.note ? ` — ${prompt.note}` : ''} · ↵ submits · exit cancels`);
+      } else {
+        const mode = hintState.mode || (hintState.agent === false ? 'commands' : 'assist');
+        composer.setRuleLabel([
+          mode,
+          hintState.shell === 'denied' ? 'shell denied' : null,
+        ].filter(Boolean).join(' · '));
+        // Mode-specific placeholders; leading · keeps the caret from eating text.
+        if (hintState.agent === false || mode === 'commands') {
+          composer.setPlaceholder('· run a command · / palette · shift+tab for agent');
+        } else if (mode === 'plan') {
+          composer.setPlaceholder('· ask (plan mode) · proposals only · / palette');
+        } else {
+          composer.setPlaceholder('· ask or run a command · / palette');
+        }
+      }
+      rows.push(...composer.render());
+    }
+    const footer = renderFooter(status, { ui, width: w, items: footerItems });
+    // (the model is part of `status`; see setStatus in the loop)
+    if (footer) rows.push(footer);
+    return rows;
+  };
+
+  /** Where the terminal cursor belongs inside the region (1-based from the
+   * region's first row). */
+  const cursorInRegion = () => {
+    let offset = 0;
+    if (live?.block) offset += 1 + Math.min(live.block.lines.length, LIVE_TAIL);
+    if (overlay) {
+      // The boxed overlay's input row is its second row — index 1, 0-based.
+      return { row: offset + 1, col: ui.stripAnsi(`  ${overlay.title ? `${overlay.title} ` : ''}${overlay.query}`).length + 2 };
+    }
+    if (palette) offset += palette.overlay.visible.length + (palette.overlay.footerText ? 1 : 0);
+    const c = composer.cursor;
+    return { row: offset + c.row, col: c.col };
+  };
+
+  /** Top row of the region, clamped so it never overlaps committed content. */
+  const regionTop = (h) => Math.max(contentRow, height() - h + 1);
 
   const erase = () => {
     if (!interactive || painted === 0) return;
-    if (parkedRow > 0) output.write(`${ESC}[${parkedRow}A`);
-    output.write(`\r${ESC}[0J`);
+    moveTo(regionTop(painted), 1);
+    emit(`${ESC}[0J`);
     painted = 0;
-    parkedRow = 0;
   };
 
   const paint = () => {
-    if (!interactive || closed || suspended) return;
-    // Always a full redraw. `next()` and `write()` both used to paint, so a
-    // submitted line painted twice with no erase between — the second box drawn
-    // inside the first. Making paint idempotent removes the ordering rule
-    // rather than asking every caller to remember it.
+    if (!interactive || closed) return;
     erase();
-    composer.setWidth(width());
-    const lines = blockLines();
-    output.write(`${lines.join('\n')}\n`);
+    const lines = regionLines();
+    let top = regionTop(lines.length);
+        const deficit = top + lines.length - 1 - height();
+    if (deficit > 0) {
+      moveTo(height(), 1);
+      emit('\n'.repeat(deficit));
+      contentRow = Math.max(1, contentRow - deficit);
+      top = regionTop(lines.length);
+    }
+    moveTo(top, 1);
+        emit(lines.join('\n'));
     painted = lines.length;
-    // Park the cursor where the next character will go: up from the line below
-    // the block, then across. Without this it sits under the box and typing
-    // looks like it is happening somewhere else.
-    const { row, col } = composer.cursor;
-    parkedRow = Math.max(0, Math.min(row, painted - 1));
-    output.write(`${ESC}[${painted - parkedRow}A\r${ESC}[${col}C`);
+    const { row, col } = cursorInRegion();
+        moveTo(top + Math.max(0, Math.min(row, painted - 1)), 1);
+    if (col > 0) emit(`${ESC}[${col}C`);
   };
 
-  /** Write into the transcript above the composer. */
-  const write = (line = '') => {
-    erase();
-    output.write(`${line}\n`);
-    paint();
-  };
-
-  // Named, so `close` can remove it. An anonymous listener stayed attached for
-  // the life of the process, which for a long-lived shell is a leak per session.
-  const onResize = () => { erase(); paint(); };
-
-  const onKeypress = (str, key = {}) => {
-    if (closed || !resolveLine) return;
-    const result = composer.handleKey(str, key);
-    if (result.intent === 'exit') { const r = resolveLine; resolveLine = null; erase(); r({ intent: 'exit' }); return; }
-    if (result.intent === 'palette') { const r = resolveLine; resolveLine = null; erase(); r({ intent: 'palette' }); return; }
-    if (result.intent === 'cancel') { const r = resolveLine; resolveLine = null; erase(); r({ intent: 'cancel', hadInput: result.hadInput }); return; }
-    if (result.submitted !== undefined) {
-      const r = resolveLine;
-      resolveLine = null;
-      erase();
-      r({ line: result.submitted });
+  /** Commit rows into the flow above the region. While a gap exists between
+   * content and region they fill it; afterwards they scroll through. */
+  const commit = (lines) => {
+    const rows = Array.isArray(lines) ? lines : [lines];
+    if (!rows.length) return;
+    if (!interactive) {
+      emit(`${rows.join('\n')}\n`);
       return;
     }
-    if (result.changed) { erase(); paint(); }
+    frame(() => {
+      erase();
+      moveTo(contentRow, 1);
+      emit(`${rows.join('\n')}\n`);
+      contentRow = Math.min(contentRow + rows.length, height());
+      paint();
+    });
+  };
+
+  const onResize = () => {
+        contentRow = Math.min(contentRow, Math.max(1, height()));
+    frame(() => {
+      moveTo(Math.min(contentRow, height()), 1);
+      emit(`${ESC}[0J`);
+      painted = 0;
+      paint();
+    });
+  };
+
+  const dropPalette = () => {
+    palette = null;
+    composer.setValue('');
+  };
+
+  const onKeypress = (str, key = {}) => {
+    if (closed) return;
+    if (!resolveEvent) {
+      const isCtrlC = Boolean(key.ctrl) && key.name === 'c';
+      if ((isCtrlC || key.name === 'escape') && typeof onInterrupt === 'function') onInterrupt();
+      return;
+    }
+    const deliver = (event) => { const r = resolveEvent; resolveEvent = null; r(event); };
+
+    if (overlay) {
+      const owner = overlay.handleKey(str, key);
+            if (owner.intent === 'close') {
+        overlay = null;
+        frame(() => { erase(); paint(); });
+        deliver({ intent: 'close' });
+        return;
+      }
+            if (owner.intent === 'choose') { deliver({ intent: 'choose', row: owner.row, query: overlay?.query ?? '' }); return; }
+      if (owner.intent === 'action') { deliver({ intent: 'action', action: owner.action, row: owner.row }); return; }
+      if (owner.changed) frame(() => { erase(); paint(); });
+      return;
+    }
+
+        if (palette) {
+      const name = key.name;
+      if (name === 'escape') { dropPalette(); frame(() => { erase(); paint(); }); return; }
+      if (['up', 'down', 'pageup', 'pagedown'].includes(name)) {
+        const r = palette.overlay.handleKey(str, key);
+        if (r.changed) frame(() => { erase(); paint(); });
+        return;
+      }
+            if (name === 'tab') {
+        const chosen = palette.overlay.selected;
+        if (chosen) { palette = null; deliver({ intent: 'complete-row', row: chosen }); return; }
+        return;
+      }
+      if (name === 'return' || name === 'enter') {
+        const chosen = palette.overlay.selected;
+        dropPalette();
+        deliver({ intent: 'choose', row: chosen });
+        return;
+      }
+      const result = composer.handleKey(str, key);
+      const value = composer.value;
+      if (!value.startsWith('/')) {
+        // The sigil was deleted: the request is withdrawn.
+        dropPalette();
+        frame(() => { erase(); paint(); });
+        return;
+      }
+      if (result.changed) {
+        palette.overlay.setQuery(value.slice(1));
+        palette.overlay.setRows(palette.filter(value.slice(1)));
+        frame(() => { erase(); paint(); });
+      }
+      return;
+    }
+
+    const owner = composer.handleKey(str, key);
+    if (owner.intent === 'exit') { deliver({ intent: 'exit' }); return; }
+    if (owner.intent === 'palette') { deliver({ intent: 'palette' }); return; }
+    if (owner.intent === 'navigate') { deliver({ intent: 'navigate' }); return; }
+    if (owner.intent === 'escape') { deliver({ intent: 'escape' }); return; }
+    if (owner.intent === 'agent-mode') { deliver({ intent: 'agent-mode' }); return; }
+    if (owner.intent === 'fold') { deliver({ intent: 'fold' }); return; }
+    if (owner.intent === 'clear') { deliver({ intent: 'clear' }); return; }
+    if (owner.intent === 'complete') { deliver({ intent: 'complete', prefix: owner.prefix }); return; }
+    if (owner.intent === 'cancel') { deliver({ intent: 'cancel', hadInput: owner.hadInput }); return; }
+    if (owner.intent === 'bash-mode') { frame(() => { erase(); paint(); }); return; }
+    if (owner.submitted !== undefined) { deliver({ line: owner.submitted, bash: owner.bash === true }); return; }
+    if (owner.changed) frame(() => { erase(); paint(); });
   };
 
   let rl = null;
+  const usingAltScreen = Boolean(altScreen) && interactive && Boolean(output.isTTY);
   if (interactive) {
     readline.emitKeypressEvents(input);
     if (input.isTTY) input.setRawMode(true);
     input.on('keypress', onKeypress);
     output.on?.('resize', onResize);
+    if (usingAltScreen) emit(`${ESC}[?1049h`);
+        frame(() => {
+      emit('\n'.repeat(Math.max(0, height() - 1)));
+      moveTo(1, 1);
+      emit(`${ESC}[0J`);
+    });
   } else {
-    // The piped path is unchanged and stays scriptable: no raw mode, no
-    // repaint, one line per line. Every existing test drives this.
     rl = readline.createInterface({ input, output, terminal: false });
   }
 
@@ -129,84 +280,96 @@ export function createInput({
 
   return {
     interactive,
-    write,
     composer,
-    setStatus(next) { status = { ...status, ...next }; if (interactive) { erase(); paint(); } },
-    setLabel(next) { composer.setLabel(next); },
-    /**
-     * Clear the visible screen and repaint the composer.
-     *
-     * Uses CSI 2J (erase display) + cursor home — NOT 3J, which also wipes
-     * scrollback. The ledger is a scrolling transcript; operators clear the
-     * viewport, not the history the design exists to keep (P4bAC2).
-     *
-     * A session builtin, not `!clear`: governed bash strips enough of the
-     * environment that terminfo cannot resolve ghostty/kitty/etc., so
-     * shelling out to `clear` fails with "unknown terminal type" on the
-     * terminals people actually use.
-     */
-    clearScreen() {
-      erase();
-      if (interactive && output.isTTY) {
-        output.write(`${ESC}[2J${ESC}[H`);
-      }
-      painted = 0;
-      paint();
+    commit,
+    regionLines,
+
+    setStatus(next) { status = { ...status, ...next }; if (interactive) frame(() => { erase(); paint(); }); },
+    setHint(next) {
+      hintState = { ...hintState, ...next };
+      composer.setGate(hintState.gate);
+      if (interactive) frame(() => { erase(); paint(); });
     },
-    /**
-     * Take the composer off screen while something else owns stdout.
-     *
-     * THE DEFECT THIS FIXES: every harness command prints with `console.log`,
-     * straight to the stream, with no idea a composer is painted below the
-     * cursor. `status` therefore wrote its rows THROUGH the box — output
-     * interleaved with the border, and a second composer stranded underneath.
-     * The module note above warned that a caller writing directly would strand
-     * the block; the commands themselves are exactly that caller, and wrapping
-     * their dispatch is the only place that can be fixed once for all of them.
-     */
-    suspend() {
-      erase();
-      suspended = true;
-      // RAW MODE COMES OFF for the duration, and this is the whole fix for a
-      // real defect: in raw mode Ctrl-C is a keypress, not a signal, and the
-      // keypress handler discards everything while no `next()` promise is
-      // pending — which is exactly the window a command runs in. So Ctrl-C
-      // during a slow command was swallowed and the SIGINT bridge never fired.
-      // Cooked mode restores the terminal's own interrupt for as long as
-      // something else owns stdout.
-      if (interactive && input.isTTY) { try { input.setRawMode(false); } catch { /* already gone */ } }
+    /** Ask a value question at the composer; null clears it. */
+    setPrompt(next) { prompt = next; if (interactive) frame(() => { erase(); paint(); }); },
+    openOverlay(next) { overlay = next; if (interactive) frame(() => { erase(); paint(); }); },
+    closeOverlay() { overlay = null; if (interactive) frame(() => { erase(); paint(); }); },
+    get overlay() { return overlay; },
+
+    openPalette({ overlay: paletteOverlay, filter }) {
+            prompt = null;
+      palette = { overlay: paletteOverlay, filter };
+      if (!composer.value.startsWith('/')) composer.setValue(`/${composer.value}`);
+      if (interactive) frame(() => { erase(); paint(); });
     },
-    resume() {
-      if (interactive && input.isTTY && !closed) { try { input.setRawMode(true); } catch { /* already gone */ } }
-      suspended = false;
-      paint();
+    closePalette() { dropPalette(); if (interactive) frame(() => { erase(); paint(); }); },
+    get palette() { return palette; },
+
+    capture(onLine) {
+      const original = output.write.bind(output);
+      rawWrite = original;
+      let buffer = '';
+      const emitLines = (chunk, encoding) => {
+        const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString(typeof encoding === 'string' ? encoding : 'utf8');
+        buffer += text;
+        let at = buffer.indexOf('\n');
+        while (at !== -1) {
+          onLine(buffer.slice(0, at).replace(/\r$/, ''));
+          buffer = buffer.slice(at + 1);
+          at = buffer.indexOf('\n');
+        }
+      };
+      output.write = (chunk, encoding, callback) => {
+        try { emitLines(chunk, encoding); } catch { /* a write must never throw into a command */ }
+        if (typeof encoding === 'function') encoding();
+        else if (typeof callback === 'function') callback();
+        return true;
+      };
+      return {
+        write: original,
+        release() {
+          output.write = original;
+          rawWrite = null;
+          if (buffer) { onLine(buffer); buffer = ''; }
+        },
+      };
     },
 
-    /** The next thing the operator did: a line, or an intent the loop owns. */
+    beginLive(block) { live = { block }; if (interactive) frame(() => { erase(); paint(); }); },
+    refreshLive() { if (interactive && live) frame(() => { erase(); paint(); }); },
+    endLive() { live = null; },
+
+    clearScreen() {
+      frame(() => {
+        erase();
+        if (interactive && output.isTTY) emit(`${ESC}[2J${ESC}[H`);
+        painted = 0;
+        contentRow = 1;
+        paint();
+      });
+    },
+
     async next() {
       if (!interactive) {
         const { value, done } = await lineIterator.next();
         return done ? { intent: 'exit' } : { line: String(value ?? '') };
       }
-      paint();
-      return new Promise((resolve) => { resolveLine = resolve; });
+      frame(() => paint());
+      return new Promise((resolve) => { resolveEvent = resolve; });
     },
-    /** Echo a submitted line into the transcript, the way a shell does — so the
-     * session reads as a record of what was asked, not only of what happened. */
-    echo(line) {
-      if (!interactive || !line) return;
-      write(`${ui.paint('muted', composer.render()[0] ? '' : '')}${ui.paint('ok', '❯')} ${line}`);
-    },
+
     close() {
-      // Idempotent: an error path may close a session the normal path also
-      // closes, and restoring a terminal twice must not throw on the way out.
       if (closed) return;
       closed = true;
-      erase();
+      frame(() => {
+        erase();
+                if (interactive) moveTo(Math.min(contentRow, height()), 1);
+      });
       if (interactive) {
         input.off?.('keypress', onKeypress);
         output.off?.('resize', onResize);
         if (input.isTTY) { try { input.setRawMode(false); } catch { /* already gone */ } }
+        if (usingAltScreen) emit(`${ESC}[?1049l`);
       }
       rl?.close();
     },

@@ -1,45 +1,3 @@
-// Structural index shape — the single integration contract between the
-// structural index builder (`harness index --structural`, Phase 3) and every
-// consumer (the `structural-expectations` verify check, orient enrichment,
-// doctor S1). Consumers import THIS module only; when the builder lands, the
-// integration is one import swap here, not a change in every consumer.
-//
-// Storage root: `~/.harness/index/<repo-id>/<worktree-id>/structural/`
-// (HARNESS_HOME overrides the home for tests) — keyed per worktree as well as
-// per repo, see `worktreeId`. Four files:
-//
-// files.json    { "version": 1, "files": { "<rel-path>": {
-//                   "hash": "<sha256 of content>", "mtime": <epoch-ms>,
-//                   "size": <bytes>, "symbols": ["name", ...],
-//                   "imports": ["specifier", ...], "complexity": <int>
-//                 } } }
-// symbols.json  { "version": 1, "symbols": [ {
-//                   "name": "...", "file": "<rel-path>", "kind": "function|class|const|...",
-//                   "exported": true|false, "def": { "line": <1-based> },
-//                   "refs": [ { "file": "<rel-path>", "line": <1-based> } ]
-//                 } ] }
-// graph.json    { "version": 1,
-//                 "calls": [ { "from": "<rel-path>#<symbol>", "to": "<rel-path>#<symbol>" } ],
-//                 "modules": [ { "from": "<rel-path>", "to": "<rel-path>" } ],
-//                 "unresolved": [ { "from": "<rel-path>#<symbol>", "to": "<bare-name>" } ] }
-// meta.json     { "version": 1, "sha": "<full commit sha the index was built at>",
-//                 "branch": "...", "baseSha": "...", "generatedAt": "<ISO 8601>",
-//                 "extractorTier": "lexical|treesitter", "grammarVersions": {} }
-//
-// Read semantics: `meta.json` is mandatory — without it the index is treated
-// as absent. The other three degrade to empty structures when missing so a
-// partially written index never crashes a consumer; any malformed JSON marks
-// the whole index unreadable (consumers skip, never guess).
-//
-// TWO READERS, ONE CONTRACT: repo-map/structural-index.mjs also exports a
-// `readStructuralIndex` — the builder-side tolerant reader used by orient /
-// buildRepoMap, which returns the raw on-disk tables (null when absent) and
-// gates on meta.sha currency. THIS reader serves the verify/doctor consumers:
-// it returns an explicit `{ present, reason, ... }` skip signal, validates the
-// baseline sha shape, and NORMALIZES both accepted on-disk encodings to one
-// row/edge shape. Both readers use the same no-follow, dir-contained,
-// size-capped file reads (fs-safe readFileNoFollow).
-
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -52,17 +10,6 @@ export const STRUCTURAL_SHAPE_VERSION = 1;
 
 const worktreeIds = new Map();
 
-/**
- * Stable per-WORKTREE id, appended to the repo-keyed index path.
- * `repoId` hashes the origin remote — deliberately path-independent, so every
- * checkout of one repo shares a knowledge store. The structural index cannot
- * be shared that way: two worktrees of the same repo sit at the same
- * `meta.sha` with DIFFERENT working-tree content, and `meta.sha` is the only
- * currency gate, so a single directory would serve each worktree the other's
- * symbol tables (and thrash the mtime fast path when both are indexed).
- * Derived from the worktree root's realpath, hashed and truncated like
- * `localRepoId`; memoized per resolved path (this sits in orient's read path).
- */
 export function worktreeId(workspace) {
   const key = path.resolve(workspace);
   const cached = worktreeIds.get(key);
@@ -92,10 +39,7 @@ export function structuralDir(workspace, { home } = {}) {
 function readJson(dir, name) {
   const full = path.join(dir, name);
   if (!fs.existsSync(full)) return { value: null, error: null };
-  // No-follow, contained, size-capped read — same fs-safe discipline as the
-  // builder-side reader; a symlinked or oversized table is unreadable, never
-  // followed outside the index dir.
-  const body = readFileNoFollow(full, { root: dir });
+    const body = readFileNoFollow(full, { root: dir });
   if (body === null) return { value: null, error: `${name} is unreadable (symlink, oversized, or open failure)` };
   try {
     const parsed = JSON.parse(body);
@@ -108,21 +52,6 @@ function readJson(dir, name) {
   }
 }
 
-/**
- * Read the structural index for a workspace.
- * Returns `{ present, reason, files, symbols, graph, meta }`:
- * - `present: false` with a `reason` when the index is missing or unreadable —
- *   consumers must skip, never fail, on that signal.
- * - `present: true` with normalized `files` (map), `symbols` (array),
- *   `graph` ({calls, modules, unresolved}), and `meta` otherwise.
- *
- * Two on-disk encodings are accepted and normalized to one consumer shape:
- * the builder's compact form (`files.json` is a bare rel→entry map,
- * `symbols.json` a bare name→{defs,refs} map, `graph.json` with
- * `{modules, unresolvedImports, calls: [{from, symbol, to: [files]}],
- * unresolvedCalls}`), and the documented wrapper form above. The builder's
- * form is authoritative; the wrapper form keeps fixtures readable.
- */
 export function readStructuralIndex(workspace, { home } = {}) {
   const dir = structuralDir(workspace, { home });
   const absent = (reason) => ({ present: false, reason, dir, files: {}, symbols: [], graph: EMPTY_GRAPH, meta: null });
@@ -134,9 +63,7 @@ export function readStructuralIndex(workspace, { home } = {}) {
   if (typeof meta.value.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(meta.value.sha)) {
     return absent('meta.json has no valid baseline sha');
   }
-  // `version` is the shape contract, so it is enforced rather than merely
-  // written: an index from a NEWER writer must be skipped, not misread.
-  const version = meta.value.version;
+    const version = meta.value.version;
   if (version !== undefined && !(Number.isFinite(version) && version <= STRUCTURAL_SHAPE_VERSION)) {
     return absent(`unsupported structural index version ${JSON.stringify(version)} (this harness reads ${STRUCTURAL_SHAPE_VERSION})`);
   }
@@ -170,9 +97,7 @@ function normalizeSymbols(parsed) {
   if (!parsed || typeof parsed !== 'object') return [...EMPTY_SYMBOLS.symbols];
   // Wrapper form: { version, symbols: [rows] } already row-shaped.
   if (Array.isArray(parsed.symbols)) return parsed.symbols;
-  // Builder form: { "<name>": { defs: [{file, line, kind, exported}], refs: [{file, line}] } }
-  // → one row per def, carrying the symbol's shared refs.
-  const rows = [];
+    const rows = [];
   for (const [name, entry] of Object.entries(parsed)) {
     if (name === 'version' || !entry || typeof entry !== 'object') continue;
     const refs = Array.isArray(entry.refs) ? entry.refs : [];

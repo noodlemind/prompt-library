@@ -4,35 +4,6 @@ import { createHash } from 'node:crypto';
 import { resolveCopilotHome } from '../paths.mjs';
 import { canonicalDirectoryRoot, directoryRootsOverlap } from './workspace-scope.mjs';
 
-/**
- * Real host token usage and local session performance metrics from Copilot's
- * own session-state logs.
- *
- * VS Code Copilot Chat (agent mode) and the Copilot CLI share a session store
- * at `<copilotHome>/session-state/<sessionId>/events.jsonl` (producer
- * "copilot-agent"). Authoritative per-session totals live on the
- * `session.shutdown` record: `data.modelMetrics.<model>.usage` (input/output/
- * cache/reasoning tokens), `data.totalPremiumRequests`, `data.totalApiDurationMs`,
- * `data.codeChanges`, and a context breakdown (currentTokens etc.). Interaction
- * counts come from the stream: `assistant.turn_start`, `tool.execution_start`,
- * `tool.execution_complete`, and `skill.invoked`. The stream also supplies
- * content-free system-message and loaded-skill fingerprints, compaction usage,
- * and assistant output tokens split between tool-calling and response-only
- * messages. Prompt and skill bodies are never retained.
- *
- * Each session yields one `source: 'host'`, `estimated: false` event carrying
- * both `usage` (for token roll-ups) and `metrics` (for the performance view).
- * VS Code records provider `prompt_tokens` and `completion_tokens` as the input
- * and output totals. Cache read/write and reasoning are detail subsets used for
- * pricing, not extra tokens to add again. VS Code does not expose per-request
- * input tokens in this store, and context composition is only the final
- * snapshot; both limitations are carried explicitly in `telemetryCoverage`.
- * It never throws — a missing or malformed store degrades the report to
- * harness estimates.
- */
-
-// Bound how many session directories we scan so a long-lived store cannot blow
-// up a report. Newest sessions (by mtime) win.
 const MAX_SESSIONS = 500;
 
 function sessionStateDir(copilotHome) {
@@ -256,11 +227,7 @@ function eventFromSession(file, sessionId, workspace) {
     observedTokens: 0,
     byPhase: { toolCalling: 0, responseOnly: 0 },
   };
-  // Actual harness CLI engagement: how often the agent really ran
-  // `harness <command>` inside its tool calls. Zero across a session means
-  // the engineer contract never exercised the CLI (e.g. only init-repo was
-  // ever run by hand) — the report flags that.
-  const harnessCliCommands = {};
+    const harnessCliCommands = {};
   let harnessCliCalls = 0;
   for (const record of records) {
     switch (record?.type) {

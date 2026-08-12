@@ -27,8 +27,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// Quarantine an episode via 3 byte-cap strikes through apply — same idiom as
-// quarantine.test.mjs's three-strikes test.
 function quarantineEpisode(c) {
   const dir = path.join(c.ws, 'docs', 'solutions', 'perf');
   fs.mkdirSync(dir, { recursive: true });
@@ -51,12 +49,6 @@ function quarantineEpisode(c) {
   return ep;
 }
 
-// A REAL fix-kind episode file — verifyAdmittedEpisodeKinds (apply.mjs) now
-// disk-verifies every fix/insight-kind episode an ADD/STRENGTHEN/SUPERSEDE/
-// MERGE op offers (existence + sha256 match + no elevated-kind frontmatter)
-// before admitting it, so a fabricated sha256 pointing at a file that was
-// never written is rejected with E_SCHEMA. No frontmatter is required for
-// `fix` — plain content is legitimate evidence.
 function writeFixEpisode(ws, rel) {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -65,8 +57,6 @@ function writeFixEpisode(ws, rel) {
   return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
 
-// Three fix-kind episode links across two distinct plans — promotion-eligible
-// (verified >= 3 && plans >= 2), mirroring promotionCandidates in consolidate.mjs.
 function buildAddPromotable(ws) {
   return {
     op: 'ADD',
@@ -110,9 +100,6 @@ function seed(c) {
   return { autoId, humanId };
 }
 
-// A modest auto learning (single fix link, non-human) — light enough that a
-// SUPERSEDE against it lands cleanly instead of disputed (verifiedFixLinks <
-// 3 and source !== human — see apply.mjs's DISPUTED_FIX_THRESHOLD rule).
 function seedLegacyAndSupersede(c) {
   const legacyOp = {
     op: 'ADD',
@@ -284,11 +271,7 @@ test('learnings --why exposes lastConfirmed, supersededBy, mergedFrom, and claim
   const c = ctx();
   const { oldId, newId } = seedLegacyAndSupersede(c);
 
-  // mergedFrom is DERIVED provenance — an op can no longer assert it — so the
-  // fixture performs a real MERGE and gets the merged_from the writer itself
-  // stamped. MERGE requires at least two ACTIVE targets, so a second claim is
-  // seeded alongside the superseding one.
-  const extraOp = {
+    const extraOp = {
     op: 'ADD',
     domain: 'sql',
     slug: 'legacy-claim-alt',
@@ -345,19 +328,13 @@ test('--why immediately followed by another flag treats the flag as a missing va
   const c = ctx();
   seed(c);
 
-  // --json sits right after --why — a naive parser consumes it as --why's
-  // value (and silently skips past it, so --json itself never takes
-  // effect). A --prefixed next token must be treated as a missing value
-  // instead, same as the trailing-bare---why case above.
-  const res = spawnSync(
+    const res = spawnSync(
     process.execPath,
     [binPath, 'learnings', '--why', '--json', '--workspace', c.ws, '--copilot-home', c.home],
     { encoding: 'utf8', env: { ...process.env, HARNESS_HOME: c.harnessHome } }
   );
   assert.equal(res.status, 2, res.stderr || res.stdout);
-  // --json must still have taken effect (not swallowed as --why's value) —
-  // the usage error itself is emitted as JSON, not a plain-text error block.
-  const out = JSON.parse(res.stdout);
+    const out = JSON.parse(res.stdout);
   assert.match(out.blockedReason || '', /usage/i);
 });
 
@@ -390,11 +367,7 @@ test('failure count survives more than 20 unrelated events written after the ver
   const c = ctx();
   const { humanId } = seed(c);
 
-  // seed() already appended one verify-fail event naming humanId. Append 25
-  // filler events of another type after it — enough to push the verify-fail
-  // past readEvents' plain default 20-event window if failures weren't
-  // pre-filtered before the window was applied.
-  const eventsPath = path.join(c.ws, '.harness', 'events.jsonl');
+    const eventsPath = path.join(c.ws, '.harness', 'events.jsonl');
   const filler = Array.from({ length: 25 }, () => JSON.stringify({ version: 2, type: 'orient', result: 'pass' }));
   fs.appendFileSync(eventsPath, `${filler.join('\n')}\n`);
 

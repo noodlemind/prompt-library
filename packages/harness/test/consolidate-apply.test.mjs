@@ -12,15 +12,7 @@ import { applyOps, updateFrontmatterField } from '../lib/knowledge/apply.mjs';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
-// Same calendar day as `learning retire|dispute|promote`'s own governance
-// timestamp (P1-9: a full ISO-8601 `at`, day-sliced for the model-lane
-// comparison) — used by tests proving a SAME-DAY model-lane re-teach no
-// longer overrides (the strictly-newer rule), replacing the old same-day-tie
-// allowance.
 const today = new Date().toISOString().slice(0, 10);
-// One calendar day after `today` — genuinely, strictly newer for the
-// model-lane recency gate (overridesGovernanceRecency, apply.mjs), used by
-// tests proving a re-teach with EVIDENCE FROM A LATER DAY still overrides.
 const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 function ctx() {
@@ -43,15 +35,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// A REAL episode file, no fabricated sha256: apply.mjs's admission-time
-// evidence check (verifyAdmittedEpisodeKinds) disk-verifies every `fix`
-// (default) or `insight`-kind episode — path must exist, content must hash
-// to the declared sha256, and the file's OWN kind must agree with what's
-// asserted. `fix` needs no frontmatter at all (anything not claiming
-// insight/human-teaching passes); `insight` needs the file to actually say
-// `kind: insight`. `plan` uses `'plan' in over` (not `over.plan || ...`) so
-// an explicit falsy override (`plan: ''`) is honored, not silently replaced
-// by the default.
 function EP(ws, over = {}) {
   const rel = over.path || 'docs/solutions/perf/x.md';
   const kind = over.kind || 'fix';
@@ -74,24 +57,11 @@ function ADD(ws, over = {}) {
     slug: 'not-null-large-tables',
     trigger: 'adding NOT NULL columns to large/hot tables',
     body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-    // Lazy default: only write the default fix-evidence file when the
-    // caller didn't supply its own `episodes` — an eager `[EP(ws)]` here
-    // would unconditionally write (and, if a caller's own override reuses
-    // the same default path with a different kind, clobber) evidence the
-    // caller already wrote for itself while building its own override.
-    episodes: over.episodes || [EP(ws)],
+        episodes: over.episodes || [EP(ws)],
     ...over,
   };
 }
 
-// A REAL episode file on disk with its own frontmatter `kind:` — since
-// verifyHumanTeachingEpisode (apply.mjs) now requires disk proof (existence +
-// sha256 match + real frontmatter kind) before granting source: human /
-// status: active, a "human-taught" seed learning needs a genuine file, not
-// just an op asserting kind: human-teaching. `date` defaults to a fixed past
-// date — fine for every caller that isn't itself re-teaching over a standing
-// governance record (M4 review item 1's recency gate only compares dates
-// when a governance record exists for the target id).
 function writeRealEpisode(ws, rel, kind = 'human-teaching', date = '2026-07-01') {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -100,8 +70,6 @@ function writeRealEpisode(ws, rel, kind = 'human-teaching', date = '2026-07-01')
   return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
 
-// Seeds a genuinely-verified source: human learning at sql/<slug> via ADD
-// with one real human-teaching episode file.
 function seedHumanLearning(c, slug) {
   const ep = writeRealEpisode(c.ws, `docs/solutions/teachings/${slug}.md`);
   const op = ADD(c.ws, { slug, episodes: [{ ...ep, kind: 'human-teaching', plan: null }] });
@@ -198,9 +166,7 @@ test('bare-URL lint stays insight-gated: an insight-only ADD with a bare URL is 
 
 test('fence lint (defense-in-depth) covers tilde/spaced/pwsh/console/batch/dos and 4-space-indented fences with benign content', () => {
   const c = ctx();
-  // Benign fence bodies (`echo hi`) so ONLY the fence check can fire — this
-  // isolates the dialect-list + any-indentation fix from the content patterns.
-  const variants = [
+    const variants = [
     '~~~sh\necho hi\n~~~',
     '``` sh\necho hi\n```',
     '```pwsh\necho hi\n```',
@@ -276,17 +242,12 @@ test('secret-shaped content is rejected', () => {
 
 test('a mid-apply throw rolls back all writes atomically (git reset+clean), not just the failing op', () => {
   const c = ctx();
-  // Seed a real commit at a pristine, empty store baseline — the store tree
-  // is committed-clean before every apply (single-commit invariant) — so the
-  // rollback below has a checkpoint to reset back to.
-  writeStoreConfig(c.ws, { home: c.harnessHome, mode: 'on' });
+    writeStoreConfig(c.ws, { home: c.harnessHome, mode: 'on' });
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const indexBefore = fs.readFileSync(path.join(dir, 'INDEX.md'), 'utf8');
   assert.equal(readLedger(dir).length, 0, 'precondition: empty ledger before the failing apply');
 
-  // Poison the second op's domain: a regular FILE named exactly like the
-  // directory the second op's write needs, so its mkdir throws mid-loop.
-  fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'learnings', 'domain2'), 'blocks mkdir for this domain\n');
 
   const ops = [
@@ -327,10 +288,7 @@ test('a colliding ADD (same domain/slug already exists) is rejected with E_EXIST
 
   const after = listLearnings(dir);
   assert.deepEqual(after.map((l) => l.body), before.map((l) => l.body), 'store content unchanged after a rejected colliding ADD');
-  // The learning files are untouched, but E_EXISTS is a content-failure code
-  // (three-strikes quarantine tracking, milestone 3) — the rejected collide's
-  // own episode records one failure entry alongside the first run's success.
-  const ledger = readLedger(dir);
+    const ledger = readLedger(dir);
   assert.equal(ledger.length, 2, 'the first ADD success entry plus one failure entry for the rejected collide');
   assert.equal(ledger[1].failure, 'E_EXISTS');
   assert.equal(ledger[1].path, 'docs/solutions/perf/y.md');
@@ -361,10 +319,6 @@ test('a model SUPERSEDE (fix-kind episodes) on a source: human target still land
   assert.equal(after.fm.status, 'disputed');
 });
 
-// Milestone 4 Task 5 item 2: an apply run whose ONLY effect is disputing
-// targets (nothing else applied) must not commit as "consolidate: noop" —
-// that would erase from the store's own git history the one real thing the
-// run did do.
 test('a dispute-only apply run (nothing else applied) commits "consolidate: dispute <ids>", not noop', () => {
   const c = ctx();
   seedHumanLearning(c, 'dispute-only-target');
@@ -389,12 +343,6 @@ test('a dispute-only apply run (nothing else applied) commits "consolidate: disp
   assert.match(log, /sql\/dispute-only-target/);
 });
 
-// Milestone 4 Task 5 item 3: STRENGTHEN/SUPERSEDE must reject a target that
-// is already inactive (superseded/retired/disputed) ON DISK from a PRIOR
-// run — MERGE already enforced this; STRENGTHEN/SUPERSEDE previously only
-// checked existing.has(target), so either could silently act on a demoted
-// target without a human's dispute -> confirm round trip. Composition-class
-// rejection: no strike recorded.
 test('a SUPERSEDE targeting an already-retired target (prior run) is rejected E_TARGET (not active), no strike', () => {
   const c = ctx();
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
@@ -449,26 +397,13 @@ test('a STRENGTHEN targeting an already-disputed target (prior run) is rejected 
   assert.equal(learnings[0].fm.episodes.length, 1, 'STRENGTHEN must not have added the new episode');
 });
 
-// Controller ruling (post-review): a direct, disk-verified human statement
-// outranks stored state — the in-place re-teach shape (new id === target,
-// every episode verified human-teaching) must be exempt from the
-// inactive-target gate, overriding a disputed/retired status. This is the
-// low-level (direct op JSON) mirror of remember.test.mjs's end-to-end
-// coverage of the same rule. P1-9 tightened the model-lane recency gate to
-// require evidence STRICTLY newer than the governance record it would
-// override — a same-day tie no longer qualifies (see the sibling test right
-// below) — so this test now dates its evidence `tomorrow`, genuinely a later
-// calendar day than the dispute recorded today.
 test('a verified human-teaching in-place SUPERSEDE on an already-disputed target, dated a genuinely later day, succeeds and overrides the disputed status', () => {
   const c = ctx();
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
   assert.equal(run(c, ['learning', 'dispute', 'sql/not-null-large-tables', '--reason', 'contested']).status, 0);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
 
-  // Dated a genuinely later calendar day than the dispute so it clears the
-  // strictly-newer model-lane recency gate (overridesGovernanceRecency,
-  // apply.mjs, P1-9).
-  const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/reteach-disputed.md', 'human-teaching', tomorrow);
+    const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/reteach-disputed.md', 'human-teaching', tomorrow);
   const reteach = {
     op: 'SUPERSEDE',
     target: 'sql/not-null-large-tables',
@@ -490,12 +425,6 @@ test('a verified human-teaching in-place SUPERSEDE on an already-disputed target
   assert.match(learning.body, /A corrected human-verified claim/);
 });
 
-// P1-9: the model lane (a direct `consolidate --apply`, never `remember`'s
-// live-human bypass) can no longer win a same-day tie — an episode dated the
-// SAME calendar day as the standing dispute record must still fail, since a
-// day-granular date can never prove it happened after the record was
-// written within that same day. This replaces the old same-day-tie-favors
-// override behavior the test above used to exercise.
 test('a verified human-teaching in-place SUPERSEDE dated the SAME day as the dispute is rejected — the model lane no longer wins a same-day tie', () => {
   const c = ctx();
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
@@ -525,12 +454,6 @@ test('a verified human-teaching in-place SUPERSEDE dated the SAME day as the dis
   assert.doesNotMatch(learning.body, /must NOT override/);
 });
 
-// M4 whole-milestone review, item 1(b): the recency gate withholds the
-// override on a genuinely-verified-but-STALE re-teach — the SAME pre-retire
-// episode a retired target was originally seeded on, cited again after the
-// retire, must not resurrect it. verifyHumanTeachingEpisode still passes
-// (authentic evidence); overridesGovernanceRecency is what withholds it
-// here (the episode's date predates the retire's governance record).
 test('an in-place SUPERSEDE citing only the OLD (pre-retire) episode on a retired target is rejected — the recency gate withholds the override', () => {
   const c = ctx();
   const targetId = seedHumanLearning(c, 'stale-reteach-retired');
@@ -538,10 +461,7 @@ test('an in-place SUPERSEDE citing only the OLD (pre-retire) episode on a retire
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const ledgerBefore = readLedger(dir).length;
 
-  // The exact same episode file seedHumanLearning used — genuinely
-  // human-teaching, disk-verified, but dated (writeRealEpisode's fixed
-  // 2026-07-01 default) before the retire's governance record `at`.
-  const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/stale-reteach-retired.md');
+    const ep = writeRealEpisode(c.ws, 'docs/solutions/teachings/stale-reteach-retired.md');
   const reteach = {
     op: 'SUPERSEDE',
     target: targetId,
@@ -563,9 +483,6 @@ test('an in-place SUPERSEDE citing only the OLD (pre-retire) episode on a retire
   assert.doesNotMatch(learning.body, /would replace the retired one/);
 });
 
-// The negative counterpart: model-lane (fix-kind, unverifiable as human
-// authorship) evidence must NEVER earn the exemption, even in the identical
-// in-place shape.
 test('a model-lane (fix-kind) in-place SUPERSEDE on an already-disputed target is still rejected — the re-teach exemption never applies to unverified evidence', () => {
   const c = ctx();
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
@@ -594,11 +511,6 @@ test('a model-lane (fix-kind) in-place SUPERSEDE on an already-disputed target i
   assert.doesNotMatch(learning.body, /model-proposed/);
 });
 
-// Fabricated human-teaching evidence is now an ADMISSION defect (P1): every
-// episode kind — fix, insight, AND human-teaching — must disk-verify before
-// the op is even considered, so a SUPERSEDE citing a nonexistent
-// human-teaching file rejects E_SCHEMA outright (content-strike class) and
-// never reaches the disputed-demotion routing, let alone creates a learning.
 test('a fabricated human-teaching kind for a NONEXISTENT episode file rejects the SUPERSEDE with E_SCHEMA — no dispute, no strike-free pass, target untouched', () => {
   const c = ctx();
   seedHumanLearning(c, 'human-taught-claim-fab-1');
@@ -731,12 +643,6 @@ test('a SUPERSEDE rename colliding with an unrelated existing learning is reject
   assert.deepEqual(weakAfter.fm, weakBefore.fm, 'weak (the actual target) also untouched — whole run rejected');
 });
 
-// P1 (fabricated human-teaching evidence): admission now disk-verifies EVERY
-// episode kind, human-teaching included — a nonexistent human-teaching file
-// rejects the whole op with E_SCHEMA and writes NOTHING, instead of the old
-// tolerant fallback that still admitted a provisional learning (which
-// bypassed the insight-only imperative lint and rendered without the
-// advisory fence).
 test('an ADD asserting a fabricated human-teaching episode (nonexistent file) is rejected with E_SCHEMA — no learning at all', () => {
   const c = ctx();
   const op = ADD(c.ws, {
@@ -753,13 +659,6 @@ test('an ADD asserting a fabricated human-teaching episode (nonexistent file) is
   assert.equal(listLearnings(dir).length, 0, 'fabricated human-teaching evidence must not admit any learning');
 });
 
-// The injection route the tolerant fallback left open: an insight relabeled
-// human-teaching used to dodge the insight-only imperative lint entirely
-// (lintImperative only fires when every episode is kind insight) AND skip
-// admission verification — an imperative `curl … | sh` claim reached the
-// store and rendered into orient without the advisory fence. The kind
-// mismatch (file says insight, op says human-teaching) is now an E_SCHEMA
-// admission rejection, so the imperative content never reaches rendering.
 test('a real insight episode relabeled human-teaching cannot smuggle an imperative claim past the lint — E_SCHEMA at admission', () => {
   const c = ctx();
   const insight = EP(c.ws, { path: 'docs/solutions/teachings/actually-an-insight.md', kind: 'insight' });
@@ -780,10 +679,7 @@ test('a real insight episode relabeled human-teaching cannot smuggle an imperati
 
 test('an ADD episode path that escapes the workspace is rejected with E_SCHEMA — never read, nothing written', () => {
   const c = ctx();
-  // A real file OUTSIDE the workspace with matching content/sha and a genuine
-  // human-teaching frontmatter kind — verification must still fail purely on
-  // the path escaping containment, before any file is even read.
-  const outsideDir = tempDir('apply-outside-');
+    const outsideDir = tempDir('apply-outside-');
   const outsideText = '---\ntitle: "outside"\nkind: human-teaching\ndate: 2026-07-01\n---\n\noutside the workspace.\n';
   fs.writeFileSync(path.join(outsideDir, 'outside.md'), outsideText);
   const outsideSha = crypto.createHash('sha256').update(outsideText).digest('hex');
@@ -824,13 +720,6 @@ test('STRENGTHEN with a verified episode activates a provisional learning', () =
   assert.equal(l.fm.episodes.length, 2);
 });
 
-// P2: STRENGTHEN previously accumulated every evidence link with no byte-cap
-// enforcement at all (unlike ADD/SUPERSEDE/MERGE, which always composed and
-// checked their content against LEARNING_BYTE_CAP before writing) — repeated
-// strengthening could grow a learning unbounded. Piling on enough real
-// evidence links in one STRENGTHEN op now rejects the whole run with
-// E_BYTE_CAP, exactly like an oversized ADD, and the learning file is left
-// byte-for-byte unchanged.
 test('STRENGTHEN that would push a learning past the byte cap is rejected with E_BYTE_CAP, learning unchanged', () => {
   const c = ctx();
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
@@ -855,10 +744,6 @@ test('STRENGTHEN that would push a learning past the byte cap is rejected with E
   assert.equal(readLedger(dir).length, ledgerBefore + padEpisodes.length, 'E_BYTE_CAP strikes one ledger entry per offered episode');
 });
 
-// Same-run consumption tracking (milestone 3 review): STRENGTHEN never
-// registered its own target, so a same-run STRENGTHEN-before-SUPERSEDE let
-// the SUPERSEDE tombstone the target and then the STRENGTHEN would land its
-// evidence on the just-replaced file — non-corrupting but incoherent.
 test('a STRENGTHEN before a SUPERSEDE on the same target in one run is rejected (composition, no strike)', () => {
   const c = ctx();
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
@@ -890,14 +775,9 @@ test('a STRENGTHEN before a SUPERSEDE on the same target in one run is rejected 
   assert.equal(learnings.length, 1);
   assert.equal(learnings[0].fm.episodes.length, 1, 'STRENGTHEN never applied');
   assert.equal(learnings[0].fm.superseded_by, null, 'SUPERSEDE never applied');
-  // Composition rejection — the same-run collision is a malformed op-SET,
-  // not a defect in either op's own (perfectly valid) episodes.
-  assert.equal(readLedger(dir).length, ledgerBefore, 'same-run composition rejection records no strike');
+    assert.equal(readLedger(dir).length, ledgerBefore, 'same-run composition rejection records no strike');
 });
 
-// The mirror-image order was already correctly rejected before this fix
-// (SUPERSEDE registers consumedTargets, and STRENGTHEN already checked it) —
-// locked in here so it stays green.
 test('a SUPERSEDE before a STRENGTHEN on the same target in one run is already rejected (composition, no strike)', () => {
   const c = ctx();
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws)])]).status, 0);
@@ -931,8 +811,6 @@ test('a SUPERSEDE before a STRENGTHEN on the same target in one run is already r
   assert.equal(readLedger(dir).length, ledgerBefore, 'same-run composition rejection records no strike');
 });
 
-// strengthenLearning dropped merged_from (passed null to renderLearning): a
-// STRENGTHEN on a MERGE result silently lost the merge provenance.
 test('MERGE then STRENGTHEN the merged learning preserves merged_from', () => {
   const c = ctx();
   const seedA = ADD(c.ws, { slug: 'merge-src-a', episodes: [EP(c.ws, { path: 'docs/solutions/perf/merge-src-a.md' })] });
@@ -1021,11 +899,6 @@ test('a normal SUPERSEDE tombstones the target and writes the replacement', () =
   assert.match(index, /sql\/not-null-two-step/);
 });
 
-// Closing the evidence gap (fix-kind episodes were previously trusted from
-// the op JSON alone): a `kind: fix` (or kind-omitted) assertion must now
-// disk-verify — nonexistent file, or a real file whose own frontmatter
-// claims a conflicting elevated kind, both reject E_SCHEMA before anything
-// is written.
 test('an ADD asserting kind: fix for a nonexistent episode file is rejected with E_SCHEMA', () => {
   const c = ctx();
   const op = ADD(c.ws, {
@@ -1059,13 +932,7 @@ test('an ADD asserting kind: fix for a real file whose own frontmatter says kind
 });
 
 test('updateFrontmatterField inserts a missing field on a CRLF-terminated learning file instead of silently no-opping', () => {
-  // The fixture lives at a REAL store path (`<home>/knowledge/<id>/learnings/
-  // <domain>/<slug>.md`): updateFrontmatterField reads and writes through the
-  // store-io choke point, which derives its containment root from exactly that
-  // shape — and requires the derived root to sit inside a `knowledge/`
-  // directory, since `storeDirForId` is the only thing that ever builds one —
-  // refusing anything else outright.
-  const file = path.join(tempDir('apply-crlf-'), 'knowledge', 'repo-id', 'learnings', 'sql', 'crlf-learning.md');
+    const file = path.join(tempDir('apply-crlf-'), 'knowledge', 'repo-id', 'learnings', 'sql', 'crlf-learning.md');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const text = '---\r\ntrigger: "x"\r\nstatus: active\r\n---\r\n\r\nbody\r\n';
   fs.writeFileSync(file, text);
@@ -1091,11 +958,6 @@ test('updateFrontmatterField refuses a path that is not a learning file, and ref
   assert.equal(fs.readFileSync(victim, 'utf8'), 'OUTSIDE\n', 'the symlink target is untouched');
 });
 
-// merged_from records that THIS store consolidated those ids into this claim,
-// tombstoning each one in the same run. It is derived from a MERGE's own
-// validated targets — never assertable by an op, in either shape. Accepting it
-// let any op JSON (including a hand-edited `.harness/promote-ops.json`) stamp
-// forged consolidation provenance onto a fresh claim while merging nothing.
 test('op.merged_from cannot be asserted by an op — neither a bare string nor a well-formed array of ids', () => {
   for (const value of ['sql/some-id', ['sql/some-id', 'sql/other-id']]) {
     const c = ctx();
@@ -1220,13 +1082,6 @@ test('an episode missing from BOTH the workspace and the global root is rejected
 // processes can both observe the same stale lock and both attempt takeover.
 // The fix claims the stale lock via an ATOMIC renameSync (not an idempotent
 // rmSync) so only one caller's rename can ever succeed against that exact
-// directory entry — the loser must see its renameSync throw (ENOENT, since
-// the winner already moved the entry away) and fall straight through to
-// E_LOCKED WITHOUT attempting its own mkdirSync recovery, which would
-// otherwise race against — and could steal — the winner's freshly
-// recreated live lock. Simulated deterministically by stubbing
-// fs.renameSync to throw exactly once, standing in for "another process's
-// rename already won."
 test('a concurrent stale-lock takeover race: the loser (whose claim loses to another renamer) rejects E_LOCKED, never double-acquiring', () => {
   const c = ctx();
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -1251,10 +1106,7 @@ test('a concurrent stale-lock takeover race: the loser (whose claim loses to ano
     assert.equal(res.exitCode, 1);
     assert.equal(res.rejected[0].code, 'E_LOCKED');
     assert.ok(intercepted, 'the stubbed renameSync must have been exercised by the takeover attempt');
-    // The loser never attempted mkdirSync recovery of its own — the stale
-    // lock our stub refused to rename away is still sitting exactly where
-    // it was, proving nothing was double-acquired.
-    assert.ok(fs.existsSync(lockPath), 'the lock directory is left exactly as the failed rename left it');
+        assert.ok(fs.existsSync(lockPath), 'the lock directory is left exactly as the failed rename left it');
   } finally {
     fs.renameSync = originalRename;
   }
@@ -1262,9 +1114,6 @@ test('a concurrent stale-lock takeover race: the loser (whose claim loses to ano
 
 // P1#3 (candidate-set evidence checks). ------------------------------------
 
-// (i) An episode already consolidated by a PRIOR run is no longer a current
-// candidate, so a second, different ADD can't re-cite it to mint a second
-// learning from spent evidence.
 test('P1#3: an ADD re-citing an episode already consolidated by a prior run is rejected E_SCHEMA (not a current candidate)', () => {
   const c = ctx();
   const ep = EP(c.ws, { path: 'docs/solutions/perf/reused.md' });
@@ -1282,10 +1131,6 @@ test('P1#3: an ADD re-citing an episode already consolidated by a prior run is r
   assert.ok(!listLearnings(dir).some((l) => l.id === 'sql/second-claim'), 'no second learning minted from spent evidence');
 });
 
-// The re-cite exemption that must SURVIVE (D1 invariant): a STRENGTHEN
-// re-citing its target's OWN already-consolidated evidence is exempt from the
-// candidate gate — without the exemption it would be wrongly rejected as
-// "already consolidated."
 test('P1#3: a STRENGTHEN re-citing its target\'s OWN already-consolidated episode still succeeds (exempt from candidacy)', () => {
   const c = ctx();
   const ep = EP(c.ws, { path: 'docs/solutions/perf/recite.md' });
@@ -1300,8 +1145,6 @@ test('P1#3: a STRENGTHEN re-citing its target\'s OWN already-consolidated episod
   assert.equal(res.status, 0, res.stderr || res.stdout);
 });
 
-// A genuinely-new episode in a STRENGTHEN still must be a current candidate —
-// re-citing a DIFFERENT learning's spent evidence via STRENGTHEN is closed too.
 test('P1#3: a STRENGTHEN citing a NEW episode that is another learning\'s spent evidence is rejected E_SCHEMA', () => {
   const c = ctx();
   const spent = EP(c.ws, { path: 'docs/solutions/perf/spent.md' });
@@ -1321,9 +1164,6 @@ test('P1#3: a STRENGTHEN citing a NEW episode that is another learning\'s spent 
   assert.match(out.rejected[0].reason, /not a current unconsolidated candidate/);
 });
 
-// (ii) NOOP disk-verification: a NOOP CONSUMES the cited episode (clears its
-// debt), so it must verify existence + sha256 first — it can't clear debt for
-// a fabricated or edited file.
 test('P1#3: a NOOP citing a nonexistent episode is rejected E_SCHEMA and consumes nothing', () => {
   const c = ctx();
   const noop = {
@@ -1338,9 +1178,7 @@ test('P1#3: a NOOP citing a nonexistent episode is rejected E_SCHEMA and consume
   assert.match(out.rejected[0].reason, /NOOP episode .* does not exist on disk or its sha256 does not match/);
 
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
-  // A rejection may record a failure STRIKE, but must never CONSUME (a
-  // consuming entry has a `learning` key; a strike does not).
-  assert.ok(
+    assert.ok(
     !readLedger(dir).some((e) => e.path === 'docs/solutions/perf/ghost.md' && 'learning' in e),
     'a fabricated NOOP episode is never consumed / debt-cleared'
   );

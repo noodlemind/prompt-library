@@ -37,9 +37,6 @@ const SKILL_READ_TOOLS = new Set([
   'readSkill',
 ]);
 
-// Known read-only tools may carry file paths without being governed mutations.
-// Any other tool that names a concrete file target is treated as a mutation so
-// unrecognized or future host edit tools fail closed instead of bypassing gates.
 export const READ_ONLY_TOOLS = new Set([
   ...SKILL_READ_TOOLS,
   'grep_search',

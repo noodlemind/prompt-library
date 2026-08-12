@@ -8,30 +8,6 @@ import { absorbOrAbort } from './admin.mjs';
 import { resolveDefaultBranch } from '../git-context.mjs';
 import { assertRealpathContained } from '../fs-safe.mjs';
 
-/**
- * `harness knowledge prune` (blueprint P6/§5): delete branch buckets. HUMAN
- * AUTHORITY — never mode-gated (exactly like `knowledge purge`: a person
- * reaching in directly always wins, in every knowledge mode including off).
- * Removal is one store commit through the standard single-writer transaction.
- *
- * Selectors (union when combined):
- *   --branch <key>   exact bucket key
- *   --merged         buckets whose branch is merged into the resolved default
- *                    branch (workspace git state), plus fully-tombstoned
- *                    buckets (every entry promoted to golden — nothing left)
- *   --stale <days>   buckets whose meta createdAt is older than N days
- *
- * CONFIRMATION (P2 finding): the selectors above are not occupancy tests. A
- * merged branch, a 30-day-old bucket, or an explicitly named key can still
- * hold ACTIVE, UNPROMOTED learnings — `knowledge status` reports exactly those
- * buckets as NOT prunable, while prune deleted them anyway with no preview and
- * no confirmation. Both surfaces now share ONE predicate (`bucketCounts`,
- * consolidate.mjs): anything status calls prunable (`active === 0`) still
- * prunes unattended; anything holding active work needs an explicit `--yes`,
- * and every run — refused or applied — returns a per-bucket `preview` of what
- * is at stake.
- */
-
 /** Local branches fully merged into the resolved default branch. */
 function mergedBranches(workspace, defaultBranch) {
   if (!defaultBranch) return null;
@@ -60,9 +36,7 @@ function bucketPreview(bucket) {
   }
   return {
     key: bucket.key,
-    // Same untrusted-branch-name treatment `knowledge status` applies — this
-    // preview is a `--json` surface too.
-    branch: safeBranchName(bucket.meta?.branch),
+        branch: safeBranchName(bucket.meta?.branch),
     active: counts ? counts.active : null,
     promoted: counts ? counts.promoted : null,
     total: counts ? counts.total : null,
@@ -85,10 +59,7 @@ export function pruneBuckets({ workspace, home, branchKey = null, merged = false
   if (!branchKey && !merged && staleDays === null) {
     return { pass: false, exitCode: 2, removed: [], preview: [], blockedReason: 'prune needs --branch <key>, --merged, or --stale <days>' };
   }
-  // Boundary validation for direct callers (the CLI's flag parser validates
-  // too): a fractional or non-numeric staleDays would silently shift the
-  // cutoff and prune the wrong buckets.
-  if (staleDays !== null && !(Number.isSafeInteger(staleDays) && staleDays > 0)) {
+    if (staleDays !== null && !(Number.isSafeInteger(staleDays) && staleDays > 0)) {
     return { pass: false, exitCode: 2, removed: [], preview: [], blockedReason: `--stale needs a positive whole number of days (got ${staleDays})` };
   }
   const dir = storeDir(workspace, { home });
@@ -96,11 +67,7 @@ export function pruneBuckets({ workspace, home, branchKey = null, merged = false
     return { pass: false, exitCode: 2, removed: [], preview: [], blockedReason: 'nothing to prune — no knowledge store yet' };
   }
 
-  // Bucket discovery and selector evaluation both run INSIDE the transaction,
-  // under the store lock — never before it — so a concurrent writer landing
-  // fresh learnings in a same-key bucket can't race a stale pre-lock selection
-  // into deleting them (TOCTOU). Only flag validation stays outside.
-  const tx = withStoreTransaction(workspace, { home, label: 'knowledge: prune' }, ({ dir: txDir, recordCheckpoint }) => {
+    const tx = withStoreTransaction(workspace, { home, label: 'knowledge: prune' }, ({ dir: txDir, recordCheckpoint }) => {
     try {
       absorbOrAbort({ workspace, home, log, recordCheckpoint });
     } catch (err) {
@@ -151,10 +118,7 @@ export function pruneBuckets({ workspace, home, branchKey = null, merged = false
       return { kind: 'reject', exitCode: 2, blockedReason: 'no buckets match the given selectors — nothing pruned' };
     }
 
-    // Preview FIRST — computed for every run, returned on both the refusal and
-    // the success path, and logged line by line so a human sees what a prune
-    // costs before (or as) it happens.
-    const preview = [...selected.values()].map(bucketPreview).sort((a, b) => a.key.localeCompare(b.key));
+        const preview = [...selected.values()].map(bucketPreview).sort((a, b) => a.key.localeCompare(b.key));
     for (const p of preview) {
       log(
         `prune preview ${p.key}${p.branch ? ` (${p.branch})` : ''}: ${p.active ?? '?'} active · ${p.promoted ?? '?'} promoted · ${p.total ?? '?'} total`
@@ -173,18 +137,7 @@ export function pruneBuckets({ workspace, home, branchKey = null, merged = false
     }
 
     const keys = [...selected.keys()].sort();
-    // ALL-OR-NOTHING (review finding). Defense in depth (fs-safe.mjs): a
-    // recursive delete is the single most destructive syscall in this module,
-    // and `branches/` is a hand-editable tree, so a bucket whose real path
-    // resolves outside the store is refused rather than letting rmSync follow a
-    // swapped ancestor. That check used to run INSIDE the delete loop, which
-    // made the refusal PARTIAL: the buckets ahead of the offending one were
-    // already gone, the run returned `removed: []` (this reject path reports
-    // nothing removed), and withStoreTransaction still committed the deletion
-    // under the generic label — a silent, unreported loss. Every selected
-    // bucket is therefore containment-verified BEFORE the first rmSync; a
-    // refusal now costs the whole prune, not half of it.
-    const targets = [];
+        const targets = [];
     for (const b of selected.values()) {
       const contained = assertRealpathContained(txDir, path.join('branches', b.key));
       if (!contained) {

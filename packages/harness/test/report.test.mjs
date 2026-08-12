@@ -253,16 +253,6 @@ test('report does not render a partial host usage event as a measured zero', () 
   assert.doesNotMatch(text, /^report\s+~0 tokens/m);
 });
 
-// --- Fix-wave Important #8: report must not observe its own dispatch -------
-//
-// `report` reads events.jsonl (loadReportEvents), and the dispatch pipeline
-// writes command.start BEFORE the handler runs — so an instrumented `report`
-// observed its own pending command.start on every invocation (the same
-// self-referential read-your-own-write class as the `events` command, fixed
-// earlier with instrument:false), and `--sync` could copy that phantom row
-// into the global store. The registry entry now opts out via
-// `instrument: false`, exactly like `events`.
-
 test('harness report leaves events.jsonl byte-identical — no self-observed command.start/command.result rows', () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-report-noinstr-'));
   fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
@@ -280,9 +270,7 @@ test('harness report leaves events.jsonl byte-identical — no self-observed com
 });
 
 test('layer split preserves both attributions for a protected-shadow same-id pair', () => {
-  // The protected-shadow overlay surfaces golden AND branch entries with one
-  // id; per-occurrence learningLayers entries must credit BOTH layers.
-  const events = [
+    const events = [
     {
       version: 2,
       type: 'orient',

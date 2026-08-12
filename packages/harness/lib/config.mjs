@@ -1,51 +1,27 @@
-/**
- * Harness configuration — user and project scopes, effective values with
- * provenance, schema validation, atomic writes.
- *
- * THE KEY SET IS DELIBERATELY SMALL. Every key here is read by code that
- * exists: `exec.timeout_seconds` and `exec.allow_env` feed `exec-policy.mjs`,
- * and `exec.bash_enabled` is the policy gate that lets `bash` be denied
- * separately from `exec`. A configuration surface whose keys nothing consumes
- * is the same dead seam `runProcess`'s unused `env` parameter already was —
- * correct, documented, and doing nothing. Keys arrive when their reader does.
- *
- * PRECEDENCE is default < user < project, with one exception that matters:
- * keys marked `merge: 'restrictive'` take the SAFER of the two scopes rather
- * than the more specific one. A repository is content; a user's config is a
- * decision about their own machine. Letting a checked-in file re-enable a shell
- * its owner turned off would make the user-scope setting advisory, which is not
- * what a person disabling `bash` globally means by it. Restrictive keys can be
- * tightened by a project and never loosened.
- *
- * Project scope is additionally gated on TRUST (P3AC6): an unapproved project's
- * config is parsed for display but never contributes an effective value, so
- * cloning a hostile repository cannot change how the harness executes before
- * anyone has looked at it.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { EXIT } from './style.mjs';
 import { writeFileContained } from './fs-safe.mjs';
+import { DEFAULT_PROVIDER, PROVIDER_IDS } from './provider.mjs';
 
 export const CONFIG_SCHEMA_VERSION = 1;
+
+export const AGENT_LIMITS = Object.freeze({
+  maxTurns: Object.freeze({ min: 1, max: 500 }),
+  maxSeconds: Object.freeze({ min: 1, max: 86_400 }),
+  toolTimeout: Object.freeze({ min: 1, max: 3600 }),
+});
 
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
 }
 
-/**
- * The declared key space. Data, not convention — `config` renders from this,
- * validation reads it, and the merge rule per key lives here rather than in a
- * branch someone has to remember to update.
- */
 export const CONFIG_SCHEMA = Object.freeze({
   'exec.timeout_seconds': {
     type: 'number',
     default: 600,
-    // Restrictive by MINIMUM: a shorter deadline is the safer one. A project
-    // that needs longer than the user allows has to say so to the user.
-    merge: 'restrictive',
+        merge: 'restrictive',
     restrict: (a, b) => Math.min(a, b),
     description: 'default seconds before an executed process tree is terminated',
     validate: (value) => {
@@ -58,11 +34,7 @@ export const CONFIG_SCHEMA = Object.freeze({
   'exec.allow_env': {
     type: 'list',
     default: [],
-    // Union: an allowlist entry is an operator decision in both scopes, and
-    // `NEVER_ALLOWED` in exec-policy.mjs still refuses the three names that are
-    // not decisions. Trust is what keeps an unreviewed project out of this set,
-    // not per-key arithmetic.
-    merge: 'union',
+        merge: 'union',
     description: 'environment variable names passed through to executed processes',
     validate: (value) => {
       for (const name of value) {
@@ -77,34 +49,21 @@ export const CONFIG_SCHEMA = Object.freeze({
     type: 'enum',
     values: ['allow', 'deny'],
     default: 'allow',
-    // Restrictive: `deny` always wins. Same rule as the shell gate — a project
-    // may cut network access off and may never restore it.
-    merge: 'restrictive',
+        merge: 'restrictive',
     restrict: (a, b) => (a === 'deny' || b === 'deny' ? 'deny' : 'allow'),
     description: 'whether executed processes may reach the network (deny is enforced only where the platform has a primitive)',
   },
   'checks.env_allowlist': {
     type: 'boolean',
-    // OFF by default, deliberately — see the note in `runNamedCheck`. A named
-    // check runs only after `trust approve`, so the allowlist is
-    // defence-in-depth there rather than the boundary, and defaulting it on
-    // would break every check that needs a variable nobody enumerated.
-    default: false,
-    // Restrictive by OR: turning the allowlist ON is the safer state, so a
-    // project may enable it and may not switch it back off.
-    merge: 'restrictive',
+        default: false,
+        merge: 'restrictive',
     restrict: (a, b) => a || b,
     description: 'apply the exec environment allowlist to named checks too',
   },
   'runs.retention_days': {
     type: 'number',
     default: 30,
-    // Plain precedence (default < user < project), NOT restrictive. Every other
-    // key here gates authority, where a project must never be able to loosen
-    // what the user set. Retention length is not authority — it is how much
-    // history a team wants to keep — so the ordinary "more specific wins" rule
-    // applies and a repository may state its own policy.
-    merge: 'override',
+        merge: 'override',
     description: 'days of run and event history to keep before pruning',
     validate: (value) => {
       if (!Number.isInteger(value) || value < 1 || value > 3650) {
@@ -116,11 +75,191 @@ export const CONFIG_SCHEMA = Object.freeze({
   'exec.bash_enabled': {
     type: 'boolean',
     default: true,
-    // Restrictive by AND. This is the P3AC2 gate: `bash` is allowed or denied
-    // separately from `exec`, and a project can deny it but never grant it.
-    merge: 'restrictive',
+        merge: 'restrictive',
     restrict: (a, b) => a && b,
     description: 'whether `harness bash` may run a shell at all',
+  },
+
+  'agent.enabled': {
+    type: 'boolean',
+    default: false,
+    merge: 'restrictive',
+    restrict: (a, b) => a && b,
+    description: 'master switch for the agent loop; off = no provider is ever started',
+  },
+    'agent.providers': {
+    type: 'list',
+    default: [DEFAULT_PROVIDER],
+    merge: 'restrictive',
+    restrict: (a, b) => {
+      const allowed = new Set(a);
+      return b.filter((id) => allowed.has(id));
+    },
+    description: 'enabled provider ids (disabled providers are hidden and cannot start)',
+    validate: (value) => {
+      if (!Array.isArray(value) || value.length === 0) {
+        throw usageError('agent.providers must list at least one known provider id');
+      }
+      const out = [];
+      const seen = new Set();
+      for (const raw of value) {
+        const id = String(raw ?? '').trim();
+        if (!id) continue;
+        if (!PROVIDER_IDS.includes(id)) {
+          throw usageError(
+            `unknown provider in agent.providers: ${id}`,
+            `known providers: ${PROVIDER_IDS.join(', ')}`,
+          );
+        }
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+      }
+      if (!out.length) {
+        throw usageError('agent.providers must list at least one known provider id');
+      }
+      return out;
+    },
+  },
+  'agent.provider': {
+    type: 'string',
+    default: DEFAULT_PROVIDER,
+    merge: 'override',
+    description: 'default provider for `harness agent` (must also be in agent.providers)',
+  },
+  'agent.model': {
+    type: 'string',
+    default: '',
+    merge: 'override',
+    description: 'default model id; empty means the provider default (or auto)',
+  },
+  'agent.max_turns': {
+    type: 'number',
+    default: 30,
+        merge: 'restrictive',
+    restrict: (a, b) => Math.min(a, b),
+    description: 'default turn budget for `harness agent` (--max-turns overrides)',
+    validate: (value) => {
+      const { min, max } = AGENT_LIMITS.maxTurns;
+      if (!Number.isInteger(value) || value < min || value > max) {
+        throw usageError(`agent.max_turns must be an integer from ${min} to ${max}`);
+      }
+      return value;
+    },
+  },
+  'agent.max_seconds': {
+    type: 'number',
+    default: 1800,
+    merge: 'restrictive',
+    restrict: (a, b) => Math.min(a, b),
+    description: 'default wall-clock budget in seconds for `harness agent` (--max-seconds overrides)',
+    validate: (value) => {
+      const { min, max } = AGENT_LIMITS.maxSeconds;
+      if (!Number.isInteger(value) || value < min || value > max) {
+        throw usageError(`agent.max_seconds must be an integer from ${min} to ${max}`);
+      }
+      return value;
+    },
+  },
+  'agent.profile': {
+    type: 'enum',
+    values: ['deliver', 'autonomous', 'bench', 'benchmark'],
+    default: 'autonomous',
+    merge: 'override',
+    description:
+      'optional agent track: deliver (product-minded) or autonomous/bench (verifier-shaped long-horizon; no plan/gate/compound). '
+      + 'benchmark is a test fixture alias. Does not enable agent.enabled.',
+  },
+
+    'tui.density': {
+    type: 'enum',
+    values: ['compact', 'comfortable'],
+        default: 'comfortable',
+    merge: 'override',
+    description: 'blank line between ledger blocks (comfortable, default) or none (compact)',
+  },
+  'tui.dividers': {
+    type: 'boolean',
+    default: false,
+    merge: 'override',
+    description: 'draw a rule between ledger blocks instead of relying on the tint',
+  },
+  'tui.statusline': {
+    type: 'list',
+        ordered: true,
+    default: ['plan', 'gate', 'agent', 'shell', 'run', 'knowledge'],
+    merge: 'override',
+    description: 'footer items, in order (plan, gate, agent, shell, run, knowledge)',
+    validate: (value) => {
+      const allowed = ['plan', 'gate', 'agent', 'shell', 'run', 'knowledge'];
+      for (const item of value) {
+        if (!allowed.includes(item)) {
+          throw usageError(`tui.statusline entries must be one of ${allowed.join(', ')} (got ${JSON.stringify(item)})`);
+        }
+      }
+      return value;
+    },
+  },
+  'tui.scheme': {
+    type: 'enum',
+    values: ['default', 'colorblind'],
+    default: 'default',
+    merge: 'override',
+        description: 'semantic palette: default, or colorblind (Okabe-Ito, no green/red axis)',
+  },
+  'tui.tint': {
+    type: 'enum',
+    values: ['auto', 'dark', 'light', 'off'],
+    default: 'auto',
+    merge: 'override',
+        description: 'block tint ground: auto-detect, force dark/light, or off for maximum contrast',
+  },
+  'tui.palette_chord': {
+    type: 'enum',
+    values: ['ctrl+p', 'ctrl+k', 'ctrl+space'],
+    default: 'ctrl+p',
+    merge: 'override',
+        description: 'chord that opens the command palette',
+  },
+  'tui.startup': {
+    type: 'list',
+    default: ['context', 'knowledge', 'shortcuts'],
+    merge: 'override',
+    description: 'sections shown when the ledger opens (context, knowledge, shortcuts)',
+    validate: (value) => {
+      const allowed = ['context', 'knowledge', 'shortcuts'];
+      for (const item of value) {
+        if (!allowed.includes(item)) {
+          throw usageError(`tui.startup entries must be one of ${allowed.join(', ')} (got ${JSON.stringify(item)})`);
+        }
+      }
+      return value;
+    },
+  },
+  'tui.verbosity': {
+    type: 'enum',
+    values: ['normal', 'screen-reader'],
+    default: 'normal',
+    merge: 'override',
+        description: 'screen-reader mode: no repainting region, no tints, status stated in words',
+  },
+  'tui.alt_screen': {
+    type: 'boolean',
+    default: false,
+    merge: 'override',
+        description: 'render in the alternate screen instead of the main buffer (costs scrollback)',
+  },
+  'tui.restore': {
+    type: 'number',
+    default: 8,
+    merge: 'override',
+    description: 'how many prior runs the ledger restores from the journal on open',
+    validate: (value) => {
+      if (!Number.isInteger(value) || value < 0 || value > 100) {
+        throw usageError('tui.restore must be an integer from 0 to 100');
+      }
+      return value;
+    },
   },
 });
 
@@ -137,22 +276,8 @@ export function configPathFor(scope, { copilotHome, workspace }) {
   throw usageError(`unknown scope: ${scope}`, `scope must be one of: ${SCOPES.join(', ')}`);
 }
 
-/**
- * Coerce and validate one raw value against its key's declared type.
- *
- * Coercion is from STRINGS because that is what a CLI hands you; a value read
- * from YAML arrives already typed and passes through the same validator, so a
- * hand-edited file and a `config set` cannot disagree about what is legal.
- */
 export function coerceValue(key, raw) {
-  // `Object.hasOwn`, not `in`/plain lookup: `CONFIG_SCHEMA` is a plain object,
-  // so `constructor`, `toString`, `valueOf` and `__proto__` resolve to
-  // INHERITED members. Each of those passed both this guard and the unknown-key
-  // check below, then `spec.type` and `spec.validate` came back undefined — so
-  // the value skipped every coercion and validation branch and was returned
-  // unchanged, and the key was recorded rather than reported. Nothing reads
-  // those keys today; the bypass was on the surface that gates execution.
-  const spec = Object.hasOwn(CONFIG_SCHEMA, key) ? CONFIG_SCHEMA[key] : null;
+    const spec = Object.hasOwn(CONFIG_SCHEMA, key) ? CONFIG_SCHEMA[key] : null;
   if (!spec) {
     throw usageError(`unknown config key: ${key}`, `known keys: ${CONFIG_KEYS.join(', ')}`);
   }
@@ -175,6 +300,9 @@ export function coerceValue(key, raw) {
       value = raw.split(',').map((s) => s.trim()).filter(Boolean);
     }
     if (!Array.isArray(value)) throw usageError(`${key} must be a list (got ${JSON.stringify(raw)})`);
+  } else if (spec.type === 'string') {
+    if (typeof value !== 'string') throw usageError(`${key} must be a string (got ${JSON.stringify(raw)})`);
+    value = value.trim();
   } else if (spec.type === 'enum') {
     if (typeof value !== 'string' || !spec.values.includes(value)) {
       throw usageError(`${key} must be one of ${spec.values.join(', ')} (got ${JSON.stringify(raw)})`);
@@ -183,13 +311,6 @@ export function coerceValue(key, raw) {
   return spec.validate ? spec.validate(value) : value;
 }
 
-/**
- * Read one scope's file.
- *
- * A malformed or unknown-key file is REPORTED, never silently skipped: a
- * configuration that does not take effect because nobody could parse it is the
- * failure mode where an operator believes a limit is enforced and it is not.
- */
 export function loadConfigFile(file) {
   if (!fs.existsSync(file)) return { exists: false, values: {}, errors: [] };
   let doc;
@@ -221,14 +342,6 @@ export function loadConfigFile(file) {
   return { exists: true, values, errors };
 }
 
-/**
- * The effective configuration, with provenance for every key.
- *
- * `provenance[key]` records which scope supplied the value and, for a
- * restrictive key that two scopes both set, that the safer one won — otherwise
- * a user who set a 60-second timeout and sees 60 while the project asked for
- * 900 has no way to learn why.
- */
 export function resolveConfig({ copilotHome, workspace, projectTrusted = true } = {}) {
   const userFile = configPathFor('user', { copilotHome, workspace });
   const projectFile = configPathFor('project', { copilotHome, workspace });
@@ -257,18 +370,7 @@ export function resolveConfig({ copilotHome, workspace, projectTrusted = true } 
     } else if (projectSets) {
       const projectValue = project.values[key];
       if (spec.merge === 'restrictive') {
-        // Folded against whatever is currently effective — the USER value when
-        // there is one, otherwise the DEFAULT. Comparing only when a user value
-        // existed made the arithmetic depend on whether a second scope happened
-        // to be present: with no user config, a project could raise
-        // `exec.timeout_seconds` from the 600 default to 3600 and the rule
-        // "a project may tighten and never loosen" quietly did not apply.
-        //
-        // The USER scope is deliberately NOT folded against the default. The
-        // default is a starting point, not a ceiling; folding it would make it
-        // impossible for the operator to raise their own timeout, which turns
-        // the escape hatch into a wall.
-        const restricted = spec.restrict(value, projectValue);
+                const restricted = spec.restrict(value, projectValue);
         if (restricted !== value) {
           value = restricted;
           source = 'project';
@@ -290,13 +392,8 @@ export function resolveConfig({ copilotHome, workspace, projectTrusted = true } 
       }
     }
 
-    // Normalized regardless of how many scopes contributed. Previously a
-    // user-only list came back verbatim (`["A","A"]`) while the same list
-    // merged with a project scope was deduplicated and sorted through the
-    // `Set` above — the shape of a value should not depend on how many files
-    // happened to mention it.
-    values[key] = spec.type === 'list' && Array.isArray(value)
-      ? [...new Set(value)].sort()
+        values[key] = spec.type === 'list' && Array.isArray(value)
+      ? (spec.ordered ? [...new Set(value)] : [...new Set(value)].sort())
       : value;
     provenance[key] = { source, file, ...(note ? { note } : {}) };
   }
@@ -312,15 +409,6 @@ export function resolveConfig({ copilotHome, workspace, projectTrusted = true } 
   };
 }
 
-/**
- * Write one key into one scope, atomically.
- *
- * `writeFileContained` (lib/fs-safe.mjs) does the work: exclusive create,
- * containment verified through the open descriptor, content written only after
- * that check, then a same-directory rename — so a concurrent reader sees either
- * the old file or the new one and never a half-written config that would parse
- * as a weaker policy than either.
- */
 export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
   if (!SCOPES.includes(scope)) {
     throw usageError(`unknown scope: ${scope}`, `scope must be one of: ${SCOPES.join(', ')}`);
@@ -329,9 +417,7 @@ export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
   const file = configPathFor(scope, { copilotHome, workspace });
   const existing = loadConfigFile(file);
   if (existing.errors.length && existing.exists) {
-    // Refusing beats silently rewriting: overwriting a file we could not fully
-    // parse would discard settings the operator believes are in effect.
-    throw Object.assign(new Error(`refusing to write over a config with errors: ${existing.errors[0]}`), {
+        throw Object.assign(new Error(`refusing to write over a config with errors: ${existing.errors[0]}`), {
       code: 'E_TARGET',
       exit: 1,
       hint: 'fix the file by hand, or run `harness config validate` to see every error',
@@ -350,4 +436,40 @@ export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
     });
   }
   return { file: written, key, value: coerced, scope };
+}
+
+export function unsetConfigValue({ scope, keys, copilotHome, workspace }) {
+  if (!SCOPES.includes(scope)) {
+    throw usageError(`unknown scope: ${scope}`, `scope must be one of: ${SCOPES.join(', ')}`);
+  }
+  const named = Array.isArray(keys) ? keys : [keys];
+  for (const key of named) {
+    if (!Object.hasOwn(CONFIG_SCHEMA, key)) {
+      throw usageError(`unknown config key: ${key}`, `known keys: ${CONFIG_KEYS.join(', ')}`);
+    }
+  }
+  const file = configPathFor(scope, { copilotHome, workspace });
+  const existing = loadConfigFile(file);
+  if (!existing.exists) return { file, keys: named, scope, removed: [] };
+  if (existing.errors.length) {
+    throw Object.assign(new Error(`refusing to write over a config with errors: ${existing.errors[0]}`), {
+      code: 'E_TARGET',
+      exit: 1,
+      hint: 'fix the file by hand, or run `harness config validate` to see every error',
+    });
+  }
+  const removed = named.filter((key) => key in existing.values);
+  if (!removed.length) return { file, keys: named, scope, removed };
+  const remaining = { ...existing.values };
+  for (const key of removed) delete remaining[key];
+  const root = scope === 'user' ? copilotHome : workspace;
+  const written = writeFileContained(root, path.relative(root, file), YAML.stringify({ version: CONFIG_SCHEMA_VERSION, ...remaining }));
+  if (!written) {
+    throw Object.assign(new Error(`could not write ${file}`), {
+      code: 'E_TARGET',
+      exit: 1,
+      hint: 'the path is not writable, or an ancestor is a symlink out of the scope root',
+    });
+  }
+  return { file: written, keys: named, scope, removed };
 }

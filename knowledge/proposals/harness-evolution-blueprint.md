@@ -5,7 +5,7 @@ The `## Human Decision` section records approval on 2026-08-06; its listed condi
 remain binding on every implementation phase (per Decision Handling semantics in
 [`capability-gap-proposal.md`](../../.github/skills/references/capability-gap-proposal.md)).
 This document is the approved design, not a behavior reference — current behavior is
-documented in `docs/MEMORY-MODEL.md` and the harness tool contract as each phase ships.
+documented in `docs/adaptive-engineer-harness.md` and the harness tool contract as each phase ships.
 
 This blueprint adapts nine externally supplied proposals — a two-layer golden/branch-local
 knowledge model, deterministic retrieval, structural codebase indexing, layer-aware
@@ -13,7 +13,7 @@ compounding, structurally enriched plans and verification, knowledge lifecycle c
 multi-project/worktree hardening, local token budgeting, and provenance governance — onto
 the existing Adaptive Engineer Harness architecture. It maps each proposal to what already
 exists, what is genuinely new, and how the new parts compose with the contracts pinned by
-`docs/MEMORY-MODEL.md`, `docs/architecture/engineer-harness.md`, and the harness test
+`docs/adaptive-engineer-harness.md`, `docs/adaptive-engineer-harness.md`, and the harness test
 suite. Two proposals arrive largely satisfied and are marked verify-and-document.
 
 ## 1. Fixed decisions
@@ -51,7 +51,7 @@ every section below. Alternatives are not reconsidered.
 | Events | `events.mjs` | `EVENT_TYPES` allow-list (known latent gap: `init_repo`/`recall`/`validate_plan`/`index` writes are silently dropped; `knowledge`-type events already flow) |
 | Doctor | `doctor.mjs` | H1–H17, K1–K4, V1–V9 |
 | Capability governance | `knowledge/capability-registry.yaml`, `capability-gap-proposal.md` | Lifecycle + registry mutation rules |
-| Memory model + threat model | `docs/MEMORY-MODEL.md` | Three tiers, one writer each; day-granular episode dates are load-bearing |
+| Memory model + threat model | `docs/adaptive-engineer-harness.md` | Three tiers, one writer each; day-granular episode dates are load-bearing |
 
 ## 3. Per-proposal mapping
 

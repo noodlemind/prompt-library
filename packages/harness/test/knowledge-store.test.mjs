@@ -33,10 +33,7 @@ test('repoId normalizes ssh and https forms of the same remote to one id', () =>
 });
 
 test('repoId disambiguates remotes whose lossy slugs would otherwise collide', () => {
-  // "org-a/repo-b" and "org-a-repo/b" both collapse to the same slug once
-  // '/' and '-' fold together in the lossy replace — the hash suffix (over
-  // the pre-lossy canonical string) must still tell them apart.
-  const a = gitWorkspace('https://github.com/org-a/repo-b.git');
+    const a = gitWorkspace('https://github.com/org-a/repo-b.git');
   const b = gitWorkspace('https://github.com/org-a-repo/b.git');
   assert.notEqual(repoId(a), repoId(b));
 });

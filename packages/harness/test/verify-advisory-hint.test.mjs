@@ -1,13 +1,5 @@
-// An advisory check cannot move verify's outcome, so it must not be counted
-// as a gating failure or offered as the next fix target — otherwise a run that
-// genuinely failed on a gating check points the agent at the one check that
-// can never unblock it. Advisory failures stay visible as rows and in the
-// evidence payload's `advisoryFailures`.
-
 import test from 'node:test';
 import assert from 'node:assert/strict';
-// The PRODUCTION predicate, imported rather than restated: a copy here could go
-// on passing while `harness verify`'s own counting drifted away from it.
 import { isGatingCheck as gating } from '../lib/verify.mjs';
 
 test('advisory and skipped checks are neither counted nor offered as the next fix', () => {

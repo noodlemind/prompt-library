@@ -8,25 +8,6 @@ import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
 import { readLearningFile } from './store-io.mjs';
 
-/**
- * `harness knowledge promote` (blueprint §5): emits a REVIEWABLE op-set at
- * the distinct path `.harness/promote-ops.json` — it never writes the store
- * itself. The op-set is applied only through `consolidate --apply` running in
- * promotion mode (apply.mjs recognizes the `promotion` envelope), where the
- * §5 mechanics bind: candidacy exemption backed by the sha256s recorded at
- * branch-apply time, a never-strike rejection class, the protected-target
- * dispute rule, and the `absorb-branch` audit ledger action.
- *
- * Shadow mapping: a branch claim whose golden twin carries the SAME trigger
- * and body is an episodes-only overlap → STRENGTHEN (just the new evidence);
- * any other same-id twin → SUPERSEDE (the branch claim becomes the
- * authoritative version); no twin → ADD.
- *
- * `--all` chunks under MAX_OPS_PER_RUN with deterministic id ordering as the
- * cursor — the emitted set is always the first chunk; `remaining: N` reports
- * what a later run will pick up once these land and are tombstoned.
- */
-
 export const PROMOTE_OPS_REL = path.join('.harness', 'promote-ops.json');
 
 export function promotionDigest(ops) {
@@ -39,9 +20,7 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
     return { pass: false, exitCode: 2, opsPath: null, ops: 0, remaining: 0, skipped: [], blockedReason: 'no knowledge store — nothing to promote' };
   }
 
-  // Resolve the source bucket: explicit --branch key, else the current
-  // branch's bucket from write-time git context.
-  let key = branchKey;
+    let key = branchKey;
   if (!key) {
     try {
       key = deriveGitContext({ workspace, home }).branchKey;
@@ -52,12 +31,7 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
   if (!key) {
     return { pass: false, exitCode: 2, opsPath: null, ops: 0, remaining: 0, skipped: [], blockedReason: 'no branch bucket resolvable — pass --branch <key> (see harness knowledge status)' };
   }
-  // Path-safety: a bucket key is a plain directory name under branches/,
-  // never a path — ONE shared shape check (isSafeBucketKey, overlay.mjs) that
-  // apply.mjs re-derives on the promotion envelope's branchKey at write time,
-  // so an explicit --branch value can never traverse outside the store via
-  // bucketDirFor's path.join and the emitter/writer can never drift.
-  if (!isSafeBucketKey(key)) {
+    if (!isSafeBucketKey(key)) {
     return { pass: false, exitCode: 2, opsPath: null, ops: 0, remaining: 0, skipped: [], blockedReason: `invalid branch key ${key} — bucket keys are plain directory names (see harness knowledge status)` };
   }
   if (isDetachedKey(key)) {
@@ -77,12 +51,7 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
     };
   }
 
-  // Ancestry gate (P7): a bucket whose recorded base PROVABLY shares no
-  // history with the current HEAD (force-push branch-name reuse) is excluded
-  // from the overlay — it must never promote to golden either. Matching the
-  // read path's semantics, only a verified `false` refuses; `null`
-  // (unverifiable — no recorded base, or git unavailable) stays allowed.
-  const bucketMeta = readBucketMeta(bucketDir);
+    const bucketMeta = readBucketMeta(bucketDir);
   if (bucketAncestryOk(workspace, bucketMeta) === false) {
     return {
       pass: false,
@@ -109,11 +78,7 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
 
   const skipped = [];
   const promotable = [];
-  // Through the choke point (S1), and the SAME reader apply.mjs re-hashes with
-  // at write time — so the emitted `source.sha256` and the write-time
-  // re-verification can never disagree about what the file's bytes are, and
-  // neither of them can be steered onto an outside file by a planted symlink.
-  const sourceSha = (learning) => {
+    const sourceSha = (learning) => {
     const text = readLearningFile(learning.file);
     return text === null ? null : crypto.createHash('sha256').update(text).digest('hex');
   };
@@ -178,12 +143,7 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
     promotion: { branchKey: key, meta: bucketMeta, digest: promotionDigest(chunk) },
     ops: chunk,
   };
-  // Contained, atomic write (fs-safe.mjs) — the same discipline every sibling
-  // workspace write uses. A symlinked `.harness/` (or any ancestor of it)
-  // must never let this op-set land outside the workspace, and a partially
-  // written op-set must never be readable by a concurrent `consolidate
-  // --apply`.
-  const written = writeFileContained(workspace, PROMOTE_OPS_REL, JSON.stringify(opset, null, 2) + '\n');
+    const written = writeFileContained(workspace, PROMOTE_OPS_REL, JSON.stringify(opset, null, 2) + '\n');
   if (!written) {
     return {
       pass: false,

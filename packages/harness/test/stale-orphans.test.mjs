@@ -28,11 +28,7 @@ function scaffold() {
   write(home, 'agents/ghost-reviewer.agent.md'); // ORPHAN: gone from assets, not retired
   write(home, 'knowledge/solutions/user.md'); // user-owned, never an orphan
   write(home, 'skills/team-added/SKILL.md'); // added by hand — NOT hydrated, so never an orphan
-  // The lock is what says "the harness put this here". Without it, a file the
-  // package no longer ships is indistinguishable from one someone added by
-  // hand — which is exactly how a team's own skill came to be recommended for
-  // retirement. The fixture now states what it always meant.
-  fs.writeFileSync(path.join(home, '.harness-lock.json'), JSON.stringify({
+    fs.writeFileSync(path.join(home, '.harness-lock.json'), JSON.stringify({
     package: '@dev-kit/harness',
     version: '0.0.0-test',
     files: [

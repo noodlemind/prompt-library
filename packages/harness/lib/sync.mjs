@@ -15,17 +15,8 @@ export function loadRetired(pkgRoot) {
   return data.retired || [];
 }
 
-// Primitive directories that accumulate orphans across versions. Knowledge and
-// enterprise are excluded: they hold user- and enterprise-owned content, not
-// harness-shipped primitives, so their extra files are not orphans.
 const ORPHAN_SCAN_DIRS = ['skills', 'agents', 'instructions', 'prompts', 'hooks'];
 
-/**
- * Stale orphans: files hydrated in the Copilot home that current assets no
- * longer ship AND retired.json does not cover — i.e. leftovers from an older
- * harness that upgrade will not clean because nobody tombstoned them. Returns
- * the sorted relative paths so `doctor` can flag them for retirement.
- */
 export function findStaleOrphans(copilotHome, assetsRoot, retiredList = [], lockFiles = null) {
   const current = new Set();
   for (const top of SYNC_TOP_LEVEL) {
@@ -43,15 +34,8 @@ export function findStaleOrphans(copilotHome, assetsRoot, retiredList = [], lock
       const rel = `${top}/${f}`;
       if (current.has(rel)) continue; // still shipped
       if (retiredCovered(rel)) continue; // explicitly retired — upgrade removes it
-      // A file the harness NEVER HYDRATED is not a leftover from an older
-      // version — someone added it. Treating it as an orphan told operators to
-      // tombstone their own team's skill in retired.json, which would have made
-      // the next upgrade delete it. `lockFiles` is null for callers that cannot
-      // supply the lock, which keeps the pre-existing behavior for them.
-      if (lockFiles && !lockFiles.has(rel)) continue;
-      // `.harness/` under a scan dir is runtime state written by hooks at
-      // execution time — never a shipped primitive, so never an orphan.
-      if (/(^|\/)\.harness\//.test(rel)) continue;
+            if (lockFiles && !lockFiles.has(rel)) continue;
+            if (/(^|\/)\.harness\//.test(rel)) continue;
       orphans.push(rel);
     }
   }
@@ -69,11 +53,7 @@ export function resolveContainedPath(root, rel) {
   const dest = path.resolve(rootResolved, ...parts.filter(Boolean));
   const relative = path.relative(rootResolved, dest);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
-  // Physical containment (adversarial-review sweep): applyRetired below
-  // deletes through this resolved path — a symlinked ancestor under `root`
-  // (a tampered/compromised copilotHome) must never let that delete land
-  // outside it.
-  return assertNoSymlinkAncestors(rootResolved, relative);
+    return assertNoSymlinkAncestors(rootResolved, relative);
 }
 
 function fileHash(filePath) {

@@ -25,8 +25,6 @@ const run = ({ ws, home, harnessHome }, args) =>
     env: { ...process.env, HARNESS_HOME: harnessHome },
   });
 
-// Same CLI invocation, minus --json — needed only where the assertion is on
-// the human-readable log() line, which is a no-op under --json.
 const runPlain = ({ ws, home, harnessHome }, args) =>
   spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
     encoding: 'utf8',
@@ -39,12 +37,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// Writes a real fix-evidence file into the workspace at the episode's path
-// and returns an episode object whose sha256 actually matches the file's
-// on-disk content — verifyAdmittedEpisodeKinds (apply.mjs) hashes the file
-// at admission time, so a fabricated sha256 rejects the whole op with
-// E_SCHEMA. Any caller-supplied `sha256` is intentionally ignored (never
-// trusted) in favor of the real, freshly-computed hash of what was written.
 function EP(ws, over = {}) {
   const { path: relOverride, sha256: _ignoredFakeSha256, ...rest } = over;
   const rel = relOverride || 'docs/solutions/perf/x.md';
@@ -69,12 +61,7 @@ function seedLearning(c, over = {}) {
     slug,
     trigger: 'adding NOT NULL columns to hot tables',
     body: 'Use two-step default+backfill; a direct ALTER takes an exclusive lock.',
-    // Unique evidence per seeded learning (P1#3): an episode consumed by one
-    // ADD is no longer a current candidate for another ADD in a LATER run, so
-    // seeding two learnings that each defaulted to the same episode file would
-    // now fail candidacy on the second. Derive the default episode path from
-    // the slug so every seed cites its own fresh, unconsumed episode.
-    episodes: episodes || [EP(c.ws, { path: `docs/solutions/perf/${slug}.md` })],
+        episodes: episodes || [EP(c.ws, { path: `docs/solutions/perf/${slug}.md` })],
     ...rest,
   };
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome });
@@ -109,9 +96,7 @@ test('serializeLearning round-trips a parsed learning byte-for-byte, in canonica
   };
   const content = serializeLearning(fm, 'Some body text.');
 
-  // Canonical field order: schema, trigger, status, source, episodes,
-  // anchors, superseded_by, last_confirmed, merged_from?, promoted_to?, origin.
-  const order = ['schema:', 'trigger:', 'status:', 'source:', 'episodes:', 'anchors:', 'superseded_by:', 'last_confirmed:', 'promoted_to:', 'origin:'];
+    const order = ['schema:', 'trigger:', 'status:', 'source:', 'episodes:', 'anchors:', 'superseded_by:', 'last_confirmed:', 'promoted_to:', 'origin:'];
   let cursor = -1;
   for (const key of order) {
     const idx = content.indexOf(key);
@@ -141,9 +126,7 @@ test('serializeLearning omits promoted_to when absent — the field 5 concept st
 });
 
 test('serializeLearning drops a pathless episode entry and defaults a kindless one to fix — never emits literal "undefined"', () => {
-  // Unit-level: a bare malformed fm.episodes array, the shape a hand-edited
-  // file with an incomplete episode entry parses into.
-  const fm = {
+    const fm = {
     trigger: 't',
     status: 'active',
     source: 'auto',
@@ -169,10 +152,7 @@ test('absorbHandEdits: a hand-edited learning with an incomplete episode entry r
   const file = path.join(dir, 'learnings', 'sql', 'not-null-hot-tables.md');
   const { fm, body } = parseLearningFrontmatter(fs.readFileSync(file, 'utf8'));
 
-  // Simulate a human hand-editing the episodes block directly in a text
-  // editor: one entry missing `kind`, one missing `path` entirely —
-  // malformed shapes the sole writer never itself emits.
-  const malformedEpisodes =
+    const malformedEpisodes =
     `  - path: docs/solutions/perf/kindless.md\n` +
     `    sha256: "${'b'.repeat(64)}"\n` +
     `    plan: docs/plans/p2.md\n` +
@@ -210,26 +190,13 @@ test('absorbHandEdits: a hand-edited learning with an incomplete episode entry r
   assert.doesNotMatch(after, new RegExp('c'.repeat(64)), 'the pathless episode is dropped entirely');
 });
 
-// renderLearning (apply.mjs) is the SECOND writer of a learning file —
-// serializeLearning's guard alone doesn't cover it. STRENGTHEN reads the
-// on-disk episodes, merges in new ones, and re-renders through
-// renderLearning — a pre-existing pathless episode already sitting on disk
-// (a stale pre-fix record, or an old hand edit) must not resurrect a literal
-// `path: undefined` on that re-render. The malformed record is COMMITTED
-// (not left as a dirty working-tree edit) so applyOps' own hand-edit absorb
-// step — which already runs serializeLearning and would otherwise mask this
-// exact bug by cleaning the record before STRENGTHEN ever sees it — is a
-// no-op here (clean tree, nothing to absorb), isolating renderLearning's own
-// guard as the only thing standing between this input and "undefined".
 test('a STRENGTHEN re-render (renderLearning) drops a pre-existing pathless episode and never emits literal "undefined"', () => {
   const c = ctx();
   const id = seedLearning(c);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const file = path.join(dir, 'learnings', 'sql', 'not-null-hot-tables.md');
 
-  // A pre-existing malformed record, committed directly (not a dirty hand
-  // edit) — alongside the original valid episode seedLearning wrote.
-  const rewritten = `---
+    const rewritten = `---
 schema: 1
 trigger: "adding NOT NULL columns to hot tables"
 status: provisional
@@ -294,11 +261,7 @@ test('a hand-edited learning body is absorbed as human authority with a human-te
   const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
   assert.ok(dirty.length > 0, 'precondition: hand edit leaves the store tree dirty');
 
-  // "dispute" (not "confirm"): confirm only re-stamps last_confirmed to
-  // today, which — run the same day the learning was created — can be a
-  // byte-identical no-op write with nothing for git to commit. dispute
-  // always flips `status` away from 'active', guaranteeing a real commit.
-  const disputed = run(c, ['learning', 'dispute', learningId, '--reason', 'needs re-verification']);
+    const disputed = run(c, ['learning', 'dispute', learningId, '--reason', 'needs re-verification']);
   assert.equal(disputed.status, 0, disputed.stderr || disputed.stdout);
 
   const log = gitLog(dir);
@@ -328,9 +291,7 @@ test('a hand-edited learning body is absorbed as human authority with a human-te
     'the ledger links the snapshot to the learning id'
   );
 
-  // Re-derivability: a full store rebuild wipes the ledger's consumed marker,
-  // so the snapshot episode re-enters debt exactly like any other episode.
-  const rebuilt = run(c, ['consolidate', '--rebuild', '--yes']);
+    const rebuilt = run(c, ['consolidate', '--rebuild', '--yes']);
   assert.equal(rebuilt.status, 0, rebuilt.stderr || rebuilt.stdout);
   const status = JSON.parse(run(c, ['consolidate', '--status']).stdout);
   assert.ok(
@@ -379,12 +340,7 @@ test('a hand edit survives a genuine POST-LOCK mid-mutation throw (git reset --h
   const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
   assert.ok(dirty.length > 0, 'precondition: dirty tree before the failing apply');
 
-  // Mirror consolidate-apply.test.mjs's mid-apply-throw fixture: a regular
-  // FILE named exactly like the directory this op's write needs, so the
-  // write-phase mkdir throws AFTER the lock is acquired — past the compose
-  // phase's own validation, deep inside the mutation try/catch that runs
-  // `git reset --hard` + `git clean -fd` on failure.
-  fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'learnings', 'poisoned-domain'), 'blocks mkdir for this domain\n');
   const poisonedOp = {
     op: 'ADD',
@@ -399,10 +355,7 @@ test('a hand edit survives a genuine POST-LOCK mid-mutation throw (git reset --h
   assert.equal(res.committed, false);
   assert.equal(res.rejected?.[0]?.code, 'E_APPLY_FAILED', 'a genuine post-lock throw, not a validation rejection');
 
-  // The reset target IS the absorb commit (the tree was already clean and
-  // committed by the time the write phase acquired the lock), so the hand
-  // edit is untouched by the rollback.
-  const log = gitLog(dir);
+    const log = gitLog(dir);
   assert.match(log[log.length - 1], new RegExp(`human edit: ${learningId.replace('/', '\\/')}$`), 'HEAD sits at the absorb commit — no dangling or reverted state');
 
   const after = listLearnings(dir).find((l) => l.id === learningId);
@@ -538,13 +491,6 @@ test('a secret-shaped hand edit still absorbs (source: human) but skips the snap
   assert.ok(!files.some((f) => f.includes('hand-edit')), 'no snapshot file was written for the secret hit');
 });
 
-// Milestone 4 Task 5 item 4: absorbHandEdits already accepted a `log` option
-// (the test above calls it directly) — the gap was that every CLI mutation
-// entry point that ALSO calls absorbHandEdits (applyOps, setLearningStatus,
-// purgeEpisode, purgeAll, rebuildStore) silently defaulted it to a no-op
-// instead of threading through the real cmd-handler logger. Proven end-to-end
-// through the actual CLI surface (`harness learning confirm`), not just the
-// direct lib call above.
 test('a secret-skip during absorb triggered via `harness learning confirm` surfaces the warning line in CLI output', () => {
   const c = ctx();
   const learningId = seedLearning(c);
@@ -564,12 +510,6 @@ test('a secret-skip during absorb triggered via `harness learning confirm` surfa
   );
 });
 
-// A learning file PLANTED in the store (never tracked) is live, retrievable
-// content the moment it lands — listLearnings reads the tree, not the index —
-// yet it used to be skipped here as "untracked/other" and then swept wholesale
-// into store history by the next transaction's own `git add -A`, unvalidated,
-// unscanned, and with whatever provenance its author typed. It is a hand edit
-// like any other, and absorbs through the same validating path.
 function plantLearning(file, { trigger, body, source = 'auto' }) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(
@@ -584,10 +524,7 @@ test('a PLANTED untracked learning file absorbs as a hand edit — golden and bu
   seedLearning(c);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
 
-  // A brand-new domain directory: `git status --porcelain` at its default
-  // untracked granularity reports only the collapsed `learnings/planted/`
-  // entry, which matches no learning path shape at all.
-  const goldenFile = path.join(dir, 'learnings', 'planted', 'golden-claim.md');
+    const goldenFile = path.join(dir, 'learnings', 'planted', 'golden-claim.md');
   plantLearning(goldenFile, { trigger: 'planted golden trigger', body: 'Planted golden claim body.' });
 
   const bucketDir = ensureBucket(dir, { key: 'planted-bucket', branch: 'feature/planted', baseSha: null });
@@ -612,13 +549,6 @@ test('a PLANTED untracked learning file absorbs as a hand edit — golden and bu
   assert.equal(spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout.trim(), '');
 });
 
-// A SYMLINK planted at a learning path is not a learning — it is a redirect.
-// Absorbing untracked learning files brought a bare `fs.readFileSync` +
-// `fs.writeFileSync` pair to a path derived straight from `git status`, so a
-// planted symlink was followed BOTH ways: the read pulled an arbitrary outside
-// file's content into the store's absorb pipeline, and the canonical rewrite
-// overwrote that outside file with a serialized learning. Refused on both
-// halves, through fs-safe.mjs, for golden and bucket paths alike.
 test('a planted SYMLINK at a learning path is refused, never followed — the outside target is untouched (golden and bucket)', () => {
   const c = ctx();
   const seeded = seedLearning(c);
@@ -644,19 +574,12 @@ test('a planted SYMLINK at a learning path is refused, never followed — the ou
   assert.deepEqual(result.absorbed.map((a) => a.id), [], 'a symlink at a learning path is never absorbed as a learning');
   assert.equal(logged.filter((m) => /symlink/i.test(m)).length, 2, 'both refusals are reported, not silently skipped');
 
-  // A full store transaction (which runs absorb first, as every mutation entry
-  // point does) must not follow them either.
-  const tx = setLearningStatus({ workspace: c.ws, id: seeded, action: 'confirm', reason: 'unrelated', home: c.harnessHome });
+    const tx = setLearningStatus({ workspace: c.ws, id: seeded, action: 'confirm', reason: 'unrelated', home: c.harnessHome });
   assert.equal(tx.pass, true, tx.blockedReason);
 
   assert.equal(fs.readFileSync(goldenVictim, 'utf8'), original, 'the golden symlink target is byte-identical');
   assert.equal(fs.readFileSync(bucketVictim, 'utf8'), original, 'the bucket symlink target is byte-identical');
-  // REFUSED **AND** MADE INERT. The link itself is moved out of `learnings/`
-  // into the gitignored `<store>/.quarantine/` — leaving it live at a learning
-  // path is what let the previous round's "refused in absorb" fix still end in
-  // a truncated outside file, because every OTHER reader/writer still met a
-  // live symlink there.
-  assert.equal(fs.existsSync(goldenLink), false, 'the planted golden symlink no longer sits at a learning path');
+    assert.equal(fs.existsSync(goldenLink), false, 'the planted golden symlink no longer sits at a learning path');
   assert.equal(fs.existsSync(bucketLink), false, 'nor does the bucket one');
   const quarantined = fs.readdirSync(path.join(dir, QUARANTINE_DIR));
   assert.equal(quarantined.length, 2, `both links are quarantined: ${quarantined.join(', ')}`);
@@ -691,17 +614,12 @@ test('a REJECTED apply never launders a planted untracked learning file into sto
   const rel = 'learnings/planted/smuggled.md';
   plantLearning(path.join(dir, rel), { trigger: 'smuggled trigger', body: 'Smuggled claim body.' });
 
-  // An op set that is rejected outright — the run applies nothing, but its
-  // transaction still finalizes with `git add -A`.
-  const bad = ADD_WITH_BAD_EPISODE(c.ws);
+    const bad = ADD_WITH_BAD_EPISODE(c.ws);
   const res = applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [bad]), home: c.harnessHome });
   assert.equal(res.exitCode, 1, JSON.stringify(res));
   assert.deepEqual(res.applied, []);
 
-  // The planted file IS in history — but only as a validated, provenance-
-  // stamped hand edit, never as a silent passenger on the rejected run's own
-  // commit.
-  const introducing = spawnSync('git', ['log', '--format=%s', '--diff-filter=A', '--', rel], { cwd: dir, encoding: 'utf8' })
+    const introducing = spawnSync('git', ['log', '--format=%s', '--diff-filter=A', '--', rel], { cwd: dir, encoding: 'utf8' })
     .stdout.trim()
     .split('\n')
     .filter(Boolean);
@@ -711,8 +629,6 @@ test('a REJECTED apply never launders a planted untracked learning file into sto
   assert.equal(fm.episodes.length, 1);
 });
 
-// An ADD whose episode sha256 does not match the file on disk: rejected by
-// verifyAdmittedEpisodeKinds (apply.mjs) before anything is written.
 function ADD_WITH_BAD_EPISODE(ws) {
   return {
     op: 'ADD',
@@ -773,16 +689,12 @@ test('an ADD → hand-edit → absorb → STRENGTHEN cycle keeps the absorbed st
   const learning = listLearnings(dir).find((l) => l.id === learningId);
   handEditBody(learning.file, 'A human edited this claim directly on disk during the cycle test.');
 
-  // Trigger absorb on its own first (any mutation entry point does this —
-  // calling the exported primitive directly keeps this step unambiguous).
-  const firstAbsorb = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
+    const firstAbsorb = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
   assert.equal(firstAbsorb.absorbed.length, 1);
   assert.equal(firstAbsorb.absorbed[0].id, learningId);
   assert.equal(firstAbsorb.committed, true);
 
-  // STRENGTHEN the same id with a new fix episode — a separate mutation on
-  // top of the already-absorbed state.
-  const strengthenOp = {
+    const strengthenOp = {
     op: 'STRENGTHEN',
     target: learningId,
     episodes: [EP(c.ws, { path: 'docs/solutions/perf/new-fix.md' })],
@@ -805,65 +717,38 @@ test('an ADD → hand-edit → absorb → STRENGTHEN cycle keeps the absorbed st
   const origEpisode = after.fm.episodes.find((e) => e.path === 'docs/solutions/perf/orig.md');
   assert.ok(origEpisode, 'the original ADD episode is still present — STRENGTHEN merges, never replaces');
 
-  // A second absorb pass on the now-clean tree (STRENGTHEN's own applyOps
-  // call already committed everything) commits nothing.
-  const before = gitLog(dir).length;
+    const before = gitLog(dir).length;
   const secondAbsorb = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
   assert.deepEqual(secondAbsorb, { absorbed: [], deleted: [], committed: false });
   assert.equal(gitLog(dir).length, before, 'no commit from the second, clean-tree absorb pass');
 });
 
-// P2 (git-status fail-closed): a `git status --porcelain` spawn error / non-zero
-// exit used to coerce to an empty string — read as "tree is clean" — so a later
-// transaction rollback could destroy an unabsorbed hand edit the function never
-// saw. It must instead surface a failure-shaped result (ok:false) so
-// absorbOrAbort fails CLOSED (StoreTransactionAbort → the transaction aborts
-// WITHOUT a rollback over the unprotected edit).
 test('P2: a git status failure makes absorbHandEdits fail closed (ok:false), not report a clean tree', () => {
   const c = ctx();
   seedLearning(c);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
 
-  // Break the repo so `git status` exits non-zero while a `.git` entry still
-  // exists (the existsSync guard passes) — a garbage `.git` gitfile stands in
-  // for a corrupt repo / spawn failure without touching any store content.
-  fs.rmSync(path.join(dir, '.git'), { recursive: true, force: true });
+    fs.rmSync(path.join(dir, '.git'), { recursive: true, force: true });
   fs.writeFileSync(path.join(dir, '.git'), 'not a valid gitfile\n');
 
   const result = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
   assert.equal(result.ok, false, 'a git status failure must be a failure, never a silent clean tree');
   assert.match(result.stderr, /git status failed/);
 
-  // absorbOrAbort turns that failure-shape into a StoreTransactionAbort — the
-  // signal withStoreTransaction uses to skip the rollback and preserve the
-  // (unabsorbed) working-tree edit rather than destroy it.
-  assert.throws(
+    assert.throws(
     () => absorbOrAbort({ workspace: c.ws, home: c.harnessHome }),
     (err) => err instanceof StoreTransactionAbort && /git status failed/.test(err.message),
     'absorbOrAbort must fail closed on a git status failure'
   );
 });
 
-// A REFUSED EVIDENCE APPEND MUST ABORT THE ABSORB, NOT FALL THROUGH (review
-// finding). `appendLedger`/`appendGovernance` fail closed by throwing, but a
-// PLAIN Error thrown from absorbHandEdits lands in every transaction adopter's
-// `catch (err) { if (err instanceof StoreTransactionAbort) throw err; }` —
-// which swallows it as a best-effort absorb hiccup. The learning file has
-// already been rewritten by then, so the adopter went on to finalize and commit
-// hand-rewritten content with NO ledger line citing its teaching snapshot.
 test('a refused ledger append aborts the absorb instead of committing evidence-free content', () => {
   const c = ctx();
   seedLearning(c);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   handEditBody(path.join(dir, 'learnings', 'sql', 'not-null-hot-tables.md'), 'Hand-rewritten claim body.');
 
-  // Poison the ledger path with a DIRECTORY: appendFileContained's
-  // O_APPEND|O_CREAT|O_NOFOLLOW open then fails (EISDIR), which is exactly the
-  // refusal appendLedger raises. (Not a symlink — a symlinked LEAF is
-  // quarantined and rewritten fresh, so it never refuses.) `consolidated.jsonl`
-  // is not a learning path, so LEARNING_FILE_RE skips it and the absorb still
-  // reaches the append.
-  fs.rmSync(path.join(dir, 'consolidated.jsonl'), { force: true });
+    fs.rmSync(path.join(dir, 'consolidated.jsonl'), { force: true });
   fs.mkdirSync(path.join(dir, 'consolidated.jsonl'));
 
   const commitsBefore = gitLog(dir).length;

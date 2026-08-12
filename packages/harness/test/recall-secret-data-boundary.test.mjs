@@ -10,37 +10,11 @@ import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
 import { buildContextPack } from '../lib/context-pack.mjs';
 import { ensureStore, storeDir, serializeLearning } from '../lib/knowledge/store.mjs';
 
-/**
- * Data-boundary secret redaction for retrieved memory.
- *
- * Two reproduced leaks the render-boundary-only fix left open:
- *   1. `path` and `docid` were never redacted — a manifest entry with a
- *      credential in its path (e.g. `s3://user:AKIA…@host/x.md`) or its id
- *      rendered the secret verbatim in `.harness/context-pack.md` and
- *      `harness recall`.
- *   2. `harness orient --json` emitted `title`/`summary`/`snippet` un-redacted
- *      because redaction lived at the render boundary, while the JSON sibling
- *      serializes the raw recall array.
- *
- * The fix redacts at the DATA boundary (where the recall objects are built),
- * so BOTH the pack render AND every `--json` emit carry redacted fields.
- *
- * Third leak, same trust class, one section higher in the SAME pack: the
- * `## Learnings (memory)` bullets rendered `inertLine(trigger) → inertLine(claim)`
- * with NO redactSecrets, while the `## Recall` bullets right below them used
- * `inertLine(redactSecrets(...))`. Learning content is hand-editable and human
- * authority deliberately overrides the secret screen for hand edits
- * (hand-edits.test.mjs), so a matching query surfaced the stored key verbatim.
- */
-
 const AWS = 'AKIAIOSFODNN7EXAMPLE'; // canonical \bAKIA[0-9A-Z]{16}\b shape
 const CONN = 's3://user:AKIAIOSFODNN7EXAMPLE@host'; // \w+://[^:@/]+:[^@/]+@… shape
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
-// A manifest whose LEAK entry carries a secret in every untrusted field, plus a
-// CLEAN sibling with an ordinary path/docid to prove no false-positive damage.
-// Both match the query ("orders timeout") so both land in recall.
 function seedHome() {
   const home = tmp('recall-secret-home-');
   const kdir = path.join(home, 'knowledge');
@@ -110,9 +84,7 @@ test('runOrient redacts every untrusted recall field in BOTH the written pack an
     query: 'orders timeout',
   });
 
-  // FAIL-BEFORE: orient built its recall array with NO redaction, so the raw
-  // secret reached both the pack and the --json emit.
-  assertNoRawSecret(JSON.stringify(result), 'harness orient --json');
+    assertNoRawSecret(JSON.stringify(result), 'harness orient --json');
 
   const pack = fs.readFileSync(path.join(workspace, result.contextPack), 'utf8');
   assertNoRawSecret(pack, '.harness/context-pack.md');

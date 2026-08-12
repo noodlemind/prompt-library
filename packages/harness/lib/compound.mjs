@@ -13,10 +13,6 @@ import { readStoreConfig } from './knowledge/store.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { assertNoSymlinkAncestors, realpathParentContained } from './fs-safe.mjs';
 
-// Byte-exact snapshot/restore of a single retrieval-state file, used to roll
-// back the manifest + postings when indexing throws mid-write. Read as a raw
-// Buffer so bytes round-trip verbatim; null means "was absent" → restore
-// deletes it.
 function snapshotFile(p) {
   try {
     return fs.readFileSync(p);
@@ -33,10 +29,6 @@ function restoreFile(p, snap) {
   }
 }
 
-// Verify a rollback postcondition (P2): after restoreFile, does the file on
-// disk actually match the snapshot again? A null snapshot means "was absent",
-// so the file must be gone; a Buffer snapshot means the bytes must round-trip.
-// Never throws — an unreadable/racing file just reports "not restored".
 function snapshotRestored(p, snap) {
   try {
     if (snap === null) return !fs.existsSync(p);
@@ -46,46 +38,19 @@ function snapshotRestored(p, snap) {
   }
 }
 
-/**
- * Atomically reserve a unique episode filename and write it (P1#1). The prior
- * check-then-write loop (`existsSync` to pick a suffix, THEN write) let two
- * concurrent `compound --insight` / `remember` commands both observe the same
- * suffix as free and both write it — one silently overwriting the other, since
- * episodes land in the WORKSPACE (docs/solutions), OUTSIDE the store lock.
- * Here each suffix is claimed with an EXCLUSIVE create (`writeFileSync` flag
- * `'wx'` = O_CREAT|O_EXCL): whichever process loses the race gets EEXIST and
- * moves to the next suffix, so two processes can never both claim one name.
- * Containment is re-validated (assertNoSymlinkAncestors, the same fs-safe
- * guard writeFileContained uses) BEFORE every exclusive create, and O_EXCL
- * itself refuses to follow a pre-planted symlink at the leaf. Returns
- * `{ ok: true, rel }` on success, or `{ ok: false, error? }` when containment
- * fails (no error) or the write fails for a non-EEXIST reason (error set).
- */
 function reserveEpisodePath(workspace, dirRel, base, doc) {
   const dirFull = assertNoSymlinkAncestors(workspace, dirRel);
   if (!dirFull) return { ok: false };
   fs.mkdirSync(dirFull, { recursive: true });
   let candidate = `${base}.md`;
   let n = 2;
-  // Bounded so a pathological filesystem that repeats EEXIST forever can never
-  // wedge the process — 100k same-title captures in one day is not a real case.
-  for (let attempt = 0; attempt < 100000; attempt++) {
+    for (let attempt = 0; attempt < 100000; attempt++) {
     const rel = path.join(dirRel, candidate);
     const full = assertNoSymlinkAncestors(workspace, rel);
     if (!full) return { ok: false };
     try {
-      // Exclusively create the leaf EMPTY first (O_CREAT|O_EXCL via 'wx'): the
-      // race loser still gets EEXIST, and O_EXCL still refuses a pre-planted
-      // symlink at the leaf — but no content byte lands until the verify below
-      // passes, so an ancestor-swap race can only ever expose a zero-byte file.
-      const fd = fs.openSync(full, 'wx');
-      // Post-create containment verify (symmetry with writeFileContained's
-      // canonicalize-after-acquire step 3): the pre-create ancestor walk and the
-      // O_EXCL leaf create are both scan-time, so an ancestor swapped for a
-      // symlink AFTER the walk could make this leaf land OUTSIDE the workspace.
-      // realpath the created (still EMPTY) file's parent; on an escape, close,
-      // unlink, and refuse so no content is ever published outside the workspace.
-      if (!realpathParentContained(workspace, full)) {
+            const fd = fs.openSync(full, 'wx');
+            if (!realpathParentContained(workspace, full)) {
         try {
           fs.closeSync(fd);
         } catch {
@@ -157,8 +122,17 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       nextTools: ['harness knowledge on'],
     };
   }
-  const body = flags.body || (flags.bodyFile ? fs.readFileSync(path.resolve(flags.bodyFile), 'utf8') : '');
-  if (!flags.title || !body.trim()) {
+  // The one-liner form is the contract the approved TUI mock shows in its own
+  // composer example: `compound --insight "windows taskkill needs its own
+  // probe"`. When the insight text is all there is, it IS the title and the
+  // body — demanding both separately for a one-sentence observation turned a
+  // capture affordance into a form.
+  const insightText = typeof flags.insight === 'string' ? flags.insight.trim() : '';
+  const title = flags.title || (insightText.length > 3 ? insightText.slice(0, 96) : '');
+  const body = flags.body
+    || (flags.bodyFile ? fs.readFileSync(path.resolve(flags.bodyFile), 'utf8') : '')
+    || (flags.title ? '' : insightText);
+  if (!title || !body.trim()) {
     return {
       pass: false,
       exitCode: 2,
@@ -179,7 +153,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
         .filter(Boolean)
         .join(',')
     : '';
-  const fmLines = [`title: ${yamlQuote(flags.title)}`, `kind: ${kind}`, `date: ${date}`];
+  const fmLines = [`title: ${yamlQuote(title)}`, `kind: ${kind}`, `date: ${date}`];
   if (tags) fmLines.push(`tags: ${tags}`);
   if (flags.trigger) fmLines.push(`trigger: ${yamlQuote(flags.trigger)}`);
   if (flags.claim) fmLines.push(`claim: ${yamlQuote(flags.claim)}`);
@@ -212,7 +186,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   }
   // Never silently overwrite an earlier capture: same-day same-title collisions
   // get a deterministic numeric suffix.
-  const base = `${date}-${slugify(flags.title)}`;
+  const base = `${date}-${slugify(title)}`;
   const dirRel = path.join('docs', 'solutions', category);
   // Physical containment (sweep-completeness finding, probe C): this is the
   // PRIMARY episode write path for both `harness compound --insight` and

@@ -1,98 +1,78 @@
-/**
- * The composer — a bordered, multiline editor that lives in the terminal's
- * MAIN buffer (P4bAC10, P4bAC11, P4bAC16).
- *
- * WHY IT IS A STATE MACHINE. The phase-4b reopening found nine green
- * acceptance criteria sitting beside a TUI that did not exist: the tests drove
- * the loop through injected streams, which have no `isTTY`, so the terminal —
- * the entire product — was on the far side of the test seam. Everything with
- * logic in it therefore lives here, where a keypress goes in and state plus
- * rendered lines come out, and no terminal is needed to prove any of it.
- * `tui-cmd.mjs` binds real keypress events and repaints; that binding is small
- * enough to read in one sitting, which is the most a pty-less suite can ask.
- *
- * WHY A BOX AT ALL, given the Session Ledger direction. "Main-buffer scrolling
- * transcript" was previously read as licence to ship a bare readline. It is not:
- * Amp, Pi, opencode, Grok and Claude Code are all main-buffer transcripts, and
- * every one draws a bordered composer with a status line. The transcript scrolls
- * above; the composer is a fixed block at the bottom that repaints in place. The
- * two ideas were never in tension — see `render` and `height`, which exist so
- * the caller knows exactly how many lines to clear.
- */
+import { displayWidth, graphemes, wrapCells, cellOffset } from './width.mjs';
 
-const UNICODE = {
-  topLeft: '╭', topRight: '╮', bottomLeft: '╰', bottomRight: '╯',
-  horizontal: '─', vertical: '│', caret: '❯',
-};
-const ASCII = {
-  topLeft: '+', topRight: '+', bottomLeft: '+', bottomRight: '+',
-  horizontal: '-', vertical: '|', caret: '>',
-};
+const UNICODE = { rule: '─', caret: '❯' };
+const ASCII = { rule: '-', caret: '>' };
 
 export const DEFAULT_HISTORY_LIMIT = 200;
 
+/** Gate state → the token the hairlines are painted in. Unknown gate reads as
+ * muted rather than green: an unverified gate is not a passing one. */
+const GATE_TOKEN = {
+  pass: 'ok',
+  ok: 'ok',
+  blocked: 'warn',
+  failed: 'error',
+  expired: 'warn',
+};
+
 /** A control character is a key press, never text. Inserting one is how a raw
- * escape sequence used to end up in the dispatched line. */
-const isPrintable = (ch) => typeof ch === 'string' && ch.length === 1 && ch >= ' ' && ch !== '';
-
-const visibleWidth = (text) => [...String(text).replace(/\[[0-9;]*m/g, '')].length;
-
-/**
- * Break one logical line into rows that fit inside the border.
- *
- * A line wider than the terminal used to push the right-hand border off screen,
- * which makes the box look broken precisely when someone is typing something
- * long. Wrapping is by display cell, not by character index, so the arithmetic
- * matches what the terminal actually does.
- */
-function wrap(line, width) {
-  if (width <= 0) return [''];
-  const chars = [...line];
-  if (!chars.length) return [''];
-  const rows = [];
-  for (let i = 0; i < chars.length; i += width) rows.push(chars.slice(i, i + width).join(''));
-  return rows;
-}
+ * escape sequence used to end up in the dispatched command. */
+const isPrintable = (ch) => typeof ch === 'string' && ch.length >= 1 && ch >= ' ' && ch !== '\x7f';
 
 export function createComposer({
   width = 80,
   ascii = false,
   history = [],
   historyLimit = DEFAULT_HISTORY_LIMIT,
-  label = '',
   hint = '',
+  gate = null,
   paint = (_token, text) => text,
+    paletteChord = 'ctrl+p',
+
+  classify = null,
 } = {}) {
   const glyphs = ascii ? ASCII : UNICODE;
-  let lines = [''];
+    let lines = [[]];
   let row = 0;
   let col = 0;
   const past = [...history];
-  // `null` means "editing a fresh line"; an index means "showing history", and
-  // `draft` is what to restore on the way back down.
   let historyIndex = null;
   let draft = null;
+  let completion = null;
+  /** Right-embedded label on the top rule — mode and posture, the way Claude
+   * Code carries the session title in its hairline and Amp carries the mode in
+   * its border. A rule is a row already being spent; the label rides free. */
+  let ruleLabel = '';
 
+  let bashMode = false;
+
+  // Leading middot avoids the caret glyph colliding with the first letter of
+  // "ask" in some terminals (read as a broken box + "sk, or run…").
+  const DEFAULT_PLACEHOLDER = '· ask or run a command · / palette';
+  let placeholder = DEFAULT_PLACEHOLDER;
+
+  const asText = (clusters) => clusters.join('');
   const clampCursor = () => {
     row = Math.max(0, Math.min(row, lines.length - 1));
     col = Math.max(0, Math.min(col, lines[row].length));
   };
   const setValue = (text) => {
-    lines = String(text).split('\n');
+    lines = String(text).split('\n').map((l) => graphemes(l));
+    if (!lines.length) lines = [[]];
     row = lines.length - 1;
     col = lines[row].length;
   };
   const insert = (text) => {
-    const line = lines[row];
-    lines[row] = line.slice(0, col) + text + line.slice(col);
-    col += text.length;
+    const clusters = graphemes(text);
+    lines[row].splice(col, 0, ...clusters);
+    col += clusters.length;
     historyIndex = null;
   };
 
-  /** The value as dispatched: rows joined by a space, because a multiline entry
-   * is one command typed across several rows, not several commands. */
-  const currentValue = () => lines.join('\n');
-  const dispatchValue = () => lines.map((l) => l.replace(/\\$/, '').trim()).filter(Boolean).join(' ');
+  const currentValue = () => lines.map(asText).join('\n');
+  /** As dispatched: rows joined by a space, because a multiline entry is one
+   * command typed across several rows, not several commands. */
+  const dispatchValue = () => lines.map((l) => asText(l).replace(/\\$/, '').trim()).filter(Boolean).join(' ');
 
   function recallHistory(direction) {
     if (!past.length) return false;
@@ -113,32 +93,55 @@ export function createComposer({
 
   function submit() {
     const value = dispatchValue();
-    lines = ['']; row = 0; col = 0; historyIndex = null; draft = null;
+    lines = [[]]; row = 0; col = 0; historyIndex = null; draft = null; completion = null;
     if (!value) return { changed: true };
     past.push(value);
     while (past.length > historyLimit) past.shift();
-    return { submitted: value, changed: true };
+        return { submitted: value, bash: bashMode, changed: true };
   }
 
-  /**
-   * One key press.
-   *
-   * Returns `{ submitted?, intent?, changed }`. `intent` is for the things the
-   * composer recognises but does not own — opening the palette, cancelling a
-   * running command, closing the session — so the loop keeps those decisions.
-   */
+  function activeReference() {
+    const clusters = lines[row];
+        if (col === 0) return null;
+    let start = col - 1;
+    while (start >= 0 && !/\s/.test(clusters[start])) start -= 1;
+    start += 1;
+    if (clusters[start] !== '@') return null;
+    return { start, end: col, prefix: clusters.slice(start + 1, col).join('') };
+  }
+
+  /** Replace the active `@` token with a chosen path. */
+  function applyCompletion(pathText) {
+    const ref = activeReference();
+    if (!ref) return false;
+    const replacement = graphemes(`@${pathText}`);
+    lines[row].splice(ref.start, ref.end - ref.start, ...replacement);
+    col = ref.start + replacement.length;
+    completion = null;
+    return true;
+  }
+
+  const matchesPaletteChord = (name, ctrl, meta) => {
+    if (paletteChord === 'ctrl+p') return ctrl && name === 'p';
+    if (paletteChord === 'ctrl+k') return ctrl && name === 'k';
+    if (paletteChord === 'ctrl+space') return ctrl && name === 'space';
+    return ctrl && name === 'p';
+  };
+
   function handleKey(str, key = {}) {
     const name = key.name;
     const ctrl = Boolean(key.ctrl);
     const meta = Boolean(key.meta);
+    const shift = Boolean(key.shift);
 
-    // Chords first: a chord that fell through to the printable branch would
-    // type a character instead of opening what it names.
-    if (ctrl && name === 'p') return { intent: 'palette', changed: false };
+        if (matchesPaletteChord(name, ctrl, meta)) return { intent: 'palette', changed: false };
     if (meta && name === 'k') return { intent: 'palette', changed: false };
+    // The mock's chord, honoured only with an empty line — see `paletteChord`.
+    if (ctrl && name === 'k' && !dispatchValue()) return { intent: 'palette', changed: false };
+        if (ctrl && name === 'up') return { intent: 'navigate', changed: false };
     if (ctrl && name === 'c') {
       const had = Boolean(dispatchValue());
-      lines = ['']; row = 0; col = 0; historyIndex = null;
+      lines = [[]]; row = 0; col = 0; historyIndex = null; completion = null;
       return { intent: 'cancel', hadInput: had, changed: true };
     }
     if (ctrl && name === 'd') {
@@ -149,13 +152,43 @@ export function createComposer({
     if (ctrl && name === 'e') { col = lines[row].length; return { changed: true }; }
     if (ctrl && name === 'u') { lines[row] = lines[row].slice(col); col = 0; return { changed: true }; }
     if (ctrl && name === 'k') { lines[row] = lines[row].slice(0, col); return { changed: true }; }
+    if (ctrl && name === 'o') return { intent: 'fold', changed: false };
+        if (ctrl && name === 'l') return { intent: 'clear', changed: false };
+    if (ctrl && name === 'j') {
+      const rest = lines[row].slice(col);
+      lines[row] = lines[row].slice(0, col);
+      lines.splice(row + 1, 0, rest);
+      row += 1; col = 0;
+      return { changed: true };
+    }
+
+    if (name === 'escape' && bashMode) {
+      bashMode = false;
+      return { intent: 'bash-mode', changed: true };
+    }
+
+    if (name === 'escape') {
+            return { intent: 'escape', changed: false };
+    }
+
+        if (completion?.items?.length) {
+      if (name === 'up') { completion.index = (completion.index - 1 + completion.items.length) % completion.items.length; return { changed: true }; }
+      if (name === 'down') { completion.index = (completion.index + 1) % completion.items.length; return { changed: true }; }
+      if (name === 'tab' || name === 'return' || name === 'enter') {
+        const chosen = completion.items[completion.index];
+        if (chosen && applyCompletion(chosen.path ?? chosen)) return { changed: true };
+      }
+    }
+        if (name === 'tab' && shift) return { intent: 'agent-mode', changed: false };
+    if (name === 'tab') {
+      const ref = activeReference();
+      if (ref) return { intent: 'complete', prefix: ref.prefix, changed: false };
+    }
 
     switch (name) {
       case 'return':
       case 'enter': {
-        // Shift/Alt-Enter and a trailing backslash both mean "keep going" —
-        // two spellings because terminals disagree about which they can send.
-        if (key.shift || meta || lines[row].endsWith('\\')) {
+                if (shift || meta || asText(lines[row]).endsWith('\\')) {
           const rest = lines[row].slice(col);
           lines[row] = lines[row].slice(0, col);
           lines.splice(row + 1, 0, rest);
@@ -165,12 +198,13 @@ export function createComposer({
         return submit();
       }
       case 'backspace':
-        if (col > 0) { lines[row] = lines[row].slice(0, col - 1) + lines[row].slice(col); col -= 1; }
-        else if (row > 0) { const merged = lines[row]; lines.splice(row, 1); row -= 1; col = lines[row].length; lines[row] += merged; }
+        if (col > 0) { lines[row].splice(col - 1, 1); col -= 1; }
+        else if (row > 0) { const merged = lines[row]; lines.splice(row, 1); row -= 1; col = lines[row].length; lines[row] = [...lines[row], ...merged]; }
+        completion = null;
         return { changed: true };
       case 'delete':
-        if (col < lines[row].length) lines[row] = lines[row].slice(0, col) + lines[row].slice(col + 1);
-        else if (row < lines.length - 1) { lines[row] += lines[row + 1]; lines.splice(row + 1, 1); }
+        if (col < lines[row].length) lines[row].splice(col, 1);
+        else if (row < lines.length - 1) { lines[row] = [...lines[row], ...lines[row + 1]]; lines.splice(row + 1, 1); }
         return { changed: true };
       case 'left':
         if (col > 0) col -= 1;
@@ -181,9 +215,7 @@ export function createComposer({
         else if (row < lines.length - 1) { row += 1; col = 0; }
         return { changed: true };
       case 'up':
-        // History only at the TOP edge: inside a multiline buffer, Up is
-        // cursor movement, and recalling instead would destroy what is typed.
-        if (row > 0) { row -= 1; clampCursor(); return { changed: true }; }
+                if (row > 0) { row -= 1; clampCursor(); return { changed: true }; }
         return { changed: recallHistory('back') };
       case 'down':
         if (row < lines.length - 1) { row += 1; clampCursor(); return { changed: true }; }
@@ -193,58 +225,129 @@ export function createComposer({
       default: break;
     }
 
-    if (!ctrl && !meta && isPrintable(str)) { insert(str); return { changed: true }; }
-    // Anything else — an unmapped escape, a stray control byte — is a key press
-    // the composer does not know, and a key press is never text.
-    return { changed: false };
+    if (!ctrl && !meta && isPrintable(str)) {
+            const atStartOfEmptyLine = row === 0 && col === 0 && lines.length === 1 && lines[0].length === 0;
+      if (str === '/' && atStartOfEmptyLine && !bashMode) {
+        return { intent: 'palette', changed: false };
+      }
+      // The sigil is consumed by the mode it opens, exactly as `/` is.
+      if (str === '!' && atStartOfEmptyLine && !bashMode) {
+        bashMode = true;
+        return { intent: 'bash-mode', changed: true };
+      }
+      insert(str);
+      completion = null;
+            const ref = activeReference();
+      if (ref) return { intent: 'complete', prefix: ref.prefix, changed: true };
+      return { changed: true };
+    }
+        return { changed: false };
   }
 
-  /** Every rendered row, border included. The caller clears exactly
-   * `height` lines before repainting, so this and `height` must agree. */
   function render() {
-    const inner = Math.max(1, width - 2);
-    // A leading space so the caret is not welded to the border.
-    const caret = ` ${glyphs.caret} `;
-    const rows = [];
-    lines.forEach((line, i) => {
-      const prefix = i === 0 ? caret : ' '.repeat(caret.length);
-      for (const [j, piece] of wrap(line, inner - caret.length).entries()) {
-        rows.push(`${j === 0 ? prefix : ' '.repeat(caret.length)}${piece}`);
-      }
+    const caret = `${glyphs.caret} `;
+    const caretCells = displayWidth(caret);
+    const inner = Math.max(8, width - caretCells);
+    const token = GATE_TOKEN[gate] ?? 'muted';
+    const rule = paint(token, glyphs.rule.repeat(Math.max(1, width)));
+        let topRule = rule;
+    if (ruleLabel) {
+      const tail = ` ${ruleLabel} `;
+      const lead = Math.max(1, width - displayWidth(tail) - 2);
+      topRule = paint(token, glyphs.rule.repeat(lead)) + paint('muted', tail) + paint(token, glyphs.rule.repeat(2));
+    }
+
+    const body = [];
+    const empty = lines.length === 1 && lines[0].length === 0;
+    // Always end caret with a space so the placeholder never sits under the glyph.
+    const caretOut = bashMode
+      ? paint('warn', '! ')
+      : paint('info', `${glyphs.caret} `);
+    if (empty) {
+      const ph = bashMode ? '· shell command · esc leaves bash' : placeholder;
+      body.push(`${caretOut}${paint('muted', ph)}`);
+    } else {
+      lines.forEach((clusters, i) => {
+        const text = asText(clusters);
+        const wrapped = wrapCells(text, inner);
+        wrapped.forEach((piece, j) => {
+          const prefix = i === 0 && j === 0 ? caretOut : ' '.repeat(caretCells);
+                    const shown = i === 0 && wrapped.length === 1 ? highlight(piece) : piece;
+          body.push(`${prefix}${shown}`);
+        });
+      });
+    }
+
+    const out = [topRule, ...body, rule];
+        if (completion?.items?.length) out.push(...renderCompletion());
+    if (hint) out.push(hint);
+    return out;
+  }
+
+  function highlight(text) {
+    if (bashMode) return text; // the shell owns this grammar, not the registry
+    if (!classify || !text) return text;
+        const sigil = /^(!!|!|@|\/)/.exec(text);
+    if (sigil) {
+      return `${paint('info', sigil[1])}${text.slice(sigil[1].length)}`;
+    }
+        const head = (text.trim().split(/\s+/)[0] || '');
+    let index = -1;
+    return text.replace(/\S+/g, (word) => {
+      index += 1;
+      const kind = classify(word, { first: index === 0, head });
+      if (kind === 'command' || kind === 'session') return paint('info', word);
+      if (kind === 'verb') return paint('ok', word);
+      if (kind === 'flag') return paint('warn', word);
+      return word;
     });
+  }
 
-    const title = label ? ` ${label} ` : '';
-    const tail = hint ? ` ${hint} ` : '';
-    const barLength = Math.max(0, width - 2 - visibleWidth(title) - visibleWidth(tail));
-    const left = Math.min(1, barLength);
-    const top = `${glyphs.topLeft}${glyphs.horizontal.repeat(left)}${paint('info', title)}${glyphs.horizontal.repeat(barLength - left)}${paint('muted', tail)}${glyphs.topRight}`;
-    const bottom = `${glyphs.bottomLeft}${glyphs.horizontal.repeat(Math.max(0, width - 2))}${glyphs.bottomRight}`;
-
-    return [
-      top,
-      ...rows.map((r) => `${glyphs.vertical}${r}${' '.repeat(Math.max(0, inner - visibleWidth(r)))}${glyphs.vertical}`),
-      bottom,
-    ];
+  /** The `@` list, drawn under the editor as an inline chooser rather than an
+   * overlay: it is a refinement of what is already being typed, so moving the
+   * eye somewhere else to pick would be the wrong gesture. */
+  function renderCompletion() {
+    const items = completion.items.slice(0, 6);
+    return items.map((item, i) => {
+      const path = item.path ?? item;
+      const chosen = i === completion.index;
+      const mark = chosen ? paint('info', ascii ? '>' : '❯') : ' ';
+      const note = item.kind ? paint('muted', ` · ${item.kind}`) : '';
+      return `${mark} ${chosen ? path : paint('muted', path)}${note}`;
+    });
   }
 
   return {
     handleKey,
     render,
     get value() { return currentValue(); },
-    get lines() { return [...lines]; },
+    get lines() { return lines.map(asText); },
     get height() { return render().length; },
     get history() { return [...past]; },
-    /** Where the terminal cursor belongs, relative to the block's first line. */
+    get reference() { return activeReference(); },
+    get completionOpen() { return Boolean(completion?.items?.length); },
+    /** Where the terminal cursor belongs, relative to the block's first line.
+     * Row 0 is the top rule, so the text starts at 1. */
     get cursor() {
-      const caretWidth = 3;
-      const inner = Math.max(1, width - 2) - caretWidth;
+      const caretCells = displayWidth(`${glyphs.caret} `);
+      const inner = Math.max(8, width - caretCells);
       let y = 1;
-      for (let i = 0; i < row; i += 1) y += wrap(lines[i], inner).length;
-      y += Math.floor(col / inner);
-      return { row: y, col: 1 + caretWidth + (col % inner) };
+      for (let i = 0; i < row; i += 1) y += wrapCells(asText(lines[i]), inner).length;
+      const cells = cellOffset(asText(lines[row]), col);
+      y += Math.floor(cells / inner);
+      return { row: y, col: caretCells + (cells % inner) };
     },
-    setWidth(next) { width = Math.max(8, next); },
-    setLabel(next) { label = next; },
+    setWidth(next) { width = Math.max(24, next); },
     setHint(next) { hint = next; },
+    setRuleLabel(next) { ruleLabel = String(next ?? ''); },
+    setPlaceholder(next) { placeholder = next == null ? DEFAULT_PLACEHOLDER : String(next); },
+    get bashMode() { return bashMode; },
+    setBashMode(on) { bashMode = Boolean(on); },
+    setGate(next) { gate = next; },
+    setCompletion(items) {
+      completion = items?.length ? { items, index: 0 } : null;
+    },
+    clearCompletion() { completion = null; },
+    setValue,
   };
 }

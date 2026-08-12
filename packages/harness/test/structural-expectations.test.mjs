@@ -1,12 +1,3 @@
-// Phase 4 — per-check severity (policy v2) and the advisory
-// `structural-expectations` verify check.
-//
-// FIXTURE DISCIPLINE: the baseline index under test is written by the REAL
-// builder (`buildStructuralIndex`) from the fixture workspace, so every
-// assertion here pins the contract against a shape the builder actually emits.
-// Hand-written index JSON is reserved for the reader's own malformed-input
-// tests below, where the point IS an off-contract file on disk.
-
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -248,11 +239,7 @@ function structuralWorkspace({ policy = null } = {}) {
   writeChecks(workspace, { 'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] } });
   if (policy) writePolicy(workspace, policy);
   const sha = commitAll(workspace, 'baseline');
-  // P3AC6: project policy loads only for a trusted project. These fixtures test
-  // POLICY behavior, so they approve themselves against their own isolated
-  // home — `withHome` points COPILOT_HOME there, so the developer's real
-  // ~/.copilot is never touched. `test/trust.test.mjs` owns the gate itself.
-  approveProject({ workspace, copilotHome: copilotHomeFor(home) });
+    approveProject({ workspace, copilotHome: copilotHomeFor(home) });
   return { workspace, home, plan, sha };
 }
 
@@ -264,9 +251,6 @@ function minimalPlan(impacted, fm = {}) {
   };
 }
 
-// P1.6: runVerify is async (lib/runner.mjs wiring), so the HARNESS_HOME
-// override must survive until the run RESOLVES — a sync try/finally would
-// restore the env the instant the promise was created, mid-run.
 /** The isolated Copilot home paired with a fixture's HARNESS_HOME. Derived
  * rather than passed so every existing `withHome(home, ...)` call keeps working
  * unchanged while trust still resolves inside the fixture. */
@@ -391,9 +375,7 @@ test('missing structural index reports skipped, never fails', () => {
 
 test('stale baseline (meta.sha not an ancestor of HEAD) warns and skips', async () => {
   const { workspace, home } = structuralWorkspace();
-  // A commit on a side branch is not an ancestor of the restored main HEAD —
-  // the index is built there, so meta.sha is genuinely off-history.
-  git(workspace, ['checkout', '-q', '-b', 'side']);
+    git(workspace, ['checkout', '-q', '-b', 'side']);
   fs.writeFileSync(path.join(workspace, 'src', 'side.js'), 'export const side = 1;\n');
   commitAll(workspace, 'side work');
   await buildBaseline(workspace, home);
@@ -431,9 +413,7 @@ test('removed exported symbol with a surviving caller is flagged', async () => {
 
 test('a treesitter-tier baseline is never diffed against the lexical current side — skipped, not passed', async () => {
   const { workspace, home } = structuralWorkspace();
-  // The whole baseline is written by the builder at the treesitter tier; the
-  // check's current side is always lexical, so any diff would be unsound.
-  await buildBaseline(workspace, home, { tier: 'treesitter' });
+    await buildBaseline(workspace, home, { tier: 'treesitter' });
   // Without the tier gate this removal fabricates removed-symbol findings.
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
@@ -445,24 +425,17 @@ test('a treesitter-tier baseline is never diffed against the lexical current sid
     changedFiles: ['src/example.js'],
     home,
   });
-  // Nothing was compared, so this is a SKIP, not a green gate over an empty
-  // comparison (which an `enforce` opt-in would read as a pass).
-  assert.equal(result.status, 'skipped', JSON.stringify(result.findings));
+    assert.equal(result.status, 'skipped', JSON.stringify(result.findings));
   assert.deepEqual(result.findings, []);
   const notes = result.informational.filter((note) => note.type === 'tier-mismatch-skipped');
   assert.ok(notes.some((note) => note.file === 'src/example.js' && note.tier === 'treesitter'), JSON.stringify(result.informational));
-  // A required expectation on the tier-skipped file is unverifiable — it must
-  // surface informationally, never as a fabricated unmet-required failure.
-  assert.ok(notes.some((note) => note.symbol === 'other'), JSON.stringify(result.informational));
+    assert.ok(notes.some((note) => note.symbol === 'other'), JSON.stringify(result.informational));
   assert.match(result.message, /compared nothing/);
 });
 
 test('an untiered file entry inherits meta.extractorTier — treesitter index never diffs against lexical', () => {
   const { workspace, home, sha } = structuralWorkspace();
-  // No per-file tier anywhere (a legacy index), but the index-wide meta
-  // declares treesitter: the untiered entry must inherit that tier and be
-  // skipped, not diffed as lexical (which would fabricate findings here).
-  writeStructuralIndex(workspace, home, { ...legacyUntieredBaseline(sha), extractorTier: 'treesitter' });
+    writeStructuralIndex(workspace, home, { ...legacyUntieredBaseline(sha), extractorTier: 'treesitter' });
   fs.writeFileSync(path.join(workspace, 'src', 'example.js'), 'export const other = 2;\n');
 
   const result = runStructuralExpectations({
@@ -514,10 +487,7 @@ test('changed exported symbols outside Impacted Files are flagged; planned ones 
 test('unplanned-symbol-change reports EXPORTED changes only — a local addition is not a public change', async () => {
   const { workspace, home } = structuralWorkspace();
   await buildBaseline(workspace, home);
-  // Unplanned file whose only new symbol is module-private: nothing about the
-  // module surface changed, so the contract ("changed exported symbols outside
-  // Impacted Files") must not fire.
-  fs.writeFileSync(path.join(workspace, 'src', 'private.js'), 'function Hidden() { return 1; }\nHidden();\n');
+    fs.writeFileSync(path.join(workspace, 'src', 'private.js'), 'function Hidden() { return 1; }\nHidden();\n');
 
   const quiet = runStructuralExpectations({
     workspace,
@@ -542,10 +512,7 @@ test('unplanned-symbol-change reports EXPORTED changes only — a local addition
 test('a changed file the check cannot evaluate never fails a required expectation', async () => {
   const { workspace, home } = structuralWorkspace();
   await buildBaseline(workspace, home);
-  // .go is not a language the lexical extractor reads and has no baseline
-  // entry: the check cannot say anything about it, so a required expectation
-  // on it is informational — not a hard finding regardless of the change.
-  fs.writeFileSync(path.join(workspace, 'src', 'thing.go'), 'package main\nfunc Thing() {}\n');
+    fs.writeFileSync(path.join(workspace, 'src', 'thing.go'), 'package main\nfunc Thing() {}\n');
 
   const result = runStructuralExpectations({
     workspace,
@@ -569,9 +536,7 @@ test('a changed file the check cannot evaluate never fails a required expectatio
 
 test('a truncated baseline table degrades findings to informational instead of asserting them', async () => {
   const { workspace, home } = structuralWorkspace();
-  // A build that hits MAX_SYMBOL_TABLE: past the cap the symbol table is
-  // incomplete, so "removed symbol with callers" cannot be asserted from it.
-  const build = await buildStructuralIndex({
+    const build = await buildStructuralIndex({
     workspace,
     home,
     extractor: {

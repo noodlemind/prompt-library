@@ -13,11 +13,6 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
-/** Writes a real episode file inside `ws` at `rel` and returns the op-JSON
- * episode object (path + real sha256) so `verifyAdmittedEpisodeKinds` admits
- * it — a fabricated hardcoded sha256 is rejected with E_SCHEMA. For
- * `kind: 'insight'` the body must carry real frontmatter `kind: insight`
- * matching the assertion; `fix` needs no frontmatter at all. */
 function writeRealEpisode(ws, rel, body) {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -112,10 +107,7 @@ test('orient records only the learning ids that SURVIVED into the 2KB pack, neve
   const home = tempDir('ol-trunc-home-');
   const harnessHome = tempDir('ol-trunc-hh-');
 
-  // Three learnings that all match the query, each with a large trigger so
-  // their rendered pack bullets overflow the 2KB budget and the later ones are
-  // truncated away entirely.
-  const ops = { schema: 1, ops: [] };
+    const ops = { schema: 1, ops: [] };
   for (let i = 0; i < 3; i++) {
     const rel = `docs/solutions/perf/big-${i}.md`;
     const body = `Body ${i}.\n`;

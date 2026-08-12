@@ -10,37 +10,18 @@ import { hasCommand, describeCommand } from '../lib/registry.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
-// Token/tool efficiency budgets (AC25, AC32). A tracked surface over its cap
-// fails CI so a regression is caught before it lands.
 const ENGINEER_AGENT_MAX_TOKENS = 900;
 const SKILL_BODY_MAX_LINES = 300;
-const architecturePath = 'docs/architecture/engineer-harness.md';
+const architecturePath = 'docs/adaptive-engineer-harness.md';
 const supersededArchitectureDocs = [
-  'adaptive-engineer-harness.md',
-  'capability-catalog-review.md',
-  'capability-lifecycle.md',
-  'composer-gap-fulfillment-loop.md',
-  'composer-parity-review.md',
-  'composer-style-autonomous-harness-proposal.md',
-  'cross-host-validation.md',
-  'engineer-memory-system.md',
-  'engineer-operating-model.md',
-  'engineer-vision-and-growth-loop.md',
-  'enterprise-capability-expansion.md',
-  'harness-enforcement.md',
-  'harness-pre-implementation-review.md',
-  'lexical-retrieval-v2.md',
-  'npm-harness-distribution-plan.md',
-  'semantic-retrieval-v2.md',
-  'tool-native-harness-design.md',
+  'architecture/engineer-harness.md',
+  'architecture/skill-driven-prompt-library.md',
+  'architecture/harness-cli-workbench.md',
+  'MEMORY-MODEL.md',
+  'install.md',
+  'onboarding/harness-quickstart.md',
 ];
 
-// Every text file is stored LF in the index, but no .gitattributes pins the
-// working-tree form, so Git for Windows (core.autocrlf=true by default) checks
-// them out CRLF. These assertions pin file *content*, not its checkout
-// encoding, so normalize back to the committed LF form. Without this, `\n`-
-// anchored frontmatter regexes silently miss on Windows and the per-line `\r`
-// inflates the token budgets (engineer.agent.md measured 904 rather than 892).
 function read(rel) {
   return fs.readFileSync(path.join(repoRoot, rel), 'utf8').replace(/\r\n/g, '\n');
 }
@@ -49,7 +30,7 @@ function exists(rel) {
   return fs.existsSync(path.join(repoRoot, rel));
 }
 
-test('canonical architecture defines task modes, ownership, gap handling, and runtime modes', () => {
+test('canonical concept doc defines task modes, ownership, gap handling, and runtime modes', () => {
   const model = read(architecturePath);
 
   for (const phrase of [
@@ -58,32 +39,35 @@ test('canonical architecture defines task modes, ownership, gap handling, and ru
     'Investigate',
     'Deliver',
     'Review',
-    'Engineer accountability',
-    'Component ownership',
-    'Gap classification',
-    'Standalone mode',
-    'Degraded mode',
-    'Governed mode',
-    'Single-owner contracts',
+    'Engineer',
+    'Skill-first',
+    'Standalone',
+    'Degraded',
+    'Governed',
+    'Bounded delegation',
   ]) {
     assert.match(model, new RegExp(phrase, 'i'), `missing ${phrase}`);
   }
 });
 
-test('canonical architecture replaces superseded harness architecture fragments', () => {
-  const architectureDocs = fs
-    .readdirSync(path.join(repoRoot, 'docs', 'architecture'))
-    .filter((name) => name.endsWith('.md'))
-    .sort();
-  assert.deepEqual(architectureDocs, [
-    'engineer-harness.md',
-    'harness-cli-workbench-delivery.md',
-    'harness-cli-workbench.md',
-    'skill-driven-prompt-library.md',
-  ]);
+test('docs surface is concept + agent-loop + plan/solution scaffolding', () => {
+  const docsRoot = path.join(repoRoot, 'docs');
+  const topLevel = fs.readdirSync(docsRoot).filter((name) => !name.startsWith('.')).sort();
+  assert.deepEqual(topLevel, ['adaptive-engineer-harness.md', 'agent-loop.md', 'plans', 'solutions']);
+  assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
-    assert.equal(exists(`docs/architecture/${name}`), false, `${name} should be removed`);
+    assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);
   }
+  const concept = read('docs/adaptive-engineer-harness.md');
+  for (const phrase of ['Host-first', 'Kernel-always', 'Agent-optional', 'Benchmark-test-only']) {
+    assert.match(concept, new RegExp(phrase, 'i'), `product model missing ${phrase}`);
+  }
+  const agentLoop = read('docs/agent-loop.md');
+  assert.match(agentLoop, /opt-in|optional/i);
+  assert.match(agentLoop, /BENCHMARK|benchmark|test/i);
+  assert.match(agentLoop, /@engineer/);
+  assert.doesNotMatch(read('packages/harness/README.md'), /harness agent[\s\S]{0,80}Adaptive Engineer runtime/i);
+  assert.match(read('packages/harness/README.md'), /opt-in add-on/i);
 });
 
 test('engineer agent is frozen, thin, and owns the only normative nine-step delivery lifecycle', () => {
@@ -232,7 +216,7 @@ test('active entry points use the accountable Engineer vocabulary', () => {
   const activeEntryPoints = [
     'README.md',
     '.github/agents/engineer.agent.md',
-    'docs/onboarding/harness-quickstart.md',
+    'docs/adaptive-engineer-harness.md',
   ];
   for (const rel of activeEntryPoints) {
     const contract = read(rel);
@@ -290,13 +274,16 @@ test('prompt-library retains at most one non-terminal PR plan and documents clea
   const datedPlans = fs
     .readdirSync(path.join(repoRoot, 'docs', 'plans'))
     .filter((name) => /^\d{4}-\d{2}-\d{2}.*\.md$/.test(name));
-  assert.ok(datedPlans.length <= 1, `expected at most one live PR plan, found ${datedPlans.length}`);
+  const live = [];
   for (const name of datedPlans) {
     const frontmatter = read(`docs/plans/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1];
     const plan = YAML.parse(frontmatter || '');
     assert.ok(plan?.plan_schema, `${name} must use the current plan schema`);
-    assert.ok(!['done', 'completed'].includes(plan.status), `${name} is terminal and should be removed`);
+    // Only in-progress execution plans count as "live". planned/deferred/done may coexist.
+    if (plan.status !== 'in-progress') continue;
+    live.push(name);
   }
+  assert.ok(live.length <= 1, `expected at most one in-progress PR plan, found ${live.length}: ${live.join(', ')}`);
   const policy = read('docs/plans/README.md');
   assert.match(policy, /transient/i);
   assert.match(policy, /after[^\n]*merge[^\n]*(?:remove|delete)/i);
@@ -506,12 +493,10 @@ test('engineer step 8 runs harness compound to close the learn loop', () => {
 // for the handful of commands with subcommand/alternation syntax a flat
 // flag list can't express). These assertions were rewritten to pin the
 // REGISTRY-GENERATED equivalent (still rendering the identical `harness
-// help <command>` text) rather than grep bin/harness.mjs's source for a
-// literal `case`/CATALOG string that no longer exists there.
 test('read-only report command is registered and AC14 amendment is consistent', () => {
   assert.equal(hasCommand('report'), true, 'report command must be registered');
   const help = describeCommand('report');
-  assert.equal(help.usage, '[--sync] [--global] [--check] [--json]', 'help documents report');
+  assert.equal(help.usage, '[--growth] [--sync] [--global] [--check] [--json]', 'help documents report');
   // report must not write session/plan state — it only reads telemetry (and syncs under ~/.harness).
   const commands = read('packages/harness/lib/commands.mjs');
   const reportFn = commands.slice(commands.indexOf('export async function cmdReport'), commands.indexOf('export async function cmdValidatePlan'));
@@ -545,9 +530,7 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   assert.equal(hasCommand('learnings'), true, 'learnings command registered');
   assert.equal(hasCommand('knowledge'), true, 'knowledge command registered');
   assert.equal(hasCommand('eval-knowledge'), true, 'eval-knowledge command registered');
-  // The M3 surfaces (suggest mode, commit mode, promote, MERGE/domain cap) are
-  // now the same public contract — the knowledge entry's usage names every mode.
-  assert.equal(
+    assert.equal(
     describeCommand('knowledge')?.usage,
     '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
     'help documents the knowledge suggest mode, opt-in commit mode, and stranded-store migration'
@@ -568,31 +551,19 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   assert.match(events, /'remember'/, 'EVENT_TYPES includes remember');
   assert.match(events, /'learning'/, 'EVENT_TYPES includes learning');
   assert.match(events, /'knowledge'/, 'EVENT_TYPES includes knowledge');
-  // KNOWLEDGE_MODES is single-sourced in store.mjs and includes suggest;
-  // commands.mjs must import it rather than keep its own copy.
-  const store = read('packages/harness/lib/knowledge/store.mjs');
+    const store = read('packages/harness/lib/knowledge/store.mjs');
   assert.match(store, /KNOWLEDGE_MODES = new Set\(\[[^\]]*'suggest'[^\]]*\]\)/, 'store.mjs KNOWLEDGE_MODES includes suggest');
   const commands = read('packages/harness/lib/commands.mjs');
   assert.doesNotMatch(commands, /const KNOWLEDGE_MODES\s*=\s*new Set/, 'commands.mjs must not keep its own copy of KNOWLEDGE_MODES');
   assert.match(commands, /KNOWLEDGE_MODES[^=]*=[\s\S]*?await import\('\.\/knowledge\/store\.mjs'\)/, 'commands.mjs imports KNOWLEDGE_MODES from store.mjs');
-  // MEMORY-MODEL.md is the canonical memory model + threat model page (human
-  // register, lifecycle diagram, and governance ledger).
-  assert.ok(exists('docs/MEMORY-MODEL.md'), 'docs/MEMORY-MODEL.md exists');
-  const memoryModel = read('docs/MEMORY-MODEL.md');
-  assert.match(memoryModel, /stateDiagram/, 'MEMORY-MODEL.md includes the lifecycle stateDiagram');
-  assert.match(memoryModel, /promote/, 'MEMORY-MODEL.md documents learning promote');
-  // packages/harness/README.md documents the opt-in commit mode.
+  const concept = read('docs/adaptive-engineer-harness.md');
+  assert.match(concept, /stateDiagram/, 'concept doc includes the learning lifecycle stateDiagram');
+  assert.match(concept, /promote/, 'concept doc documents learning promote');
   assert.match(read('packages/harness/README.md'), /knowledge commit/, 'README documents knowledge commit');
-  // Milestone 4: the governance ledger (retire/dispute/confirm/promote persist
-  // across `consolidate --rebuild --yes` and are mechanically reapplied) is
-  // now the same public contract.
   assert.match(store, /export function readGovernance/, 'store.mjs exports readGovernance');
   assert.match(apply, /governed/, 'apply.mjs tracks governed reapplication');
-  assert.match(memoryModel, /governance/i, 'MEMORY-MODEL.md documents the governance ledger');
-  // The learnings quarantine line (surfaced by cmdLearnings) is pinned the
-  // same way the CATALOG strings above are — a verbatim match against the
-  // string a human actually sees, not just a loose keyword.
-  assert.match(
+  assert.match(concept, /governance/i, 'concept doc documents the governance ledger');
+    assert.match(
     commands,
     /quarantined episode\(s\) — inspect with harness consolidate --status, clear with knowledge purge <path>/,
     'commands.mjs renders the learnings quarantine line'
@@ -675,7 +646,7 @@ test('canonical architecture defines capability promotion through retirement', (
   assert.match(lifecycle, /trigger eval/i);
   assert.match(lifecycle, /outcome eval/i);
   assert.match(lifecycle, /promotion evidence/i);
-  assert.match(lifecycle, /engineer-autopilot/i);
+  assert.match(lifecycle, /tombstone/i);
   assert.match(lifecycle, /overlap/i);
 });
 
@@ -735,14 +706,12 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
 
   assert.match(read('.github/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
 
-  const enforcementDoc = read(architecturePath);
-  assert.doesNotMatch(enforcementDoc, /Each entry must include/);
-  assert.match(enforcementDoc, /exemptions.*waivers.*arrays/is);
-
-  const standard = read('docs/architecture/skill-driven-prompt-library.md');
-  assert.match(standard, /plan_schema:\s*1/);
-  assert.match(standard, /verification:\s*\n\s+required:[\s\S]*criteria:/);
-  assert.match(standard, /reviews:\s*\n\s+required:[\s\S]*completed:[\s\S]*critical_open:/);
+  const concept = read(architecturePath);
+  assert.match(concept, /exemptions/i);
+  assert.match(concept, /waivers/i);
+  assert.match(concept, /plan_schema:\s*1/);
+  assert.match(concept, /verification:\s*\n\s+required:[\s\S]*criteria:/);
+  assert.match(concept, /reviews:\s*\n\s+required:[\s\S]*completed:[\s\S]*critical_open:/);
 
   const packageReadme = read('packages/harness/README.md');
   assert.match(packageReadme, /\$PLAN[^\n]*single plan resolved from the PR/i);

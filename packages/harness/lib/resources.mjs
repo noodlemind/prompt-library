@@ -1,26 +1,3 @@
-/**
- * Resource bundles — third-party contributions that ride the EXISTING
- * hydration pipeline (P5AC1).
- *
- * The temptation in a plugin system is a parallel install path: a second
- * directory, a second sync, a second retirement mechanism. The contract forbids
- * it and the reason is concrete — `install`/`upgrade`/`retired.json` already
- * know how to place files, detect stale orphans, and withdraw something that
- * shipped. A second pipeline would need all three again and would get the third
- * one wrong, because retirement is the part nobody remembers until a file that
- * should have vanished is still being loaded a version later.
- *
- * So a bundle is a MANIFEST plus a directory of the same asset kinds the
- * harness already hydrates. Everything below is about deciding which bundles
- * are allowed to contribute and in what order — not about a new way to copy
- * files.
- *
- * PRECEDENCE IS DETERMINISTIC AND INSPECTABLE (P5AC2). Two bundles contributing
- * the same skill is not an error; silently picking one is. Every resource
- * carries where it came from, and `resources show` prints the losers alongside
- * the winner, because "why is my version not the one running" is the question a
- * precedence rule exists to answer.
- */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -49,14 +26,6 @@ function fail(errors, message) {
   return errors;
 }
 
-/**
- * Parse and validate one manifest.
- *
- * An invalid manifest is REPORTED and its bundle disabled, never silently
- * skipped — the same rule as a malformed config. A bundle whose author believes
- * it is contributing while it quietly does nothing is the worst outcome for
- * both sides.
- */
 export function parseManifest(text, { source = '(inline)' } = {}) {
   const errors = [];
   let doc;
@@ -90,12 +59,7 @@ export function parseManifest(text, { source = '(inline)' } = {}) {
       fail(errors, `${source}: contributes.${kind} must be a list of paths`);
       continue;
     }
-    // A contributed path is a path INSIDE the bundle, and nothing else. A
-    // manifest declaring `../../../etc/passwd` was previously accepted without
-    // complaint — this is a third-party file describing what the harness should
-    // load, which makes it the least trustworthy input in the system and the
-    // one place a traversal must be refused rather than normalized away.
-    for (const rel of list) {
+        for (const rel of list) {
       if (typeof rel !== 'string' || !rel) {
         fail(errors, `${source}: contributes.${kind} entries must be non-empty strings`);
         continue;
@@ -124,11 +88,7 @@ export function parseManifest(text, { source = '(inline)' } = {}) {
       name: doc.name,
       version: doc.version,
       description: typeof doc.description === 'string' ? doc.description : '',
-      // Carried through, not merely validated: without this the documented
-      // precedence rule ("an explicit priority outranks the name tie-break")
-      // could never fire, because `resolvePrecedence` read a field the parser
-      // had dropped.
-      priority: Number.isInteger(doc.priority) ? doc.priority : 0,
+            priority: Number.isInteger(doc.priority) ? doc.priority : 0,
       contributes,
       capabilities,
       // A plugin entry point is optional: a bundle may contribute only files.
@@ -139,15 +99,6 @@ export function parseManifest(text, { source = '(inline)' } = {}) {
   };
 }
 
-/**
- * Files that are OPERATOR STATE rather than bundle content, and so must not
- * participate in the integrity digest.
- *
- * `.enabled` is written by `resources enable`. Including it meant approving a
- * pinned bundle changed its digest and immediately marked it `tampered` — the
- * pin catching the operator's own approval instead of the tampering it exists
- * for. Found by the Phase 5 integrity test.
- */
 const NON_CONTENT_FILES = new Set(['.enabled', '.disabled']);
 
 /** The digest a bundle's integrity pin is checked against: every contributed
@@ -160,13 +111,7 @@ export function bundleDigest(dir) {
       const relative = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) walk(full, relative);
       else if (entry.isFile() && !NON_CONTENT_FILES.has(relative)) files.push([relative, full]);
-      // F3 (Codex phase-5 review): a symlink is neither a directory nor a file
-      // to `Dirent`, so it fell out of the digest entirely — the pin approved a
-      // bundle without covering the one entry whose content is decided
-      // elsewhere. It is HASHED AS A LINK, by its target string, so repointing
-      // it breaks the pin. `bundle-sync` refuses to place one regardless; this
-      // makes the integrity record honest about what is in the directory.
-      else if (entry.isSymbolicLink()) files.push([relative, full, 'symlink']);
+            else if (entry.isSymbolicLink()) files.push([relative, full, 'symlink']);
     }
   };
   walk(dir);
@@ -180,11 +125,7 @@ export function bundleDigest(dir) {
       continue;
     }
     if (rel === MANIFEST_FILE) {
-      // The manifest IS covered, minus the `integrity:` line that states the
-      // digest — excluding it entirely meant changing `plugin: safe.mjs` to
-      // `plugin: ../../outside.mjs` left the pin matching. A pin that does not
-      // authorize the file declaring what to load authorizes very little.
-      hash.update(fs.readFileSync(full, 'utf8').split(/\r?\n/).filter((l) => !/^\s*integrity\s*:/.test(l)).join('\n'));
+            hash.update(fs.readFileSync(full, 'utf8').split(/\r?\n/).filter((l) => !/^\s*integrity\s*:/.test(l)).join('\n'));
     } else {
       hash.update(fs.readFileSync(full));
     }
@@ -192,25 +133,6 @@ export function bundleDigest(dir) {
   return `sha256-${hash.digest('hex')}`;
 }
 
-/**
- * Every bundle under the resources root, with its state and the reason for it.
- *
- * `trustedNames` defaults to EMPTY, not to "trust everything". Defaulting to
- * null-means-trusted made `discoverBundles(home)` report an unapproved bundle
- * as `enabled`, so any caller that forgot the argument silently bypassed
- * approval. A trust check whose default is open is not a trust check.
- *
- * It is keyed by DIRECTORY name, matching where the marker lives. Keying the
- * marker by directory and the check by MANIFEST name let a directory `grant`
- * whose manifest called itself `decoy` hand its approval to a different bundle
- * that called itself `grant` — bundle content transferring an operator's
- * approval to something else.
- *
- * `state` is one of `enabled`, `disabled`, `invalid`, `untrusted`, or
- * `tampered`. Each is reported rather than filtered away — a bundle a user
- * installed and cannot see is a support ticket; one shown greyed with a reason
- * is a fix they can make.
- */
 export function discoverBundles(copilotHome, { trustedNames = new Set() } = {}) {
   const root = resourcesRoot(copilotHome);
   if (!fs.existsSync(root)) return [];
@@ -233,10 +155,7 @@ export function discoverBundles(copilotHome, { trustedNames = new Set() } = {}) 
     let state = disabled ? 'disabled' : 'enabled';
     let reason = disabled ? 'disabled by the operator' : null;
 
-    // P5AC3: a distributed bundle carries an integrity pin, and a mismatch is
-    // `tampered` rather than a warning — the pin exists precisely so that
-    // content changing under an approval is loud.
-    const digest = bundleDigest(dir);
+        const digest = bundleDigest(dir);
     if (manifest.integrity && manifest.integrity !== digest) {
       state = 'tampered';
       reason = `integrity pin does not match the bundle's contents (${manifest.integrity} vs ${digest})`;
@@ -245,19 +164,10 @@ export function discoverBundles(copilotHome, { trustedNames = new Set() } = {}) 
       reason = 'not approved — run `harness resources enable` after reading what it contributes';
     }
 
-    // `id` is the DIRECTORY name and is unique by construction; `name` is the
-    // manifest's, which is not. Both are carried because they answer different
-    // questions — `name` is what an operator reads, `id` is what the placement
-    // layer must key off. Replacing one with the other is how a winning
-    // contribution came to be read from whichever bundle happened to be first
-    // in the list with that manifest name.
-    bundles.push({ id: entry.name, dir, name: manifest.name, manifest, state, reason, errors: [], digest });
+        bundles.push({ id: entry.name, dir, name: manifest.name, manifest, state, reason, errors: [], digest });
   }
 
-  // Two enabled bundles claiming the same manifest name is a conflict the
-  // operator has to resolve, not one this code should silently pick a side in.
-  // Reported on every claimant so `resources bundles` names both.
-  const claims = new Map();
+    const claims = new Map();
   for (const b of bundles) {
     if (b.state !== 'enabled' || !b.manifest) continue;
     (claims.get(b.name) || claims.set(b.name, []).get(b.name)).push(b);
@@ -272,18 +182,6 @@ export function discoverBundles(copilotHome, { trustedNames = new Set() } = {}) 
   return bundles;
 }
 
-/**
- * Resolve which bundle wins each contributed path.
- *
- * PRECEDENCE: an explicit `priority` first (higher wins), then bundle name,
- * ascending. Name is a deterministic tie-break rather than install order or
- * directory-read order, both of which vary by filesystem and would make the
- * answer machine-dependent — the exact property `resources show` exists to make
- * inspectable.
- *
- * Losers are RETAINED per path, because the useful question is not "what won"
- * but "why did mine not".
- */
 export function resolvePrecedence(bundles) {
   const enabled = bundles.filter((b) => b.state === 'enabled' && b.manifest);
   const ordered = [...enabled].sort((a, b) => (
@@ -295,9 +193,7 @@ export function resolvePrecedence(bundles) {
     for (const kind of CONTRIBUTION_KINDS) {
       for (const rel of bundle.manifest.contributes[kind] || []) {
         const key = `${kind}/${rel}`;
-        // `winnerId` is what the placement layer resolves against; `winner`
-        // stays the readable manifest name for reports.
-        if (!byPath.has(key)) byPath.set(key, { kind, path: rel, winner: bundle.name, winnerId: bundle.id, shadowed: [] });
+                if (!byPath.has(key)) byPath.set(key, { kind, path: rel, winner: bundle.name, winnerId: bundle.id, shadowed: [] });
         else byPath.get(key).shadowed.push(bundle.name);
       }
     }

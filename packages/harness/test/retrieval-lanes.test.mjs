@@ -1,15 +1,3 @@
-/**
- * P2D1 (Phase 1 debt) and P2AC7 — lane coverage across the retrieval surface.
- *
- * Before this, `recall` and `get` refused `--output json-envelope|agent` with a
- * structured E_USAGE, which made them only half a compatibility path: P2AC5
- * keeps them working while `search`/`lookup` take over, but a caller moving to
- * the envelope lane would have had to move commands at the same time.
- *
- * The assertions here are structural rather than per-command snapshots: lane
- * support is derived from the presence of `resultOf`, so the property worth
- * pinning is "every retrieval command has one", not the shape each returns.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -73,9 +61,6 @@ test('the agent lane fences retrieved corpus text as untrusted data', () => {
   assert.match(res.stdout, /«untrusted-data»/, 'retrieved text must be fenced before it reaches a model');
 });
 
-// The producers are pure by design: the lane path is bracketed by the
-// registry's own command.start/command.result, and duplicating a domain write
-// here would deepen the Phase 4a debt rather than pay it down.
 test('a lane request does not double-write the domain event a handler writes', () => {
   const workspace = tempDir('lanes-events-ws-');
   const copilotHome = tempDir('lanes-events-home-');

@@ -1,20 +1,3 @@
-/**
- * `lookup <kind> <identifier>` — exact entity retrieval (P2.2, P2AC4).
- *
- * The kind list is settled upstream in
- * `docs/architecture/harness-cli-workbench.md` §lookup and is NOT re-decided
- * here. Identifiers reuse the keys each store already has rather than minting a
- * parallel id scheme: a learning is `<domain>/<slug>` (`knowledge/store.mjs`),
- * an episode is `path@sha256` (`knowledge/consolidate.mjs`, already how
- * consolidation keys them). Neither corpus has an id index, so resolution is a
- * bounded scan — a cost to measure, not an addressability gap, and a second id
- * scheme would fork identity between the store and the retrieval layer.
- *
- * Read-path invariant (P2AC6): every resolver here reads. None creates the
- * knowledge store, and none writes. `storeDir` is only ever probed for
- * existence — `listLearnings` on a missing directory returns empty rather than
- * seeding one.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import { EXIT } from '../style.mjs';
@@ -41,11 +24,6 @@ export const LOOKUP_KINDS = Object.freeze([
   'episode',
 ]);
 
-/**
- * One line per kind, for the palette row and `harness help lookup`. Kept beside
- * the kind list so a kind added there without a summary is obvious at a glance
- * rather than rendering a blank row.
- */
 export const LOOKUP_KIND_SUMMARIES = Object.freeze({
   file: 'a tracked workspace file by relative path',
   symbol: 'a declaration by name, from the structural index',
@@ -60,14 +38,6 @@ export const LOOKUP_KIND_SUMMARIES = Object.freeze({
   episode: 'an episode by path, or path@sha256',
 });
 
-/**
- * Kinds whose entities do not exist yet, mapped to the phase that creates them.
- * They stay in the kind list deliberately: dropping them would make
- * `lookup run` an unknown-kind usage error, which tells a caller the kind is
- * wrong rather than that the store is empty until Phase 4a. Same honesty rule
- * the AC3 and AC7 amendments follow — deliver less than the contract, and say
- * precisely how much less.
- */
 export const PENDING_KINDS = Object.freeze({
   run: 'Phase 4a (durable runs) creates the run journal',
   resource: 'Phase 5 (resources and plugins) creates the resource model',
@@ -102,13 +72,6 @@ function preview(raw) {
   return redactSecrets(text);
 }
 
-/**
- * Read a workspace-relative file through the containment-verified path, the
- * same discipline `get` uses: resolve under the root, then open with O_NOFOLLOW
- * and re-verify the opened inode's realpath sits under that same root, so an
- * ancestor swapped to an outside symlink between the walk and the open is
- * caught rather than trusted from a moment earlier.
- */
 function readUnderWorkspace(workspace, rel) {
   const root = path.resolve(workspace);
   const full = safeResolveUnderRoot(root, rel);
@@ -146,9 +109,7 @@ function symbolEntity({ workspace, identifier, home }) {
   }
   const matches = (index.symbols || []).filter((s) => s.name === identifier);
   if (!matches.length) {
-    // Near-miss related entries make a typo recoverable without a second
-    // command; capped so a one-character query cannot dump the symbol table.
-    const near = (index.symbols || [])
+        const near = (index.symbols || [])
       .filter((s) => typeof s.name === 'string' && s.name.toLowerCase().includes(identifier.toLowerCase()))
       .slice(0, 5)
       .map((s) => ({ kind: 'symbol', id: s.name, location: s.file }));
@@ -190,9 +151,7 @@ function documentEntity({ workspace, copilotHome, identifier }) {
 }
 
 function planEntity({ workspace, identifier }) {
-  // Plans are addressed by filename or by the full repo-relative path; both
-  // resolve to the same file, and neither may escape docs/plans.
-  const rel = identifier.startsWith('docs/plans/') ? identifier : path.posix.join('docs/plans', identifier);
+    const rel = identifier.startsWith('docs/plans/') ? identifier : path.posix.join('docs/plans', identifier);
   const { escaped, raw } = readUnderWorkspace(workspace, rel);
   if (escaped || raw === null) {
     const dir = path.join(path.resolve(workspace), 'docs', 'plans');

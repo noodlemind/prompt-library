@@ -1,8 +1,12 @@
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 import { findEntryByDocid, resolveDocPath } from './recall-rank.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
+
+export const GET_DEFAULT_LINES = 40;
+export const GET_DEFAULT_MAX_BYTES = 2048;
 
 function truncateUtf8(text, maxBytes) {
   let buf = Buffer.from(text, 'utf8');
@@ -20,16 +24,14 @@ function truncateUtf8(text, maxBytes) {
 export function runGet({ workspace, copilotHome, flags }) {
   const docid = flags.docid;
   const relPath = flags.path;
-  const maxLines = flags.lines || 40;
-  const maxBytes = flags.maxBytes || 2048;
+  const maxLines = flags.lines || GET_DEFAULT_LINES;
+  const maxBytes = flags.maxBytes || GET_DEFAULT_MAX_BYTES;
+    const offset = Math.max(1, Math.floor(flags.offset || 1));
   const workspaceResolved = path.resolve(workspace);
 
   let entry = null;
   let fullPath = null;
-  // The trusted root `fullPath` resolved under — handed to readFileNoFollow so
-  // the read is containment-verified (canonicalize-after-acquire) against the
-  // SAME root, closing the ancestor-swap window before the leaf open.
-  let readRoot = null;
+    let readRoot = null;
 
   if (docid) {
     entry = findEntryByDocid(copilotHome, workspace, docid);
@@ -54,20 +56,17 @@ export function runGet({ workspace, copilotHome, flags }) {
     throw new Error(`file not found for ${docid || relPath}`);
   }
 
-  // readFileNoFollow (not fs.readFileSync): the O_NOFOLLOW open re-confirms the
-  // leaf atomically, and `root: readRoot` adds the canonicalize-after-acquire
-  // containment verify — the opened inode's realpath must sit under the real
-  // root — so an ancestor swapped to an outside symlink between
-  // safeResolveUnderRoot's walk and this read is caught, not trusted from a
-  // moment earlier. No maxBytes override here — `flags.maxBytes` governs the
-  // EXCERPT's truncation below, not what's admissible to read at all.
-  const raw = readFileNoFollow(fullPath, { root: readRoot });
+    const raw = readFileNoFollow(fullPath, { root: readRoot });
   if (raw === null) throw new Error(`file not found for ${docid || relPath}`);
-  const lines = raw.split(/\r?\n/).slice(0, maxLines);
+  const allLines = raw.split(/\r?\n/);
+  const start = Math.min(offset - 1, allLines.length);
+  const lines = allLines.slice(start, start + maxLines);
   let excerpt = lines.join('\n');
-  if (Buffer.byteLength(excerpt, 'utf8') > maxBytes) {
+  const clipped = Buffer.byteLength(excerpt, 'utf8') > maxBytes;
+  if (clipped) {
     excerpt = truncateUtf8(excerpt, maxBytes);
   }
+    const truncated = clipped || start > 0 || start + lines.length < allLines.length;
 
   return {
     docid: entry.docid || entry.id || docid || null,
@@ -75,6 +74,10 @@ export function runGet({ workspace, copilotHome, flags }) {
     title: entry.title || path.basename(fullPath),
     excerpt,
     bytes: Buffer.byteLength(excerpt, 'utf8'),
-    lines: excerpt.split('\n').length,
+        lines: excerpt === '' ? 0 : excerpt.split('\n').length,
+        offset,
+    totalLines: allLines.length,
+        sha256: createHash('sha256').update(raw, 'utf8').digest('hex'),
+    truncated,
   };
 }

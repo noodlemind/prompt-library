@@ -1,29 +1,3 @@
-/**
- * Locally-added primitives — skills and agents a user put into `~/.copilot`
- * themselves, from an external source, rather than receiving them from the
- * harness package.
- *
- * THE HARNESS COULD NOT PREVIOUSLY TELL THEM APART FROM CRUFT. Everything under
- * `skills/` and `agents/` was assumed to have been hydrated by the package, so
- * a file the package no longer ships looked like a leftover from an old
- * version. A hand-added skill therefore tripped doctor's stale-orphan check,
- * which told the operator to tombstone it in `retired.json` — advice that would
- * have made the next `upgrade` delete their own team's work.
- *
- * The lock file is what makes the distinction possible: it records every file
- * the harness hydrated. A file that is not shipped AND was never in the lock
- * was not put there by the harness, so it is a local addition, not an orphan.
- *
- * REGISTRATION IS AN OPERATOR ACT, RECORDED IN THE USER SCOPE. The marker lives
- * in `~/.copilot/harness/registered.yaml`, never inside the primitive — the
- * same reason the trust store lives outside the project it describes. A file
- * that could register itself would mean anything dropped into the directory
- * arrives pre-approved, which is the whole thing registration exists to prevent.
- *
- * REGISTRATION PINS CONTENT, for the same reason project trust does: a file
- * approved once and trusted forever means a later edit rides an approval nobody
- * re-read. A changed file becomes `stale` and asks to be looked at again.
- */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -70,23 +44,6 @@ export function fileDigest(full) {
   }
 }
 
-/**
- * Validate a primitive the harness did not ship (P5 workflow item 4).
- *
- * The point is that a malformed file fails LOUDLY here rather than silently
- * never loading in the host. A skill whose frontmatter does not parse is not
- * "not yet working" — from Copilot's side it simply does not exist, and the
- * person who added it has no signal at all.
- */
-/**
- * Read a primitive once, refusing anything that is not a regular file.
- *
- * F5/F3 (Codex phase-5 review): validation read the file and registration read
- * it AGAIN to hash it, so content swapped between the two reads was registered
- * as approved while never having been validated. One read, one buffer, one
- * decision — and `lstat` first, because a symlink passes `readFileSync` by
- * following it somewhere the containment check never looked.
- */
 export function readPrimitiveOnce(copilotHome, rel) {
   const full = path.join(copilotHome, rel);
   const stat = fs.lstatSync(full);
@@ -97,9 +54,7 @@ export function readPrimitiveOnce(copilotHome, rel) {
     throw Object.assign(new Error(`${rel}: is not a regular file`), { code: 'E_TARGET', exit: 1 });
   }
   const bytes = fs.readFileSync(full);
-  // Same shape `fileDigest` produces, so a snapshot digest and a re-read digest
-  // are comparable — `localPrimitiveStatus` compares them to decide `stale`.
-  return { bytes, text: bytes.toString('utf8'), digest: `sha256-${crypto.createHash('sha256').update(bytes).digest('hex')}` };
+    return { bytes, text: bytes.toString('utf8'), digest: `sha256-${crypto.createHash('sha256').update(bytes).digest('hex')}` };
 }
 
 export function validatePrimitive(copilotHome, rel, snapshot = null) {
@@ -111,10 +66,7 @@ export function validatePrimitive(copilotHome, rel, snapshot = null) {
     errors.push(`${rel}: a ${kindKey.replace(/s$/, '')} must be ${kind.describe} — a file elsewhere is never discovered`);
   }
 
-  // The caller may supply the bytes it is about to pin, so validation and the
-  // digest describe the same content. Reading here is the convenience path for
-  // callers that only want an opinion.
-  let text = '';
+    let text = '';
   let digest = null;
   try {
     const read = snapshot || readPrimitiveOnce(copilotHome, rel);
@@ -144,9 +96,7 @@ export function validatePrimitive(copilotHome, rel, snapshot = null) {
   const name = typeof front.name === 'string' ? front.name.trim() : '';
   if (!name) errors.push(`${rel}: frontmatter needs a name`);
 
-  // The name and the path must agree, or two different things answer to one
-  // identity and which one loads depends on the host.
-  const onDisk = kindKey === 'skills'
+    const onDisk = kindKey === 'skills'
     ? rel.split('/')[1]
     : path.basename(rel).replace(/\.(agent|instructions)\.md$/, '');
   if (name && onDisk && name !== onDisk) {
@@ -163,10 +113,7 @@ function readRegistry(copilotHome) {
     const doc = YAML.parse(fs.readFileSync(file, 'utf8'), { maxAliasCount: 50 });
     const primitives = doc?.primitives;
     if (!primitives || typeof primitives !== 'object' || Array.isArray(primitives)) {
-      // Present but structurally wrong: damaged, not empty. Overwriting it
-      // would discard registrations nobody could read back — the same rule the
-      // trust store follows.
-      return { version: REGISTRY_SCHEMA, primitives: {}, unreadable: true };
+            return { version: REGISTRY_SCHEMA, primitives: {}, unreadable: true };
     }
     return { version: doc.version || REGISTRY_SCHEMA, primitives };
   } catch {
@@ -186,16 +133,6 @@ function writeRegistry(copilotHome, registry) {
   return written;
 }
 
-/**
- * Everything under the primitive directories, classified by ORIGIN.
- *
- *   shipped   the package ships it — the harness owns it
- *   orphan    the harness hydrated it once and no longer ships it
- *   local     never shipped, never in the lock: someone put it there
- *
- * `lockFiles` is what separates the last two, and getting it wrong is what
- * turned a team's own skill into a deletion recommendation.
- */
 export function classifyPrimitives({ copilotHome, shippedFiles = new Set(), lockFiles = new Set() }) {
   const out = { shipped: [], orphan: [], local: [] };
   for (const key of Object.keys(PRIMITIVE_KINDS)) {
@@ -210,13 +147,6 @@ export function classifyPrimitives({ copilotHome, shippedFiles = new Set(), lock
   return out;
 }
 
-/**
- * Local primitives with their registration state.
- *
- * `state` is `registered`, `pending`, `stale`, or `invalid`. `pending` and
- * `invalid` are both reported rather than hidden: a file someone added that the
- * harness silently ignores is the failure this whole surface exists to end.
- */
 export function localPrimitiveStatus({ copilotHome, shippedFiles = new Set(), lockFiles = new Set() }) {
   const registry = readRegistry(copilotHome);
   const { local } = classifyPrimitives({ copilotHome, shippedFiles, lockFiles });
@@ -253,9 +183,7 @@ export function registerPrimitive({ copilotHome, rel, now = new Date().toISOStri
       hint: 'harness resources list — only files the harness did not ship can be registered',
     });
   }
-  // One read for both decisions — see readPrimitiveOnce. The digest below is
-  // OF THE BYTES THAT PASSED, not of whatever is on disk a moment later.
-  let snapshot;
+    let snapshot;
   try {
     snapshot = readPrimitiveOnce(copilotHome, rel);
   } catch (error) {
@@ -267,9 +195,7 @@ export function registerPrimitive({ copilotHome, rel, now = new Date().toISOStri
   }
   const validation = validatePrimitive(copilotHome, rel, snapshot);
   if (!validation.valid) {
-    // Validation gates registration, which is the whole point of the flow: a
-    // primitive the host would never load must not be marked as working.
-    throw Object.assign(new Error(`refusing to register an invalid primitive: ${validation.errors[0]}`), {
+        throw Object.assign(new Error(`refusing to register an invalid primitive: ${validation.errors[0]}`), {
       code: 'E_USAGE',
       exit: 2,
       hint: `fix it, then: harness resources register ${rel}`,
@@ -306,8 +232,5 @@ export function unregisterPrimitive({ copilotHome, rel }) {
   }
   delete registry.primitives[rel];
   writeRegistry(copilotHome, registry);
-  // Deliberately does NOT delete the file. Unregistering withdraws the
-  // harness's recognition; removing someone's work because they changed their
-  // mind about a marker would be a much larger action than they asked for.
-  return { path: rel, state: 'pending' };
+    return { path: rel, state: 'pending' };
 }

@@ -1,29 +1,3 @@
-/**
- * `harness resources list|show|register|unregister` — the locally-added
- * primitive surface.
- *
- * The workflow this serves: someone obtains a skill or agent from an external
- * source and drops it straight into `~/.copilot/skills` or `~/.copilot/agents`,
- * where every host already looks. It is deliberately NOT in the harness lock,
- * so `upgrade` and `uninstall` never touch it. What was missing is that the
- * harness had no idea it existed — worse, it read as cruft, and `doctor` told
- * people to tombstone their own team's work.
- *
- * So this command answers three questions: what did we add, does it actually
- * work, and is it recognized. `register` is the operator saying "I read this
- * and I want it" — validated first, because marking a primitive as working when
- * the host would never load it is the failure mode with the longest feedback
- * loop in the system.
- *
- * Bundles are the managed route and they are wired: `bundle-sync` places an
- * approved bundle's contributions on every install and upgrade, and withdraws
- * them when it is disabled or removed.
- *
- * The plugin protocol is NOT reachable from here. A manifest may declare a
- * plugin entry point and nothing reads it; the only sanctioned start path is
- * the first-party provider seam, and `test/provider-seam.test.mjs` asserts this
- * file cannot reach it.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
@@ -48,10 +22,7 @@ const ui = createStyle({ argv: process.argv.slice(2) });
 
 export const RESOURCES_VERBS = Object.freeze([
   'list', 'show', 'register', 'unregister',
-  // Bundle verbs. A bundle is the MANAGED way to put primitives into the
-  // Copilot home — versioned, removable, and provenance-tracked — next to the
-  // unmanaged way of copying a file in by hand, which `register` covers.
-  'add', 'update', 'remove', 'bundles',
+    'add', 'update', 'remove', 'bundles',
 ]);
 
 function usageError(message, hint) {
@@ -83,13 +54,6 @@ function context(argv) {
   };
 }
 
-/**
- * What the package ships, and what it has hydrated here.
- *
- * Both are needed to tell a local addition from an orphan. A failure to resolve
- * assets is not fatal: without them every non-lock file simply reads as local,
- * which errs toward showing a file rather than hiding it.
- */
 function origins(copilotHome) {
   let shippedFiles = new Set();
   try {
@@ -97,10 +61,7 @@ function origins(copilotHome) {
   } catch {
     /* assets unavailable — see the note above */
   }
-  // A bundle's placed files are not hand-added, so they are excluded from the
-  // local set: reporting a managed file as "pending registration" would ask the
-  // operator to approve something a bundle already accounts for.
-  const lockFiles = new Set([...(readLock(copilotHome)?.files || []), ...placedFiles(copilotHome)]);
+    const lockFiles = new Set([...(readLock(copilotHome)?.files || []), ...placedFiles(copilotHome)]);
   return { shippedFiles, lockFiles };
 }
 
@@ -129,30 +90,16 @@ function addBundle(copilotHome, source) {
   if (!manifest) {
     throw Object.assign(new Error(`invalid bundle: ${errors[0]}`), { code: 'E_USAGE', exit: EXIT.usage });
   }
-  // Same resolver `remove` uses. `parseManifest` already constrains the name,
-  // so this is belt-and-braces — but a containment guarantee that lives in a
-  // different function's validation is one refactor away from being gone.
-  const dest = resolveBundleDir(copilotHome, manifest.name);
+    const dest = resolveBundleDir(copilotHome, manifest.name);
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.cpSync(from, dest, { recursive: true });
-  // Never carries approval across: a bundle arriving pre-enabled would mean
-  // installing it and approving it were the same act.
-  for (const marker of ['.enabled', '.disabled']) {
+    for (const marker of ['.enabled', '.disabled']) {
     fs.rmSync(path.join(dest, marker), { force: true });
   }
   return { name: manifest.name, version: manifest.version, dir: dest, digest: bundleDigest(dest) };
 }
 
-
-/** A bundle directory named by the operator, resolved and proved to be inside
- * the resources root before anything destructive happens to it.
- *
- * Two checks rather than one: the NAME must be the slug `parseManifest` already
- * requires (so `remove` and `add` agree on what a bundle is), and the resolved
- * path must still be a direct child of the root (so a future caller that
- * loosens the pattern cannot reintroduce the escape). The recursive delete this
- * guards is the most destructive operation in the CLI. */
 export function resolveBundleDir(copilotHome, name) {
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) {
     throw usageError(
@@ -200,34 +147,20 @@ export async function resourcesResultOf(argv, ctx = {}) {
   if (verb === 'add' || verb === 'update') {
     if (!target) throw usageError(`resources ${verb} requires a bundle directory`, `harness resources ${verb} ./my-bundle`);
     const added = addBundle(copilotHome, target);
-    // Placement happens on the same pass, so `add` leaves the home in the state
-    // the next `upgrade` would produce rather than a half-applied one.
-    const sync = applyBundles(copilotHome);
+        const sync = applyBundles(copilotHome);
     return { schema: 1, verb, bundle: added, sync };
   }
 
   if (verb === 'remove') {
     if (!target) throw usageError('resources remove requires a bundle name', 'harness resources bundles');
-    // CRITICAL (CodeRabbit): `target` is an unvalidated operator positional that
-    // was joined onto the resources root and then removed RECURSIVELY. So
-    // `harness resources remove ../skills` deleted the whole hydrated skills
-    // tree, and `../../outside` reached past `~/.copilot` entirely — both while
-    // reporting `[ok]`.
-    //
-    // `add` was never exposed this way because `parseManifest` constrains a
-    // bundle's name to a slug; `remove` took whatever it was handed. The name
-    // is validated to the SAME shape here, so the two ends of the lifecycle
-    // agree on what a bundle is allowed to be called.
-    const dir = resolveBundleDir(copilotHome, target);
+        const dir = resolveBundleDir(copilotHome, target);
     if (!fs.existsSync(dir)) {
       throw Object.assign(new Error(`no bundle named ${JSON.stringify(target)}`), {
         code: 'E_NOT_FOUND', exit: EXIT.notFound, hint: 'harness resources bundles',
       });
     }
     fs.rmSync(dir, { recursive: true, force: true });
-    // Withdrawal is the same sync: whatever this bundle placed is no longer
-    // contributed, so the pass that re-places everything removes exactly it.
-    const sync = applyBundles(copilotHome);
+        const sync = applyBundles(copilotHome);
     return { schema: 1, verb, bundle: { name: target }, sync };
   }
 
@@ -238,9 +171,7 @@ export async function resourcesResultOf(argv, ctx = {}) {
       verb,
       home: copilotHome,
       registry: registeredPath(copilotHome),
-      // An invalid primitive is a real problem someone should see; a merely
-      // pending one is a decision waiting to be made, not a failure.
-      status: invalid ? 'failed' : 'ok',
+            status: invalid ? 'failed' : 'ok',
       counts: {
         total: primitives.length,
         registered: primitives.filter((p) => p.state === 'registered').length,
@@ -253,12 +184,7 @@ export async function resourcesResultOf(argv, ctx = {}) {
   }
 
   if (!target) throw usageError(`resources ${verb} requires a path`, 'harness resources list');
-  // Matched generously on purpose. A person types the name they gave the thing
-  // — `my-team-skill` — not `skills/my-team-skill/SKILL.md`. Matching only the
-  // full path or the frontmatter name meant an INVALID primitive (whose name
-  // could not be read) reported "not found", hiding the actual problem behind a
-  // misleading error.
-  const matches = (p) => p.path === target
+    const matches = (p) => p.path === target
     || p.path.endsWith(`/${target}`)
     || p.name === target
     || p.path.split('/')[1] === target
@@ -299,9 +225,7 @@ export async function cmdResources(argv, ctx = {}) {
       keyWidth,
     }));
     for (const p of result.primitives) {
-      // Untrusted text from a file someone else wrote, on its way to a
-      // terminal: inerted like every other external string the harness renders.
-      console.log(ui.line({
+            console.log(ui.line({
         state: STATE_STYLE[p.state] || 'warn',
         key: p.path,
         value: p.state,
@@ -354,13 +278,7 @@ export async function cmdResources(argv, ctx = {}) {
 }
 
 export function resourcesExitFor(result) {
-  // An invalid primitive makes `list` a failure so CI — or a person reading an
-  // exit code — learns that something someone added will never load.
-  if ((result?.verb === 'list' || result?.verb === 'bundles') && result.status !== 'ok') return 1;
-  // A refused placement means the bundle contributed NOTHING, and `add`,
-  // `update` and `remove` reported that as a warning line while exiting 0. A CI
-  // job that installs a bundle and checks the exit code could not tell the
-  // difference between "installed" and "installed and silently placed nothing".
-  if (result?.sync?.refused?.length) return 1;
+    if ((result?.verb === 'list' || result?.verb === 'bundles') && result.status !== 'ok') return 1;
+    if (result?.sync?.refused?.length) return 1;
   return EXIT.ok;
 }

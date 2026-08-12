@@ -1,16 +1,3 @@
-/**
- * `harness config show|get|set|validate` — the configuration surface.
- *
- * `show` leads with PROVENANCE rather than values alone. The question an
- * operator actually has is not "what is the timeout" but "why is it that, when
- * I set something else" — a config command that prints an effective value
- * without saying where it came from leaves the interesting half unanswered, and
- * this harness merges three sources with one of them deliberately able to lose.
- *
- * `set` is the only verb with a mutate side effect, declared per verb rather
- * than inherited from the entry's maximum, for the same reason `checks list`
- * does not inherit `checks run`'s execute class.
- */
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { resolveCopilotHome } from './paths.mjs';
@@ -38,12 +25,6 @@ function notFoundError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_NOT_FOUND', exit: EXIT.notFound, hint });
 }
 
-/**
- * `--scope` is read straight from argv rather than added to lib/flags.mjs, the
- * same reason `--match` and `--source` are: parseFlags is shared by every
- * command, and a new value-flag there would also have to join
- * `FLAGS_WITH_VALUES` in argv.mjs or free-text parsing would swallow its value.
- */
 function readValueFlag(argv, name) {
   const boundary = argv.indexOf('--');
   const scan = boundary === -1 ? argv : argv.slice(0, boundary);
@@ -55,9 +36,48 @@ function readValueFlag(argv, name) {
   return next === undefined || next.startsWith('--') ? '' : next;
 }
 
+/**
+ * Normalize set-style positionals so humans can type frontier-style sugar:
+ *   set agent.enabled false
+ *   set agent.enabled=false
+ *   set agent.enabled = false
+ * Without collapsing unrelated positionals (get still takes one key only).
+ */
+export function normalizeConfigPositionals(positionals, { verb }) {
+  const out = [...positionals];
+  if (verb !== 'set' && out[0] !== 'set') return out;
+
+  // After verb: ["set", "agent.enabled=false"] or ["set", "agent.enabled", "=", "false"]
+  const verbIdx = out[0] === 'set' ? 0 : -1;
+  const start = verbIdx === 0 ? 1 : 0;
+  if (out.length <= start) return out;
+
+  const head = out[start];
+  if (typeof head === 'string' && head.includes('=') && !head.startsWith('=')) {
+    const eq = head.indexOf('=');
+    const key = head.slice(0, eq);
+    const value = head.slice(eq + 1);
+    if (key) {
+      const rest = out.slice(start + 1);
+      return verbIdx === 0 ? ['set', key, value, ...rest] : [key, value, ...rest];
+    }
+  }
+
+  // ["set", "agent.enabled", "=", "false"] or ["set", "agent.enabled", "="]
+  if (out[start + 1] === '=') {
+    const key = out[start];
+    const value = out[start + 2] ?? null;
+    const rest = out.slice(start + 3);
+    if (verbIdx === 0) return value === null ? ['set', key] : ['set', key, value, ...rest];
+    return value === null ? [key] : [key, value, ...rest];
+  }
+
+  return out;
+}
+
 function context(argv) {
   const flags = parseFlags(argv);
-  const positionals = [];
+  const rawPositionals = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--') break;
@@ -65,9 +85,12 @@ function context(argv) {
       if (!a.includes('=') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i += 1;
       continue;
     }
-    positionals.push(a);
-    if (positionals.length === 3) break;
+    rawPositionals.push(a);
+    // Allow one extra token for the `key = value` sugar before collapsing.
+    if (rawPositionals.length === 5) break;
   }
+  const verb = rawPositionals[0] ?? null;
+  const positionals = normalizeConfigPositionals(rawPositionals, { verb });
   return {
     flags,
     scope: readValueFlag(argv, '--scope'),
@@ -93,9 +116,7 @@ export async function configResultOf(argv, ctx = {}) {
     return {
       schema: 1,
       verb,
-      // Same reason as `checks`: without a `status` the envelope's default
-      // `ok` stood next to a body full of parse errors.
-      status: resolved.errors.length ? 'failed' : 'ok',
+            status: resolved.errors.length ? 'failed' : 'ok',
       files: resolved.files,
       settings: CONFIG_KEYS.map((k) => ({
         key: k,
@@ -109,10 +130,7 @@ export async function configResultOf(argv, ctx = {}) {
   }
 
   if (verb === 'validate') {
-    // Exits non-zero on a broken file so CI can gate on it. A config that does
-    // not parse is a policy nobody is enforcing, which is worse than an absent
-    // one because it looks present.
-    return {
+        return {
       schema: 1,
       verb,
       status: resolved.errors.length ? 'failed' : 'ok',
@@ -139,21 +157,24 @@ export async function configResultOf(argv, ctx = {}) {
   }
 
   // `set`.
-  if (value === null) throw usageError(`config set requires a value`, `harness config set ${key} <value> --scope user|project`);
-  const scope = rawScope || null;
-  if (!scope) {
-    // No default scope, deliberately: guessing wrong writes a machine-wide
-    // decision into a repository, or a repository's needs onto a machine.
-    throw usageError('config set requires --scope', `--scope ${SCOPES.join(' or --scope ')}`);
+  if (value === null || value === '') {
+    throw usageError(
+      `config set requires a value`,
+      `config set ${key} <value>   (scope defaults to user; use --scope project for the repo)`,
+    );
   }
-  if (!SCOPES.includes(scope)) throw usageError(`unknown scope: ${scope}`, `--scope ${SCOPES.join(' or --scope ')}`);
+  // Default scope is user — matches frontier TUIs (Claude/Codex settings land
+  // in user scope unless project is explicit). Project still requires --scope.
+  const scopeDefaulted = !rawScope;
+  const scope = rawScope || 'user';
+  if (!SCOPES.includes(scope)) {
+    throw usageError(
+      `unknown scope: ${scope}`,
+      `--scope ${SCOPES.join(' or --scope ')}  (not session)`,
+    );
+  }
 
   const written = setConfigValue({ scope, key, value, copilotHome, workspace });
-  // Trust is recomputed AFTER the write. `config.yaml` is a pinned file, so
-  // writing the project scope invalidates the approval that was covering it —
-  // reusing the pre-write boolean reported an effective value from a project
-  // that had just become `stale`, and the very next read disagreed. Found by
-  // the Codex phase review.
   const trustedAfter = isProjectTrusted({ workspace, copilotHome });
   const after = resolveConfig({ copilotHome, workspace, projectTrusted: trustedAfter });
   return {
@@ -161,20 +182,24 @@ export async function configResultOf(argv, ctx = {}) {
     verb,
     key,
     scope,
+    scopeDefaulted,
     written: written.value,
     file: written.file,
-    // The effective value AFTER the write, which is not always what was just
-    // written — a restrictive key set loosely in the project scope leaves the
-    // user's value in force, and saying so here prevents the operator walking
-    // away believing a limit changed when it did not.
     value: after.values[key],
     ...after.provenance[key],
-    effectiveChanged: after.values[key] === written.value,
-    // Surfaced because it is the likeliest surprise: a project-scope write makes
-    // the project's own approval stale, so the value just written does not take
-    // effect until someone re-approves after reading the change.
+    effectiveChanged: configValuesEqual(after.values[key], written.value),
     ...(scope === 'project' && !trustedAfter ? { trustNowStale: true } : {}),
   };
+}
+
+/** Scalar === ; arrays compare by joined form so list keys do not false-warn. */
+function configValuesEqual(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const as = Array.isArray(a) ? a.map(String).join(',') : String(a ?? '');
+    const bs = Array.isArray(b) ? b.map(String).join(',') : String(b ?? '');
+    return as === bs;
+  }
+  return a === b;
 }
 
 function renderShow(result) {
@@ -209,31 +234,35 @@ export async function cmdConfig(argv, ctx = {}) {
     const keyWidth = keyWidthFor([result.key, 'source']);
     console.log(ui.line({ key: result.key, value: Array.isArray(result.value) ? result.value.join(',') : String(result.value), note: [result.source, result.note].filter(Boolean).join(' · '), keyWidth }));
   } else {
-    const keyWidth = keyWidthFor(['set', 'file', 'effective']);
-    console.log(ui.line({ state: 'ok', key: 'set', value: `${result.key} = ${Array.isArray(result.written) ? result.written.join(',') : String(result.written)}`, note: result.scope, keyWidth }));
-    console.log(ui.line({ key: 'file', value: result.file, keyWidth }));
+    // Compact product lines — avoid a sparse 4-row key dump that fills a wide
+    // tinted block with empty columns on the session ledger.
+    const written = Array.isArray(result.written) ? result.written.join(',') : String(result.written);
+    const effective = Array.isArray(result.value) ? result.value.join(',') : String(result.value);
+    const scopeNote = result.scopeDefaulted ? `${result.scope} (default)` : result.scope;
+    const keyWidth = keyWidthFor(['set', 'file']);
     console.log(ui.line({
-      state: result.effectiveChanged ? 'ok' : 'warn',
-      key: 'effective',
-      value: Array.isArray(result.value) ? result.value.join(',') : String(result.value),
-      note: [result.source, result.note].filter(Boolean).join(' · '),
+      state: 'ok',
+      key: 'set',
+      value: `${result.key} = ${written}`,
+      note: scopeNote,
       keyWidth,
     }));
+    console.log(ui.line({ key: 'file', value: result.file, keyWidth }));
+    if (!result.effectiveChanged) {
+      console.log(ui.line({
+        state: 'warn',
+        key: 'effective',
+        value: effective,
+        note: [result.source, result.note, 'not effective'].filter(Boolean).join(' · '),
+        keyWidth: keyWidthFor(['set', 'file', 'effective']),
+      }));
+    }
   }
 
   // One rule, shared with the lane path through the registry's `exitOf`.
   return configExitFor(result);
 }
 
-/**
- * The exit code for a `config` result, on EVERY lane.
- *
- * `config validate` is meant to be gated on in CI, and `dispatchLane` returns 0
- * on any success path unless the entry declares this — so `config validate
- * --output json-envelope` exited 0 over a body saying `"valid": false`. Same
- * defect the Codex review found in `checks run`, in a command whose whole
- * purpose is likewise the exit code.
- */
 export function configExitFor(result) {
   if (result?.verb === 'validate') return result.valid ? EXIT.ok : 1;
   if (result?.verb === 'show') return result.errors?.length ? 1 : EXIT.ok;

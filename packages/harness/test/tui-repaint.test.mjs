@@ -1,152 +1,151 @@
-/**
- * P4bAC10 — the repaint arithmetic.
- *
- * The composer's first interactive outing drew a box INSIDE the previous box.
- * Nothing in the suite could see it: the state machine and the renderer were
- * both correct, and the defect lived entirely in the escape sequences that move
- * the cursor between paints — the one part with no test.
- *
- * So this file models a cursor. The fake terminal below understands exactly
- * three sequences (`CSI nA` up, `CSI nC` right, `CSI 0J` clear-to-end) plus CR
- * and LF, which is everything the input binding emits. That is enough to assert
- * what a screenshot showed and a stream capture could not: how many composers
- * end up on screen.
- *
- * Two bugs were found and both are pinned here. `erase` walked back `painted`
- * lines while the cursor had already been parked inside the block, overshooting
- * by the parked offset and leaving the old box behind; and `next()` painted on
- * top of a paint `write()` had already done, because neither erased first.
- */
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { createInput } from '../lib/tui/input.mjs';
-
-const CSI = '[';
-
-/** A terminal with a cursor, a screen, and no dependencies. */
-function fakeTty({ columns = 60 } = {}) {
-  const screen = [''];
-  let cy = 0;
-  let cx = 0;
-  const ensure = (row) => { while (screen.length <= row) screen.push(''); };
-
-  return {
-    isTTY: true,
-    columns,
-    write(chunk) {
-      let rest = String(chunk);
-      while (rest.length) {
-        if (rest.startsWith(CSI)) {
-          const m = /^\[(\d*)([A-Za-z])/.exec(rest);
-          if (m) {
-            const n = m[1] === '' ? 1 : Number(m[1]);
-            if (m[2] === 'A') cy = Math.max(0, cy - n);
-            else if (m[2] === 'B') cy += n;
-            else if (m[2] === 'C') cx += n;
-            else if (m[2] === 'D') cx = Math.max(0, cx - n);
-            else if (m[2] === 'J' && (m[1] === '0' || m[1] === '')) {
-              ensure(cy);
-              screen[cy] = screen[cy].slice(0, cx);
-              screen.length = cy + 1;
-            } else if (m[2] === 'H') { cy = 0; cx = 0; }
-            rest = rest.slice(m[0].length);
-            continue;
-          }
-        }
-        const ch = rest[0];
-        if (ch === '\n') { cy += 1; cx = 0; ensure(cy); rest = rest.slice(1); continue; }
-        if (ch === '\r') { cx = 0; rest = rest.slice(1); continue; }
-        const stop = rest.search(/[\n\r]/);
-        const text = stop === -1 ? rest : rest.slice(0, stop);
-        ensure(cy);
-        const padded = screen[cy].padEnd(cx, ' ');
-        screen[cy] = padded.slice(0, cx) + text + padded.slice(cx + text.length);
-        cx += text.length;
-        rest = stop === -1 ? '' : rest.slice(text.length);
-      }
-      return true;
-    },
-    on() {}, off() {},
-    get lines() { return screen.map((l) => l.replace(/\s+$/, '')); },
-  };
-}
+import { createOverlay } from '../lib/tui/overlay.mjs';
+import { createBlock } from '../lib/tui/block.mjs';
+import { fakeTty, plainUi } from './helpers/tty.mjs';
 
 /** A real stream, so readline's own plumbing works, wearing a TTY hat. */
 const fakeInput = () => Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
-const ui = { paint: (_token, text) => text, unicode: true, arrow: '->' };
+const ui = plainUi();
 
-test('P4bAC10: repainting repeatedly leaves ONE composer on screen', () => {
+/** Rows that are part of the editor, identified by the rule it draws. The top
+ * rule may carry a right-embedded label (`── deliver ──`), so both spellings
+ * count. */
+const isRule = (t) => /^─{4,}$/.test(t) || /^─{3,} \S.* ──$/.test(t);
+const ruleRows = (out) => out.lines.filter((l) => isRule(l.trim())).length;
+const caretRows = (out) => out.lines.filter((l) => l.includes('❯')).length;
+
+test('P4bAC10: repainting repeatedly leaves ONE editor on screen', () => {
   const output = fakeTty();
-  const session = createInput({ input: fakeInput(), output, ui, label: 'prompt-library' });
+  const session = createInput({ input: fakeInput(), output, ui });
 
   session.setStatus({ workspace: '~/repo' });
   session.setStatus({ branch: 'main' });
   session.setStatus({ gate: 'pass' });
 
-  const boxes = output.lines.filter((l) => l.includes('prompt-library')).length;
-  assert.equal(boxes, 1,
-    `the composer appears ${boxes} times — erase walked back the wrong number of lines, so each paint nested inside the last`);
-  const carets = output.lines.filter((l) => l.includes('❯')).length;
-  assert.equal(carets, 1, 'and exactly one caret, or the operator sees two input lines');
+  assert.equal(ruleRows(output), 2,
+    'exactly two hairlines — more means erase walked back the wrong number of lines and each paint nested inside the last');
+  assert.equal(caretRows(output), 1, 'and exactly one caret, or the operator sees two input lines');
   session.close();
 });
 
-test('P4bAC10: a transcript line lands above the composer, which stays at the bottom', () => {
+test('P4bAC10: a transcript line lands above the editor, which stays at the bottom', () => {
   const output = fakeTty();
-  const session = createInput({ input: fakeInput(), output, ui, label: 'repo' });
-  session.write('first line');
-  session.write('second line');
+  const session = createInput({ input: fakeInput(), output, ui });
+  session.commit(['first line']);
+  session.commit(['second line']);
 
   const lines = output.lines;
   const firstAt = lines.findIndex((l) => l.includes('first line'));
   const secondAt = lines.findIndex((l) => l.includes('second line'));
-  const boxAt = lines.findIndex((l) => l.includes('repo'));
-  assert.ok(firstAt !== -1 && secondAt !== -1 && boxAt !== -1, 'all three must be on screen');
+  const caretAt = lines.findIndex((l) => l.includes('❯'));
+  assert.ok(firstAt !== -1 && secondAt !== -1 && caretAt !== -1, 'all three must be on screen');
   assert.ok(firstAt < secondAt, 'the transcript keeps its order');
-  assert.ok(secondAt < boxAt, 'and the composer stays below everything written');
-  assert.equal(lines.filter((l) => l.includes('repo')).length, 1);
+  assert.ok(secondAt < caretAt, 'and the editor stays below everything written');
+  assert.equal(caretRows(output), 1);
   session.close();
 });
 
-test('P4bAC10: typing repaints in place rather than stacking boxes', async () => {
+test('P4bAC10: typing repaints in place rather than stacking editors', async () => {
   const output = fakeTty();
-  // A label that cannot collide with the status path — the first version used
-  // `repo` for both and counted the status line as a second composer.
   const input = fakeInput();
-  const session = createInput({ input, output, ui, label: 'the-label' });
+  const session = createInput({ input, output, ui });
   session.setStatus({ workspace: '~/somewhere' });
-  // Driven through the REAL keypress binding, not by calling the composer
-  // directly. The previous version bypassed the binding entirely, so it could
-  // not have detected a stacked repaint per keystroke — the exact defect it was
-  // written to catch (Codex final review).
-  const pending = session.next();
+    const pending = session.next();
   for (const ch of 'status') input.emit('keypress', ch, { name: ch, sequence: ch });
-  assert.equal(output.lines.filter((l) => l.includes('the-label')).length, 1,
-    'six keypresses must not leave six composers behind');
-  assert.equal(output.lines.filter((l) => l.includes('❯')).length, 1);
+  assert.equal(ruleRows(output), 2, 'six keypresses must not leave six editors behind');
+  assert.equal(caretRows(output), 1);
   input.emit('keypress', null, { name: 'return' });
   await pending;
   session.close();
 });
 
-test('P4bAC10: closing the session erases the composer instead of stranding it', () => {
+test('P4bAC10: an overlay replaces the editor rather than stacking on top of it', () => {
   const output = fakeTty();
-  const session = createInput({ input: fakeInput(), output, ui, label: 'repo' });
+  const session = createInput({ input: fakeInput(), output, ui });
+  session.setStatus({ workspace: '~/repo' });
+  session.openOverlay(createOverlay({ rows: [{ label: 'verify' }, { label: 'status' }], footer: 'esc closes' }));
+
+  assert.equal(caretRows(output), 1,
+    'the overlay has its own prompt caret; the composer must be gone, not underneath');
+  assert.equal(ruleRows(output), 0, 'and the hairlines with it — overlays replace, they do not layer');
+  assert.ok(output.lines.some((l) => l.includes('verify')));
+
+  session.closeOverlay();
+  assert.equal(ruleRows(output), 2, 'closing brings the editor back, exactly once');
+  session.close();
+});
+
+test('P4bAC10: a live block sits above the editor and vanishes when the command ends', () => {
+  const output = fakeTty();
+  const session = createInput({ input: fakeInput(), output, ui });
+  const block = createBlock({ command: 'npm test', status: 'running', lines: ['first', 'second'] });
+  session.beginLive(block);
+
+  const lines = output.lines;
+  const liveAt = lines.findIndex((l) => l.includes('npm test'));
+  const caretAt = lines.findIndex((l) => l.includes('❯'));
+  assert.ok(liveAt !== -1 && caretAt !== -1);
+  assert.ok(liveAt < caretAt, 'the running command is above the editor, where the transcript is');
+  assert.ok(lines.some((l) => l.includes('esc cancels')), 'the sticky header says how to stop it');
+
+  session.endLive();
+  session.setStatus({ workspace: '~/repo' });
+  assert.equal(output.lines.filter((l) => l.includes('esc cancels')).length, 0,
+    'and the live region is transient — the committed block is what survives');
+  session.close();
+});
+
+test('P4bAC10: closing the session erases the region instead of stranding it', () => {
+  const output = fakeTty();
+  const session = createInput({ input: fakeInput(), output, ui });
   session.setStatus({ workspace: '~/repo' });
   session.close();
-  assert.equal(output.lines.filter((l) => l.includes('❯')).length, 0,
-    'the exit ritual prints after this; a stranded box would sit in the middle of it');
+  assert.equal(caretRows(output), 0,
+    'the exit ritual prints after this; a stranded editor would sit in the middle of it');
+  assert.equal(ruleRows(output), 0);
 });
 
 test('P4bAC10: the piped path emits no escape sequences at all', () => {
-  // Scripted sessions must stay diffable — a repaint sequence in captured
-  // output would break every existing test that reads the transcript.
-  const output = fakeTty();
+    const output = fakeTty();
   const piped = new PassThrough();
   piped.end();
-  const session = createInput({ input: piped, output, ui, label: 'repo' });
-  session.write('a line');
+  const session = createInput({ input: piped, output, ui });
+  session.commit(['a line']);
   assert.deepEqual(output.lines.filter(Boolean), ['a line']);
+  assert.doesNotMatch(output.bytes, /\x1b/, 'not one escape byte reaches a pipe');
+  session.close();
+});
+
+test('the alternate screen is entered and left as a pair, and only when asked for', () => {
+  const plain = fakeTty();
+  const a = createInput({ input: fakeInput(), output: plain, ui });
+  assert.equal(plain.altScreen, false, 'main buffer by default — scrollback is the design commitment');
+  a.close();
+
+  const alt = fakeTty();
+  const b = createInput({ input: fakeInput(), output: alt, ui, altScreen: true });
+  assert.equal(alt.altScreen, true);
+  b.close();
+  assert.equal(alt.altScreen, false, 'and a session that entered it always leaves it');
+});
+
+test('capture takes stdout for one dispatch and gives it back, partial line included', () => {
+  const output = fakeTty();
+  const session = createInput({ input: fakeInput(), output, ui });
+  const seen = [];
+  const capture = session.capture((line) => seen.push(line));
+
+  output.write('one\ntwo\n');
+  output.write('three without a newline');
+  assert.deepEqual(seen, ['one', 'two'], 'complete lines arrive as they complete');
+  capture.release();
+  assert.deepEqual(seen, ['one', 'two', 'three without a newline'],
+    'and the partial last line is flushed rather than dropped — a command that printed without a trailing newline still gets its output');
+
+  output.write('after release');
+  assert.equal(seen.length, 3, 'stdout is genuinely handed back');
   session.close();
 });

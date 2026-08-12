@@ -1,17 +1,3 @@
-/**
- * Phase 3 — `harness config`, and the execution policy it feeds.
- *
- * Two things are pinned here, and the second is the one that matters.
- *
- * The first is ordinary: scopes, provenance, schema validation, atomic writes.
- *
- * The second is the merge rule. Precedence is default < user < project, EXCEPT
- * for keys marked restrictive, where the safer scope wins regardless of which
- * is more specific. A repository is content — often content nobody has read —
- * and letting a checked-in file re-enable a shell its owner disabled would make
- * the user-scope setting advisory. Every restrictive-key test below is written
- * from the attacker's side: the project asks for MORE and must not get it.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -39,11 +25,6 @@ function writeProjectConfig({ workspace }, body) {
   fs.writeFileSync(path.join(workspace, '.github', 'harness', 'config.yaml'), body);
 }
 
-/**
- * Harness flags go BEFORE any `--`, or `exec`/`bash` would hand them to the
- * child and the command under test would read a different config than the one
- * the test just wrote.
- */
 function run(argv, { workspace, copilotHome }) {
   const harnessFlags = ['--workspace', workspace, '--copilot-home', copilotHome, '--no-events'];
   const boundary = argv.indexOf('--');
@@ -54,15 +35,7 @@ function run(argv, { workspace, copilotHome }) {
 }
 
 test('every declared key is consumed by code that exists', () => {
-  // The guard against a configuration surface growing keys nothing reads. If a
-  // key is added here, its reader has to be added with it.
-  //
-  // Scans all of `lib/` rather than one file: keys are consumed wherever the
-  // policy applies — `exec-cmd.mjs` for the execution commands,
-  // `checks.mjs` for the named-check path — and pinning the search to a single
-  // module would fail an honestly-placed reader while still passing a key that
-  // only `config.mjs` mentions.
-  const libDir = path.join(packageRoot, 'lib');
+    const libDir = path.join(packageRoot, 'lib');
   const sources = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -126,8 +99,6 @@ test('a project cannot re-enable a shell the user disabled', () => {
   assert.equal(resolveConfig(s).values['exec.bash_enabled'], false);
 });
 
-// Trust (P3AC6) is the gate that keeps an unreviewed repository out entirely;
-// the restrictive merge is the second line for a repository that IS trusted.
 test('an untrusted project contributes no effective value at all', () => {
   const s = scopes();
   writeProjectConfig(s, 'version: 1\nexec.timeout_seconds: 5\n');
@@ -159,8 +130,6 @@ test('schema validation rejects out-of-range, wrong-typed, and malformed values'
   assert.deepEqual(coerceValue('exec.allow_env', 'A, B'), ['A', 'B']);
 });
 
-// A config that does not parse is a policy nobody is enforcing — and unlike an
-// absent one, it looks present.
 test('a malformed file is reported, never silently skipped', () => {
   const s = scopes();
   writeProjectConfig(s, 'version: 1\nexec.timeout_seconds: not-a-number\n');
@@ -197,11 +166,14 @@ test('set preserves the keys it is not changing', () => {
   assert.equal(values['exec.bash_enabled'], false);
 });
 
-test('set requires an explicit scope — guessing writes the wrong file', () => {
+test('set defaults to user scope when --scope is omitted (TUI/TUX sugar)', () => {
   const s = scopes();
   const res = run(['config', 'set', 'exec.timeout_seconds', '30'], s);
-  assert.equal(res.status, EXIT.usage);
-  assert.match(res.stdout + res.stderr, /--scope/);
+  assert.equal(res.status, 0, res.stderr + res.stdout);
+  assert.match(res.stdout, /exec\.timeout_seconds/);
+  assert.match(res.stdout, /user/);
+  const body = fs.readFileSync(path.join(s.copilotHome, 'harness', 'config.yaml'), 'utf8');
+  assert.match(body, /timeout_seconds:\s*30/);
 });
 
 test('set reports the effective value after the write, not just what it wrote', () => {
@@ -262,9 +234,48 @@ test('bash is denied by policy while exec keeps working', () => {
 test('a denied bash reports the denial rather than a syntax complaint about the script', () => {
   const s = scopes();
   setConfigValue({ scope: 'user', key: 'exec.bash_enabled', value: 'false', ...s });
-  // No `--` at all: the denial must still be the error the user sees, because
-  // the command was never going to run whatever they typed.
-  const res = run(['bash'], s);
+    const res = run(['bash'], s);
   assert.equal(res.status, EXIT.needsApproval);
   assert.match(res.stdout + res.stderr, /disabled by configuration/);
+});
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('a project cannot loosen a restrictive key past the default when no user value exists', async () => {
+  const { approveProject } = await import('../lib/trust.mjs');
+  const s = scopes();
+  writeProjectConfig(s, 'version: 1\nexec.timeout_seconds: 3600\n');
+  approveProject(s);
+  const { values, provenance } = resolveConfig({ ...s, projectTrusted: true });
+  assert.equal(values['exec.timeout_seconds'], 600, 'restrictive arithmetic must not depend on a second scope existing');
+  assert.match(provenance['exec.timeout_seconds'].note, /less restrictive/);
+});
+
+test('the user scope is still free to raise a limit above the default', () => {
+  const s = scopes();
+  setConfigValue({ scope: 'user', key: 'exec.timeout_seconds', value: '900', ...s });
+  assert.equal(resolveConfig(s).values['exec.timeout_seconds'], 900);
+});
+
+test('inherited Object.prototype keys are rejected by the config schema, not silently accepted', () => {
+  for (const key of ['constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
+    assert.equal(Object.hasOwn(CONFIG_SCHEMA, key), false, `${key} must not be an own key`);
+    assert.throws(() => coerceValue(key, 'anything'), (e) => e.code === 'E_USAGE',
+      `${key} must not resolve via inheritance and skip validation`);
+  }
+});
+
+test('a config file naming a prototype key reports it as unknown instead of storing it', () => {
+  const s = scopes();
+  fs.mkdirSync(path.join(s.copilotHome, 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(s.copilotHome, 'harness', 'config.yaml'), 'toString: 1\nconstructor: 2\n');
+  const cfg = resolveConfig(s);
+  assert.equal(cfg.errors.length, 2, 'an unknown key is reported, never silently accepted');
+  for (const e of cfg.errors) assert.match(e, /unknown key/);
+});
+
+test('a list is normalized whether one scope or two contributed it', () => {
+  const s = scopes();
+  setConfigValue({ scope: 'user', key: 'exec.allow_env', value: 'A,A', ...s });
+  assert.deepEqual(resolveConfig(s).values['exec.allow_env'], ['A']);
 });

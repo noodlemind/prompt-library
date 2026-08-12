@@ -74,11 +74,6 @@ test('scaffolded capability-gap plan is blocked-capability and the gate denies i
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-// cmdPlanNew's bespoke argv loop broke OUT of the boundary instead of slicing
-// at it like lib/flags.mjs#parseFlags, so a value flag sitting right before
-// `--` consumed the boundary token through next() and parsing continued past
-// it. Verified pre-fix: `--title -- --json` set the plan heading to `--` AND
-// re-interpreted the post-boundary `--json` as the output selector.
 test('CLI: plan-new slices at the `--` boundary — no value flag swallows it, nothing after it is a flag', () => {
   const ws = workspace();
   const r = spawnSync(
@@ -97,10 +92,6 @@ test('CLI: plan-new slices at the `--` boundary — no value flag swallows it, n
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-// cmdPlanNew has always read --status (it feeds buildPlanSkeleton's status
-// frontmatter), but the registry entry never declared it — so strict
-// validateArgs rejected the invocation with `unknown flag: --status` before
-// the handler ran.
 test('CLI: plan-new --status is declared and writes the requested status frontmatter', () => {
   const ws = workspace();
   const explicit = harness(ws, [

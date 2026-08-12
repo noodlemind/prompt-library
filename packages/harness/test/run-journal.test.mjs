@@ -1,11 +1,3 @@
-/**
- * Phase 4a — the run journal.
- *
- * The properties worth pinning are the ones a journal is FOR: that an entry is
- * never modified, that a run can be joined to the work it caused, that an
- * interrupted command is never replayed, and that a journal which loses
- * entries says so. Everything else here is ordinary querying.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -35,9 +27,7 @@ const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p))
 const scopes = () => ({ workspace: tempDir('rj-ws-'), copilotHome: tempDir('rj-home-') });
 
 function run(argv, { workspace, copilotHome }) {
-  // Spliced before any `--`: appended after it, `exec` would hand these to the
-  // child and the command under test would use a different workspace.
-  const flags = ['--workspace', workspace, '--copilot-home', copilotHome];
+    const flags = ['--workspace', workspace, '--copilot-home', copilotHome];
   const boundary = argv.indexOf('--');
   const full = boundary === -1
     ? [...argv, ...flags]
@@ -50,8 +40,6 @@ test('P4aAC1: every run carries a stable id, and ids do not collide', () => {
   assert.equal(ids.size, 500, 'two runs starting in the same millisecond must not share an id');
 });
 
-// The property an audit depends on. Narrower than "the file only grows" — see
-// the module doc — but this is the half that must never break.
 test('P4aAC1: a terminal record never overwrites an earlier one', () => {
   const { workspace } = scopes();
   const id = newRunId();
@@ -76,8 +64,6 @@ test('P4aAC3: finishRun refuses a status outside the contract vocabulary', () =>
   }
 });
 
-// `interrupted` is not in the vocabulary, so liveness is reported separately
-// rather than invented as a status.
 test('P4aAC3: a run with no outcome is `running`, with `live` telling you whether that is true', () => {
   const { workspace } = scopes();
   const mine = newRunId();
@@ -103,9 +89,7 @@ test('P4aAC5: runs are queryable by status, command, host, plan, and date', () =
   assert.deepEqual(queryRuns(runs, { command: 'verify' }).map((r) => r.run), ['a', 'c']);
   assert.deepEqual(queryRuns(runs, { host: 'vscode' }).map((r) => r.run), ['b', 'c']);
   assert.deepEqual(queryRuns(runs, { plan: 'docs/plans/y.md' }).map((r) => r.run), ['c']);
-  // A bare date is what a person types; rejecting it would be a papercut on the
-  // filter people reach for most.
-  assert.deepEqual(queryRuns(runs, { since: '2026-08-05' }).map((r) => r.run), ['b', 'c']);
+    assert.deepEqual(queryRuns(runs, { since: '2026-08-05' }).map((r) => r.run), ['b', 'c']);
   assert.deepEqual(queryRuns(runs, { until: '2026-08-05' }).map((r) => r.run), ['a', 'b']);
   assert.deepEqual(queryRuns(runs, { since: '2026-08-02', until: '2026-08-06' }).map((r) => r.run), ['b']);
 });
@@ -234,12 +218,6 @@ test('a refused invocation opens no run and touches nothing', () => {
 
 // --- regressions for the Codex phase-4a review ---------------------------
 
-/**
- * P1-2. The journal used to infer a run's status by reverse-mapping the exit
- * code, so `exec` passing through a child's exit 8 was recorded as a harness
- * `timed-out`. The hazard was already written down in `exitFor`; the journal
- * walked into it anyway.
- */
 for (const lane of [null, 'json-envelope']) {
   test(`P1-2: a child's exit code is not mistaken for a harness status on the ${lane || 'ledger'} lane`, () => {
     const s = scopes();
@@ -282,9 +260,7 @@ test('P1-4: an unparseable timestamp is kept, not deleted by a string comparison
   fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
   const file = runsPath(workspace);
   const lines = [
-    // Not `'0'`: Date.parse('0') is a real date (year 2000), so pruning it is
-    // correct. The invariant is about a value that cannot be read at all.
-    JSON.stringify({ schema: 1, type: 'run.start', run: 'weird', ts: 'not-a-date' }),
+        JSON.stringify({ schema: 1, type: 'run.start', run: 'weird', ts: 'not-a-date' }),
     ...Array.from({ length: 6000 }, () => JSON.stringify({ schema: 1, type: 'run.start', run: 'old', ts: '2020-01-01T00:00:00.000Z', pad: 'x'.repeat(200) })),
   ];
   fs.writeFileSync(file, `${lines.join('\n')}\n`);
@@ -345,9 +321,7 @@ test('P2-15: a status outside the vocabulary is not believed, and is never resum
 
 // P2-13.
 test('P2-13: dates are compared as instants, and a nonsense date is refused', () => {
-  // The run's own timestamp carries an offset: as an INSTANT it is exactly the
-  // bound, but as a STRING it sorts before it. String comparison excluded it.
-  const runs = [{ run: 'a', status: 'succeeded', startedAt: '2026-08-08T20:00:00.000-05:00' }];
+    const runs = [{ run: 'a', status: 'succeeded', startedAt: '2026-08-08T20:00:00.000-05:00' }];
   assert.equal(queryRuns(runs, { since: '2026-08-09T00:00:00.000Z' }).length, 1);
   assert.throws(() => queryRuns(runs, { since: '2026-99-99' }), (e) => e.code === 'E_USAGE');
 });
@@ -388,12 +362,6 @@ test('P2-11: a filter value never becomes the querying run’s own identity', ()
 
 // --- phase-4b/5 review: the live criticals -------------------------------
 
-/**
- * The first symlink fix was partial — `runs.jsonl` was contained but
- * `.gitignore` and `events.jsonl` still escaped, because the check ran after
- * one write and the event writer had none. The guard now lives at the single
- * directory choke point every writer passes through.
- */
 test('no writer under .harness escapes through a symlinked directory', () => {
   const s = scopes();
   const outside = tempDir('rj-escape2-');
@@ -403,10 +371,6 @@ test('no writer under .harness escapes through a symlinked directory', () => {
     'even a read-class command could otherwise be steered into writing outside the workspace');
 });
 
-/**
- * A lock only the pruner took was not a lock: a writer appending between the
- * pruner's read and its rename had its record discarded.
- */
 test('a concurrent append is never discarded by a prune', () => {
   resetRetentionState();
   const { workspace } = scopes();
@@ -415,9 +379,7 @@ test('a concurrent append is never discarded by a prune', () => {
   const old = '2020-01-01T00:00:00.000Z';
   fs.writeFileSync(file, `${Array.from({ length: 6000 }, (_, i) => JSON.stringify({ run: `old${i}`, ts: old, pad: 'x'.repeat(200) })).join('\n')}\n`);
 
-  // Append while the prune is deciding, through the same guarded path the
-  // journals use.
-  const appended = [];
+    const appended = [];
   const originalRead = fs.readFileSync;
   let injected = false;
   fs.readFileSync = (...args) => {

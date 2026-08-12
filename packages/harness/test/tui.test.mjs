@@ -1,14 +1,3 @@
-/**
- * Phase 4b — the Session Ledger.
- *
- * The design direction is what makes most of these assertions cheap: a
- * scrolling transcript in the terminal's MAIN buffer is a read-dispatch-print
- * loop, so there is no screen manager to test and no second behavior path to
- * keep in sync. The properties worth pinning are the ones that would let those
- * two things creep back in — a palette that drifts from dispatch, a row that
- * asks someone to type flag syntax, a ledger that shells out instead of
- * dispatching.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -31,12 +20,15 @@ const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p))
 const ESC = String.fromCharCode(27);
 
 /** Drive the whole loop over strings — the reason input/output are injected. */
-async function ledger(lines, { workspace = process.cwd(), dispatcher } = {}) {
+
+const LEDGER_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-ledger-home-'));
+
+async function ledger(lines, { workspace = process.cwd(), dispatcher, copilotHome = LEDGER_HOME } = {}) {
   const input = new PassThrough();
   const output = new PassThrough();
   let text = '';
   output.on('data', (c) => { text += c.toString(); });
-  const done = runLedger({ input, output, workspace, argv: ['--no-color'], dispatcher });
+    const done = runLedger({ input, output, workspace, copilotHome, argv: ['--no-color', '--no-events'], dispatcher });
   for (const line of lines) input.write(`${line}\n`);
   input.end();
   await done;
@@ -66,9 +58,7 @@ test('P4bAC9: the same query against the same rows yields the same order, every 
       assert.deepEqual(rankRows(index.rows, query).map((r) => r.id), first,
         `ranking for ${JSON.stringify(query)} must not vary between calls`);
     }
-    // …and must not depend on the input order, which is registration order
-    // across files and therefore incidental.
-    const shuffled = [...index.rows].reverse();
+        const shuffled = [...index.rows].reverse();
     assert.deepEqual(rankRows(shuffled, query).map((r) => r.id), first,
       'a total tie-break, not sort stability');
   }
@@ -117,9 +107,7 @@ test('P4bAC7: every palette row resolves to an argv the CLI actually accepts', (
   const palette = openPalette({ workspace: process.cwd() });
   const offenders = [];
   for (const row of palette.rows) {
-    // Rows with required values cannot be resolved without them; those are
-    // covered by the prompt assertions above. This checks the ones that can.
-    const { argv, missing } = resolveSelection(row, {});
+        const { argv, missing } = resolveSelection(row, {});
     if (missing.length || !argv) continue;
     const [name, ...rest] = argv;
     const entry = getCommand(name);
@@ -138,9 +126,12 @@ test('P4bAC7: every palette row resolves to an argv the CLI actually accepts', (
 test('the sigils parse, and `!!` wins over `!`', () => {
   assert.deepEqual(interpretLine('/run'), { kind: 'palette', query: 'run' });
   assert.deepEqual(interpretLine('/'), { kind: 'palette', query: '' });
-  assert.deepEqual(interpretLine('!ls -a'), { kind: 'shell', script: 'ls -a', private: false });
-  assert.deepEqual(interpretLine('!!ls -a'), { kind: 'shell', script: 'ls -a', private: true },
-    'the longer sigil must win, or the private form parses as the public one');
+  assert.deepEqual(interpretLine('!ls -a'), { kind: 'shell', script: 'ls -a' });
+    assert.deepEqual(interpretLine('!!'), { kind: 'rerun', target: null });
+  assert.deepEqual(interpretLine('!! 5e08c7'), { kind: 'rerun', target: '5e08c7' },
+    'the longer sigil must win, or a re-run parses as a shell command starting with `!`');
+  assert.equal(interpretLine('!! not an id').kind, 'invalid',
+    'anything that is not id-shaped is a mistake worth naming rather than a command worth guessing at');
   assert.deepEqual(interpretLine('@notes.md'), { kind: 'reference', target: 'notes.md' });
   assert.equal(interpretLine('   ').kind, 'empty');
   assert.equal(interpretLine('exit').kind, 'exit');
@@ -148,10 +139,7 @@ test('the sigils parse, and `!!` wins over `!`', () => {
 });
 
 test('session words work with or without a leading slash', () => {
-  // Operators coming from other agent CLIs type /exit and /clear. Shipping
-  // those to the palette filter produced "nothing matches" for the session's
-  // own words — the same class of failure /help used to have.
-  for (const [line, kind] of [
+    for (const [line, kind] of [
     ['exit', 'exit'], ['quit', 'exit'], ['/exit', 'exit'], ['/quit', 'exit'],
     ['clear', 'clear'], ['/clear', 'clear'],
     ['help', 'help'], ['/help', 'help'], ['?', 'help'], ['/?', 'help'],
@@ -161,15 +149,13 @@ test('session words work with or without a leading slash', () => {
   // A real palette filter is still a filter — only reserved words are special.
   assert.deepEqual(interpretLine('/status'), { kind: 'palette', query: 'status' });
   // Shell escape still wins for !clear (even though native clear is preferred).
-  assert.deepEqual(interpretLine('!clear'), { kind: 'shell', script: 'clear', private: false });
+  assert.deepEqual(interpretLine('!clear'), { kind: 'shell', script: 'clear' });
 });
 
 test('tokenize honors quotes but is deliberately not a shell', () => {
   assert.deepEqual(tokenize('search "two words" --limit 5'), ['search', 'two words', '--limit', '5']);
   assert.deepEqual(tokenize("recall 'a b'"), ['recall', 'a b']);
-  // No expansion, no substitution, no globbing — the ledger dispatches through
-  // the registry, and anything shell-shaped here would misdescribe what runs.
-  assert.deepEqual(tokenize('exec $HOME *'), ['exec', '$HOME', '*']);
+    assert.deepEqual(tokenize('exec $HOME *'), ['exec', '$HOME', '*']);
 });
 
 test('the tally counts outcomes apart', () => {
@@ -198,17 +184,10 @@ test('P4bAC8: a palette-initiated run echoes the resolved argv into the ledger',
     dispatcher: async (argv) => { calls.push(argv); return 0; },
   });
   assert.ok(calls.length >= 1, 'choosing a row must run something');
-  assert.match(text, /\$ harness status/,
-    'a transcript showing a choice but not the command cannot be replayed or reviewed');
+  assert.match(text, /[>❯] status/,
+    'a transcript showing a choice but not the command cannot be replayed or reviewed — the block carries the resolved argv');
 });
 
-/**
- * Every dispatched command carries the session's own workspace and home.
- *
- * Without it, `harness tui --workspace B` opened a ledger on B and ran each
- * command against the process cwd — a mutating command could act on a different
- * repository than the session was opened for, silently.
- */
 test('the session context reaches every command the ledger dispatches', async () => {
   const calls = [];
   const workspace = tempDir('tui-ctx-');
@@ -255,16 +234,14 @@ test('an unknown command is answered, not dispatched', async () => {
 test('the exit ritual prints the tally and how to pick the thread back up', async () => {
   const text = await ledger(['exit'], { dispatcher: async () => 0 });
   assert.match(text, /session/);
-  assert.match(text, /resume with: harness run list/);
+  assert.match(text, /resume with: harness tui/);
 });
 
 // --- P4bAC4 / P4bAC2 -------------------------------------------------------
 
 test('P4bAC4: the ledger renders through lib/style.mjs and degrades to ASCII', async () => {
   const text = await ledger(['/status', 'exit'], { dispatcher: async () => 0 });
-  // `--no-color` is passed in `ledger()`, so the ASCII glyph set is what must
-  // appear — and no escape sequences at all.
-  assert.equal(text.includes(ESC), false, 'a limited terminal must get no escape sequences');
+    assert.equal(text.includes(ESC), false, 'a limited terminal must get no escape sequences');
   assert.match(text, /\[ok\]/, 'the ASCII state token, from style.mjs rather than a local literal');
 });
 
@@ -281,15 +258,11 @@ test('P4bAC2: tui declares no output lanes, so --output is refused rather than i
 test('an arrow key cannot corrupt the command it precedes', () => {
   const UP = '\u001b[A';
   const DOWN = '\u001b[B';
-  // Exactly what the terminal handed us while readline was not doing line
-  // editing: the raw bytes for three Up presses, echoed, then the word.
-  assert.equal(interpretLine(`${UP}${UP}${UP}exit`).kind, 'exit',
+    assert.equal(interpretLine(`${UP}${UP}${UP}exit`).kind, 'exit',
     'this arrived as ^[[A^[[A^[[Aexit and was rejected as an unknown command');
   assert.equal(interpretLine(`${DOWN}status`).kind, 'command');
   assert.deepEqual(interpretLine(`${DOWN}status`).argv, ['status']);
-  // A line that is ONLY arrow keys is empty input, not an unknown command —
-  // the session reported `unknown` with a blank value for exactly this.
-  assert.equal(interpretLine(`${UP}${UP}${DOWN}${DOWN}`).kind, 'empty');
+    assert.equal(interpretLine(`${UP}${UP}${DOWN}${DOWN}`).kind, 'empty');
   assert.equal(stripControl('\u001b[31mred\u001b[0m'), 'red');
   assert.equal(stripControl('a\u0007b\u007f'), 'ab', 'bell and delete are not input either');
 });
@@ -302,16 +275,20 @@ test('`help` and `/help` answer instead of reporting nothing matches', () => {
 });
 
 test('the session renders a visible prompt naming the workspace it acts on', async () => {
-  // Asserted against the composer rather than by grepping tui-cmd.mjs for
-  // readline options. The old version pinned the shape of an implementation
-  // that has since been replaced, which is exactly the kind of test that has to
-  // be rewritten instead of read — the behaviour is what was ever at stake.
-  const { createComposer } = await import('../lib/tui/composer.mjs');
-  const c = createComposer({ width: 60, label: 'prompt-library' });
+    const { createComposer } = await import('../lib/tui/composer.mjs');
+  const c = createComposer({ width: 60 });
+  c.setHint('  deliver · gate ok · shell allowed');
   const block = c.render();
-  assert.ok(block.length >= 3, 'the input is a bordered block, not a blank line');
-  assert.match(block.join('\n'), /prompt-library/, 'and it names what a command would act on');
+  assert.ok(block.length >= 3, 'the input is a ruled region, not a blank line');
   assert.match(block.join('\n'), /\u276f/, 'with a caret, so a waiting session never reads as a hung one');
+    assert.match(block.join('\n'), /deliver · gate ok/, 'the editor carries consequence, not identity');
+  const { renderFooter } = await import('../lib/tui/chrome.mjs');
+  const { plainUi } = await import('./helpers/tty.mjs');
+  assert.match(
+    renderFooter({ plan: 'x.md', gate: 'pass', run: 'abc123' }, { ui: plainUi(), width: 80 }),
+    /plan x\.md/,
+    'and the footer names what a command would act on',
+  );
 });
 
 // --- palette value collection (the ledger was unusable without this) --------
@@ -343,7 +320,7 @@ test('the ledger collects required values from a palette choice and dispatches',
   assert.equal(calls.length, 1, 'search must run after the query is supplied');
   assert.equal(calls[0][0], 'search');
   assert.ok(calls[0].includes('hello world'), `argv was ${calls[0].join(' ')}`);
-  assert.match(text, /\$ harness search/, 'resolved argv is still echoed into the ledger');
+  assert.match(text, /[>❯] search/, 'resolved argv is still echoed into the ledger');
   assert.equal(text.includes('not available from a piped session'), false,
     'the previous dead-end message must not appear once collection works');
 });
@@ -371,12 +348,16 @@ test('either/or rows like get stop collecting once resolveSelection accepts', as
   assert.ok(calls[0].includes('--path'));
   assert.ok(calls[0].includes('README.md'));
   assert.equal(calls[0].includes('--lines'), false, 'untilResolves must not force every optional field');
-  assert.match(text, /\$ harness get/);
+  assert.match(text, /[>❯] get/);
 });
 
-test('nested tui from the palette is refused rather than hanging on the same stdin', async () => {
+test('the ledger is not offered inside itself, and typing it is still refused', async () => {
+    const { buildCommandIndex } = await import('../lib/command-index.mjs');
+  const rows = buildCommandIndex({ surface: 'tui', workspace: process.cwd() }).rows;
+  assert.equal(rows.some((r) => r.noun === 'tui'), false, 'no palette row opens the surface you are already in');
+
   const calls = [];
-  const text = await ledger(['/tui', '1', 'exit'], {
+  const text = await ledger(['tui', 'exit'], {
     dispatcher: async (argv) => { calls.push(argv); return 0; },
   });
   assert.deepEqual(calls, [], 'opening the ledger from inside the ledger must not dispatch');
@@ -396,7 +377,7 @@ test('exit during value collection cancels the choice without running', async ()
 test('/exit closes the session instead of filtering the palette', async () => {
   const text = await ledger(['/exit'], { dispatcher: async () => 0 });
   assert.match(text, /session/);
-  assert.match(text, /resume with: harness run list/);
+  assert.match(text, /resume with: harness tui/);
   assert.equal(text.includes('nothing matches'), false);
 });
 
@@ -408,11 +389,155 @@ test('clear is a session builtin, not an unknown command', async () => {
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'status');
   assert.equal(text.includes('unknown'), false, 'clear must not dispatch as a harness command');
-  assert.match(text, /session ledger/, 'clear re-prints the banner so the operator knows they are still in the ledger');
+    const headers = text.split('\n').filter((l) => /^[●o] /.test(l)).length;
+  assert.equal(headers, 2,
+    'once at startup and once after clear — otherwise a cleared viewport reads as a session that ended');
 });
 
 test('empty Enter after the palette restates how to pick a row', async () => {
   const text = await ledger(['/', '', 'exit'], { dispatcher: async () => 0 });
   assert.match(text, /type 1/);
   assert.match(text, /pick a row/);
+  });
+
+// --- review findings: replay fidelity and run attribution -------------------
+
+test('!! replays the governed argv of a shell block, not the string that was typed', async () => {
+    const calls = [];
+  await ledger(['!echo hi', '!!', 'exit'], {
+    dispatcher: async (argv) => { calls.push(argv.filter((a) => !a.startsWith('--') && a !== process.cwd())); return 0; },
+  });
+  assert.equal(calls.length, 2, 'the shell command ran, and then ran again');
+  assert.deepEqual(calls[1], calls[0], 'the replay is the same argv, not a re-parse of the display string');
+  assert.equal(calls[1][0], 'bash', 'and it is still the governed bash, not a bare `!echo`');
+});
+
+test('!! <id> resolves a block by id or unique prefix, and says so when it cannot', async () => {
+    const { createLedger } = await import('../lib/tui/ledger.mjs');
+    const ledgerStore = createLedger({ workspace: tempDir('tui-byid-'), journaling: true });
+  const a = ledgerStore.open({ command: 'verify', argv: ['verify'] });
+  const b = ledgerStore.open({ command: '!echo hi', argv: ['bash', '--', 'echo hi'] });
+
+  assert.notEqual(a.id, b.id);
+  assert.equal(ledgerStore.byId(a.id)?.command, 'verify', 'an exact id resolves');
+  assert.equal(ledgerStore.byId(b.id.slice(0, 12))?.command, '!echo hi', 'so does a unique prefix');
+  assert.equal(ledgerStore.byId(b.id.slice(-6))?.command, '!echo hi',
+    'and a unique SUFFIX — the record line prints the id tail (#xxxxxx), because the time-ordered head is the colliding part');
+  assert.equal(ledgerStore.byId(`#${b.id.slice(-6)}`)?.command, '!echo hi', 'with or without the # sigil');
+  assert.equal(ledgerStore.byId('zzzzzzzz'), null, 'and an id that matches nothing resolves to nothing');
+  assert.deepEqual(b.argv, ['bash', '--', 'echo hi'],
+    'the block keeps the argv that was dispatched, which is what a replay needs');
+  assert.equal(ledgerStore.lastCommand().command, '!echo hi',
+    'asserted before the ambiguity blocks below are opened, which become the new last command');
+    const c = ledgerStore.open({ command: 'first', argv: ['first'] });
+  const d = ledgerStore.open({ command: 'second', argv: ['second'] });
+  c.id = 'shared0head-aaaa'; c.run = c.id;
+  d.id = 'shared0head-bbbb'; d.run = d.id;
+  assert.equal(ledgerStore.byId('shared0head'), null,
+    'a prefix matching two blocks resolves to neither — replaying the wrong one is worse than asking');
+  assert.equal(ledgerStore.byId('shared0head-aa')?.command, 'first', 'one more character disambiguates');
+  assert.equal(ledgerStore.byId(''), null, 'and an empty id resolves to nothing at all');
+});
+
+test('an unknown block id is reported rather than guessed at', async () => {
+  const text = await ledger([`!! ${'z'.repeat(8)}`, 'exit'], { dispatcher: async () => 0 });
+  assert.match(text, /no block with that id in this session/);
+});
+
+/** The shared `ledger` helper passes `--no-events`, which turns journaling off
+ * for the whole session — correct for grammar tests, and blinding for these
+ * two. They run their own session with journaling ON in a temp workspace. */
+async function journalingLedger(lines, { workspace, dispatcher, copilotHome = LEDGER_HOME }) {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => { text += c.toString(); });
+  const done = runLedger({ input, output, workspace, copilotHome, argv: ['--no-color'], dispatcher });
+  for (const line of lines) input.write(`${line}\n`);
+  input.end();
+  await done;
+  return text;
+}
+
+const readRuns = (workspace) => {
+  const file = path.join(workspace, '.harness', 'runs.jsonl');
+  return fs.existsSync(file)
+    ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    : [];
+};
+
+test('a TUI dispatch carries its own run into the event registry', async () => {
+    const workspace = tempDir('tui-events-');
+  let ctx = null;
+  await journalingLedger(['status', 'exit'], {
+    workspace,
+    dispatcher: async (_argv, received) => {
+      ctx = received;
+      // The registry calls this once validation passes; the stub stands in.
+      received.onRunStart?.();
+      return 0;
+    },
+  });
+  assert.ok(ctx, 'the command dispatched');
+  assert.ok(ctx.events, 'the dispatch carries the run’s own event registry');
+  assert.equal(typeof ctx.onRunStart, 'function',
+    'the run record is deferred past validation, exactly as bin/harness.mjs defers it');
+  assert.equal(typeof ctx.reportStatus, 'function',
+    'and the command can report its own status, which beats reverse-mapping an exit code');
+
+  const runs = readRuns(workspace);
+  const starts = runs.filter((r) => r.type === 'run.start' && r.command === 'status');
+  const results = runs.filter((r) => r.type === 'run.result');
+  assert.equal(starts.length, 1, 'the command opened exactly one run');
+  assert.ok(results.some((r) => r.run === starts[0].run && r.status === 'succeeded'),
+    'and closed it with a terminal status');
+});
+
+test('a refused command journals no run — while an accepted one does', async () => {
+    const workspace = tempDir('tui-refused-');
+  await journalingLedger(['definitely-not-a-command', 'status', 'exit'], {
+    workspace,
+    dispatcher: async (_argv, received) => { received.onRunStart?.(); return 0; },
+  });
+  const runs = readRuns(workspace);
+  const starts = runs.filter((r) => r.type === 'run.start');
+  assert.equal(starts.length, 1, `only the accepted command opened a run: ${JSON.stringify(starts.map((r) => r.command))}`);
+  assert.equal(starts[0].command, 'status');
+  assert.ok(!starts.some((r) => r.command === 'definitely-not-a-command'),
+    'a command refused before dispatch never reaches the journal');
+});
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('a running command can still be cancelled from the keyboard', async () => {
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 60 });
+  const interrupts = [];
+  const ui = { paint: (_t, s2) => s2, unicode: true, arrow: '->', glyph: () => '', stripe: () => '|', tintRow: (_st, r) => r, stripAnsi: (t) => t, line: () => '' };
+  const session = createInput({ input, output, ui, onInterrupt: () => interrupts.push('abort') });
+
+  input.emit('keypress', '\u0003', { name: 'c', ctrl: true });
+  assert.deepEqual(interrupts, ['abort'], 'Ctrl-C during a command must reach the abort controller');
+  input.emit('keypress', null, { name: 'escape' });
+  assert.equal(interrupts.length, 2, 'and so must Esc');
+
+  const pending = session.next();
+  input.emit('keypress', null, { name: 'escape' });
+  const event = await pending;
+  assert.equal(event.intent, 'escape');
+  assert.equal(interrupts.length, 2, 'an idle Esc is not an interrupt');
+  session.close();
+});
+
+test('input close is idempotent and removes the resize listener', async () => {
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 60 });
+  const session = createInput({ input, output, ui: { paint: (_t, s) => s, unicode: true, arrow: '->' }, label: 'x' });
+  session.close();
+  session.close();
+  assert.equal(output.listenerCount('resize'), 0, 'an anonymous listener must not stay attached');
 });

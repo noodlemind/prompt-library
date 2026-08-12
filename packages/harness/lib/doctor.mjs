@@ -470,9 +470,7 @@ function knowledgeChecks({ workspace, copilotHome }) {
 
   // K6 (blueprint P6): layer misroute — bucket contents whose `branch:`
   // provenance disagrees with the bucket's own meta.json branch. A learning
-  // carrying another branch's provenance inside this bucket means a write
-  // was routed into the wrong layer (or a bucket dir was hand-moved).
-  try {
+    try {
     const dir = storeDir(workspace);
     if (fs.existsSync(dir)) {
       const misrouted = [];
@@ -497,10 +495,7 @@ function knowledgeChecks({ workspace, copilotHome }) {
     // Advisory; never fail doctor on a knowledge-check error.
   }
 
-  // K7 (blueprint P1): the default branch drives write-layer routing; when it
-  // is unresolvable (no store config.json defaultBranch, no origin/HEAD),
-  // writes fail closed to branch-local — surfaced so a team can pin it.
-  try {
+    try {
     const dir = storeDir(workspace);
     if (fs.existsSync(dir)) {
       const context = deriveGitContext({ workspace });
@@ -520,34 +515,13 @@ function knowledgeChecks({ workspace, copilotHome }) {
   return checks;
 }
 
-// Structural-index health (blueprint P3, doctor S1). One check, five facts:
-// grammar availability + integrity (BOTH the mismatch recorded at index time
-// in meta.json AND the current on-disk wasm state via the sync grammarStatus
-// probe), meta.sha drift vs HEAD, parse-failure rate, unreadable index tables,
-// and orphaned cache entries. Binding blueprint rule: a grammar integrity
-// mismatch — or an unreadable grammars.lock, which disables verification
-// entirely — FAILS S1 (optional: false); the loud lexical fallback is a doctor
-// failure, never a warning. A mismatch RECORDED in meta that the current wasm
-// no longer has is stale, so it degrades to an advisory "re-run the index"
-// instead of failing forever. Everything else about the optional tier stays
-// advisory. The disk probe is scoped to the harness package's own node_modules
-// and both it and the lock path are injectable, so S1 is never a verdict on an
-// unrelated web-tree-sitter copy elsewhere on the filesystem (and the tests
-// stay hermetic). Exported for direct testing, same as the check builders
-// above are exercised through runDoctor.
 export function structuralChecks({ workspace, grammarRoots = packageGrammarRoots(), lockPath } = {}) {
   const checks = [];
   try {
-    // Scoped to the harness package's OWN node_modules: walking parent
-    // node_modules made any unrelated web-tree-sitter anywhere up the
-    // filesystem a hard doctor failure for a user who never built an index.
-    const disk = grammarStatus({ grammarRoots, lockPath });
+        const disk = grammarStatus({ grammarRoots, lockPath });
     const index = readStructuralIndex(workspace);
     const recorded = index?.meta?.integrityFailures || [];
-    // A recorded mismatch the disk now verifies as good is STALE, not live:
-    // the last build fell back, but the bytes are fixed — say "re-run", don't
-    // keep failing forever on a record no rebuild ever clears.
-    const stale = recorded.filter((f) => disk.grammars?.[f.language]?.ok === true);
+        const stale = recorded.filter((f) => disk.grammars?.[f.language]?.ok === true);
     const live = recorded.filter((f) => !stale.includes(f));
     const mismatches = [...disk.integrityFailures, ...live];
     if (mismatches.length) {
@@ -578,9 +552,7 @@ export function structuralChecks({ workspace, grammarRoots = packageGrammarRoots
       const languages = [...new Set(stale.map((f) => f.language))].join(', ');
       issues.push(`index meta still records a grammar integrity mismatch (${languages}) that the current wasm no longer has — re-run: harness index --structural`);
     }
-    // An existing-but-unreadable table (oversized past the fs-safe cap,
-    // symlinked, corrupt JSON) used to read as empty everywhere. Say it.
-    if (index.unreadable?.length) issues.push(`${index.unreadable.join('; ')} — delete the index directory and re-run: harness index --structural`);
+        if (index.unreadable?.length) issues.push(`${index.unreadable.join('; ')} — delete the index directory and re-run: harness index --structural`);
     const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 });
     const headSha = head.status === 0 ? head.stdout.trim() : null;
     if (index.meta.sha && headSha && index.meta.sha !== headSha) {
@@ -589,11 +561,7 @@ export function structuralChecks({ workspace, grammarRoots = packageGrammarRoots
     const filesIndexed = Math.max(index.meta.filesIndexed || Object.keys(index.files).length, 1);
     const failRate = (index.meta.parseFailures || 0) / filesIndexed;
     if (failRate > 0.2) issues.push(`parse-failure rate ${(failRate * 100).toFixed(0)}% — inspect grammar installation`);
-    // Orphaned cache entries: indexed rels that no longer exist on disk.
-    // files.json can be hand-edited, so each rel is containment-checked
-    // before any stat — an escaping rel counts as an orphan, never a probe
-    // outside the workspace.
-    let orphans = 0;
+        let orphans = 0;
     for (const rel of Object.keys(index.files).slice(0, 500)) {
       const full = assertNoSymlinkAncestors(workspace, rel);
       if (!full || !fs.existsSync(full)) orphans += 1;
@@ -690,17 +658,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     hint: 'Maintainer: npm run build:assets before publish',
   });
 
-  // Present AND matching the installed binary. Installing the package — from the
-  // registry or from a hand-delivered tarball, identically — replaces the binary
-  // and hydrates nothing: there is no postinstall. Until someone runs `upgrade`,
-  // the agents, skills and instructions in the Copilot home stay on whatever
-  // version last hydrated, and the only prior signal was `harness status`
-  // printing the two numbers next to each other for a human to compare.
-  // This is the channel-agnostic check: it compares what is installed against
-  // what was hydrated, which does not care how the package arrived.
-  // pkgRoot, not an import from commands.mjs — that module imports runDoctor,
-  // so reading its readPkgVersion from here would close an import cycle.
-  const lock = readLock(copilotHome);
+    const lock = readLock(copilotHome);
   let installedVersion = null;
   try {
     installedVersion = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8')).version;
@@ -761,14 +719,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
       ? `Resolved via ${resolved.source}: ${resolved.bin}`
       : 'Run: harness install, then init-repo (creates .harness/run.mjs)',
   });
-  // Present AND current. Existence alone was not enough: the runner is
-  // regenerated only by `init-repo` and by an `install`/`upgrade` run from
-  // inside this workspace, so any other workspace can sit on a shim built by an
-  // older harness indefinitely — and its owner has no reason to suspect it,
-  // because upgrading the harness looks like it updated everything. A runner
-  // carrying a fixed bug is worth as much as a missing one, so it fails the
-  // same check with a hint that names the actual remedy.
-  const runnerExists = fs.existsSync(runnerPath);
+    const runnerExists = fs.existsSync(runnerPath);
   let runnerCurrent = false;
   if (runnerExists) {
     try {
@@ -818,16 +769,8 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     optional: true,
   });
 
-  // Degrade honestly: without the shipped asset bundle there is no ship list
-  // to compare against, so never claim orphans that cannot be verified.
-  const assetsAvailable = fs.existsSync(path.join(assetsRoot, 'skills', 'engineer', 'SKILL.md'));
-  // `null` means "no lock to consult", which findStaleOrphans treats as the
-  // pre-existing behavior. `new Set([])` is TRUTHY, so an unreadable or
-  // file-less lock made `lockFiles && !lockFiles.has(rel)` skip every
-  // candidate — H17 then passed unconditionally and detected nothing, which is
-  // strictly worse than the false positives the lock was added to fix. Reuses
-  // the `lock` already read above rather than reading it a second time.
-  const lockFiles = Array.isArray(lock?.files) && lock.files.length ? new Set(lock.files) : null;
+    const assetsAvailable = fs.existsSync(path.join(assetsRoot, 'skills', 'engineer', 'SKILL.md'));
+    const lockFiles = Array.isArray(lock?.files) && lock.files.length ? new Set(lock.files) : null;
   const orphans =
     pkgRoot && assetsAvailable ? findStaleOrphans(copilotHome, assetsRoot, loadRetired(pkgRoot), lockFiles) : [];
   checks.push({

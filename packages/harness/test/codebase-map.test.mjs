@@ -9,10 +9,6 @@ import { test } from 'node:test';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
-// Isolated HARNESS_HOME so init-repo's knowledge-store arming step (Task 7)
-// can never resolve to the developer's real ~/.harness, regardless of
-// ambient machine state — these tests already scope --copilot-home per
-// call, this scopes the other half of the arming step's two roots.
 const harnessHome = tempDir('cbmap-hh-');
 const run = (args) =>
   spawnSync(process.execPath, [binPath, ...args], { encoding: 'utf8', env: { ...process.env, HARNESS_HOME: harnessHome } });

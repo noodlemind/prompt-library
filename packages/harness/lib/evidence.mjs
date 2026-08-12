@@ -29,20 +29,7 @@ export function writeEvidence(workspace, result, dryRun = false) {
   if (!dryRun) {
     const full = path.join(workspace, rel);
     fs.mkdirSync(path.dirname(full), { recursive: true });
-    // Critical fix: a named check's captured stdout/stderr (result.checks[])
-    // is arbitrary output from a trusted-but-unreviewed command — a test
-    // run, a lint pass, a build — and routinely contains secret-shaped
-    // content (a token echoed by a misconfigured tool, a credential in an
-    // error trace). This artifact is a durable, on-disk file under
-    // `.harness/evidence/`, unlike a terminal scrollback, so it is redacted
-    // here at the persistence boundary before it is ever written — the
-    // SAME `lib/redact.mjs` discipline already applied to the events log
-    // (lib/event-registry.mjs) and the envelope/agent output lanes
-    // (lib/registry.mjs). `redactValue` returns a new, deep-copied
-    // structure — `result` itself (and therefore whatever the caller does
-    // with it afterward, e.g. render it to the console) is untouched; only
-    // the bytes actually written to disk are masked.
-    const redactor = createRedactor();
+        const redactor = createRedactor();
     const payload = {
       ...redactor.redactValue(result),
       version: EVIDENCE_VERSION,
@@ -113,14 +100,7 @@ function containedPath(workspace, rel) {
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error(`Evidence path escapes workspace: ${rel}`);
   }
-  // Physical containment for every ANCESTOR directory (adversarial-review
-  // sweep) — deliberately NOT the leaf itself: workspaceDigest below already
-  // has an intentional, correct answer for a symlinked LEAF (hash its link
-  // target, never dereference it — see the isSymbolicLink() branch), so
-  // rejecting the leaf here would fight that existing behavior. A symlinked
-  // ANCESTOR directory is the actual gap: it would let the read below
-  // resolve outside the workspace despite passing the lexical check above.
-  const parentRel = path.dirname(relative);
+    const parentRel = path.dirname(relative);
   if (parentRel !== '.' && !assertNoSymlinkAncestors(root, parentRel)) {
     throw new Error(`Evidence path resolves through a symlinked ancestor: ${rel}`);
   }

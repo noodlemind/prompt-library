@@ -1,15 +1,5 @@
 import { estimateTokens } from './token-meter.mjs';
 
-/**
- * Bounded plan view for the context pack (internal helper — not a CLI command).
- *
- * The full plan file is re-read every work session and its ## Activity and
- * ## Verification Evidence sections grow without bound. This extracts only the
- * parts the agent needs to act — current-phase open tasks and the latest review
- * findings — capped to a token budget, so re-reads stay flat. The harness still
- * reads the full plan for gate/verify enforcement; this view is agent-facing only.
- */
-
 const DEFAULT_MAX_TOKENS = 220;
 
 function currentPhaseTasks(planSection, phase) {
@@ -42,10 +32,6 @@ function latestReviewFinding(findingsSection) {
   return latest;
 }
 
-/**
- * Build a compact, token-bounded plan view from a loaded plan.
- * Returns null when there is no plan. Never includes Activity/Evidence bodies.
- */
 export function buildPlanView(plan, { maxTokens = DEFAULT_MAX_TOKENS } = {}) {
   if (!plan) return null;
   const { heading, openTasks } = currentPhaseTasks(plan.sections?.plan || '', plan.phase);
@@ -65,9 +51,7 @@ export function buildPlanView(plan, { maxTokens = DEFAULT_MAX_TOKENS } = {}) {
   }
 
   let body = lines.join('\n');
-  // Enforce the token budget by trimming trailing lines, never Activity/Evidence
-  // (which are never included here in the first place).
-  while (estimateTokens(body) > maxTokens && lines.length > 1) {
+    while (estimateTokens(body) > maxTokens && lines.length > 1) {
     lines.pop();
     body = [...lines, '  …(plan view truncated to budget)'].join('\n');
   }

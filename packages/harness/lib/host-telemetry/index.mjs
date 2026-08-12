@@ -11,12 +11,6 @@ const ADAPTERS = {
   cli: copilotCli,
 };
 
-/**
- * Collect real host token usage for a host, or [] if none is available.
- * Never throws — a failed adapter degrades the report to harness estimates.
- * With no host specified, every adapter is tried (each returns [] when it has
- * nothing), so the report opportunistically picks up whatever real data exists.
- */
 export function collectHostUsage({ workspace, host, copilotHome } = {}) {
   try {
     if (host) {
@@ -36,11 +30,6 @@ export function collectHostUsage({ workspace, host, copilotHome } = {}) {
   }
 }
 
-/**
- * Merge host-real usage over harness estimates: for any session that has real
- * host usage, the estimated `usage` on that session's base events is stripped
- * (so tokens are not double-counted), then the host events are appended.
- */
 export function mergeHostUsage(baseEvents, hostEvents) {
   if (!hostEvents?.length) return baseEvents;
   const hostSessions = new Set(hostEvents.map((e) => e.session).filter(Boolean));

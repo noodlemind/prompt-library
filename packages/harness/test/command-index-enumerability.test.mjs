@@ -1,32 +1,8 @@
-/**
- * AC8 — enumerability. Every verb reachable on the CLI must be enumerable
- * from the registry AS DATA. No capability may exist only inside a `usage:`
- * string.
- *
- * `describeCommand().usage` is either auto-generated from `args` (safe by
- * construction) or a hand-written override (lib/registry.mjs's escape hatch
- * for `index`, `report`, `knowledge`, `consolidate`, `learning`). The override
- * is the whole risk: it is prose, so a new subcommand can be documented there
- * and never declared — which is exactly how pi's command table drifted from
- * its dispatcher. `auditUsage` below re-derives every capability a usage line
- * names and requires each one to resolve against declared data.
- *
- * The audit is a pure function on `(entry, usage)` precisely so it can be
- * exercised against a SYNTHETIC entry carrying a prose-only verb — see "the
- * audit fires on every class of undeclared capability". Without that, a test
- * asserting "zero violations" could pass because the parser matches nothing.
- */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { GLOBAL_FLAGS, describeCommand, getCommand, listCommands } from '../lib/registry.mjs';
 import { buildCommandIndex } from '../lib/command-index.mjs';
 
-/**
- * Alternatives a usage line may name that are legitimately NOT verbs, flags,
- * positional names, or flag value-name enums. Each needs a stated reason —
- * an allow-list entry is a documented exception, not a silencer. Keyed
- * `<command>:<alternative>`; a stale key fails its own test below.
- */
 const USAGE_ALLOW_LIST = Object.freeze({
   'knowledge:file':
     'the argument to `purge <file>` — an episode file path supplied through the `target` positional, not a subcommand of its own',
@@ -52,28 +28,11 @@ function declaredNames(entry) {
   };
 }
 
-/**
- * Every capability `usage` names that does not resolve to registry data.
- * Returns `[{token, kind}]` — `kind` is `alternative` (inside an `<a|b>`
- * group), `bare` (a top-level subcommand word), or `flag` (a `--x` the entry
- * does not declare). `usedAllowKeys` collects the allow-list keys this call
- * consumed so the caller can detect stale exceptions.
- */
 function auditUsage(entry, usage, usedAllowKeys = new Set()) {
   const { flags, valueNames, verbs, positionals } = declaredNames(entry);
   const violations = [];
 
-  // Everything after a bare `--` is passthrough: the harness hands those tokens
-  // to a child process and never parses them (`exec -- <program> [args...]`).
-  // They are the CHILD's capability, not this entry's, so requiring them to
-  // resolve against registry data would demand the harness declare arguments it
-  // deliberately does not understand — and declaring them would be worse than
-  // the prose, because the palette would then offer pickers for them.
-  //
-  // A general rule rather than a per-command allow-list entry: it holds for any
-  // passthrough command, and it states the actual semantic instead of excusing
-  // five tokens by name.
-  const boundary = usage.search(/(^|\s)--(\s|$)/);
+    const boundary = usage.search(/(^|\s)--(\s|$)/);
   if (boundary !== -1) usage = usage.slice(0, boundary);
 
   const allowed = (token) => {
@@ -85,10 +44,7 @@ function auditUsage(entry, usage, usedAllowKeys = new Set()) {
 
   // Angle-bracket groups: `<on|suggest|off>`, `<file|--all>`, `<ref>`.
   for (const [, inner] of usage.matchAll(/<([^<>]*)>/g)) {
-    // The whole group is one flag's value name — `--risk <green|amber|red>`
-    // is that flag's enum, never three verbs (lib/registry.mjs says so on
-    // plan-new explicitly).
-    if (valueNames.has(inner)) continue;
+        if (valueNames.has(inner)) continue;
     for (const alt of inner.split('|').map((s) => s.trim()).filter(Boolean)) {
       if (verbs.has(alt) || flags.has(alt) || positionals.has(alt) || valueNames.has(alt)) continue;
       if (allowed(alt)) continue;
@@ -96,10 +52,7 @@ function auditUsage(entry, usage, usedAllowKeys = new Set()) {
     }
   }
 
-  // Bare words left once the groups are removed: knowledge's top-level
-  // `purge | commit | migrate-store` alternation, and buildUsage's optional
-  // positionals (`[query]`).
-  const bare = usage.replace(/<[^<>]*>/g, ' ').split(/[\s|[\]"]+/).filter(Boolean);
+    const bare = usage.replace(/<[^<>]*>/g, ' ').split(/[\s|[\]"]+/).filter(Boolean);
   for (const token of bare) {
     if (token.startsWith('-')) {
       if (!flags.has(token)) violations.push({ token, kind: 'flag' });
@@ -206,7 +159,11 @@ const DECLARED_VERBS = Object.freeze({
   run: ['list', 'show', 'tree', 'resume'],
   // `register`/`unregister` change what the harness recognizes; `list`/`show`
   // override DOWN to read.
+  model: ['show', 'set', 'clear', 'refresh'],
   resources: ['list', 'show', 'register', 'unregister', 'bundles', 'add', 'update', 'remove'],
+  undo: ['list'],
+  todo: ['list', 'add', 'complete', 'clear'],
+  inspect: ['config', 'permissions', 'workspace', 'tools'],
 });
 
 const VERB_FLAGS = Object.freeze({
@@ -217,7 +174,7 @@ const VERB_FLAGS = Object.freeze({
   knowledge: ['--merged'],
   learnings: ['--why'],
   orient: ['--explain'],
-  report: ['--sync', '--global'],
+  report: ['--growth', '--sync', '--global'],
 });
 
 /**
@@ -252,8 +209,13 @@ const VERB_POSITIONALS = Object.freeze({
   config: { get: ['key'], set: ['key', 'value'] },
   // `list` takes no id — it is the query over all of them.
   run: { show: ['run-id'], tree: ['run-id'], resume: ['run-id'] },
+  // `set` names the provider it is switching to, and optionally the model;
+  // `show` and `clear` take neither — one reports on every provider, the
+  // other forgets the choice.
+  model: { set: ['provider', 'model'], refresh: ['provider'] },
   // `list` takes no name — it is the query over all of them.
   resources: { show: ['path'], register: ['path'], unregister: ['path'], add: ['path'], update: ['path'], remove: ['path'] },
+  inspect: { config: ['key'] },
 });
 
 test('AC8: every verb-consumed positional is declared and reaches its row as a picker', () => {
@@ -265,11 +227,14 @@ test('AC8: every verb-consumed positional is declared and reaches its row as a p
   }
   assert.deepEqual(actual, { ...VERB_POSITIONALS }, 'a verb argument was added or lost — update the fixture deliberately');
 
-  const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
-  const byId = new Map(rows.map((r) => [r.id, r]));
+  // Positionals live on verb rows. On the TUI those rows sit inside modals;
+  // the CLI index is the source of truth for argv token shape.
+  const cli = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
+  const cliById = new Map(cli.map((r) => [r.id, r]));
   for (const [command, verbs] of Object.entries(VERB_POSITIONALS)) {
     for (const [verb, names] of Object.entries(verbs)) {
-      const row = byId.get(`verb:${command}:${verb}`);
+      const row = cliById.get(`verb:${command}:${verb}`);
+      assert.ok(row, `${command} ${verb} must exist on the CLI index`);
       assert.deepEqual(
         row.argvTokens.filter((t) => t.kind === 'value').map((t) => t.positional),
         names,
@@ -286,7 +251,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 50, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs + config’s 4 verbs + trust’s 3 verbs + run’s 4 verbs + resources’ 8 verbs');
+  assert.equal(Object.values(actual).flat().length, 63, 'prior 59 + inspect’s 4 verbs');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -296,7 +261,7 @@ test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', (
     if (flags.length) actual[name] = flags;
   }
   assert.deepEqual(actual, { ...VERB_FLAGS }, 'a tui:"verb" disposition was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 13);
+  assert.equal(Object.values(actual).flat().length, 14);
 });
 
 // --- AC8: the index actually carries every enumerated verb ---------------
@@ -304,7 +269,37 @@ test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', (
 test('AC8: every declared verb reaches the palette as its own row', () => {
   const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
   const byId = new Map(rows.map((r) => [r.id, r]));
+  // A PICKER COMMAND IS THE ONE EXCEPTION, and it is an exception to the
+  // RENDERING, not to the reachability this test exists to protect: `model`
+  // presents in the TUI as a single row that opens a chooser, where show is what
+  // it does on open, set is what choosing does and clear is a row inside it.
+  // Every verb is still reachable — through the picker here, and unchanged on
+  // the CLI surface, which the assertion below pins.
+  // TUI: multi-verb families (and explicit tuiPicker) collapse to one modal row.
+  // Verbs remain fully reachable on the CLI surface and inside the modal sheet.
+  const modalFamilies = new Set(
+    Object.keys(DECLARED_VERBS).filter((name) => {
+      const entry = getCommand(name);
+      if (!entry) return false;
+      if (entry.tuiPicker) return true;
+      return (entry.verbs || []).length >= 2 && entry.tuiFold !== false;
+    }),
+  );
+  assert.ok(modalFamilies.has('model'), 'model stays a specialized picker');
+  assert.ok(modalFamilies.has('config'), 'config is a settings modal');
+  const cliRows = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
+  for (const name of modalFamilies) {
+    for (const verb of DECLARED_VERBS[name] || []) {
+      assert.ok(cliRows.some((r) => r.id === `verb:${name}:${verb}`), `${name} ${verb} must survive on the CLI surface`);
+    }
+    assert.ok(
+      rows.some((r) => r.id === `command:${name}` && r.picker),
+      `${name} must be a single modal entry on the TUI palette`,
+    );
+  }
+
   for (const [command, verbs] of Object.entries(DECLARED_VERBS)) {
+    if (modalFamilies.has(command)) continue;
     for (const verb of verbs) {
       const row = byId.get(`verb:${command}:${verb}`);
       assert.ok(row, `${command} ${verb} must be a palette row`);
@@ -313,7 +308,10 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
       assert.ok(row.summary, `${command} ${verb} must carry its declared summary`);
     }
   }
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 63, '50 declared verbs + 13 row-bearing verb flags');
+  // Modal families leave the verb strip; remaining verb rows + flag-verbs only.
+  const tuiVerbs = rows.filter((r) => r.kind === 'verb').length;
+  assert.ok(tuiVerbs < 40, `TUI verb strip should fold heavily (got ${tuiVerbs})`);
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 77, 'the CLI surface keeps every verb (+ inspect)');
 });
 
 /**
@@ -334,14 +332,16 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
  * it is a declared capability that has lost its own name.
  */
 test('AC8: every verb-dispositioned flag owns a row or refines a verb row', () => {
-  const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
+  // Reachability is measured on the CLI index (full expansion). The TUI may
+  // collapse a family into a modal, but the flag still has a CLI/modal row.
+  const { rows } = buildCommandIndex({ surface: 'cli', workspace: process.cwd() });
   const rowless = [];
   for (const [command, flagNames] of Object.entries(VERB_FLAGS)) {
     const owned = rows.filter((r) => r.noun === command);
     for (const flag of flagNames) {
       const asRow = owned.some((r) => r.argv?.includes(flag));
       const refinesAVerbRow = owned.some(
-        (r) => r.kind === 'verb' && r.refinements.some((o) => o.flag === flag),
+        (r) => r.kind === 'verb' && (r.refinements || []).some((o) => o.flag === flag),
       );
       assert.ok(asRow || refinesAVerbRow, `${command} ${flag} must stay reachable from the index`);
       if (!asRow && !refinesAVerbRow) rowless.push(`${command} ${flag}`);

@@ -28,12 +28,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// verifyAdmittedEpisodeKinds (apply.mjs) now requires every fix-kind (or
-// kind-omitted) episode an ADD/STRENGTHEN/SUPERSEDE/MERGE op offers to
-// disk-verify: the path must resolve inside the workspace, the file must
-// exist, and its CURRENT content must hash to the asserted sha256. This
-// helper writes a real file and returns its real sha256, so fixtures never
-// assert fabricated evidence for evidence expected to be admitted.
 function writeRealEpisode(ws, rel, content) {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -42,11 +36,6 @@ function writeRealEpisode(ws, rel, content) {
   return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
 
-// Deliberately fabricated (unlike writeRealEpisode above): the remaining use
-// of EP() targets a mode gate (E_MODE) that applyOps checks BEFORE it ever
-// parses the ops file, let alone reaches per-op evidence verification — the
-// episode is never read, so real evidence would add nothing and a
-// fabricated one proves the mode gate short-circuits ahead of it.
 const EP = (over = {}) => ({
   path: 'docs/solutions/perf/x.md',
   sha256: 'a'.repeat(64),
@@ -166,12 +155,7 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
       { ...other, kind: 'fix', plan: 'docs/plans/p2.md' },
     ],
   };
-  // Both ADDs share the `target` episode as evidence — allowed only within a
-  // SINGLE apply run (P1#3 forbids re-citing an episode ALREADY consumed by a
-  // prior run, but the ledger is not updated mid-run, so two ops in one run
-  // may both cite the still-unconsolidated target). This still sets up the
-  // sole/shared cascade the purge below exercises.
-  assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [sole, shared]), home: c.harnessHome }).exitCode, 0);
+    assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [sole, shared]), home: c.harnessHome }).exitCode, 0);
 
   const res = run(c, ['knowledge', 'purge', targetPath]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
@@ -196,11 +180,6 @@ test('knowledge purge <episode> cascades: sole-evidence learning removed, shared
   assert.ok(fs.existsSync(path.join(c.ws, otherPath)), 'unrelated episode file untouched');
 });
 
-// P2 (purge debris = failure): un-sweepable `.purge-*` staging debris still
-// holds the live episode content, so a purge that cannot remove it must fail
-// (pass:false / non-zero) and surface WHY — never report a hidden partial
-// while returning pass:true. Completion is judged from the ACTUAL post-state
-// (real path absent AND zero staging siblings remain), not the pre-state.
 test('P2: purge that cannot sweep its staging debris fails pass:false and names the residue, not a hidden partial', () => {
   const c = ctx();
   const targetPath = 'docs/solutions/perf/debris.md';
@@ -215,10 +194,7 @@ test('P2: purge that cannot sweep its staging debris fails pass:false and names 
   };
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
 
-  // Stub fs.rmSync so any `.purge-*` staging sibling is un-removable (EACCES),
-  // standing in for a filesystem the sweep cannot clean — every other rmSync
-  // (the store cascade's own learning-file deletes) passes through untouched.
-  const origRm = fs.rmSync;
+    const origRm = fs.rmSync;
   fs.rmSync = (p, opts) => {
     if (String(p).includes('.purge-')) {
       const e = new Error('EACCES: permission denied');
@@ -243,11 +219,6 @@ test('P2: purge that cannot sweep its staging debris fails pass:false and names 
   assert.ok(remaining.length > 0, 'the un-sweepable staging copy is still on disk (the content is not gone)');
 });
 
-// P1: purge must cascade into the recall retrieval state too — the team
-// manifest (knowledge/manifest.yaml) and postings index are rebuilt from the
-// same solution trees by `harness index`, and without a rebuild inside the
-// purge cascade, rankRecall kept serving the deleted episode's title/
-// summary/snippet after the file, store links, and ledger were all gone.
 test('purging an indexed episode removes it from recall: the manifest no longer lists it and recall returns nothing for its terms', () => {
   const c = ctx();
   const targetPath = 'docs/solutions/perf/zebra-orders-timeout.md';
@@ -319,13 +290,7 @@ test('a trigger with a quote and a backslash survives TWO successive purge-unlin
   const ep2 = writeRealEpisode(c.ws, targetPath2, 'target episode body two\n');
   const epKeep = writeRealEpisode(c.ws, keepPath, 'kept episode body\n');
 
-  // Exactly two of the characters yamlQuote escapes at write time: a double
-  // quote and a backslash. NOT a real embedded newline — P1-5 hardening now
-  // rejects a control character in a fresh trigger at admission outright
-  // (see knowledge-injection-and-plan.test.mjs for the dedicated rejection
-  // coverage); this test only proves the quote/backslash escaping round trip
-  // stays byte-identical across repeated rewrites.
-  const trigger = 'trigger with a "quoted" word, a \\backslash\\, and a second clause: fake-key';
+    const trigger = 'trigger with a "quoted" word, a \\backslash\\, and a second clause: fake-key';
   const op = {
     op: 'ADD',
     domain: 'sql',
@@ -349,19 +314,12 @@ test('a trigger with a quote and a backslash survives TWO successive purge-unlin
     return lines[0];
   };
 
-  // Stage 0: the initial ADD write (apply.mjs's renderLearning/yamlQuote).
-  // The parser must un-escape what it strips quotes from — the parsed
-  // trigger is the exact raw text, never the escaped on-disk form.
-  let learning = listLearnings(dir).find((l) => l.id === 'sql/escape-round-trip');
+    let learning = listLearnings(dir).find((l) => l.id === 'sql/escape-round-trip');
   assert.ok(learning, 'learning written');
   assert.equal(learning.fm.trigger, trigger, 'raw trigger recovered after the initial ADD write');
   const lineAfterAdd = triggerLine(learning.file);
 
-  // Stage 1: purge-unlink one of three episodes (admin.mjs's
-  // removeEpisodeLink) re-serializes the PARSED trigger through yamlQuote
-  // again. Since the parser now hands back raw text, this rewrite must be
-  // byte-identical to the original ADD write — not a second escaping pass.
-  let res = run(c, ['knowledge', 'purge', targetPath1]);
+    let res = run(c, ['knowledge', 'purge', targetPath1]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   assert.deepEqual(JSON.parse(res.stdout).removed.links, ['sql/escape-round-trip']);
 
@@ -370,9 +328,7 @@ test('a trigger with a quote and a backslash survives TWO successive purge-unlin
   assert.equal(learning.fm.trigger, trigger, 'raw trigger still recovered after the first purge-unlink');
   assert.equal(triggerLine(learning.file), lineAfterAdd, 'trigger line byte-identical after the first purge-unlink');
 
-  // Stage 2: a SECOND purge-unlink must still produce the same byte-exact
-  // line — proving the escaping does not compound across repeated rewrites.
-  res = run(c, ['knowledge', 'purge', targetPath2]);
+    res = run(c, ['knowledge', 'purge', targetPath2]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   assert.deepEqual(JSON.parse(res.stdout).removed.links, ['sql/escape-round-trip']);
 
@@ -381,9 +337,7 @@ test('a trigger with a quote and a backslash survives TWO successive purge-unlin
   assert.equal(learning.fm.trigger, trigger, 'raw trigger still recovered after the second purge-unlink');
   assert.equal(triggerLine(learning.file), lineAfterAdd, 'trigger line byte-identical after the second purge-unlink');
 
-  // Every consumer of the parsed trigger (retrieve tokenize, listing render,
-  // eval) expects raw text — `learnings --json` must show it raw too.
-  const listRes = run(c, ['learnings']);
+    const listRes = run(c, ['learnings']);
   assert.equal(listRes.status, 0, listRes.stderr || listRes.stdout);
   const listed = JSON.parse(listRes.stdout).learnings.find((l) => l.id === 'sql/escape-round-trip');
   assert.ok(listed, 'learning appears in the listing');
@@ -442,10 +396,7 @@ test('knowledge purge with a target that escapes the workspace exits 2, deletes 
   assert.equal(res.status, 2, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
   assert.equal(out.pass, false);
-  // P2: purge now resolves against every configured root (workspace, and
-  // copilotHome/knowledge when given) — the message names both instead of
-  // just "the workspace".
-  assert.match(out.blockedReason, /escapes every configured root/);
+    assert.match(out.blockedReason, /escapes every configured root/);
   assert.equal(out.removed, null);
 
   assert.ok(fs.existsSync(outsideFile), 'file outside the workspace must survive a blocked purge');
@@ -469,11 +420,7 @@ test('knowledge purge deletes a learning left with zero episodes after removing 
   };
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [add]), home: c.harnessHome }).exitCode, 0);
 
-  // The episode file is actually edited on disk; STRENGTHEN re-cites the
-  // same path with the NEW real sha256. apply.mjs's dedup key is
-  // `path@sha256`, so this appends a second episode entry for the same path
-  // instead of merging it away — the designed re-strengthening path.
-  const v2 = writeRealEpisode(c.ws, targetPath, 'episode body v2\n');
+    const v2 = writeRealEpisode(c.ws, targetPath, 'episode body v2\n');
   const strengthen = {
     op: 'STRENGTHEN',
     target: 'sql/re-strengthened',
@@ -597,9 +544,7 @@ test('anchors populated at ADD survive a purge-unlink round trip byte-identical'
   const targetPath = 'docs/solutions/perf/anchor-target.md';
   const otherPath = 'docs/solutions/perf/anchor-other.md';
   const target = writeRealEpisode(c.ws, targetPath, 'target episode body\n');
-  // otherPath's own body references targetPath — a real workspace file — so
-  // extractAnchors (apply.mjs) picks up a real, non-empty anchor at ADD time.
-  const other = writeRealEpisode(c.ws, otherPath, `other episode body referencing ${targetPath}\n`);
+    const other = writeRealEpisode(c.ws, otherPath, `other episode body referencing ${targetPath}\n`);
 
   const shared = {
     op: 'ADD',
@@ -622,10 +567,7 @@ test('anchors populated at ADD survive a purge-unlink round trip byte-identical'
   const anchorsBlock = (text) => text.match(/anchors:\n((?:  - .+\n)*)/)[0];
   const before = anchorsBlock(fs.readFileSync(learning.file, 'utf8'));
 
-  // Purge one of the two episode paths (not targetPath's anchor role, its
-  // role as one of two evidence links) — the learning survives with the
-  // other episode, exercising removeEpisodeLink's populated-anchors branch.
-  const res = run(c, ['knowledge', 'purge', otherPath]);
+    const res = run(c, ['knowledge', 'purge', otherPath]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
   assert.deepEqual(out.removed.links, ['sql/anchor-round-trip']);

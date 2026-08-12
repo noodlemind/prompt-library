@@ -1,15 +1,3 @@
-/**
- * Phase 5 — resource bundles and the plugin protocol.
- *
- * The assertions that matter are the trust-boundary ones. This is the largest
- * expansion of what the harness will load and run, and the Grok Build telemetry
- * incident is the cautionary case the delivery doc names: a plugin surface that
- * defaults open is one that ships something nobody asked for.
- *
- * So the fixture plugin here is a REAL child process speaking the real
- * protocol, not a stub. A crash-isolation claim tested against a mock proves
- * only that the mock behaves.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -52,10 +40,7 @@ function makeBundle(home, name, { manifest = {}, files = {}, enabled = false } =
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, body);
   }
-  // The manifest is now inside the digest (minus its own `integrity:` line), so
-  // it has to exist BEFORE the pin is computed. Appending the pin afterwards
-  // does not disturb it, which is exactly why that line is excluded.
-  const manifestPath = path.join(dir, 'harness-resource.yaml');
+    const manifestPath = path.join(dir, 'harness-resource.yaml');
   fs.writeFileSync(manifestPath, `${lines.join('\n')}\n`);
   if (full.integrity === true) fs.appendFileSync(manifestPath, `integrity: ${bundleDigest(dir)}\n`);
   else if (typeof full.integrity === 'string') fs.appendFileSync(manifestPath, `integrity: ${full.integrity}\n`);
@@ -129,10 +114,7 @@ test('P5AC3: a bundle whose contents no longer match its pin is tampered, and ca
   const [after] = discoverBundles(home, { trustedNames: trusted(home) });
   assert.equal(after.state, 'tampered', 'a pin exists precisely so content changing under an approval is loud');
 
-  // The CLI no longer surfaces bundles — `resources` serves locally-added
-  // primitives now — so the guarantee is asserted where it lives: a tampered
-  // bundle contributes nothing, whatever a caller does with it.
-  assert.equal(resolvePrecedence([after]).length, 0,
+    assert.equal(resolvePrecedence([after]).length, 0,
     'a bundle whose contents changed under its pin must not contribute');
 });
 
@@ -260,9 +242,7 @@ test('P5AC5: the protocol defines no message that writes policy, the journal, ev
   for (const surface of FORBIDDEN_WRITE_SURFACES) {
     assert.ok(surface, 'the forbidden surfaces are named as data, not left to prose');
   }
-  // The host imports nothing that can write those surfaces — enforcement is
-  // structural rather than a rule the plugin is asked to respect.
-  for (const forbidden of ['evidence.mjs', 'run-journal.mjs', 'policy.mjs', 'knowledge/store.mjs']) {
+    for (const forbidden of ['evidence.mjs', 'run-journal.mjs', 'policy.mjs', 'knowledge/store.mjs']) {
     assert.equal(source.includes(forbidden), false,
       `plugin-host must not import ${forbidden}: a plugin cannot be denied a write the host is able to broker`);
   }
@@ -270,12 +250,6 @@ test('P5AC5: the protocol defines no message that writes policy, the journal, ev
 
 // --- self-review findings, verified before the phase review returned --------
 
-/**
- * A contributed path is a path INSIDE the bundle. A manifest is a third-party
- * file describing what the harness should load, which makes it the least
- * trustworthy input in the system — and it was previously accepted with a
- * traversal in it.
- */
 test('a manifest cannot contribute a path outside its own bundle', () => {
   for (const bad of ['../../../etc/passwd', '/etc/passwd', 'a/../../b', '..']) {
     const { errors } = parseManifest(`schema: 1\nname: x\nversion: 1.0.0\ncontributes:\n  skills: [${JSON.stringify(bad)}]\n`);
@@ -288,12 +262,6 @@ test('a manifest cannot contribute a path outside its own bundle', () => {
   }
 });
 
-/**
- * Crash isolation is not only about a plugin that dies. A chatty one writing
- * megabytes with no newline grew the host's line buffer to 438 MB in two
- * seconds — exhausting the process it was supposed to be insulated from,
- * without ever crashing itself.
- */
 test('P5AC6: a plugin flooding stdout without a newline cannot exhaust the host', async () => {
   const dir = tempDir('plug-flood-');
   const file = writePlugin(dir, 'setInterval(() => process.stdout.write("x".repeat(1024 * 512)), 1);');
@@ -324,12 +292,6 @@ test('a plugin cannot make the host retain unbounded log text either', async () 
   assert.ok(plugin.logs.length <= MAX_LOG_ENTRIES, `logs grew to ${plugin.logs.length}`);
 });
 
-/**
- * Found by the phase-4b/5 review. The pin excluded the manifest entirely, so
- * retargeting what a bundle loads — `plugin: safe.mjs` → `plugin:
- * ../../outside.mjs` — left the digest matching. A pin that does not authorize
- * the file declaring what to load authorizes very little.
- */
 test('P5AC3: editing the manifest breaks the pin, even when no other file changed', () => {
   const home = tempDir('res-manifest-pin-');
   const dir = makeBundle(home, 'pinned', {
@@ -345,10 +307,6 @@ test('P5AC3: editing the manifest breaks the pin, even when no other file change
     'retargeting what a bundle loads must break its pin');
 });
 
-/**
- * The default was "trust everything", so any caller that forgot the argument
- * bypassed approval entirely.
- */
 test('P5AC3: discoverBundles fails closed when no trust set is supplied', () => {
   const home = tempDir('res-failopen-');
   makeBundle(home, 'demo', { manifest: { contributes: { skills: ['a.md'] } }, files: { 'skills/a.md': 'x' }, enabled: true });
@@ -356,10 +314,6 @@ test('P5AC3: discoverBundles fails closed when no trust set is supplied', () => 
     'a trust check whose default is open is not a trust check');
 });
 
-/**
- * The marker lived in a directory and the check read the manifest's name, so a
- * directory could hand its operator approval to a differently-named bundle.
- */
 test('P5AC3: a bundle cannot transfer approval to another by naming itself after it', () => {
   const home = tempDir('res-crosskey-');
   makeBundle(home, 'grant', { manifest: { name: 'decoy' }, enabled: true });

@@ -5,19 +5,17 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { structuralChecks, runDoctor } from '../lib/doctor.mjs';
 import { buildStructuralIndex, structuralIndexDir } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2, loadGrammarsLock, DEFAULT_LOCK_PATH } from '../lib/repo-map/treesitter-extractor.mjs';
 
-// HERMETIC GRAMMAR PROBE: every scenario pins its own grammar roots, so S1 is
-// never a verdict on whatever happens to be installed up the filesystem from
-// the test runner. `emptyRoots` is the "no grammars here" baseline.
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
 function emptyRoots(t) {
   return [tempTree(t, 'harness-grammar-roots-')];
 }
 
-// Temp dirs registered for t.after cleanup — a failing assertion must not
-// leak the tree (a trailing rmSync never runs on failure).
 function tempTree(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -60,8 +58,6 @@ function extractorWith(overrides = {}) {
 
 const FIXTURE = { 'a.mjs': 'export const a = 1;\n', 'b.mjs': 'export const b = 2;\n' };
 
-// structuralChecks reads the index through the default HARNESS_HOME
-// resolution, so each scenario pins HARNESS_HOME to its own temp home.
 function withHome(t, home) {
   const saved = process.env.HARNESS_HOME;
   process.env.HARNESS_HOME = home;
@@ -221,4 +217,27 @@ test('runDoctor surfaces S1 alongside the existing check families', async (t) =>
   assert.ok(s1, 'doctor includes the structural S1 check');
   assert.equal(s1.pass, true);
   assert.equal(s1.optional, true);
+});
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('the vscode hook probe removes BOTH of its fixture directories', () => {
+  const jail = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-doc-jail-'));
+  const hooks = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cr-doc-hooks-')), 'hooks');
+  try {
+    const res = spawnSync(process.execPath, ['-e', `
+      const { runVSCodeHookProbe } = await import(${JSON.stringify(path.join(packageRoot, 'lib', 'doctor.mjs'))});
+      await runVSCodeHookProbe(${JSON.stringify(hooks)});
+    `.trim()], {
+      encoding: 'utf8',
+      timeout: 120_000,
+      env: { ...process.env, TMPDIR: jail, TMP: jail, TEMP: jail },
+    });
+
+    const left = fs.readdirSync(jail).filter((n) => n.startsWith('harness-doctor-'));
+    assert.deepEqual(left, [],
+      `only workspace was removed, so every probe left a harness-doctor-home-* directory${res.stderr ? `\n${res.stderr.slice(0, 300)}` : ''}`);
+  } finally {
+    fs.rmSync(jail, { recursive: true, force: true });
+  }
 });

@@ -101,13 +101,6 @@ Run the relevant test command.
   return planPath;
 }
 
-// P1.6 (carry-list, AC7 widening): the raw last LINE of events.jsonl is no
-// longer necessarily the 'orient' lifecycle event — every registered
-// command's dispatch now also brackets with command.start/command.result
-// (P1.5 telemetry), and command.result is the true last line for an orient
-// run. This helper specifically wants orient's OWN event (learnings/
-// gateStatus fields live there), so it filters by type instead of assuming
-// position.
 function lastEvent(ws) {
   const p = path.join(ws, '.harness', 'events.jsonl');
   const lines = fs

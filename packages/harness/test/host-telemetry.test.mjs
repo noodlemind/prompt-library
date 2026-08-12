@@ -144,9 +144,7 @@ test('session-state adapter treats cache and reasoning as subsets of input and o
     assert.equal(u['gen_ai.usage.output_tokens'], 7766);
     assert.equal(u['gen_ai.usage.cache_read_tokens'], 242816);
     assert.equal(u['gen_ai.usage.reasoning_tokens'], 2598);
-    // VS Code records provider prompt_tokens/output_tokens as the totals. Cache
-    // and reasoning are pricing/detail subsets and must not be counted twice.
-    assert.equal(u['gen_ai.usage.total_tokens'], 431090);
+        assert.equal(u['gen_ai.usage.total_tokens'], 431090);
   } finally {
     if (prev === undefined) delete process.env.HARNESS_VSCODE_USAGE_LOG;
     else process.env.HARNESS_VSCODE_USAGE_LOG = prev;

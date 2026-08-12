@@ -9,16 +9,10 @@ import {
   AGENT_LANE_FENCE_CLOSE,
 } from '../lib/agent-lane.mjs';
 
-// Deterministic redactor with an empty env — same fixture convention as
-// test/redact.test.mjs, so these tests never depend on (or get polluted by)
-// whatever secret-shaped variables happen to be set in the real process env.
 function realRedactor() {
   return createRedactor({ env: {} });
 }
 
-// Wraps the REAL redactor (never reimplements it) but counts calls, so the
-// "inject a fake redactor and assert it ran" requirement can be verified
-// against the actual pass-through wiring, not a hand-rolled stand-in.
 function spyRedactor() {
   const real = realRedactor();
   let redactValueCalls = 0;

@@ -1,17 +1,3 @@
-/**
- * Phase 3 — execution controls and their enforcement classes (P3AC1, P3AC3).
- *
- * The class that makes this worth having is `audit-only`: a control that
- * records and prevents nothing. It is easy to ship one by accident and call it
- * a policy. `network: deny` on a platform with no isolation primitive would
- * read, to an operator, exactly like `network: deny` on one that enforces it —
- * and they would have no way to tell which machine they were on.
- *
- * So the realized class is never inferred from `process.platform` alone. It is
- * probed, and a primitive that is present but unusable — `unshare` on a kernel
- * with user namespaces disabled, which is most CI containers — degrades with a
- * reason that reaches the audit event.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -51,8 +37,6 @@ test('every control declares a class from the closed vocabulary', () => {
   }
 });
 
-// `allow` is not a failed `deny`. Reporting it as a degradation would cry wolf
-// on every ordinary run and train people to ignore the one that matters.
 test('network allow reports audit-only because nothing was asked for, not because something failed', () => {
   const control = resolveNetworkControl({ policy: 'allow', platform: 'linux', spawn: spawnOk, cache: freshCache() });
   assert.equal(control.realized, 'audit-only');
@@ -68,8 +52,6 @@ test('network deny is enforced where a working primitive exists', () => {
   }
 });
 
-// The whole point of P3AC3's "where the platform lacks isolation primitives the
-// degradation is recorded".
 test('network deny degrades to audit-only on a platform with no primitive', () => {
   const control = resolveNetworkControl({ policy: 'deny', platform: 'win32', spawn: spawnOk, cache: freshCache() });
   assert.equal(control.declared, 'enforced');
@@ -78,9 +60,6 @@ test('network deny degrades to audit-only on a platform with no primitive', () =
   assert.deepEqual(control.wrapper, [], 'a degraded control must not pretend by wrapping with something that does nothing');
 });
 
-// `unshare` exists on every Linux box and is refused by plenty of them. A
-// control that reported `enforced` because a binary is on PATH would be lying
-// in exactly the environments people run CI in.
 test('a primitive that is present but unusable degrades rather than being trusted', () => {
   const control = resolveNetworkControl({ policy: 'deny', platform: 'linux', spawn: spawnFails, cache: freshCache() });
   assert.equal(control.realized, 'audit-only');
@@ -137,18 +116,13 @@ test('the audit records what each control achieved, and the operator’s argv ra
   assert.equal(Array.isArray(event.exec.degraded), true);
 });
 
-// The one that proves the control is not decorative on this platform. Skipped
-// where no primitive exists, rather than asserting something untrue.
 test('network deny actually stops a child reaching the network', { skip: process.platform !== 'darwin' && process.platform !== 'linux' }, () => {
   const probe = resolveNetworkControl({ policy: 'deny', cache: freshCache() });
   if (probe.realized !== 'enforced') return; // degraded here; the degradation tests above cover it
 
   const s = scopes();
   setConfigValue({ scope: 'user', key: 'exec.network', value: 'deny', ...s });
-  // The verdict goes to a FILE, not stdout: the ledger echoes the argv it ran,
-  // and the argv contains the script — so asserting on stdout would be reading
-  // the echo of the source code rather than the child's behavior.
-  const verdictFile = path.join(s.workspace, 'verdict');
+    const verdictFile = path.join(s.workspace, 'verdict');
   const scriptFile = path.join(s.workspace, 'probe.js');
   fs.writeFileSync(scriptFile, `
     const fs = require('node:fs');
@@ -195,4 +169,14 @@ test('exec.network is restrictive — a project may cut the network off and neve
     { cwd: packageRoot, encoding: 'utf8' },
   );
   assert.equal(JSON.parse(res.stdout).value, 'deny');
+});
+
+test('the control set reports environment-allowlist as audit-only when the child inherits', () => {
+  const inheriting = resolveControls({ environmentAllowlisted: false, spawn: () => ({ status: 0 }) });
+  const env = inheriting.controls.find((c) => c.id === 'environment-allowlist');
+  assert.equal(env.realized, 'audit-only', 'an audit that contradicts reality is worse than none, because it is believed');
+  assert.ok(inheriting.degraded.some((c) => c.id === 'environment-allowlist'));
+
+  const applied = resolveControls({ environmentAllowlisted: true, spawn: () => ({ status: 0 }) });
+  assert.equal(applied.controls.find((c) => c.id === 'environment-allowlist').realized, 'enforced');
 });

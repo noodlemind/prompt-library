@@ -75,13 +75,6 @@ test('repo map is query-ranked, budgeted, and code-relevant', () => {
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-// P1: `git ls-files` keeps listing a tracked path from the INDEX even after
-// its parent directory was swapped on disk for a symlink pointing outside
-// the workspace — and readFileNoFollow's O_NOFOLLOW only refuses a symlink
-// at the FINAL component, so the kernel happily followed the symlinked
-// ancestor and outside file content leaked into the generated map.
-// readFileSafe now validates every ancestor (assertNoSymlinkAncestors)
-// before each tracked read.
 test('a symlinked ancestor (src/ swapped for an outside symlink) never leaks outside content into the map; real files still mapped', () => {
   const { ws } = gitRepo({
     'src/payments.mjs': 'export function insidePayments() {}',
@@ -105,14 +98,18 @@ test('a symlinked ancestor (src/ swapped for an outside symlink) never leaks out
 test('index --status reports drift deterministically', () => {
   const { ws, git } = gitRepo({ 'a.js': 'export const a = 1;' });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-idx-'));
+  fs.mkdirSync(path.join(home, 'knowledge'), { recursive: true });
   const indexDir = resolveIndexDir(home, ws);
   fs.mkdirSync(indexDir, { recursive: true });
   const head = git(['rev-parse', 'HEAD']).stdout.trim();
-  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: 1, headSha: head, updated: '2026-01-01' }));
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: 1, headSha: head, updated: '2026-01-01', entryCount: 1 }));
 
   const fresh = indexStatus({ workspace: ws, copilotHome: home });
   assert.equal(fresh.indexed, true);
   assert.equal(fresh.stale, false);
+  assert.equal(fresh.knowledge.indexed, true);
+  assert.equal(fresh.structural.indexed, false);
+  assert.match(fresh.recommendation, /code: not built|structural/i);
 
   fs.writeFileSync(path.join(ws, 'b.js'), 'export const b = 2;');
   git(['add', '.']);
@@ -121,7 +118,38 @@ test('index --status reports drift deterministically', () => {
   assert.equal(stale.stale, true);
   assert.equal(stale.commitsSince, 1);
   assert.ok(stale.filesChanged >= 1);
-  assert.match(stale.recommendation, /harness index/);
+  assert.match(stale.knowledge.recommendation, /harness index/);
+
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('empty knowledge rebuild writes meta so status is empty not not-built', () => {
+  const { ws, git } = gitRepo({ 'a.js': 'export const a = 1;' });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-idx-empty-'));
+  fs.mkdirSync(path.join(home, 'knowledge', 'solutions'), { recursive: true });
+  const indexDir = resolveIndexDir(home, ws);
+  const head = git(['rev-parse', 'HEAD']).stdout.trim();
+
+  const built = runBuildPostingsIndex({
+    entries: [],
+    indexDir,
+    manifestUpdated: '2026-08-12',
+    flags: { headSha: head },
+  });
+  assert.equal(built.entryCount, 0);
+  assert.equal(built.empty, true);
+  assert.ok(fs.existsSync(path.join(indexDir, 'meta.json')), 'meta must exist for empty rebuilds');
+  const meta = JSON.parse(fs.readFileSync(path.join(indexDir, 'meta.json'), 'utf8'));
+  assert.equal(meta.entryCount, 0);
+  assert.equal(meta.headSha, head);
+
+  const status = indexStatus({ workspace: ws, copilotHome: home });
+  assert.equal(status.indexed, true, 'empty is still "built"');
+  assert.equal(status.empty, true);
+  assert.equal(status.stale, false);
+  assert.match(status.knowledge.recommendation, /empty/i);
+  assert.doesNotMatch(status.knowledge.recommendation, /not built yet/);
 
   fs.rmSync(ws, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
@@ -130,9 +158,7 @@ test('index --status reports drift deterministically', () => {
 test('writeCodebaseMap refuses to write through a symlinked docs/ directory', () => {
   const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-repomap-outside-'));
-  // A symlinked `docs/` pointing outside the workspace — a naive
-  // mkdir(recursive)+write would follow it and write the map there instead.
-  fs.symlinkSync(outside, path.join(ws, 'docs'));
+    fs.symlinkSync(outside, path.join(ws, 'docs'));
 
   const result = writeCodebaseMap({ workspace: ws });
   assert.equal(result, null, 'a symlinked docs/ must refuse the write, not follow it');

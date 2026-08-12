@@ -1,10 +1,3 @@
-// Integration seam test: the structural index the REAL builder writes
-// (`buildStructuralIndex`, compact on-disk form) must be readable through
-// `readStructuralIndex` and usable by the structural-expectations check —
-// the two halves were built independently against one documented contract,
-// and this test is the proof they meet. Nothing here hand-edits the tables:
-// every assertion is against bytes the builder itself wrote.
-
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -60,18 +53,11 @@ function fixtureRepo(t, prefix) {
   return { ws, home };
 }
 
-// Allowlist via the shape parseImpactedFiles actually consumes
-// (plan.sections.impactedFiles) — a.mjs is planned, so no
-// unplanned-symbol-change may fire; only the caller finding is expected.
 const PLAN = { fm: {}, sections: { impactedFiles: '- `a.mjs`\n' } };
 
 test('builder output round-trips through the shape reader (AST tier, grammars installed)', async (t) => {
-  // Roots scoped to the harness package's own node_modules: hermetic against
-  // whatever else lives up the filesystem.
-  const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
-  // Call edges come only from the AST tier; another grammar can set the tier
-  // while .mjs still falls back to lexical, so gate on the language itself.
-  if (!extractor.available.includes('javascript')) {
+    const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
+    if (!extractor.available.includes('javascript')) {
     t.skip('javascript tree-sitter grammar not installed — AST-tier round-trip needs it');
     return;
   }
@@ -94,11 +80,7 @@ test('builder output round-trips through the shape reader (AST tier, grammars in
   const betaCalls = index.graph.calls.filter((edge) => edge.to === 'a.mjs#beta');
   assert.ok(betaCalls.length >= 1, 'call edges normalized to file#symbol form');
 
-  // Remove an exported symbol with a surviving caller. A treesitter-tier
-  // baseline entry is honestly SKIPPED per file: the current side is always
-  // lexical, so a cross-tier diff would fabricate findings. Nothing was
-  // compared, so the check reports `skipped` — never a green `passed`.
-  fs.writeFileSync(path.join(ws, 'a.mjs'), 'export function alpha() { return 1; }\n');
+    fs.writeFileSync(path.join(ws, 'a.mjs'), 'export function alpha() { return 1; }\n');
   const skipped = runStructuralExpectations({ workspace: ws, plan: PLAN, changedFiles: ['a.mjs'], home });
   assert.equal(skipped.status, 'skipped', `tier-mismatched file must skip, got ${skipped.status}: ${skipped.message}`);
   assert.deepEqual(skipped.findings, []);
@@ -110,11 +92,7 @@ test('builder output round-trips through the shape reader (AST tier, grammars in
 
 test('removed-symbol-with-callers fires end to end from real builder output in the default lexical tier', async (t) => {
   const { ws, home } = fixtureRepo(t, 'struct-compat-lex-');
-  // No grammars needed and no table patched: this is the shape a stock install
-  // (optional grammars absent) writes. The lexical tier now records real
-  // export flags and explicit named-import references, which is exactly what
-  // the caller-side finding is computed from.
-  await buildStructuralIndex({ workspace: ws, home, extractor: lexicalExtractor() });
+    await buildStructuralIndex({ workspace: ws, home, extractor: lexicalExtractor() });
 
   const index = readStructuralIndex(ws, { home });
   assert.equal(index.present, true, `index should be readable: ${index.reason}`);

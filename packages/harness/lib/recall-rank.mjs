@@ -51,9 +51,7 @@ function weightedOverlapScore(queryTokens, entry) {
     { text: entry.module, weight: FIELD_BOOSTS.module },
     { text: entry.summary, weight: FIELD_BOOSTS.summary },
     { text: entry.excerpt, weight: FIELD_BOOSTS.excerpt },
-    // Knowledge-layer fields: the applicability condition and claim are often
-    // the only place query terms appear (fallback ranker parity with BM25).
-    { text: entry.trigger, weight: FIELD_BOOSTS.symptom },
+        { text: entry.trigger, weight: FIELD_BOOSTS.symptom },
     { text: entry.claim, weight: FIELD_BOOSTS.summary },
   ];
 
@@ -82,11 +80,7 @@ export function loadManifest(copilotHome, workspace) {
   for (const p of paths) {
     if (!fs.existsSync(p)) continue;
     try {
-      // Read-size cap (sweep P3 DoS): a crafted multi-hundred-MB manifest would
-      // otherwise be read whole + yaml.parsed on every `harness orient`. Skip an
-      // over-cap file with a note (never sets `path`, so rankRecall does not
-      // throw on it) and recall degrades to empty rather than OOM/stalling.
-      const size = fs.statSync(p).size;
+            const size = fs.statSync(p).size;
       if (size > DEFAULT_MAX_BYTES) {
         lastError = `manifest exceeds ${DEFAULT_MAX_BYTES}-byte read cap (${size}) — skipped`;
         continue;
@@ -176,12 +170,7 @@ export function rankRecall(query, { copilotHome, workspace, limit = 3, collectio
 
 export function findMatchingPlans(workspace, query, limit = 3) {
   const plansDirRel = path.join('docs', 'plans');
-  // Physical containment (adversarial-review sweep, same class as
-  // collectEpisodes/collectSolutions): docs/plans is scanned and read the
-  // same way docs/solutions is — a symlinked plans directory (or a
-  // symlinked plan file) must never let its target's content be read into
-  // the orient pack's "Plans" recall section.
-  if (!assertNoSymlinkAncestors(workspace, plansDirRel)) return [];
+    if (!assertNoSymlinkAncestors(workspace, plansDirRel)) return [];
   const plansDir = path.join(workspace, plansDirRel);
   if (!fs.existsSync(plansDir)) return [];
   const queryTokens = new Set(tokenize(query));
@@ -192,9 +181,7 @@ export function findMatchingPlans(workspace, query, limit = 3) {
     const fileRel = path.join(plansDirRel, f);
     const full = assertNoSymlinkAncestors(workspace, fileRel);
     if (!full) continue; // symlinked leaf — never follow
-    // `root: workspace` → canonicalize-after-acquire containment verify closes
-    // the ancestor-swap window between the walk above and this read.
-    const raw = readFileNoFollow(full, { root: workspace });
+        const raw = readFileNoFollow(full, { root: workspace });
     if (raw === null) continue; // missing/oversized — skip, same as before
     const text = raw.slice(0, 4000);
     const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -231,10 +218,7 @@ export function resolveDocPath(copilotHome, workspace, entry) {
   ];
   for (const root of knowledgeRoots) {
     const full = safeResolveUnderRoot(root, entry.path);
-    // Return the matched root alongside the path so the caller can hand it to
-    // readFileNoFollow for a canonicalize-after-acquire containment verify —
-    // the read must be checked against the SAME root the path resolved under.
-    if (full && fs.existsSync(full)) return { full, root };
+        if (full && fs.existsSync(full)) return { full, root };
   }
   return null;
 }

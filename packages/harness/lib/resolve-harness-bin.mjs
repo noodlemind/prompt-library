@@ -6,10 +6,6 @@ import { findHarnessOnPath, globalHarnessShimPath, INSTALL_FIX_HINT } from './gl
 const HARNESS_REL = path.join('packages', 'harness', 'bin', 'harness.mjs');
 const NM_REL = path.join('node_modules', '@dev-kit', 'harness', 'bin', 'harness.mjs');
 
-/**
- * Resolve harness CLI for agents and workspace runners.
- * Order: HARNESS_BIN → ~/.copilot/bin/harness → ~/.copilot/.harness-bin → PATH → monorepo → node_modules.
- */
 export function resolveHarnessBin({ workspace = process.cwd(), copilotHome } = {}) {
   const tried = [];
   const home = copilotHome || path.join(os.homedir(), '.copilot');
@@ -80,12 +76,6 @@ export function agentHarnessCommand(resolved) {
   return `node "${resolved.bin}"`;
 }
 
-// Bumped to 5 for the equals-form --workspace detection fix below (v3 made
-// detection boundary-aware, v4 moved the injection before the boundary, v5
-// makes detection see `--workspace=<path>` at all). writeHarnessRunner
-// rewrites any runner stamped with an older version, so already-installed
-// workspaces pick the fix up — without this bump the fix reaches only
-// workspaces that have never been initialized.
 export const RUNNER_VERSION = 5;
 
 export function harnessRunnerSource() {

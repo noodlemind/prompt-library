@@ -8,15 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { ensureStore, readLedger, writeStoreConfig } from '../lib/knowledge/store.mjs';
 
-/**
- * Three-strikes quarantine (design §3): a content-failure code raised by a
- * SPECIFIC op (E_SCHEMA/E_SECRET/E_LINT/E_BYTE_CAP/E_EXISTS/E_TARGET) appends
- * one failure ledger entry per episode of that op. On the 3rd accumulated
- * failure for the same path@sha256 key, the same append also writes a
- * quarantine marker — which both surfaces in `--status`'s `quarantined` list
- * AND joins the consumed set, so the episode stops re-triggering debt.
- */
-
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -48,10 +39,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// A real episode file on disk — collectEpisodes (consolidate.mjs) scans
-// docs/solutions/<category>/*.md, so the debt/candidates/quarantine
-// bookkeeping only lights up for a genuine on-disk episode, not a synthetic
-// path+sha256 pair.
 function writeEpisode(ws, category, name, kind = 'fix') {
   const dir = path.join(ws, 'docs', 'solutions', category);
   fs.mkdirSync(dir, { recursive: true });
@@ -137,20 +124,6 @@ test('a byte-cap rejection records one failure entry per run; the 3rd strike qua
   assert.match(doctorRes.stdout, /\[!\]\s+K2\b/);
 });
 
-// Milestone 4 Task 5 item 1: an op citing the SAME episode twice (a
-// duplicated/malformed op JSON, not two distinct pieces of evidence) must
-// still record only ONE failure entry per run — without dedup, each
-// duplicate reference would append its own entry AND its own priorFailures
-// count against the same static ledger snapshot, so a single run with two
-// duplicate refs would double-count toward the 3-strike threshold and
-// quarantine a run early (on the 2nd run instead of the 3rd).
-//
-// The duplicate itself is now REJECTED at admission (validateEpisodes,
-// apply.mjs — a duplicate link inflates verifiedFixLinks/verifiedAndPlans from
-// one episode file), so the rejection code is E_SCHEMA rather than the
-// E_BYTE_CAP this op would otherwise have earned. The strike-recorder's own
-// dedup invariant is unchanged and still pinned here: one entry per run, the
-// quarantine landing on exactly the 3rd.
 test('an op citing the same episode twice records one failure entry per run (dedup); quarantines on the 3rd run, not earlier', () => {
   const c = ctx();
   const ep = writeEpisode(c.ws, 'perf', 'dup-claim');
@@ -195,12 +168,7 @@ test('an E_MODE rejection records no failure', () => {
 test('a mixed run records failures only for the failing op\'s episodes', () => {
   const c = ctx();
   const epA = writeEpisode(c.ws, 'perf', 'op-a');
-  // Real evidence for op-b too: this op is meant to fail with E_TARGET (its
-  // STRENGTHEN target doesn't exist), not with the fix-evidence gate — a
-  // fabricated episode here would reject with E_SCHEMA before the E_TARGET
-  // check is ever reached (verifyAdmittedEpisodeKinds runs before the
-  // target-existence check in apply.mjs's per-op validation).
-  const epB = writeEpisode(c.ws, 'perf', 'op-b');
+    const epB = writeEpisode(c.ws, 'perf', 'op-b');
   const ops = [
     ADD({ slug: 'op-a-learning', episodes: [{ ...epA, kind: 'fix', plan: 'docs/plans/p1.md' }] }),
     { op: 'STRENGTHEN', target: 'sql/does-not-exist', episodes: [{ ...epB, kind: 'fix', plan: 'docs/plans/p1.md' }] },

@@ -53,9 +53,7 @@ test('opt-in commit mode: mirrors on remember, sweeps on retire, stops on none, 
   assert.match(index1, /Opt-in commit mode: these learnings are copies from a local store; treat foreign entries as read-only reference\./);
   assert.match(index1, /- \[general\/alpha-trigger] alpha trigger/);
 
-  // Hand-plant a foreign file (another machine's commit, or a stray edit) —
-  // never imported, and never touched by the sweep.
-  const foreignDir = path.join(mirrorRoot(c.ws), 'other');
+    const foreignDir = path.join(mirrorRoot(c.ws), 'other');
   fs.mkdirSync(foreignDir, { recursive: true });
   const foreignPath = path.join(foreignDir, 'foreign.md');
   const foreignContent = '---\ntrigger: "foreign"\nstatus: active\n---\n\nforeign body from another machine\n';
@@ -228,10 +226,6 @@ test('mirrorLearnings keeps secret-shaped learnings (trigger or body) out of bot
   );
 });
 
-// An ACTIVE learning that becomes secret-shaped is excluded from the write
-// and the INDEX on the pass that discovers it, but without also sweeping its
-// PREVIOUS clean mirror copy, that stale file would linger forever —
-// out of sync with both the write and the INDEX.
 test('mirror sweep removes the stale mirror copy of a learning that turns secret-shaped on a later pass', () => {
   const c = ctx();
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -261,10 +255,7 @@ test('mirror sweep removes the stale mirror copy of a learning that turns secret
   const indexBefore = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
   assert.match(indexBefore, /sql\/turns-secret/, 'precondition: INDEX lists the learning');
 
-  // The store learning turns secret-shaped — a hand edit directly on the
-  // store's learning file, bypassing every CLI write path (or equally, a
-  // fresh `consolidate --apply`/absorb write of secret-shaped content).
-  const secretPattern = 'AKIA1234567890ABCDEF';
+    const secretPattern = 'AKIA1234567890ABCDEF';
   fs.writeFileSync(
     learningPath,
     learningFile({
@@ -315,9 +306,7 @@ test('rebuild --yes and purge --all fully clear the mirror for the ids they wipe
   assert.doesNotMatch(indexAfterRebuild, /general\//, 'INDEX.md is header-only after rebuild --yes');
   assert.match(indexAfterRebuild, /Opt-in commit mode/, 'INDEX.md still carries the header');
 
-  // Re-seed for the purge --all half of this scenario (rebuild --yes leaves
-  // mode/commit untouched, so remember still works and still mirrors).
-  const three = run(c, ['remember', 'three claim body', '--trigger', 'three trigger']);
+    const three = run(c, ['remember', 'three claim body', '--trigger', 'three trigger']);
   assert.equal(three.status, 0, three.stderr || three.stdout);
   const four = run(c, ['remember', 'four claim body', '--trigger', 'four trigger']);
   assert.equal(four.status, 0, four.stderr || four.stdout);
@@ -387,10 +376,7 @@ test('hand-deleting a mirrored learning file in the store removes its mirror cop
   assert.ok(storeLearning, 'precondition: the learning exists in the store');
   fs.rmSync(storeLearning.file, { force: true }); // human deletes the store file directly, bypassing the CLI entirely
 
-  // Any mutation command absorbs the hand edit first — `remember` drives
-  // applyOps, which absorbs it under its own lock (absorbOrAbort) as the
-  // first step of its transaction, before writing its own new learning.
-  const another = run(c, ['remember', 'another claim body', '--trigger', 'another trigger']);
+    const another = run(c, ['remember', 'another claim body', '--trigger', 'another trigger']);
   assert.equal(another.status, 0, another.stderr || another.stdout);
 
   assert.ok(!fs.existsSync(mirrorFile), 'the mirror copy is removed once the hand deletion is absorbed');
@@ -407,9 +393,7 @@ test('lifecycle retire mirrors the COMMITTED snapshot via afterCommit (the retir
   const mirrorFile = path.join(mirrorRoot(c.ws), id.split('/')[0], `${id.split('/')[1]}.md`);
   assert.ok(fs.existsSync(mirrorFile), 'precondition: the active learning is mirrored');
 
-  // Direct lifecycle call (not applyOps) — proves a non-applyOps writer mirrors
-  // committed state under the transaction's held lock via afterCommit.
-  const res = setLearningStatus({ workspace: c.ws, id, action: 'retire', reason: 'done', home: c.harnessHome });
+    const res = setLearningStatus({ workspace: c.ws, id, action: 'retire', reason: 'done', home: c.harnessHome });
   assert.equal(res.pass, true, res.blockedReason);
   assert.ok(!fs.existsSync(mirrorFile), 'the retired learning is swept from the mirror (committed state only)');
   const index = fs.readFileSync(path.join(mirrorRoot(c.ws), 'INDEX.md'), 'utf8');
