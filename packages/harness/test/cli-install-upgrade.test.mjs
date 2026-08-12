@@ -186,13 +186,21 @@ test('install creates global harness shim', () => {
 test('TUI launch installs or version-upgrades once with VS Code configuration enabled', async () => {
   const copilotHome = tempDir('first-tui-home-');
   const workspace = tempDir('first-tui-workspace-');
+  const bridgePath = path.join(tempDir('first-tui-extensions-'), 'dev-kit.harness-copilot-bridge');
   const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
   const calls = [];
   const install = async (command, argv) => {
     calls.push({ command, argv });
+    fs.mkdirSync(bridgePath, { recursive: true });
+    fs.writeFileSync(path.join(bridgePath, 'extension.cjs'), 'module.exports = {};\n');
     fs.writeFileSync(
       path.join(copilotHome, '.harness-lock.json'),
-      JSON.stringify({ package: '@dev-kit/harness', version: packageVersion, files: ['skills'] }),
+      JSON.stringify({
+        package: '@dev-kit/harness',
+        version: packageVersion,
+        files: ['skills'],
+        vscodeBridge: { id: 'dev-kit.harness-copilot-bridge', version: '0.1.0', path: bridgePath },
+      }),
     );
     return 0;
   };
@@ -223,6 +231,29 @@ test('TUI launch installs or version-upgrades once with VS Code configuration en
   );
   assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), false);
   assert.equal(calls.length, 2, 'running an older CLI never auto-downgrades a newer hydrated install');
+});
+
+test('TUI launch repairs a same-version legacy install that has no VS Code bridge', async () => {
+  const copilotHome = tempDir('legacy-tui-home-');
+  const workspace = tempDir('legacy-tui-workspace-');
+  const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
+  fs.writeFileSync(
+    path.join(copilotHome, '.harness-lock.json'),
+    JSON.stringify({ package: '@dev-kit/harness', version: packageVersion, files: ['skills'] }),
+  );
+  const calls = [];
+
+  assert.equal(await ensureFirstRunInstall({
+    copilotHome,
+    workspace,
+    packageVersion,
+    install: async (command, argv) => {
+      calls.push({ command, argv });
+      return 0;
+    },
+  }), true);
+  assert.deepEqual(calls.map((call) => call.command), ['upgrade']);
+  assert.ok(calls[0].argv.includes('--configure-vscode'));
 });
 
 test('install tracks the VS Code bridge across a CLI-only upgrade and uninstall removes it safely', () => {
