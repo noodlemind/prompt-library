@@ -1,17 +1,3 @@
-/**
- * The provider adapters, driven end to end against a local stub server.
- *
- * WHY A STUB RATHER THAN A MOCK: everything interesting about an adapter is in
- * the parts a mock replaces. Whether the request reaches the right path, whether
- * the credential is on the right header, whether a JSON-string `arguments`
- * field is parsed, whether a 429 body becomes a readable message — none of that
- * is exercised by stubbing the HTTP call. A real server on loopback costs
- * milliseconds and tests the thing that ships.
- *
- * It also proves the loop completes a task against something that genuinely
- * answers over HTTP, which is the closest this suite can get to a live model
- * without a key or a network.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -25,11 +11,6 @@ import { AGENT_TOOLS } from '../lib/agent-loop.mjs';
 
 const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
 
-/**
- * A stub that speaks whichever format is asked of it. `reply` receives the
- * parsed request body and returns `[status, body]`, so a test can assert on
- * what the adapter SENT as well as on what it does with the answer.
- */
 async function stubServer(reply) {
   const seen = [];
   const server = http.createServer((req, res) => {
@@ -89,10 +70,7 @@ test('the OpenAI-compatible providers share ONE adapter, and copilot only adds a
   assert.equal(new Set(shared).size, 1,
     'near-identical files would guarantee a tool-call fix lands in one and the others keep the bug');
   assert.ok(shared.length >= 10, `the table rows all ride the shared adapter (${shared.length})`);
-  // github-copilot differs only in how the credential comes to exist: its
-  // adapter IMPORTS the wire shaping from the shared one rather than copying
-  // it, pinned here so the import cannot quietly become a fork.
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const copilot = fs.readFileSync(path.join(root, 'lib', 'providers', 'github-copilot.mjs'), 'utf8');
   assert.match(copilot, /from '\.\/openai-compatible\.mjs'/);
   assert.doesNotMatch(copilot, /function toWireMessages/, 'shaping lives once');
@@ -255,10 +233,7 @@ test('the loop completes a task end to end against a server that actually answer
   const { ws, home } = scaffold('adapter-e2e');
   const marker = path.join(ws, 'proof.txt');
   const stub = await stubServer((body, n) => {
-    // Quoted: the marker sits under the OS temp directory, which on a Windows
-    // runner routinely contains a space, and an unquoted redirect target would
-    // split into two words and write to the wrong place.
-    if (n === 1) return [200, openAiToolCall('bash', JSON.stringify({ script: `echo proven > "${marker}"` }))];
+        if (n === 1) return [200, openAiToolCall('bash', JSON.stringify({ script: `echo proven > "${marker}"` }))];
     return [200, openAiText('the file is written')];
   });
   try {
@@ -280,9 +255,7 @@ test('the loop completes a task end to end against a server that actually answer
     assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'proven',
       'a model answering over HTTP drove a governed tool call that changed the filesystem');
 
-    // The second request must carry the tool RESULT, in this format's shape —
-    // one `role: "tool"` message per result, which the loop knows nothing about.
-    const followUp = stub.seen[1].body.messages;
+        const followUp = stub.seen[1].body.messages;
     const toolMessage = followUp.find((m) => m.role === 'tool');
     assert.ok(toolMessage, 'the result has to get back to the model or the loop is a one-shot');
     assert.equal(toolMessage.tool_call_id, 'call_a');
@@ -306,10 +279,7 @@ test('the system prompt travels as a system message in this format, without the 
     const first = stub.seen[0].body.messages[0];
     assert.equal(first.role, 'system');
     assert.match(first.content, /OUT OF SCOPE/);
-    // Derived from the loop's own list rather than pinned to a number: this
-    // test is about the SHAPE the adapter serializes into, and a hardcoded
-    // count made adding a tool look like an adapter regression.
-    assert.ok(Array.isArray(stub.seen[0].body.tools) && stub.seen[0].body.tools.length === AGENT_TOOLS.length);
+        assert.ok(Array.isArray(stub.seen[0].body.tools) && stub.seen[0].body.tools.length === AGENT_TOOLS.length);
     assert.equal(stub.seen[0].body.tools[0].type, 'function', 'this format nests the schema under `function`');
     assert.ok(stub.seen[0].body.tools[0].function.parameters, 'and calls it `parameters`, not `input_schema`');
   } finally {
@@ -327,9 +297,7 @@ test('the Anthropic adapter honors a base URL override, including a path prefix'
   try {
     const provider = startProvider({
       provider: 'anthropic',
-      // A gateway that mounts Anthropic under a prefix — the endpoint must be
-      // appended to it, not replace it.
-      parentEnv: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'sk-ant-stub', ANTHROPIC_BASE_URL: `${stub.base}/anthropic` },
+            parentEnv: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'sk-ant-stub', ANTHROPIC_BASE_URL: `${stub.base}/anthropic` },
     });
     const result = await provider.complete({ messages: [{ role: 'user', text: 'hi' }] }, { timeout: 15_000 });
     provider.close();
@@ -342,7 +310,6 @@ test('the Anthropic adapter honors a base URL override, including a path prefix'
   }
 });
 
-
 // --- the second wave: rows, retry, and a subscription ---------------------
 
 test('the provider table covers the round-one set, each with a distinct key variable', () => {
@@ -354,10 +321,7 @@ test('the provider table covers the round-one set, each with a distinct key vari
   ]) {
     assert.ok(ids.includes(expected), `${expected} is missing from the table`);
   }
-  // A shared key variable would make one provider's credential reach another's
-  // process — and `github-models` deliberately does NOT reuse GITHUB_TOKEN,
-  // which core names for redaction and for the exec denylist.
-  const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar);
+    const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar);
   assert.equal(new Set(keyVars).size, keyVars.length - 1,
     'only zen/zen-go intentionally share OPENCODE_API_KEY');
   assert.equal(PROVIDERS['github-models'].keyVar, 'GITHUB_MODELS_TOKEN');
@@ -397,9 +361,7 @@ test('COPILOT: a subscription is a credential ladder, resolved by the seam', () 
   const viaGh = providerEnv(copilot, { parentEnv: { GH_TOKEN: 'gho_from_cli' } });
   assert.equal(viaGh.HARNESS_COPILOT_OAUTH, 'gho_from_cli');
 
-  // Rung 3: nothing exported — the adapter falls back to the editor's store,
-  // so the seam must NOT refuse to start.
-  const none = providerEnv(copilot, { parentEnv: { PATH: '/usr/bin' } });
+    const none = providerEnv(copilot, { parentEnv: { PATH: '/usr/bin' } });
   assert.equal(none.HARNESS_PROVIDER_BASE_URL, 'https://api.githubcopilot.com');
   assert.equal(none.HARNESS_COPILOT_OAUTH, undefined);
 });
@@ -436,9 +398,7 @@ test('withRetry retries what the network broke and never what the request broke'
 });
 
 test('the shared adapter does not attach a stdin listener when merely imported', async () => {
-  // The copilot adapter imports the wire shaping. If importing also attached
-  // the IPC loop, two adapters would answer every request in that process.
-  const before = process.stdin.listenerCount('data');
+    const before = process.stdin.listenerCount('data');
   await import('../lib/providers/openai-compatible.mjs');
   assert.equal(process.stdin.listenerCount('data'), before,
     'the stdin loop attaches only when the file IS the adapter process');

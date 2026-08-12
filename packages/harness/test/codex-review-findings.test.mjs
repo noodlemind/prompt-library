@@ -1,16 +1,3 @@
-/**
- * Regressions for the twelve defects the Codex phase-3 review found.
- *
- * Each is written so it FAILS against the pre-fix code — the point of pinning a
- * review finding is that the fix cannot quietly come undone, and a test that
- * would pass either way records nothing.
- *
- * The two worth reading first are F1 and F2, because both are cases where the
- * harness was reporting something untrue rather than merely doing something
- * wrong: an approval that covered code it had never seen, and an audit claiming
- * a control that was not applied. A wrong answer nobody can detect is worse
- * than a missing one.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -45,8 +32,6 @@ function run(argv, { workspace, copilotHome }, extra = {}) {
   });
 }
 
-// F1 — the digest pinned config and policy but not the file that gets EXECUTED,
-// so approving a benign repo authorized whatever its checks became afterwards.
 test('F1: rewriting checks.yaml after approval invalidates trust', () => {
   const s = scopes();
   const marker = path.join(s.workspace, 'MARKER');
@@ -63,8 +48,6 @@ test('F1: rewriting checks.yaml after approval invalidates trust', () => {
   assert.ok(PINNED_FILES.some((f) => f.endsWith('checks.yaml')));
 });
 
-// F2 — the audit said `environment-allowlist: enforced` for a child that had
-// inherited the whole parent environment.
 test('F2: the control set reports environment-allowlist as audit-only when the child inherits', () => {
   const inheriting = resolveControls({ environmentAllowlisted: false, spawn: () => ({ status: 0 }) });
   const env = inheriting.controls.find((c) => c.id === 'environment-allowlist');
@@ -75,8 +58,6 @@ test('F2: the control set reports environment-allowlist as audit-only when the c
   assert.equal(applied.controls.find((c) => c.id === 'environment-allowlist').realized, 'enforced');
 });
 
-// F3 — `--dry-run` ran the child, and the same flag suppresses the event log, so
-// the execution happened with no record at all.
 test('F3: --dry-run describes the execution instead of performing it', () => {
   const s = scopes();
   const marker = path.join(s.workspace, 'RAN');
@@ -85,8 +66,6 @@ test('F3: --dry-run describes the execution instead of performing it', () => {
   assert.equal(fs.existsSync(marker), false, 'a flag meaning "show me what you would do" must not do it');
 });
 
-// F4 — the restrictive rule only applied when a user value happened to exist, so
-// with none, a project could raise a limit past the safer default.
 test('F4: a project cannot loosen a restrictive key past the default when no user value exists', () => {
   const s = scopes();
   fs.mkdirSync(path.join(s.workspace, '.github', 'harness'), { recursive: true });
@@ -97,16 +76,12 @@ test('F4: a project cannot loosen a restrictive key past the default when no use
   assert.match(provenance['exec.timeout_seconds'].note, /less restrictive/);
 });
 
-// …while the USER may still raise their own limit: the default is a starting
-// point, not a ceiling, and folding it would turn the escape hatch into a wall.
 test('F4: the user scope is still free to raise a limit above the default', () => {
   const s = scopes();
   setConfigValue({ scope: 'user', key: 'exec.timeout_seconds', value: '900', ...s });
   assert.equal(resolveConfig(s).values['exec.timeout_seconds'], 900);
 });
 
-// F5 — a config that failed to parse dropped the offending key and fell back to
-// the permissive default, which for a gate key means the gate opened.
 test('F5: an execute-class command fails closed on a configuration it could not read', () => {
   const s = scopes();
   fs.mkdirSync(path.join(s.copilotHome, 'harness'), { recursive: true });
@@ -118,8 +93,6 @@ test('F5: an execute-class command fails closed on a configuration it could not 
     'the dropped key can be the gate itself');
 });
 
-// F6 — writing project config invalidates the approval covering it, so the
-// pre-write trust boolean described a state that no longer existed.
 test('F6: config set --scope project reports the trust its own write just invalidated', () => {
   const s = scopes();
   approveProject(s);
@@ -157,8 +130,6 @@ test('F8: a malformed single-value flag is a usage error, not a silent default',
     'a well-formed flag still works');
 });
 
-// F9 — bash joined every post-boundary token, so the audit described one thing
-// and the shell executed another.
 test('F9: bash takes exactly one script argument', () => {
   const s = scopes();
   const multi = run(['bash', '--no-events', '--', 'printf', '[%s]', 'a b'], s);

@@ -1,23 +1,3 @@
-/**
- * Where the model catalogue came from, and whether the surface says so.
- *
- * lib/model-cache.mjs's module note states the rule: "Every reader gets the
- * provenance along with the list, because 'these are the models' and 'these
- * were the models an hour ago' are different claims and a picker should not
- * blur them."
- *
- * `modelStatus()` had computed `catalogSource` and `catalogAge` since the
- * catalogue became fetchable, and `harness model show` rendered NEITHER. The
- * rule was implemented and then dropped one layer below the screen, so the one
- * surface that answers "which models can I use" answered without saying whether
- * its list was minutes old, weeks old, or a built-in guess.
- *
- * THESE TESTS ASSERT THE VISIBLE EFFECT, not the computed value. A test that
- * checked `modelStatus().catalogAge` would have passed throughout the entire
- * period the information never reached a human — that is the same blind spot
- * that let a `tui.*` config key be silently dead in real sessions, caught only
- * once a test asserted what appeared on screen.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -85,9 +65,6 @@ test('with no cache the surface warns it is guessing, and names the fix', () => 
   assert.match(out, /model refresh/, 'a warning with no next step is half an answer');
 });
 
-// The regression guard proper. `catalogSource`/`catalogAge` were computed and
-// never rendered; anything the status object claims about provenance has to
-// reach the screen, or the claim is decoration.
 test('every provenance field the status computes reaches the rendered output', () => {
   const home = tempDir('model-cat-render-');
   writeModelCache(home, { provider: 'github-copilot', models: ['gpt-4.1'], labels: {}, fetchedAt: new Date().toISOString() });
@@ -103,10 +80,6 @@ test('every provenance field the status computes reaches the rendered output', (
   assert.match(rendered, new RegExp(json.catalogAge), 'and so does the age');
 });
 
-// `auto` is the word every comparable tool uses, and it must never reach the
-// wire: Copilot's API has no `auto` route and answers "The requested model is
-// not supported", which reads as a broken harness rather than a spelling it
-// does not know.
 test('auto is resolved to the provider default, never sent as a model id', () => {
   const spawned = [];
   const handle = startProvider({

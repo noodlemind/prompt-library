@@ -1,36 +1,3 @@
-/**
- * Binding the ledger to a real terminal.
- *
- * THE REGION IS ANCHORED TO THE BOTTOM OF THE VIEWPORT. Every reference
- * surface — Claude Code, Amp, Codex, OpenCode, Grok — puts the composer at
- * the bottom of the screen, content flowing above it, the empty space in the
- * MIDDLE of a fresh session. The first build anchored to the top: chrome at
- * rows 1–12 of a 45-row terminal with thirty-three dead rows underneath,
- * which read as unfinished no matter what the chrome looked like. Anchoring
- * is the single largest "feel" difference between this surface and the field.
- *
- * HOW THE ANCHOR WORKS in the main buffer. On open, the prior shell content
- * is scrolled into scrollback (a screenful of newlines — nothing is erased
- * from history) and the session owns a clean viewport. Committed content is
- * written top-down from `contentRow`; the region — live block, palette,
- * composer, hint, footer — is painted with absolute positioning into the
- * LAST rows of the viewport. While a gap exists between content and region,
- * commits fill it downward; once they meet, commits write through the bottom
- * and the terminal scrolls naturally, exactly as before. Scrollback,
- * selection and terminal search are untouched throughout — the design's
- * main-buffer commitment holds.
- *
- * THE WIDTH IS THE TERMINAL'S WIDTH, live: the region repaints at the current
- * width on every SIGWINCH, and nothing in it is capped. Content that already
- * scrolled keeps the width it was born at — that is what scrollback means,
- * and no reference reflows it either.
- *
- * COMMAND OUTPUT IS CAPTURED, NOT PASSED THROUGH — see `capture`. Every
- * repaint is one synchronized frame (CSI ?2026): terminals that support it
- * render each update atomically, the rest ignore the sequence. This module
- * remains the only one that needs a TTY, and still the one with the least
- * thinking in it.
- */
 import readline from 'node:readline';
 import { createComposer } from './composer.mjs';
 import { renderFooter, renderHint } from './chrome.mjs';
@@ -110,16 +77,10 @@ export function createInput({
     if (overlay) {
       rows.push(...renderOverlay(overlay, { ui, width: w }));
     } else {
-      // The palette grows UPWARD above the composer, Claude Code's shape: the
-      // input row never moves and never loses focus; the candidates stack over
-      // it and vanish. A menu that replaced the editor sent the query ten rows
-      // up-screen the moment `/` was pressed.
-      if (palette) rows.push(...renderPaletteRows(palette.overlay, { ui, width: w }));
+            if (palette) rows.push(...renderPaletteRows(palette.overlay, { ui, width: w }));
       composer.setWidth(w);
       composer.setHint(renderHint({ ui, width: w, ...hintState }));
-      // The rule label and the placeholder are computed HERE, per paint, from
-      // one source of truth each — a prompt in flight owns both.
-      if (composer.bashMode) {
+            if (composer.bashMode) {
         composer.setRuleLabel('bash');
         composer.setPlaceholder(null);
       } else if (prompt) {
@@ -127,14 +88,7 @@ export function createInput({
         composer.setPlaceholder(`${prompt.label}${prompt.note ? ` — ${prompt.note}` : ''} · ↵ submits · exit cancels`);
       } else {
         composer.setRuleLabel([hintState.mode, hintState.shell === 'denied' ? 'shell denied' : null].filter(Boolean).join(' · '));
-        // THE PLACEHOLDER PROMISES ONLY WHAT THIS SESSION CAN DO. Its default
-        // lists asking first, on the stated grounds that a bare line asks — but
-        // that is only true while the agent gate is open. With the gate shut, a
-        // typed sentence comes back as `unknown what`, which is the exact
-        // failure the default was written to prevent, reproduced in the other
-        // configuration. So the offer changes with the gate, and names the
-        // gesture that reopens it.
-        composer.setPlaceholder(hintState.agent === false
+                composer.setPlaceholder(hintState.agent === false
           ? 'run a command · / for the palette · shift+tab to ask'
           : null);
       }
@@ -175,10 +129,7 @@ export function createInput({
     erase();
     const lines = regionLines();
     let top = regionTop(lines.length);
-    // A region taller than the space below the content pushes the content up:
-    // scroll by the deficit from the bottom row, exactly what the terminal
-    // would have done had the rows been printed there.
-    const deficit = top + lines.length - 1 - height();
+        const deficit = top + lines.length - 1 - height();
     if (deficit > 0) {
       moveTo(height(), 1);
       emit('\n'.repeat(deficit));
@@ -186,15 +137,10 @@ export function createInput({
       top = regionTop(lines.length);
     }
     moveTo(top, 1);
-    // No trailing newline: a newline on the bottom row scrolls the screen,
-    // which would walk the region up one row per repaint.
-    emit(lines.join('\n'));
+        emit(lines.join('\n'));
     painted = lines.length;
     const { row, col } = cursorInRegion();
-    // `row` is a 0-based index within the region (the composer reports its
-    // cursor with the top rule at 0). Treating it as 1-based parked the
-    // blinker ON the hairline, one row above the text it belonged to.
-    moveTo(top + Math.max(0, Math.min(row, painted - 1)), 1);
+        moveTo(top + Math.max(0, Math.min(row, painted - 1)), 1);
     if (col > 0) emit(`${ESC}[${col}C`);
   };
 
@@ -217,12 +163,7 @@ export function createInput({
   };
 
   const onResize = () => {
-    // Everything from the content boundary down is cleared before repainting:
-    // a shrink leaves the tail of every wider row on screen otherwise, and a
-    // 60-column hairline over a 100-column ghost reads as a broken rule. The
-    // committed content above keeps the width it was born at — the terminal
-    // reflows scrollback itself, and no reference reflows it either.
-    contentRow = Math.min(contentRow, Math.max(1, height()));
+        contentRow = Math.min(contentRow, Math.max(1, height()));
     frame(() => {
       moveTo(Math.min(contentRow, height()), 1);
       emit(`${ESC}[0J`);
@@ -247,29 +188,19 @@ export function createInput({
 
     if (overlay) {
       const owner = overlay.handleKey(str, key);
-      // CLOSING IS AN EVENT. It used to be silent, which was fine while every
-      // overlay was a view: dismissing one left nothing behind. A value picker
-      // leaves the half-collected command it was asking for, and a loop that
-      // never hears about the dismissal keeps that question armed — the next
-      // ordinary line then answers a prompt that is no longer on screen.
-      if (owner.intent === 'close') {
+            if (owner.intent === 'close') {
         overlay = null;
         frame(() => { erase(); paint(); });
         deliver({ intent: 'close' });
         return;
       }
-      // The typed filter rides along: a picker over a source that cannot
-      // enumerate everything (paths, model ids) accepts what was typed when
-      // nothing on the list matches it.
-      if (owner.intent === 'choose') { deliver({ intent: 'choose', row: owner.row, query: overlay?.query ?? '' }); return; }
+            if (owner.intent === 'choose') { deliver({ intent: 'choose', row: owner.row, query: overlay?.query ?? '' }); return; }
       if (owner.intent === 'action') { deliver({ intent: 'action', action: owner.action, row: owner.row }); return; }
       if (owner.changed) frame(() => { erase(); paint(); });
       return;
     }
 
-    // Palette-attached mode: the composer keeps the text and the focus; the
-    // list above it owns only the navigation keys.
-    if (palette) {
+        if (palette) {
       const name = key.name;
       if (name === 'escape') { dropPalette(); frame(() => { erase(); paint(); }); return; }
       if (['up', 'down', 'pageup', 'pagedown'].includes(name)) {
@@ -277,14 +208,7 @@ export function createInput({
         if (r.changed) frame(() => { erase(); paint(); });
         return;
       }
-      // TAB COMPLETES, ENTER RUNS. Antigravity states both in its own footer
-      // (`enter Select · tab Complete`) and the distinction is the fix for the
-      // complaint that choosing a row "auto-sent" a half-finished command:
-      // Tab puts the row's text in the composer and leaves you typing its
-      // arguments; Enter is the commitment. A palette with one key for both
-      // has to guess which you meant, and guessed wrong for every command
-      // that takes an argument.
-      if (name === 'tab') {
+            if (name === 'tab') {
         const chosen = palette.overlay.selected;
         if (chosen) { palette = null; deliver({ intent: 'complete-row', row: chosen }); return; }
         return;
@@ -334,11 +258,7 @@ export function createInput({
     input.on('keypress', onKeypress);
     output.on?.('resize', onResize);
     if (usingAltScreen) emit(`${ESC}[?1049h`);
-    // THE ANCHOR: scroll whatever the shell had on screen into scrollback and
-    // take a clean viewport. Nothing is erased — a screenful of newlines is
-    // exactly what a long command's output would have done — and every
-    // reference opens the same way, on its own canvas.
-    frame(() => {
+        frame(() => {
       emit('\n'.repeat(Math.max(0, height() - 1)));
       moveTo(1, 1);
       emit(`${ESC}[0J`);
@@ -367,17 +287,8 @@ export function createInput({
     closeOverlay() { overlay = null; if (interactive) frame(() => { erase(); paint(); }); },
     get overlay() { return overlay; },
 
-    /**
-     * Open the composer-attached palette. `filter(query)` returns the rows for
-     * a query; the composer's text after the sigil IS the query, so typing
-     * filters live and backspacing the sigil away withdraws the request.
-     */
     openPalette({ overlay: paletteOverlay, filter }) {
-      // A pending question belongs to the command that asked it. Opening the
-      // palette abandons that command, so its title must go with it —
-      // otherwise the rule reads `deliver · get` while the operator is
-      // filtering for something else entirely.
-      prompt = null;
+            prompt = null;
       palette = { overlay: paletteOverlay, filter };
       if (!composer.value.startsWith('/')) composer.setValue(`/${composer.value}`);
       if (interactive) frame(() => { erase(); paint(); });
@@ -443,10 +354,7 @@ export function createInput({
       closed = true;
       frame(() => {
         erase();
-        // Leave the cursor where the flow ended, so the exit ritual (and the
-        // shell prompt after it) print after the content rather than at the
-        // bottom of a mostly-empty screen.
-        if (interactive) moveTo(Math.min(contentRow, height()), 1);
+                if (interactive) moveTo(Math.min(contentRow, height()), 1);
       });
       if (interactive) {
         input.off?.('keypress', onKeypress);

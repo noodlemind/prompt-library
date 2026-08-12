@@ -8,12 +8,6 @@ function git(workspace, args) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
-/**
- * Deterministic freshness report for the knowledge index (zero model cost).
- * The repo map itself is regenerated on every `orient`, so it is never stale;
- * this measures how far the knowledge index has drifted from the working tree
- * since it was last built, so the user knows when to re-run `harness index`.
- */
 export function indexStatus({ workspace, copilotHome }) {
   const indexDir = resolveIndexDir(copilotHome, workspace);
   const metaPath = path.join(indexDir, 'meta.json');
@@ -27,10 +21,7 @@ export function indexStatus({ workspace, copilotHome }) {
 
   const head = git(workspace, ['rev-parse', 'HEAD']);
 
-  // An index without a stamped HEAD (older format, or a rebuild that never
-  // captured HEAD) has an unknown baseline — treat it as stale, not current,
-  // so the user is nudged to rebuild rather than trusting a silent gap.
-  if (!meta.headSha) {
+    if (!meta.headSha) {
     return {
       indexed: true,
       updated: meta.updated || null,

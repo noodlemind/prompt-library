@@ -1,16 +1,3 @@
-/**
- * Phase 3 — `harness checks list|show|run`.
- *
- * The named checks were previously reachable only through `verify`, which runs
- * the whole plan-gated pipeline, so "what does this repo run, and does that one
- * check pass" had no answer short of reading the YAML by hand. That is how the
- * file came to have four independent parsers.
- *
- * What is pinned here: the per-verb side-effect split (a palette must not paint
- * an execute glyph on a listing), the exit-code contract (`run` reports the
- * check's own verdict so CI can gate on one check), and that an unknown check
- * is a not-found rather than a usage error or a crash.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -68,8 +55,6 @@ test('the shared check surface is importable — the whole point of the extracti
   assert.deepEqual(Object.keys(checks).sort(), ['bad-check', 'ok-check']);
 });
 
-// The entry's sideEffect is the policy-facing maximum; a palette that painted
-// every verb with it would warn about a listing as loudly as an execution.
 test('checks declares execute as its maximum, with list and show overriding down to read', () => {
   const entry = getCommand('checks');
   assert.equal(entry.sideEffect, 'execute', 'run executes a repo-authored argv, so the maximum is execute');
@@ -126,8 +111,6 @@ test('a workspace with no check config reports that, rather than an empty list',
   assert.match(res.stderr, /Trusted check config not found/);
 });
 
-// An invalid entry must be visible rather than silently omitted: a check that
-// cannot run is a broken gate, and a listing that hides it reads as healthy.
 test('a malformed check entry is listed and marked invalid, not dropped', () => {
   const ws = workspaceWithChecks(`version: 1
 checks:
@@ -153,12 +136,6 @@ test('checks answers the envelope lane', () => {
 
 // --- P3.6: the execution audit for the named-check path ---
 
-/**
- * `runNamedCheck` is the choke point BOTH `verify` and `checks run` go through,
- * which is why the audit lives there rather than in either caller — the same
- * lesson `exec` learned when its audit sat in the handler and the envelope lane
- * executed with no record at all.
- */
 test('running a named check writes an execution audit in the same shape exec uses', () => {
   const ws = workspaceWithChecks(PASSING);
   const copilotHome = tempDir('checks-audit-home-');
@@ -180,8 +157,6 @@ test('running a named check writes an execution audit in the same shape exec use
   assert.equal(event.status, 'ok');
 });
 
-// The default is the behavior checks have always had; the point of the key is
-// that an operator can change it without patching the harness.
 test('checks.env_allowlist is off by default and opt-in-able', () => {
   const ws = workspaceWithChecks(`version: 1
 checks:
@@ -203,16 +178,6 @@ checks:
   assert.match(invoke().stdout, /SEEN=undefined/, 'opting in must actually withhold the variable');
 });
 
-/**
- * Found by the Codex phase review.
- *
- * `checks run` exists so CI can gate on a single check without parsing output.
- * `dispatchLane` returns 0 on any success path unless the entry declares an
- * `exitOf`, and this entry did not — so the envelope lane exited 0 for a failing
- * check while the ledger lane exited 1, and the envelope printed
- * `"status":"ok"` directly above `"status":"failed"`. A pipeline gating through
- * the envelope lane passed every failing check.
- */
 const FAILING = `version: 1
 checks:
   failing:

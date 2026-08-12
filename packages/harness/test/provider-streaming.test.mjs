@@ -1,13 +1,3 @@
-/**
- * Streaming is the transport now, and the folding is where it can corrupt.
- *
- * A tool call arrives as FRAGMENTS — id and name in one frame, the arguments
- * spread across many, addressed by index — and a completion whose folding is
- * wrong does not fail: it yields a plausible tool call with truncated or
- * interleaved arguments, which the loop would then execute. That is why the
- * fold functions are exported and pinned here frame by frame, and why the
- * end-to-end test drives a real SSE server rather than a mock of one.
- */
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
@@ -160,12 +150,6 @@ test('streamCompletion consumes SSE, surfaces deltas, and returns the assembled 
   }
 });
 
-// The Copilot adapter's completion path, driven end to end through a spawned
-// adapter process against a local SSE stub. This exact path once shipped a
-// ReferenceError (`https is not defined`) that the whole suite missed — no
-// test exercised a copilot completion off-live — and the first real call died
-// on turn one. A pre-minted bearer skips the exchange; the base-URL override
-// points the adapter at the stub.
 test('the copilot adapter completes against a stub, streaming end to end', async () => {
   const { startProvider } = await import('../lib/provider.mjs');
   const server = http.createServer((req, res) => {
@@ -181,9 +165,7 @@ test('the copilot adapter completes against a stub, streaming end to end', async
     provider: 'github-copilot',
     parentEnv: {
       PATH: process.env.PATH,
-      // Not OAuth-shaped, so the seam hands it over as a pre-minted bearer
-      // and no exchange happens.
-      GITHUB_COPILOT_TOKEN: 'stub-bearer-token',
+            GITHUB_COPILOT_TOKEN: 'stub-bearer-token',
       GITHUB_COPILOT_BASE_URL: base,
     },
   });
@@ -233,9 +215,7 @@ test('an HTTP error before any byte is still a typed failure, not a stream', asy
         payload: '{}',
         providerId: 'test',
       }),
-      // withRetry retries a 429 twice and then surfaces it, with the server's
-      // own message and the Retry-After it asked for.
-      (e) => /429/.test(e.message) && /slow down/.test(e.message) && e.retryAfterMs === 2000,
+            (e) => /429/.test(e.message) && /slow down/.test(e.message) && e.retryAfterMs === 2000,
     );
   } finally {
     await new Promise((r) => server.close(r));

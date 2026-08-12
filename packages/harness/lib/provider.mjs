@@ -8,10 +8,6 @@ import { MAX_COMPLETION_LINE_BYTES, startPlugin } from './plugin-host.mjs';
 import { readModelCache } from './model-cache.mjs';
 import { findEditorOauthToken } from './copilot-credential.mjs';
 
-/** A model call is slower than a local tool: five minutes, because a long
- * generation that has not finished is usually still thinking rather than
- * stuck — and with streaming, the adapter's own idle timer catches the
- * genuinely dead socket long before this ceiling does. */
 export const PROVIDER_TIMEOUT_MS = 300_000;
 
 export const AUTO_MODEL = 'auto';
@@ -132,7 +128,6 @@ export const PROVIDERS = Object.freeze({
     adapter: 'providers/openai-compatible.mjs',
     defaultModel: 'qwen/qwen3-8b',
   },
-  
 
   'github-copilot': {
     id: 'github-copilot',
@@ -384,10 +379,6 @@ export function connectHint(provider) {
   return `export ${provider.keyVar}=…`;
 }
 
-/**
- * Normalize the agent.providers allowlist. Unknown ids are ignored; empty
- * falls back to the product default so a broken merge cannot open every door.
- */
 export function normalizeEnabledProviders(list) {
   if (!Array.isArray(list) || !list.length) return [DEFAULT_PROVIDER];
   const out = [];

@@ -13,23 +13,6 @@ import { approveProject } from '../lib/trust.mjs';
 import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
 
-/**
- * E — `advisory` is not a severity for a gating check. resolveOutcome
- * (verify.mjs) filters advisory checks OUT of the outcome, so downgrading
- * `scope` (or criteria/plan/review/gap checks) would write `outcome: passed`
- * into the evidence artifact `harness gate` and `harness compound` trust: the
- * gate opens on a real scope violation AND a "verified" fix episode is minted
- * from a run that never verified. The same reasoning reaches PROJECT-DEFINED
- * named checks the moment the ACTIVE PLAN gates on them: a failed check listed
- * in `verification.required` must never be filtered out of the outcome either.
- *
- * G — check findings carry current-side repo text (plan-declared symbol names,
- * a lexical extractor's unbounded ones) and are copied into
- * `.harness/evidence/*.json`, `verify --json`, and the event log. They must be
- * redacted, flattened, and capped THERE — on the canonical payload that ships,
- * not only on the advisory summary copy.
- */
-
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
@@ -169,17 +152,10 @@ function verifiableWorkspace({ required, criteria, extraFrontmatter, checks, pol
   if (policy) writeConfig(workspace, 'policy.yaml', policy);
   git(workspace, ['add', '.']);
   git(workspace, ['commit', '-qm', 'baseline']);
-  // P3AC6: project policy loads only for a trusted project. These fixtures are
-  // about POLICY behavior, so they approve themselves against their own
-  // isolated home — `withHome` points COPILOT_HOME here, so nothing touches the
-  // developer's real ~/.copilot. `test/trust.test.mjs` owns the gate itself.
-  approveProject({ workspace, copilotHome: copilotHomeFor(home) });
+    approveProject({ workspace, copilotHome: copilotHomeFor(home) });
   return { workspace, home, plan };
 }
 
-// P1.6: runVerify is async (lib/runner.mjs wiring), so the HARNESS_HOME
-// override must survive until the run RESOLVES — a sync try/finally would
-// restore the env the instant the promise was created, mid-run.
 /** The isolated Copilot home that pairs with a fixture's HARNESS_HOME. Derived
  * rather than passed so every existing `withHome(home, ...)` call keeps working
  * unchanged while still resolving trust inside the fixture. */
@@ -235,14 +211,8 @@ test('E: the advisory-by-default structural check stays downgradable, and v1 pol
   assert.deepEqual(loadPolicy(v1), {
     version: 1,
     enforcement: 'warn',
-    // P3AC6 additions. With no `copilotHome` supplied there is no user scope to
-    // check against, so the trust gate is not engaged and the policy loads
-    // exactly as it did before — which is what this assertion is pinning.
-    projectPolicyIgnored: false,
-    // A broken policy in an UNTRUSTED project is reported here instead of
-    // thrown, so an unapproved repository cannot abort every verify/gate run by
-    // committing a stray tab. `null` when the file parsed, as here.
-    projectPolicyError: null,
+        projectPolicyIgnored: false,
+        projectPolicyError: null,
     policyPath: path.join(v1, '.github', 'harness', 'policy.yaml'),
     gateTtlMinutes: 15,
     evidenceTtlHours: 24,
@@ -250,9 +220,7 @@ test('E: the advisory-by-default structural check stays downgradable, and v1 pol
     waivers: [],
     checkSeverities: {},
   });
-  // A v1 policy that DOES carry a checks map is still honored version-
-  // independently — and still refused for a gating downgrade.
-  const v1Checks = policyWorkspace(`version: 1\nchecks:\n  ${STRUCTURAL_CHECK_ID}:\n    severity: warn\n`);
+    const v1Checks = policyWorkspace(`version: 1\nchecks:\n  ${STRUCTURAL_CHECK_ID}:\n    severity: warn\n`);
   assert.equal(loadPolicy(v1Checks).checkSeverities[STRUCTURAL_CHECK_ID], 'warn');
   const v1Gating = policyWorkspace('version: 1\nchecks:\n  scope:\n    severity: advisory\n');
   assert.throws(() => loadPolicy(v1Gating), /cannot be advisory/);
@@ -260,10 +228,7 @@ test('E: the advisory-by-default structural check stays downgradable, and v1 pol
 
 test('E: every built-in check verify.mjs pushes is either non-downgradable or advisory by default', () => {
   const src = fs.readFileSync(path.join(packageRoot, 'lib', 'verify.mjs'), 'utf8');
-  // Literal-id pushes only: `resultCheck(name, …)` (project-defined named
-  // checks) and `resultCheck(STRUCTURAL_CHECK_ID, …)` carry no string literal
-  // and are deliberately out of scope here.
-  const ids = new Set([...src.matchAll(/resultCheck\(\s*'([a-z-]+)'/g)].map((m) => m[1]));
+    const ids = new Set([...src.matchAll(/resultCheck\(\s*'([a-z-]+)'/g)].map((m) => m[1]));
   assert.ok(ids.size >= 10, `expected to find the built-in check ids in verify.mjs, found ${[...ids].join(', ')}`);
   const defaultAdvisory = new Set([STRUCTURAL_CHECK_ID]);
   for (const id of ids) {
@@ -274,16 +239,9 @@ test('E: every built-in check verify.mjs pushes is either non-downgradable or ad
   }
 });
 
-// E (end to end) — the static id list only protects BUILT-IN checks. A
-// project-defined named check becomes gating the moment the ACTIVE PLAN lists
-// it under `verification.required`, and a policy `severity: advisory` used to
-// filter its failure straight out of `resolveOutcome` — evidence `passed`,
-// gate open, `compound` free to mint a verified episode from a failed run.
 test('E: a failed plan-required check cannot be downgraded to advisory — the run does not pass', async () => {
   const { workspace, home, plan } = verifiableWorkspace({
-    // `team-lint` is required but is NOT the sole check mapped to AC1, so the
-    // criteria-evidence check stays green and the outcome hinges on severity.
-    required: ['unit-tests', 'team-lint'],
+        required: ['unit-tests', 'team-lint'],
     criteria: { AC1: ['unit-tests'] },
     checks: {
       'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] },
@@ -332,9 +290,7 @@ test('E: a check mapped under verification.criteria is protected the same way', 
 });
 
 test('E: a project-defined check the plan does NOT gate on stays freely downgradable, and warn still degrades', async () => {
-  // Same failing command, but nothing in the plan requires it: the team keeps
-  // its own advisory checks, which is what the static-id-list rule intended.
-  const advisory = verifiableWorkspace({
+    const advisory = verifiableWorkspace({
     required: ['unit-tests'],
     criteria: { AC1: ['unit-tests'] },
     checks: { 'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] } },
@@ -347,9 +303,7 @@ test('E: a project-defined check the plan does NOT gate on stays freely downgrad
   assert.equal(advisoryResult.checks.find((check) => check.id === STRUCTURAL_CHECK_ID).severity, 'advisory');
   assert.deepEqual(advisoryResult.refusedSeverityDowngrades, []);
 
-  // `warn` is still available for a plan-required check — it degrades the
-  // failure to inconclusive (a non-zero exit under enforce), it does not erase it.
-  const warned = verifiableWorkspace({
+    const warned = verifiableWorkspace({
     required: ['unit-tests', 'team-lint'],
     criteria: { AC1: ['unit-tests'] },
     checks: {
@@ -366,9 +320,6 @@ test('E: a project-defined check the plan does NOT gate on stays freely downgrad
   assert.deepEqual(warnedResult.refusedSeverityDowngrades, []);
 });
 
-// The hostile check the two payload tests below share: an unbounded,
-// newline-bearing symbol name plus a secret-shaped one, exactly the shape a
-// lexical extractor can hand back from current-side repo text.
 function hostileCheck() {
   const huge = 'x'.repeat(200_000);
   return {
@@ -389,9 +340,6 @@ function hostileCheck() {
   };
 }
 
-// Both the CANONICAL check payload (what evidence, `--json`, and the event log
-// serialize) and the advisory summary copy must be sanitized. Sanitizing only
-// the copy left the shipped artifact carrying the raw text.
 for (const [surface, sanitize] of [
   ['the canonical check payload', (check) => sanitizeCheckPayload(check)],
   ['the advisory summary copy', (check) => collectAdvisoryFailures([check])[0]],
@@ -411,11 +359,6 @@ for (const [surface, sanitize] of [
   });
 }
 
-// `details` (plan-schema / plan-readiness sub-check messages) and `openTasks`
-// (verbatim `- [ ]` lines lifted out of the plan body) ride the SAME surfaces —
-// evidence JSON, `verify --json`, the event log — and a plan is an ordinary repo
-// file a human or model writes. They were the two list payloads shipping
-// unredacted, unflattened, and unbounded.
 test('G: plan-derived details and openTasks are sanitized like every other list payload', () => {
   const payload = sanitizeCheckPayload({
     id: 'plan-schema',
@@ -461,10 +404,7 @@ test('G: the shipped payload bounds the number of findings and the size of every
 // End to end: the guarantee is only worth anything on the artifact that ships.
 test('G: hostile check text never reaches the on-disk evidence artifact or the --json result', async () => {
   const { workspace, home, plan } = verifiableWorkspace({
-    // A required expectation whose symbol name is secret-shaped (→ a finding)
-    // and a malformed entry carrying a control char (→ an informational note):
-    // both are attacker-influenceable repo text on a fork checkout.
-    extraFrontmatter: [
+        extraFrontmatter: [
       'structural_expectations:',
       '  - file: "src/example.js"',
       `    symbol: "${AWS_KEY}"`,
@@ -474,9 +414,7 @@ test('G: hostile check text never reaches the on-disk evidence artifact or the -
       '',
     ].join('\n'),
   });
-  // A real baseline index, built by the real builder, so the structural check
-  // actually runs instead of skipping.
-  await buildStructuralIndex({
+    await buildStructuralIndex({
     workspace,
     home,
     extractor: {
@@ -496,9 +434,7 @@ test('G: hostile check text never reaches the on-disk evidence artifact or the -
   const structural = result.checks.find((check) => check.id === STRUCTURAL_CHECK_ID);
   assert.equal(structural.status, 'failed', JSON.stringify(structural, null, 2));
   assert.ok(structural.findings.length > 0, 'the hostile expectation produced a finding');
-  // Advisory by default, so the run still passes — which is exactly why the
-  // leak was silent: a green run shipped the raw text.
-  assert.equal(result.outcome, 'passed', JSON.stringify(result.checks, null, 2));
+    assert.equal(result.outcome, 'passed', JSON.stringify(result.checks, null, 2));
 
   // FAIL-BEFORE: both of these carried the raw key and the raw control char.
   const asJson = JSON.stringify(result);

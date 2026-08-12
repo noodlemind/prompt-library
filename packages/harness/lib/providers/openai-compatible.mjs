@@ -431,10 +431,6 @@ export function shapeResult(response) {
   };
 }
 
-/** What this adapter is, declared rather than echoed. The handshake used to
- * parrot `message.protocol`/`message.capabilities` straight back, which made
- * the host's version-mismatch warning structurally unable to fire — the answer
- * always matched because it WAS the question. */
 export const ADAPTER_PROTOCOL_VERSION = 1;
 const ADAPTER_CAPABILITIES = Object.freeze(['network']);
 

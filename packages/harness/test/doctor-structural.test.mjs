@@ -9,15 +9,10 @@ import { structuralChecks, runDoctor } from '../lib/doctor.mjs';
 import { buildStructuralIndex, structuralIndexDir } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2, loadGrammarsLock, DEFAULT_LOCK_PATH } from '../lib/repo-map/treesitter-extractor.mjs';
 
-// HERMETIC GRAMMAR PROBE: every scenario pins its own grammar roots, so S1 is
-// never a verdict on whatever happens to be installed up the filesystem from
-// the test runner. `emptyRoots` is the "no grammars here" baseline.
 function emptyRoots(t) {
   return [tempTree(t, 'harness-grammar-roots-')];
 }
 
-// Temp dirs registered for t.after cleanup — a failing assertion must not
-// leak the tree (a trailing rmSync never runs on failure).
 function tempTree(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -60,8 +55,6 @@ function extractorWith(overrides = {}) {
 
 const FIXTURE = { 'a.mjs': 'export const a = 1;\n', 'b.mjs': 'export const b = 2;\n' };
 
-// structuralChecks reads the index through the default HARNESS_HOME
-// resolution, so each scenario pins HARNESS_HOME to its own temp home.
 function withHome(t, home) {
   const saved = process.env.HARNESS_HOME;
   process.env.HARNESS_HOME = home;

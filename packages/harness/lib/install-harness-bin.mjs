@@ -3,8 +3,6 @@ import path from 'path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-// assets ships too: doctor run via the global runtime needs the shipped
-// bundle to verify hydration (H17) instead of guessing.
 const COPY_DIRS = ['bin', 'lib', 'config', 'assets'];
 const COPY_FILES = ['package.json', 'retired.json'];
 

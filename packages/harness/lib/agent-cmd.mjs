@@ -163,9 +163,7 @@ export function planAgent(argv) {
   if (!(providerId in PROVIDERS)) {
     throw usageError(`unknown provider: ${providerId}`, `known providers: ${Object.keys(PROVIDERS).join(', ')}`);
   }
-  // Explicit `--provider` is the operator at the keyboard — it wins for this run.
-  // Configured (or default) provider must still be on the allowlist.
-  if (!providerFlag && !configured.providers.includes(providerId)) {
+    if (!providerFlag && !configured.providers.includes(providerId)) {
     throw usageError(
       `provider ${providerId} is disabled`,
       `harness config set agent.providers ${[...configured.providers, providerId].join(',')} --scope user`,

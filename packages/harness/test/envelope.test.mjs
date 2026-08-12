@@ -13,8 +13,6 @@ import {
   createJsonlStream,
 } from '../lib/envelope.mjs';
 
-// A minimal in-memory writable — `createJsonlStream` only ever calls
-// `stream.write(chunk)`, so this is all a fake stream needs to be.
 function fakeStream() {
   const chunks = [];
   return {
@@ -72,10 +70,7 @@ test('createEnvelope rejects an unknown status', () => {
 });
 
 test('createEnvelope orders scalars (incl. null) before arrays/objects on the serialized envelope', () => {
-  // Modeled on orient's actual --json shape (task-1-report.md repro output),
-  // deliberately declared out of "natural" order to prove the envelope
-  // reorders rather than merely preserving input order.
-  const envelope = createEnvelope({
+    const envelope = createEnvelope({
     command: 'orient',
     recall: [1, 2],
     contextPack: '.harness/context-pack.md',
@@ -97,10 +92,7 @@ test('createEnvelope orders scalars (incl. null) before arrays/objects on the se
     'plans',
   ]);
 
-  // Ordering must hold on the ACTUAL SERIALIZED bytes, not just the live
-  // object's key iteration — every scalar key's position in the JSON string
-  // precedes every detail key's position.
-  const json = JSON.stringify(envelope);
+    const json = JSON.stringify(envelope);
   const scalarPositions = ['contextPack', 'gateStatus', 'activePlan', 'learningsBytes'].map((k) => json.indexOf(`"${k}"`));
   const detailPositions = ['recall', 'plans'].map((k) => json.indexOf(`"${k}"`));
   assert.ok(scalarPositions.every((p) => p !== -1) && detailPositions.every((p) => p !== -1));
@@ -252,14 +244,6 @@ test('createJsonlStream honors a custom schema version', () => {
   assert.equal(s.lines()[0].schema, 2);
 });
 
-// --- Fix-wave P2: JSONL backpressure — the terminal row is never discarded --
-//
-// emit() ignored `stream.write() === false`, and the CLI's unconditional
-// process.exit could discard a terminal `result` row buffered under
-// backpressure. The stream now tracks the write result and exposes drained(),
-// which a producer (and the CLI, plus bin/harness.mjs's flush-before-exit)
-// awaits before exiting.
-
 test('createJsonlStream: drained() waits while the stream is backpressured, then resolves on drain', async () => {
   const emitter = new EventEmitter();
   const writes = [];
@@ -300,11 +284,6 @@ test('createJsonlStream: a plain in-memory sink (no once) never hangs drained()'
   assert.equal(s.chunks.length, 1);
 });
 
-// The backpressure flag recorded `false` and never got cleared, so a SECOND
-// drained() with no write in between waited on a 'drain' the (already empty)
-// stream can never emit again — a permanent hang for the next caller that
-// awaits twice. Latent while cmdVerify was the only caller; pinned here so it
-// stays fixed as callers are added.
 test('createJsonlStream: a second drained() after the first resolved returns immediately', async () => {
   const emitter = new EventEmitter();
   const stream = { write: () => false, once: (event, cb) => emitter.once(event, cb) };

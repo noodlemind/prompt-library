@@ -1,19 +1,3 @@
-/**
- * Missing-value guards for lib/flags.mjs#parseFlags' separated value flags.
- *
- * Verified pre-fix: `parseFlags(['--target'])` threw
- * `TypeError: Cannot read properties of undefined (reading 'split')` from
- * inside the parser — `--target` is the one flag in that loop that
- * DEREFERENCES its value token instead of just assigning it. The boundary
- * slice (fix-wave C1) made it reachable from a legitimate invocation too:
- * `install --target -- x` truncates the value away before the loop ever runs.
- *
- * The guard matches the --since/--branch/--ids precedent already in that file:
- * a named `invalid --target: ... ` error instead of an opaque TypeError. (The
- * error CLASS is deliberately left alone — parseFlags value errors surface as
- * E_UNEXPECTED/exit 1 package-wide, a shape registry.test.mjs pins explicitly
- * for --min-score.)
- */
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -22,9 +6,6 @@ import { parseFlags } from '../lib/flags.mjs';
 
 const binPath = path.resolve(import.meta.dirname, '..', 'bin', 'harness.mjs');
 
-// Every flag in parseFlags' loop that reads its value from the NEXT token.
-// The contract this file pins: none of them may throw a raw TypeError when
-// that token is missing.
 const SEPARATED_VALUE_FLAGS = [
   '--query', '--phase', '--limit', '--autonomy', '--copilot-home', '--target',
   '--plan', '--base', '--enforcement', '--learnings', '--workspace', '--collection',
@@ -53,10 +34,6 @@ test('parseFlags: every previously-working --target form still parses identicall
   assert.deepEqual([...parseFlags([]).targets], ['vscode', 'cli', 'intellij'], 'the default target set is untouched');
 });
 
-// The "fix them consistently" half of the review: --target was the only flag
-// in the loop that crashed, and it must stay that way as flags are added.
-// Every other separated flag either assigns `undefined` harmlessly (the flag
-// reads as absent) or routes through a validator that rejects `undefined`.
 test('parseFlags: no separated value flag throws a raw TypeError when its value is missing', () => {
   for (const flag of SEPARATED_VALUE_FLAGS) {
     try {

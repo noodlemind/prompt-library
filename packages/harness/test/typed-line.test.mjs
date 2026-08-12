@@ -1,23 +1,3 @@
-/**
- * A typed line and a chosen palette row are the same request.
- *
- * THE DEFECT: the same command behaved differently depending on how it was
- * reached — `config set` chosen from the palette opened pickers for its three
- * values, while `config set` TYPED printed `E_USAGE: config set requires a
- * key`. The registry knew what was missing on both paths; only one of them
- * asked.
- *
- * The last test in this file is the general form of the claim, and the one that
- * matters: no row in the palette may dead-end. It is written against the index
- * rather than a list of commands so a command added later is covered the day it
- * is registered, not the day someone remembers to add it here.
- *
- * These are stream-level assertions about a routing decision, deliberately: the
- * decision is a pure function, and pinning it here is what lets the pty pass
- * check appearance rather than logic. Neither substitutes for the other —
- * `lib/tui/typed-line.mjs`'s behavior on a real terminal was verified by
- * driving one.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -140,9 +120,6 @@ function validates(argv) {
   return true;
 }
 
-// THE PALETTE CONTRACT, as a ratchet. Every row is either runnable as typed or
-// routes to the values it needs; nothing dead-ends. Derived from the index, so
-// a command registered tomorrow is covered tomorrow.
 test('no palette row dead-ends when typed', () => {
   const dead = [];
   let runnable = 0;
@@ -166,12 +143,6 @@ test('no palette row dead-ends when typed', () => {
 
 // --- the other half of "both modes work" ----------------------------------
 
-// With the agent gate SHUT, a typed sentence used to reach dispatch and come
-// back as `unknown command: what` — the first word of a question named as a
-// misspelled command. That is the same failure the composer's placeholder was
-// written to prevent, reappearing in the configuration the placeholder does not
-// describe. LEDGER_HOME is an empty copilot home, so `agent.enabled` is at its
-// declared default of false, which is the state under test.
 test('with the agent off, a sentence is answered with the gesture that enables it', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'typed-line-home-'));
   const text = await ledger(['what does this repo do'], { copilotHome: home });
@@ -189,19 +160,12 @@ test('a single unknown word is still a typo, not a question', async () => {
   assert.match(text, /unknown/);
 });
 
-// Routing runs on every submitted line, so rebuilding the index there walked
-// the skills tree on each Enter to answer a question that cannot change while
-// the process runs.
 test('the ledger builds the routing index once, not per typed line', () => {
   const source = fs.readFileSync(path.join(packageRoot, 'lib', 'tui-cmd.mjs'), 'utf8');
   assert.match(source, /routeTypedLine\(parsed\.argv, \{ workspace, index: indexForRouting\(\) \}\)/);
   assert.match(source, /routingIndex \?\?= buildCommandIndex/, 'built lazily and kept for the session');
 });
 
-// A previous fix in this repo introduced a variable nothing consumed while the
-// real render used a different value twenty lines below, and every string
-// assertion passed. The audit above proves the ROUTER is correct; this proves
-// the ledger actually calls it.
 test('the ledger calls the router — the audit above is not checking a dead module', () => {
   const source = fs.readFileSync(path.join(packageRoot, 'lib', 'tui-cmd.mjs'), 'utf8');
   assert.match(source, /routeTypedLine\(parsed\.argv/, 'a routing rule nothing calls is a rule that does not exist');

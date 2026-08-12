@@ -35,27 +35,11 @@ function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-/**
- * Spawn the CLI against a fixture that behaves like a project the user set up.
- *
- * Two things happen here that the raw spawn did not do:
- *
- *   - An isolated `--copilot-home` is injected when the args do not name one.
- *     Without it `resolveCopilotHome` falls back to the DEVELOPER'S real
- *     ~/.copilot, so the suite would read (and, once trust exists, write)
- *     state on whatever machine it runs on.
- *   - The fixture workspace is approved. P3AC6 gates named-check execution on
- *     trust, and these tests exercise `verify`/`checks run`, not the gate —
- *     `test/trust.test.mjs` owns the gate and asserts the refusal directly.
- */
 function runHarness(args, options = {}) {
   const full = [...args];
   const workspace = valueOf(full, '--workspace');
   let copilotHome = valueOf(full, '--copilot-home');
-  // Only for workspace-scoped invocations. Appending a flag to something like
-  // `harness help` would hand its topic parser the injected path as the topic —
-  // and a command with no workspace has no project to trust anyway.
-  if (!copilotHome && workspace) {
+    if (!copilotHome && workspace) {
     copilotHome = tempDir('harness-home-');
     full.push('--copilot-home', copilotHome);
   }
@@ -148,13 +132,6 @@ test('help works from a clean repo checkout without installed package deps', () 
   assert.match(result.stdout, /^harness /);
 });
 
-// Minor fix: bin/harness.mjs's HELP_COMMAND_ORDER is a hand-maintained
-// display-order list, separate from lib/registry.mjs's REGISTRY — a
-// command registered in one but never added to the other would silently
-// vanish from `harness help` (orderedCommandEntries/groupedForHelp just
-// filter out anything that doesn't resolve via describeCommand, no error).
-// This pins parity between the two lists so that drift fails a test instead
-// of quietly shrinking the rendered help output.
 test('HELP_COMMAND_ORDER covers exactly the registered commands — nothing silently vanishes from help', () => {
   const registered = listCommands();
   const registeredSet = new Set(registered);
@@ -382,9 +359,7 @@ test('gate rejects unsupported phases instead of bypassing lifecycle checks', ()
 
   const result = runHarness(['gate', '--phase', 'typo', '--plan', plan, '--workspace', workspace, '--json']);
 
-  // A bad flag value is caller misuse: E_USAGE/exit 2, not the E_UNEXPECTED/1
-  // that a bare Error from parseFlags used to produce.
-  assert.equal(result.status, 2, result.stderr);
+    assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /invalid --phase/i);
 });
 
@@ -504,17 +479,7 @@ test('lifecycle commands append schema-v2 events and omit non-lifecycle commands
     0
   );
 
-  // P1.6 (carry-list, AC7 widening): ctx.events now attaches on the legacy
-  // ledger/--json path too, for every registered command — each of the
-  // three CLI calls above now also brackets with command.start/
-  // command.result (P1.5's dispatch-pipeline telemetry), additive to the
-  // pre-existing 'orient'/'gate' lifecycle events. Post-merge with the
-  // harness-evolution allow-list fix, recall ALSO contributes its own
-  // domain 'recall' event (its writeEvent call site always existed; the type
-  // was simply absent from lib/events.mjs's EVENT_TYPES and silently
-  // dropped), so all three commands now show the same
-  // start / domain-event / result triple.
-  const events = readEvents(workspace);
+    const events = readEvents(workspace);
   assert.deepEqual(events.map((event) => event.type), [
     'command.start', 'orient', 'command.result',
     'command.start', 'gate', 'command.result',
@@ -524,18 +489,8 @@ test('lifecycle commands append schema-v2 events and omit non-lifecycle commands
     assert.equal(event.version, 2);
     assert.match(event.id, /.+/);
     assert.match(event.ts, /^\d{4}-\d{2}-\d{2}T/);
-    // command.start carries the new 'pending' marker (P1.5 fix round 1) —
-    // never tallied as pass/warn/fail; every other event still uses the
-    // original pass|warn|fail vocabulary.
-    assert.ok(['pass', 'warn', 'fail', 'pending'].includes(event.result));
-    // The very first event ever written for a brand-new workspace is this
-    // run's command.start (P1.5/P1.6: emitted before the handler runs) —
-    // session.json doesn't exist yet at that exact instant (orient's own
-    // handler is what creates it, moments later, before its OWN 'orient'
-    // event writes), so ONLY that one leading event may carry a null
-    // session; every other event (including every later command.start,
-    // once the session exists) must not.
-    if (index === 0) assert.ok(event.session === null || /.+/.test(event.session));
+        assert.ok(['pass', 'warn', 'fail', 'pending'].includes(event.result));
+        if (index === 0) assert.ok(event.session === null || /.+/.test(event.session));
     else assert.match(event.session, /.+/);
     assert.equal(event.host, 'harness-cli');
   }
@@ -663,13 +618,7 @@ test('events command returns aggregate json output', () => {
 
   assert.equal(result.status, 0, result.stderr);
   const body = JSON.parse(result.stdout);
-  // P1.6 (carry-list, AC7 widening): `gate` now also brackets with
-  // command.start/command.result (additive to its own pre-existing 'gate'
-  // lifecycle event) — 3 events, not 1. `events` itself is deliberately
-  // excluded from this instrumentation (lib/registry.mjs's `dispatch`,
-  // `instrument: false` on the `events` entry) specifically so this read
-  // never observes its OWN dispatch's telemetry.
-  assert.equal(body.count, 3);
+    assert.equal(body.count, 3);
   assert.equal(body.summary.total, 3);
   assert.equal(body.summary.lastActivePlan, 'docs/plans/2026-05-22-fix-example-plan.md');
   assert.deepEqual(body.events.map((e) => e.type), ['command.start', 'gate', 'command.result']);
@@ -1006,17 +955,8 @@ test('context pack stays within byte budget cap', () => {
 });
 
 test('context pack truncation never splits a multibyte character, whatever the cut point', () => {
-  // é is 2 bytes, ✓ and € are 3 bytes, 🎉 is 4 bytes (a surrogate pair in
-  // UTF-16) — a long run of each so the fixed truncation cut point (a
-  // constant byte offset from the top of the pack) is guaranteed to fall
-  // somewhere inside this block once the query is long enough to force
-  // truncation, regardless of how many bytes precede it.
-  const multibyte = 'é'.repeat(300) + '✓'.repeat(300) + '€'.repeat(300) + '🎉'.repeat(300);
-  // Shifting the block by 1..16 leading ASCII bytes walks the fixed cut
-  // point through every possible sub-character byte offset (mod 2, 3, and
-  // 4), so across this range every multibyte width gets cut mid-character
-  // at least once.
-  for (let pad = 0; pad < 16; pad++) {
+    const multibyte = 'é'.repeat(300) + '✓'.repeat(300) + '€'.repeat(300) + '🎉'.repeat(300);
+    for (let pad = 0; pad < 16; pad++) {
     const body = buildContextPack({ query: 'a'.repeat(pad) + multibyte, recall: [], plans: [], learnings: [] });
     assert.ok(
       Buffer.byteLength(body, 'utf8') <= CONTEXT_PACK_MAX_BYTES,
@@ -1589,10 +1529,6 @@ test('install creates global harness shim', () => {
   assert.equal(JSON.parse(validate.stdout).pass, true);
 });
 
-// The generated global harness shim (harnessShimSource, global-bin.mjs) has
-// the identical INSTALL_FIX_HINT interpolation pattern the workspace runner
-// had — same raw-interpolation-into-a-single-quoted-string risk, same
-// JSON.stringify fix.
 test('global harness shim embeds INSTALL_FIX_HINT via JSON.stringify, keeping the generated shim syntactically valid', () => {
   const copilotHome = tempDir('shim-quoting-home-');
   installGlobalHarnessShim(copilotHome, { dryRun: false, verbose: false }, () => {});
@@ -1605,9 +1541,7 @@ test('global harness shim embeds INSTALL_FIX_HINT via JSON.stringify, keeping th
   const check = spawnSync(process.execPath, ['--check', shim], { encoding: 'utf8' });
   assert.equal(check.status, 0, check.stderr);
 
-  // No global runtime installed at this copilotHome — exercises the
-  // E_NO_RUNTIME error path that actually renders the fix-hint line.
-  const result = spawnSync(process.execPath, [shim, 'help'], {
+    const result = spawnSync(process.execPath, [shim, 'help'], {
     encoding: 'utf8',
     env: { ...process.env, COPILOT_HOME: copilotHome },
   });
@@ -1645,11 +1579,6 @@ test('init-repo creates harness runner', () => {
   assert.equal(runResult.status, 0, runResult.stderr);
 });
 
-// The generated `.harness/run.mjs` source interpolates INSTALL_FIX_HINT
-// (global-bin.mjs) into an already-single-quoted JS string literal. An
-// apostrophe or backslash in the hint would break the GENERATED runner's
-// syntax unless it's embedded via JSON.stringify instead of raw
-// interpolation.
 test('harnessRunnerSource embeds INSTALL_FIX_HINT via JSON.stringify, keeping the generated runner syntactically valid', () => {
   const src = harnessRunnerSource();
   assert.ok(
@@ -1663,12 +1592,6 @@ test('harnessRunnerSource embeds INSTALL_FIX_HINT via JSON.stringify, keeping th
   assert.equal(check.status, 0, check.stderr);
 });
 
-// The generated runner injects a default `--workspace <ws>` when the caller
-// didn't pass one. Detection reads only the pre-boundary slice (v3), but the
-// injection itself used to APPEND to args — so with a caller-supplied `--` the
-// injected flag landed after the boundary, where lib/flags.mjs#parseFlags never
-// looks. `run.mjs learnings --why -- --json` produced free-text content of
-// `--json --workspace <ws>` and a workspace that silently fell back to cwd.
 test('the generated runner injects the default --workspace BEFORE a caller-supplied `--` boundary', () => {
   const workspace = tempDir('runner-inject-ws-');
   fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
@@ -1708,11 +1631,6 @@ test('the generated runner injects the default --workspace BEFORE a caller-suppl
   assert.equal(JSON.parse(explicit.stdout).filter((a) => a === '--workspace').length, 1, 'no second --workspace is injected');
 });
 
-// A bumped RUNNER_VERSION only regenerates a runner when something CALLS
-// writeHarnessRunner, and its only caller was `init-repo` — which people run
-// once at setup. So a fixed runner bug never reached an existing workspace no
-// matter how many times its owner upgraded the harness. `install`/`upgrade` now
-// refresh the runner of the workspace they run in.
 test('upgrade refreshes a stale workspace runner, and creates none where there is no runner', () => {
   const workspace = tempDir('runner-upgrade-ws-');
   const copilotHome = tempDir('runner-upgrade-home-');
@@ -1731,8 +1649,6 @@ test('upgrade refreshes a stale workspace runner, and creates none where there i
     'a runner from an older harness is brought up to the installed version');
 });
 
-// The version was reachable only through `harness status`, so the reflex every
-// user has — `harness --version` — returned `unknown command` and exit 2.
 test('harness --version and -V print the package version and exit 0', () => {
   const expected = JSON.parse(
     fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')
@@ -1744,8 +1660,6 @@ test('harness --version and -V print the package version and exit 0', () => {
   }
 });
 
-// -v has always meant --verbose here. Quietly repurposing it for version would
-// break every existing caller, which is why version took -V instead.
 test('-v still means --verbose, never version', () => {
   const workspace = tempDir('vflag-ws-');
   const copilotHome = tempDir('vflag-home-');
@@ -1754,11 +1668,6 @@ test('-v still means --verbose, never version', () => {
   assert.match(res.stdout, /home/, '-v runs status verbosely rather than printing a bare version');
 });
 
-// Installing the package — from the registry or a hand-delivered tarball, the
-// same either way — replaces the binary and hydrates nothing; there is no
-// postinstall. Nothing used to detect "new harness installed, never upgraded":
-// H9 checked only that a lock file existed, so a home hydrated by an older
-// version looked healthy indefinitely.
 test('doctor H9 detects a harness installed but never hydrated by upgrade', () => {
   const workspace = tempDir('lockdrift-ws-');
   const copilotHome = tempDir('lockdrift-home-');
@@ -1778,8 +1687,6 @@ test('doctor H9 detects a harness installed but never hydrated by upgrade', () =
   assert.match(drifted.hint, /run: harness upgrade/);
 });
 
-// Existence was never the whole question: a runner carrying an already-fixed bug
-// is worth as much as a missing one, and its owner has no reason to suspect it.
 test('doctor H13 fails a runner that predates the installed harness', () => {
   const workspace = tempDir('runner-doctor-ws-');
   const copilotHome = tempDir('runner-doctor-home-');
@@ -1799,10 +1706,6 @@ test('doctor H13 fails a runner that predates the installed harness', () => {
   assert.equal(h13().pass, true, 'a current runner passes');
 });
 
-// Codex P1: detection matched only the separated `--workspace` token, so the
-// equally supported `--workspace=<path>` fell through to injection — and since
-// parseFlags reads argv in order, the INJECTED pair won. An explicit
-// `--workspace=/a` therefore ran silently against the runner's own workspace.
 test('the generated runner honors an explicit --workspace=<path> and injects no second one', () => {
   const workspace = tempDir('runner-eqform-ws-');
   fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
@@ -1825,9 +1728,7 @@ test('the generated runner honors an explicit --workspace=<path> and injects no 
     `the equals form must suppress injection, got ${JSON.stringify(eqForm)}`);
   assert.ok(eqForm.includes(`--workspace=${workspace}`), 'the caller\'s own value is the one that survives');
 
-  // Still scoped by the boundary: a post-`--` equals form is literal content,
-  // so the default injection must still happen (and land before the boundary).
-  const literal = run(['learnings', '--', '--workspace=/not/a/flag']);
+    const literal = run(['learnings', '--', '--workspace=/not/a/flag']);
   const boundary = literal.indexOf('--');
   const injected = literal.indexOf('--workspace');
   assert.notEqual(injected, -1, 'a post-boundary equals form is content, not a caller-chosen workspace');
@@ -1835,11 +1736,7 @@ test('the generated runner honors an explicit --workspace=<path> and injects no 
 });
 
 test('writeHarnessRunner regenerates a runner stamped with an older @harness-runner-version', () => {
-  // Pinned to the pre-fix runner version (2): the JSON.stringify quoting fix
-  // above must ship with a version bump, or every already-hydrated
-  // `.harness/run.mjs` written before this fix would silently keep the old,
-  // unsafe interpolation forever.
-  assert.ok(RUNNER_VERSION > 2, 'RUNNER_VERSION must be bumped past the pre-fix value so existing runners regenerate');
+    assert.ok(RUNNER_VERSION > 2, 'RUNNER_VERSION must be bumped past the pre-fix value so existing runners regenerate');
 
   const workspace = tempDir('runner-version-ws-');
   const runnerDir = path.join(workspace, '.harness');
@@ -1965,7 +1862,6 @@ No open findings.
   );
   return rel;
 }
-
 
 test('plan readiness surfaces configured-check errors instead of running named checks', async () => {
   const { validatePlanReadiness } = await import('../lib/plan-readiness.mjs');
@@ -2394,10 +2290,7 @@ test('harness verify returns inconclusive for timeout and exits EXIT.timedOut (8
 
   const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
 
-  // Fix-wave Important #5: a genuinely timed-out run maps to EXIT.timedOut
-  // (8) BEFORE the enforcement mapping — pre-fix this exited 2 (the generic
-  // inconclusive code), losing the "ran out of time" signal entirely.
-  assert.equal(result.status, 8, result.stderr);
+    assert.equal(result.status, 8, result.stderr);
   const body = JSON.parse(result.stdout);
   assert.equal(body.outcome, 'inconclusive');
   assert.equal(body.checks.find((check) => check.id === 'unit-tests')?.status, 'timeout');
@@ -2733,12 +2626,7 @@ test('completion hook bypasses read-only work and enforces each new recorded edi
   assert.equal(runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' }).status, 0);
   recordSuccessfulEdit(workspace, { file_path: 'src/example.js' });
   session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
-  // The edit must land strictly after BOTH the completion marker and the last
-  // verification — require-verification denies on `lastVerifyAt < lastEditAt`,
-  // so anchoring only to lastCompletedEditAt made this assertion depend on
-  // `verify` finishing within 1s. Under full-suite load it does not, the
-  // spoofed edit sorts BEFORE verification, and the hook correctly allows.
-  session.lastEditAt = new Date(
+    session.lastEditAt = new Date(
     Math.max(Date.parse(session.lastCompletedEditAt), Date.parse(session.lastVerifyAt)) + 1000
   ).toISOString();
   fs.writeFileSync(sessionPath, JSON.stringify(session));

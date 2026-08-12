@@ -1,14 +1,3 @@
-/**
- * The knobs and defaults the hardcoding review flagged, pinned.
- *
- * Every test here is a regression guard for a specific defect: a default
- * spelled in five places with two disagreeing, a `clear` that pinned the very
- * literal it claimed to forget, tuning variables the deny-all environment
- * silently stripped, `auto` answered from a hardcoded id while the fetched
- * catalogue sat on disk, and adapters that could only ever connect directly.
- * The shape of each test is "the property, not the spelling": what must hold
- * is that the values agree or the variable crosses, not what the value is.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -130,13 +119,7 @@ test('an unset or auto model resolves through the fetched catalogue before the s
   assert.equal(planAgent(base).model, PROVIDERS[DEFAULT_PROVIDER].defaultModel,
     'a provider nobody has asked still answers from the table — the last resort works');
 
-  // The static default is a QUALITY choice; the catalogue is a CALLABILITY
-  // fact. The fetched list is sorted for a picker — alphabetical within a
-  // preference tier — so `[0]` is an accident of spelling: on the measured
-  // account it made `auto` mean `copilot-search-a`, a search utility. The
-  // declared default wins whenever the catalogue confirms this account can
-  // call it; the catalogue's own first entry answers only when it cannot.
-  writeModelCache(home, {
+    writeModelCache(home, {
     provider: DEFAULT_PROVIDER,
     models: ['claude-sonnet-5', 'gpt-4.1'],
     labels: {},
@@ -286,9 +269,7 @@ test('proxyFor proxies https targets only, and honours NO_PROXY, loopback, and t
 test('openTunnel performs a CONNECT through a local proxy and hands back the raw socket', async () => {
   const { openTunnel } = await import('../lib/providers/openai-compatible.mjs');
   const proxy = http.createServer();
-  // A CONNECT-hijacked socket is half-open on the server side, so it must be
-  // destroyed explicitly or proxy.close() waits on it forever.
-  let serverSide = null;
+    let serverSide = null;
   proxy.on('connect', (req, socket) => {
     serverSide = socket;
     assert.equal(req.url, 'target.example:443', 'the CONNECT names the real target');

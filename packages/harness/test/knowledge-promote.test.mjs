@@ -100,13 +100,9 @@ test('promote emits a reviewable, digest-bound op-set and apply lands it golden 
   assert.equal(opset.ops[0].op, 'ADD');
   assert.equal(opset.ops[0].source.id, 'sql/claim-a');
 
-  // Apply in promotion mode — note: the source episode file could even be
-  // absent from this checkout; evidence re-validates from recorded hashes.
-  const applied = applyOps({ workspace: ws, opsPath: path.join(ws, PROMOTE_OPS_REL), home });
+    const applied = applyOps({ workspace: ws, opsPath: path.join(ws, PROMOTE_OPS_REL), home });
   assert.equal(applied.exitCode, 0, JSON.stringify(applied.rejected));
-  // Promotion reports the layer it WROTE (golden), not the feature branch the
-  // CLI runs from.
-  assert.equal(applied.layer, 'golden');
+    assert.equal(applied.layer, 'golden');
   assert.equal(applied.bucketKey, null);
 
   // Golden now carries the claim.
@@ -158,9 +154,7 @@ test('REPLAY RULE regression: retire → absorb-branch → rebuild --yes still l
   const rebuilt = rebuildStore({ workspace: ws, home, yes: true, copilotHome: tempDir('promo-ch-') });
   assert.equal(rebuilt.pass, true, rebuilt.blockedReason);
 
-  // 4) A fresh consolidation regenerates the id — governance reapplication
-  // must land it RETIRED, not whatever the fresh op claims.
-  const again = applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, 'replayed', { episodes: [ep] })]), home });
+    const again = applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, 'replayed', { episodes: [ep] })]), home });
   assert.equal(again.exitCode, 0, JSON.stringify(again.rejected));
   assert.deepEqual(again.governed, [{ id: 'sql/replayed', action: 'retire' }]);
   const learning = listLearnings(dir).find((l) => l.id === 'sql/replayed');
@@ -207,12 +201,7 @@ test('episodes-only overlap maps to STRENGTHEN; identical claims are skipped', (
     path.join(dir, 'learnings', 'sql', 'same-claim.md'),
     `---\nschema: 1\ntrigger: "same trigger"\nstatus: active\nsource: auto\nepisodes:\n  - path: ${goldenEp.path}\n    sha256: "${goldenEp.sha256}"\n    kind: fix\n    plan: docs/plans/p1.md\nanchors: []\nsuperseded_by: null\nlast_confirmed: null\norigin: t\n---\n\nShared claim body.\n`
   );
-  // Committed, like the CLI always leaves the store: an UNCOMMITTED learning
-  // file is a hand edit — including a planted, never-tracked one — and
-  // absorbHandEdits (admin.mjs) captures it, so leaving it uncommitted would
-  // make this "pre-existing golden twin" a human-taught claim with an extra
-  // snapshot episode.
-  commitStore(dir, 'seed: pre-existing golden twin');
+    commitStore(dir, 'seed: pre-existing golden twin');
   const branchEp = writeEpisode(ws, 'docs/solutions/perf/branch-ev.md');
   seedBucketLearning(ws, home, 'same-claim', { trigger: 'same trigger', body: 'Shared claim body.', episodes: [branchEp] });
 
@@ -261,12 +250,6 @@ test('--all chunks under MAX_OPS_PER_RUN with deterministic ordering and remaini
   assert.deepEqual(nextSet.ops.map((o) => o.source.id), ['sql/chunk-05', 'sql/chunk-06']);
 });
 
-// The digest is computed over the ops array by whoever writes the file and is
-// unkeyed, so it only ever proves "this file was not edited AFTER it was
-// digested" — never that its author was the emitter. Tampering therefore has
-// to be tested BOTH ways: with a stale digest (caught by the binding) and with
-// a correctly recomputed one (which must still be caught, by the semantic
-// binding to the promotion SOURCE).
 test('a tampered promote-ops file is rejected by the digest binding — and a re-digested tamper still cannot author the promoted claim (no strikes)', () => {
   const ws = featureWorkspace('feature/tamper');
   const home = tempDir('promo-home6-');
@@ -285,10 +268,7 @@ test('a tampered promote-ops file is rejected by the digest binding — and a re
   assert.equal(staleRes.exitCode, 1);
   assert.match(staleRes.rejected[0].reason, /digest mismatch/);
 
-  // 2. The SAME tamper, correctly re-digested — indistinguishable from an
-  //    emitter-authored file by the digest alone. The promoted claim's trigger
-  //    and body must still come from the verified source learning, not the op.
-  const redigested = JSON.parse(pristine);
+    const redigested = JSON.parse(pristine);
   redigested.ops[0].trigger = 'attacker-authored trigger';
   redigested.ops[0].body = 'Attacker-authored golden claim body.';
   redigested.promotion.digest = promotionDigest(redigested.ops);
@@ -305,12 +285,6 @@ test('a tampered promote-ops file is rejected by the digest binding — and a re
   assert.equal(readLedger(dir).filter((e) => e.failure).length, 0, 'promotion rejections never strike');
 });
 
-// A promotion moves a claim between layers. Until the destination was bound to
-// the source, the writer verified `op.source.id` and its sha256 and then
-// trusted the op's own destination (`domain`/`slug`, or `target`) — so a
-// hand-authored, correctly-digested op could cite one claim's verified
-// identity while writing a completely different one, and the tombstone
-// (keyed off the destination) never marked the cited source as consumed.
 test('a re-digested promotion op cannot rename its destination, and a refused run never tombstones its source', () => {
   const ws = featureWorkspace('feature/bind');
   const home = tempDir('promo-home11-');
@@ -334,9 +308,7 @@ test('a re-digested promotion op cannot rename its destination, and a refused ru
   assert.match(res.rejected[0].reason, /promotion destination .* does not match source/);
   assert.deepEqual(listLearnings(dir).map((l) => l.id), [], 'nothing reached golden');
 
-  // The tombstone follows the SOURCE, so a refused run leaves it untouched —
-  // and, crucially, a SUCCESSFUL run must consume it exactly once.
-  const source = listLearnings(bucketDirFor(dir, key)).find((l) => l.id === 'sql/bound-claim');
+    const source = listLearnings(bucketDirFor(dir, key)).find((l) => l.id === 'sql/bound-claim');
   assert.equal(source.fm.promoted_to_golden, undefined, 'a refused promotion never tombstones its source');
 
   const clean = buildPromotionOps({ workspace: ws, home, all: true });
@@ -360,10 +332,7 @@ test('a re-digested promotion STRENGTHEN cannot graft its source evidence onto a
   const victimBefore = listLearnings(dir).find((l) => l.id === 'sql/victim');
   assert.equal(victimBefore.fm.episodes.length, 1);
 
-  // A second, unrelated bucket claim whose evidence the op tries to hand to
-  // the victim: `verifiedFixLinks` is simultaneously the promotion-eligibility
-  // signal and the protected-target signal, so grafting inflates both.
-  seedBucketLearning(ws, home, 'evidence-source');
+    seedBucketLearning(ws, home, 'evidence-source');
   assert.equal(buildPromotionOps({ workspace: ws, home, all: true }).pass, true);
   const grafted = JSON.parse(fs.readFileSync(opsFull, 'utf8'));
   const donor = grafted.ops.find((o) => o.source.id === 'sql/evidence-source');
@@ -380,24 +349,12 @@ test('a re-digested promotion STRENGTHEN cannot graft its source evidence onto a
   assert.equal(victimAfter.fm.episodes.length, 1, 'the unrelated golden claim gained no borrowed evidence');
 });
 
-// Binding the DESTINATION alone was not enough. `SUPERSEDE.target` and
-// `MERGE.targets` name OTHER learnings — ids the promotion never cited as its
-// source — and both stayed independently attacker-controlled, while MERGE was
-// admitted as a promotion op at all despite the emitter never producing one.
-// So a correctly re-digested op could promote the authentic source claim into
-// golden (passing every source binding) while tombstoning unrelated golden
-// claims the operator never chose to touch: a destructive write, laundered
-// through a legitimate-looking promotion.
 test('a re-digested promotion op cannot tombstone unrelated golden claims through target/targets, and MERGE is not a promotion op', () => {
   const ws = featureWorkspace('feature/bound-targets');
   const home = tempDir('promo-home13-');
   const { dir } = ensureStore(ws, { home });
 
-  // Two unrelated golden claims, unprotected (source: auto, no fix links) so
-  // nothing but the target binding itself can save them. Committed, like the
-  // CLI always leaves the store — an uncommitted file would absorb as a hand
-  // edit and become `source: human`, i.e. protected for the wrong reason.
-  fs.mkdirSync(path.join(dir, 'learnings', 'sql'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'learnings', 'sql'), { recursive: true });
   for (const slug of ['treasure-a', 'treasure-b']) {
     fs.writeFileSync(
       path.join(dir, 'learnings', 'sql', `${slug}.md`),
@@ -426,9 +383,7 @@ test('a re-digested promotion op cannot tombstone unrelated golden claims throug
     assert.equal(readLedger(dir).filter((e) => e.failure).length, 0, 'promotion rejections never strike');
   };
 
-  // 1. A SUPERSEDE whose DESTINATION is the source (so the destination binding
-  //    passes cleanly) but whose `target` names an unrelated golden claim.
-  const forgedSupersede = JSON.parse(pristine);
+    const forgedSupersede = JSON.parse(pristine);
   forgedSupersede.ops = [{ ...emitted, op: 'SUPERSEDE', target: 'sql/treasure-a' }];
   forgedSupersede.promotion.digest = promotionDigest(forgedSupersede.ops);
   fs.writeFileSync(opsFull, JSON.stringify(forgedSupersede));
@@ -438,9 +393,7 @@ test('a re-digested promotion op cannot tombstone unrelated golden claims throug
   assert.match(supersede.rejected[0].reason, /sql\/treasure-a/);
   untouched();
 
-  // 2. A MERGE — never emitted by `harness knowledge promote` — consolidating
-  //    two unrelated golden claims into the authentic source's own id.
-  const forgedMerge = JSON.parse(pristine);
+    const forgedMerge = JSON.parse(pristine);
   forgedMerge.ops = [{ ...emitted, op: 'MERGE', targets: ['sql/treasure-a', 'sql/treasure-b'] }];
   forgedMerge.promotion.digest = promotionDigest(forgedMerge.ops);
   fs.writeFileSync(opsFull, JSON.stringify(forgedMerge));
@@ -450,9 +403,7 @@ test('a re-digested promotion op cannot tombstone unrelated golden claims throug
   assert.match(merge.rejected[0].reason, /never MERGE/);
   untouched();
 
-  // The pristine op-set still promotes — the binding refuses forged targets,
-  // it does not break the legitimate lane.
-  fs.writeFileSync(opsFull, pristine);
+    fs.writeFileSync(opsFull, pristine);
   assert.equal(applyOps({ workspace: ws, opsPath: opsFull, home }).exitCode, 0);
   assert.ok(listLearnings(dir).some((l) => l.id === 'sql/authentic'));
 });
@@ -492,9 +443,7 @@ test('a bucket whose recorded base is provably not an ancestor of HEAD never pro
   const { dir } = ensureStore(ws, { home });
   const key = branchKeyFor('feature/reused');
 
-  // Simulate branch-name reuse after a force push: the recorded base sha is
-  // unknown to this repo's history — verified NOT an ancestor.
-  const metaPath = path.join(bucketDirFor(dir, key), 'meta.json');
+    const metaPath = path.join(bucketDirFor(dir, key), 'meta.json');
   const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
   fs.writeFileSync(metaPath, JSON.stringify({ ...meta, baseSha: 'f'.repeat(40) }) + '\n');
 
@@ -505,10 +454,7 @@ test('a bucket whose recorded base is provably not an ancestor of HEAD never pro
 });
 
 test('prune resolves bucket discovery and selection INSIDE the store transaction (TOCTOU guard)', () => {
-  // Structural assertion (the interleaving itself is not reproducible in a
-  // single-process test): every bucket listing call site must sit inside the
-  // withStoreTransaction callback, so selection happens under the store lock.
-  const src = fs.readFileSync(new URL('../lib/knowledge/prune.mjs', import.meta.url), 'utf8');
+    const src = fs.readFileSync(new URL('../lib/knowledge/prune.mjs', import.meta.url), 'utf8');
   const txAt = src.indexOf('withStoreTransaction(');
   assert.ok(txAt !== -1, 'prune uses withStoreTransaction');
   const callSites = [...src.matchAll(/listBuckets\(/g)].map((m) => m.index);
@@ -519,22 +465,13 @@ test('prune resolves bucket discovery and selection INSIDE the store transaction
 });
 
 test('prune containment-verifies EVERY selected bucket before the first delete (all-or-nothing)', () => {
-  // Structural assertion for the same reason as the TOCTOU guard above: the
-  // refusal it guards is only reachable by an ancestor swap racing the loop
-  // (`listBuckets` skips a symlinked bucket outright, so no single-process test
-  // can plant one), but the CONSEQUENCE of getting the order wrong is a silent
-  // partial deletion — the buckets ahead of the refused one already gone, the
-  // run reporting `removed: []`, and the transaction still committing it.
-  const src = fs.readFileSync(new URL('../lib/knowledge/prune.mjs', import.meta.url), 'utf8');
+    const src = fs.readFileSync(new URL('../lib/knowledge/prune.mjs', import.meta.url), 'utf8');
   const firstDeleteAt = src.indexOf('fs.rmSync(');
   assert.ok(firstDeleteAt !== -1, 'prune deletes bucket directories with rmSync');
   for (const m of [...src.matchAll(/assertRealpathContained\(/g)]) {
     assert.ok(m.index < firstDeleteAt, 'every containment check runs before anything is deleted');
   }
-  // The delete loop must iterate the PRE-VALIDATED list, never the raw
-  // selection, and must not re-validate inside itself — validating in the
-  // delete loop is exactly what made a refusal partial.
-  const deleteLoop = src.slice(src.lastIndexOf('for (', firstDeleteAt), firstDeleteAt);
+    const deleteLoop = src.slice(src.lastIndexOf('for (', firstDeleteAt), firstDeleteAt);
   assert.doesNotMatch(deleteLoop, /assertRealpathContained/, 'no containment check inside the delete loop');
   assert.doesNotMatch(deleteLoop, /selected\.values\(\)/, 'the delete loop never iterates the unvalidated selection');
 });

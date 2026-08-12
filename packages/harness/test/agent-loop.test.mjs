@@ -1,16 +1,3 @@
-/**
- * P5AC9/P5AC10 — the turn loop.
- *
- * The loop is the one component in the harness whose caller cannot be reasoned
- * with, so most of what is pinned here is about what a model CANNOT cause: it
- * cannot reach an execution path other than the governed one, cannot escape the
- * environment allowlist by asking, cannot run past the budgets, and cannot put
- * a transcript into a durable record.
- *
- * The provider is injected throughout. That is not only a convenience for
- * offline tests — it is the same seam that keeps "core never consumes a model"
- * to a single reviewable line, so testing through it tests the real shape.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -55,10 +42,6 @@ function scaffold(prefix, { persona = 'engineer', personaText = '# Engineer\n\nB
   return { ws, home };
 }
 
-/**
- * A scripted provider. Each entry is one completion, in order; running off the
- * end returns a no-tool-call completion, which is how the loop is told to stop.
- */
 function scriptedProvider(script) {
   const requests = [];
   let i = 0;
@@ -108,11 +91,6 @@ test('P5AC9: the loop orients, acts through a tool, and stops when the model ask
   assert.equal(result.usage.outputTokens, 10, 'usage accumulates across turns');
 });
 
-// A legal model request must never kill the run. `resolveToolTimeout` clamped
-// its floor and not its ceiling, so a model asking for more time than exec's
-// hard maximum had the raw value forwarded into `--timeout`, exec's validator
-// refused, and the refusal was fatal — a parity benchmark died in two seconds
-// on the model's first bash call.
 test('a tool timeout above exec\'s maximum clamps to the maximum instead of killing the run', async () => {
   const { ws } = (() => {
     const dir = tempDir('agent-timeout-clamp-');
@@ -131,11 +109,6 @@ test('a tool timeout above exec\'s maximum clamps to the maximum instead of kill
   assert.equal(resolveToolTimeout({ requested: 30 }), 30);
 });
 
-// Adopted from Pi's loop (`failToolCallsFromTruncatedMessage`): a response
-// stopped at the token limit can carry a tool call whose streamed arguments
-// were cut mid-JSON and salvage-parsed into something that VALIDATES while
-// being incomplete. A `write` whose content lost its tail would write a
-// truncated file and report success.
 test('a length-truncated message has its tool calls refused, not dispatched', async () => {
   const { ws, home } = scaffold('agent-truncated');
   const provider = scriptedProvider([
@@ -282,11 +255,7 @@ test('P5AC9: the tool call starts in the workspace (which is NOT confinement —
 });
 
 test('P5AC9: and the harness does NOT confine a model to the workspace — asserted so the claim cannot drift back', async () => {
-  // This test exists to keep a FALSE claim from returning. The previous version
-  // of the test above was named "so a model cannot run outside it" while
-  // asserting only the starting directory; Codex's final review caught the gap.
-  // `resolveExecCwd` validates where a command STARTS. Nothing stops it leaving.
-  const ws = tempDir('agent-escape-ws-');
+    const ws = tempDir('agent-escape-ws-');
   const outside = path.join(ws, '..', `escape-probe-${process.pid}`);
   const outcome = await dispatchToolCall(
     { id: 't1', name: 'bash', input: { script: `cd .. && printf x > ${JSON.stringify(path.basename(outside))}` } },
@@ -301,9 +270,7 @@ test('P5AC9: and the harness does NOT confine a model to the workspace — asser
 
 test('P5AC9: a refusal from the governed surface stops the loop rather than being re-tried forever', async () => {
   const { ws, home } = scaffold('agent-denied');
-  // `bash` disabled in the user scope: the harness refuses to dispatch at all,
-  // which is not something the model can work around by rephrasing.
-  fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
   fs.writeFileSync(path.join(home, 'harness', 'config.yaml'), '"exec.bash_enabled": false\n');
 
   const provider = scriptedProvider([callTool('t1', 'bash', { script: 'echo hi' }), say('unreachable')]);
@@ -430,17 +397,9 @@ test('P5AC10: `agent` is a registered execute-class command, so bin/harness.mjs 
 
 test('P5AC10: a real dispatch appears in `run list` as an agent run', () => {
   const { ws, home } = scaffold('agent-journal');
-  // AGENT MODE IS OFF BY DEFAULT, and this test dispatches for real — so it has
-  // to grant the authority the gate exists to withhold. Written into the
-  // fixture home rather than relaxed in the product: the whole point of the
-  // gate is that reaching a provider is opted into, and a test that needed it
-  // waived would be testing a harness nobody ships.
-  fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
   fs.writeFileSync(path.join(home, 'harness', 'config.yaml'), 'agent.enabled: true\n');
-  // No network is needed and none is relied on: the 1-second wall clock bounds
-  // the provider request, so this ends as `provider-error` or `time-budget`
-  // whether the host can reach the API or not. Either way the run is journaled.
-  const res = spawnSync(process.execPath, [
+    const res = spawnSync(process.execPath, [
     binPath, 'agent', 'a task', '--workspace', ws, '--copilot-home', home, '--max-seconds', '1', '--max-turns', '1',
   ], { cwd: packageRoot, encoding: 'utf8', env: { ...process.env, ANTHROPIC_API_KEY: 'not-a-real-key' } });
   assert.notEqual(res.status, EXIT.ok);
@@ -550,12 +509,7 @@ test('the declared tools are exactly the governed surfaces, and every one of the
     assert.ok(tool.description.length > 40, 'a tool the model must reason about needs its constraints described');
     assert.equal(tool.schema.type, 'object');
   }
-  // The invariant the list exists to keep: a tool name that does not map to a
-  // registered command would be a capability reachable by the model and by
-  // nobody else — the second write path lib/agent-loop.mjs refuses to create.
-  // `read` is the one alias, because `harness get` is the command that reads
-  // and renaming it for the model would be worse than saying so here.
-  const commandFor = { bash: 'bash', exec: 'exec', read: 'get', search: 'search', edit: 'edit', write: 'write' };
+    const commandFor = { bash: 'bash', exec: 'exec', read: 'get', search: 'search', edit: 'edit', write: 'write' };
   for (const tool of AGENT_TOOLS) {
     assert.ok(hasCommand(commandFor[tool.name]), `${tool.name} must dispatch to a registered command`);
   }
@@ -631,9 +585,7 @@ test('the operator’s --tool-timeout is a ceiling the model cannot raise', asyn
 test('a tool cannot run past the wall clock the operator set', async () => {
   const { ws, home } = scaffold('agent-wallclock');
   const provider = scriptedProvider([
-    // An hour-long sleep against a one-second run. The wall clock is only
-    // checked BETWEEN turns, so without cancellation this would sail past it.
-    callTool('t1', 'bash', { script: 'sleep 3600', timeout: 3600 }),
+        callTool('t1', 'bash', { script: 'sleep 3600', timeout: 3600 }),
     say('done'),
   ]);
   const started = Date.now();
@@ -648,11 +600,7 @@ test('a tool cannot run past the wall clock the operator set', async () => {
 });
 
 test('the loop never RAISES a timeout the operator lowered in their config', async () => {
-  // The bug the cancellation approach avoids: with no --tool-timeout there is
-  // no operator value to shorten, so shortening `--timeout` to fit the wall
-  // clock would have meant inventing one — and overriding a lower configured
-  // `exec.timeout_seconds` upward while claiming to lower it.
-  assert.equal(resolveToolTimeout({ requested: undefined, ceiling: null }), null,
+    assert.equal(resolveToolTimeout({ requested: undefined, ceiling: null }), null,
     'saying nothing is what lets `exec` apply the configured timeout');
   assert.equal(resolveToolTimeout({ requested: 3600, ceiling: 5 }), 5, 'the operator ceiling wins');
   assert.equal(resolveToolTimeout({ requested: 2, ceiling: 5 }), 2, 'and a shorter request is honored');

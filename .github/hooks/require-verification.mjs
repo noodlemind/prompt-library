@@ -66,8 +66,6 @@ function allow(reason) {
   process.exit(0);
 }
 
-// Read-only answers and investigations do not create a Harness session and
-// therefore remain free of delivery ceremony.
 if (!fs.existsSync(sessionPath)) {
   output({ continue: true });
   process.exit(0);

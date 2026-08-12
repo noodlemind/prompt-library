@@ -1,6 +1,3 @@
-// Best-effort credential screening for knowledge capture and learning writes.
-// Regex-grade by design — documented as screening, never prevention. The real
-// backstop is the never-pushed local knowledge store.
 const PATTERNS = [
   { id: 'aws-access-key', re: /\bAKIA[0-9A-Z]{16}\b/ },
   {
@@ -46,18 +43,6 @@ export function redactSecrets(text) {
   return `[redacted: ${[...new Set(hits.map((h) => h.id))].join(', ')}]`;
 }
 
-// The untrusted, repo/manifest-derived free-text fields of a built recall
-// entry. Each can carry a pasted credential — a `path` with an embedded
-// connection string, a secret-shaped `docid`, or a secret in `title`/
-// `summary`/`snippet` prose. Redacting them HERE, at the DATA boundary where
-// the recall result object is constructed, is the single guarantee that
-// reaches EVERY consumer at once: the rendered context pack, `harness recall`,
-// AND their `--json` siblings. A render-boundary-only screen missed both the
-// raw `--json` emit and the `path`/`docid` fields entirely (reproduced leaks).
-// `scope`/`kind`/`ranker`/`score` are code-set classification/enum/number
-// tokens, not free-text credential carriers, so they are left untouched — and
-// a legitimate path (no `://` connection string or AWS-key shape) never
-// matches, so this cannot corrupt normal paths.
 const RECALL_UNTRUSTED_STRING_FIELDS = ['docid', 'path', 'title', 'summary', 'snippet'];
 
 export function redactRecallEntry(entry) {

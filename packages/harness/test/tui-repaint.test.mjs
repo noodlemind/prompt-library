@@ -1,22 +1,3 @@
-/**
- * The repaint arithmetic (P4bAC10).
- *
- * The composer's first interactive outing drew a box INSIDE the previous box.
- * Nothing in the suite could see it: the state machine and the renderer were
- * both correct, and the defect lived entirely in the escape sequences that move
- * the cursor between paints — the one part with no test.
- *
- * So these tests model a screen (see `helpers/tty.mjs`) and assert what a
- * screenshot showed and a stream capture could not: how many editors end up on
- * screen, where the transcript lands relative to them, and whether the region
- * the code thinks it drew is the region it actually cleared.
- *
- * Two original bugs are still pinned here — `erase` walking back `painted`
- * lines while the cursor had already been parked inside the block, and `next()`
- * painting on top of a paint `write()` had already done. Three more are pinned
- * with them: the region now includes a live block, an overlay and a footer, and
- * each of those is a row the erase arithmetic has to know about.
- */
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
@@ -72,10 +53,7 @@ test('P4bAC10: typing repaints in place rather than stacking editors', async () 
   const input = fakeInput();
   const session = createInput({ input, output, ui });
   session.setStatus({ workspace: '~/somewhere' });
-  // Driven through the REAL keypress binding, not by calling the composer
-  // directly. Bypassing the binding could not have detected a stacked repaint
-  // per keystroke — the exact defect this was written to catch.
-  const pending = session.next();
+    const pending = session.next();
   for (const ch of 'status') input.emit('keypress', ch, { name: ch, sequence: ch });
   assert.equal(ruleRows(output), 2, 'six keypresses must not leave six editors behind');
   assert.equal(caretRows(output), 1);
@@ -131,9 +109,7 @@ test('P4bAC10: closing the session erases the region instead of stranding it', (
 });
 
 test('P4bAC10: the piped path emits no escape sequences at all', () => {
-  // Scripted sessions must stay diffable — a repaint sequence in captured
-  // output would break every test that reads the transcript.
-  const output = fakeTty();
+    const output = fakeTty();
   const piped = new PassThrough();
   piped.end();
   const session = createInput({ input: piped, output, ui });

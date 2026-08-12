@@ -16,12 +16,6 @@ import {
   QUARANTINE_DIR,
 } from './store-io.mjs';
 
-/**
- * The local knowledge store: a CLI-managed git repo OUTSIDE the working tree
- * at <harness home>/knowledge/<repo-id>/ — survives `git clean`, re-clones,
- * and is shared by every worktree/clone of the same remote. Never pushed.
- */
-
 const INDEX_STUB = `# Learnings Index
 
 _Rebuilt by \`harness consolidate --apply\`. One line per active learning._
@@ -32,18 +26,6 @@ function gitOut(cwd, args) {
   return res.status === 0 ? res.stdout.trim() : null;
 }
 
-/**
- * The path-keyed store id — a stable hash of the workspace's real path,
- * independent of whatever remote (if any) is currently configured. This is
- * exactly what `repoId` below falls back to when there's no origin remote.
- * Exported separately (P2) so a caller can compute what the store id WAS (or
- * would be) for this workspace WITHOUT a remote, regardless of whether one
- * is configured now — the doctor stranded-store check and
- * `harness knowledge migrate-store` (admin.mjs) both need this: once a
- * workspace gains an origin remote, `repoId` switches to the remote-keyed id
- * and a store built under the OLD path-keyed id silently stops being read or
- * written by anything, with nothing surfacing that it still exists on disk.
- */
 export function localRepoId(workspace) {
   let real = workspace;
   try {
@@ -54,14 +36,6 @@ export function localRepoId(workspace) {
   return `local-${crypto.createHash('sha256').update(real).digest('hex').slice(0, 12)}`;
 }
 
-/**
- * Normalize any origin-remote form (ssh/https/scp) to one stable id. The
- * human-readable slug alone is lossy — `github.com/org-a/repo-b` and
- * `github.com/org-a-repo/b` both collapse to the same slug once `/` and `-`
- * are folded together — so a short hash of the pre-lossy canonical string is
- * appended to disambiguate. Equivalent ssh/https/scp forms of the same
- * remote still share one canonical string, so they still share one id.
- */
 export function repoId(workspace) {
   const remote = gitOut(workspace, ['remote', 'get-url', 'origin']);
   if (remote) {
@@ -78,18 +52,9 @@ export function repoId(workspace) {
       return `${slug}-${suffix}`;
     }
   }
-  // No remote: stable path-keyed fallback (documented limitation — memory is
-  // per-path until a remote is added).
-  return localRepoId(workspace);
+    return localRepoId(workspace);
 }
 
-/** `<home>/knowledge/<id>` for an ALREADY-COMPUTED store id — the shared
- * join `storeDir` below uses for the current `repoId(workspace)`, exported
- * separately so a caller that already has (or wants) a DIFFERENT id — the
- * doctor stranded-store check and `harness knowledge migrate-store`
- * (admin.mjs), both working with `localRepoId`'s path-keyed id alongside the
- * current `repoId` — can resolve either one to a directory without
- * duplicating this join. */
 export function storeDirForId(id, { home } = {}) {
   return path.join(home || harnessGlobalHome(), 'knowledge', id);
 }
@@ -98,16 +63,6 @@ export function storeDir(workspace, { home } = {}) {
   return storeDirForId(repoId(workspace), { home });
 }
 
-/**
- * Store schema version (blueprint §5a): stamped into `store.json` by
- * ensureStore, checked wherever the store is opened for use. Schema 2 = the
- * layered store (golden `learnings/` + `branches/<key>/` buckets). A store
- * whose recorded schema is NEWER than this CLI supports refuses with an
- * upgrade hint instead of operating layer-blind — an older CLI running
- * root-anchored maintenance against a layered store is a data-loss hazard,
- * not a degraded mode. An absent/corrupt store.json is treated as the
- * current schema (legacy stores predate the marker and are fully readable).
- */
 export const STORE_SCHEMA = 2;
 
 export function assertStoreSchemaSupported(dir) {
@@ -129,61 +84,12 @@ export function assertStoreSchemaSupported(dir) {
   return recorded;
 }
 
-/**
- * The store's `.gitignore` (S2 — LOCK LOSS MUST BE STRUCTURALLY IMPOSSIBLE).
- *
- * `rollbackStore` runs `git clean -fd`, which sweeps every untracked directory
- * in the store — including the `.lock` the running transaction is holding. The
- * previous rounds patched that by re-asserting the lock with a bare
- * `fs.mkdirSync(lockPath)` afterwards and swallowing EEXIST as "still there":
- * if a second writer had grabbed the freed lock in that window, the first
- * writer carried on regardless, `git add -A`-ed the other writer's in-flight
- * files, and finally `rmSync`-ed THEIR lock.
- *
- * A `.gitignore` removes the window instead of racing inside it: `git clean`
- * without `-x` never touches an ignored path, and `git add -A` never stages
- * one. The lock (and its stale-takeover tombstones, and the symlink quarantine
- * bucket) therefore survive every rollback by construction. Ownership tokens
- * below are the second, independent layer — belt to this brace — because a
- * store whose `.gitignore` a human deleted must still never release a lock it
- * does not own.
- *
- * The transaction journal needs no entry: it lives at `.git/harness-txn.json`,
- * which git neither stages nor cleans.
- */
 const STORE_IGNORE_ENTRIES = ['/.lock/', '/.lock.stale-*', `/${QUARANTINE_DIR}/`];
 
-/**
- * Write or migrate the store `.gitignore`. Existing stores predate it, so this
- * runs on EVERY open (ensureStore) rather than only at creation: a store built
- * by an older CLI gains the entries the first time any command touches it,
- * which is the only migration point that does not require the user to know a
- * migration exists. Idempotent and additive — an entry a human already wrote
- * is not duplicated, and lines this CLI does not own are preserved verbatim.
- */
-/**
- * Called from inside `withStoreTransaction` UNDER THE LOCK (P3), never from
- * `ensureStore`: it used to run before `acquireStoreLock`, which made it a
- * store MUTATION outside the lock — two writers could interleave a
- * read-modify-write of the same file, and the very file that keeps a rollback
- * from sweeping the lock was written by an unlocked path.
- *
- * NEVER CLOBBER WHAT YOU COULD NOT READ (P3). A `.gitignore` that exists but
- * fails `readStoreFile` for a reason OTHER than "it is a symlink" — over
- * DEFAULT_MAX_BYTES, unreadable permissions — used to read as `''` and was then
- * FULLY REPLACED rather than extended, destroying whatever a human had put
- * there. Such a file is now left exactly as found: the entries are merely a
- * belt to the ownership-token brace, so running without them is degraded, not
- * unsafe, while silently rewriting a file we cannot see is neither.
- */
 function ensureStoreGitignore(dir) {
   const gitignore = path.join(dir, '.gitignore');
   const state = storeFileState(gitignore);
-  // 'other'/'blocked': a directory at that name, or a symlinked ancestor —
-  // nothing this function may safely touch. 'symlink' falls through: the
-  // planted link is quarantined by writeStoreFile and a real file takes its
-  // place, which is the whole point of making a plant inert.
-  if (state === 'other' || state === 'blocked') return;
+    if (state === 'other' || state === 'blocked') return;
   let existing = '';
   if (state === 'file') {
     const text = readStoreFile(gitignore);
@@ -195,10 +101,7 @@ function ensureStoreGitignore(dir) {
   if (!missing.length) return;
   const header = existing ? (existing.endsWith('\n') ? '' : '\n') : '# harness knowledge store — never staged, never swept by `git clean -fd`\n';
   try {
-    // Best effort: an unwritable `.gitignore` still lets the store run — it
-    // just falls back to the ownership-token layer below for lock safety,
-    // which is independent of this file.
-    writeStoreFile(gitignore, existing + header + missing.join('\n') + '\n');
+        writeStoreFile(gitignore, existing + header + missing.join('\n') + '\n');
   } catch {
     // writeFileContained mkdirs the parent, which can throw on a hand-built store
   }
@@ -209,53 +112,17 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
   assertStoreSchemaSupported(dir);
   const ledgerPath = path.join(dir, 'consolidated.jsonl');
   const created = storeFileState(ledgerPath) !== 'file';
-  // `.git` is a DIRECTORY probe, not a store-owned file read — the store's git
-  // repo is created and read by git itself, never by this module.
-  if (dryRun) return { dir, created, git: fs.existsSync(path.join(dir, '.git')) };
+    if (dryRun) return { dir, created, git: fs.existsSync(path.join(dir, '.git')) };
   fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
   let gitOk = fs.existsSync(path.join(dir, '.git'));
   if (!gitOk) {
     gitOk = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' }).status === 0;
   }
   if (gitOk) {
-    // The store's on-disk format is LF (admin.mjs writes '\n'), but `git
-    // init` inherits ambient config, and core.autocrlf=true is the
-    // Git-for-Windows default. Left unpinned, every `git reset --hard`
-    // (rollback) and `git checkout -- <path>` (residue discard) rewrites
-    // these files as CRLF — silently corrupting learning frontmatter, since
-    // the store is the one place git re-materializes files this module then
-    // parses. Pin it at both layers git honors, so the byte format is a
-    // property of the store rather than of whoever created it.
-    //
-    // Converged on EVERY ensureStore, not just the call that runs `git init`:
-    // scoping it to creation left every store initialized before this pin
-    // existed running on ambient config — which on Windows is precisely the
-    // configuration the paragraph above describes. A fix that reaches only
-    // stores created after it is no fix for the machines already affected.
-    // `git config` is idempotent and local to this repo, so re-asserting it is
-    // free.
-    // Config only, deliberately: a `.gitattributes` would need the
-    // lock-protected `writeStoreFile` path (R1/R7 forbids raw fs here, and
-    // R6 puts store metadata writes under the lock), which is more surface
-    // than this needs. `parseLearningFrontmatter` is already CRLF-tolerant
-    // on its own, so this pin is defense in depth rather than the fix.
-    spawnSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir, encoding: 'utf8' });
+        spawnSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir, encoding: 'utf8' });
     spawnSync('git', ['config', 'core.eol', 'lf'], { cwd: dir, encoding: 'utf8' });
   }
-  // `storeFileState` — never `fs.existsSync` — decides "is this file already
-  // there?": existsSync FOLLOWS a symlink, so a planted link read as "already
-  // fine" and was left live for the next writer to follow (the verified
-  // INDEX.md exploit). A 'symlink'/'absent'/'other' state all mean "write the
-  // real file", and writeStoreFile quarantines the link on the way.
-  // A refused write throws (as the bare `fs.writeFileSync` these replaced did):
-  // a store missing its index/ledger/schema marker is not a store this CLI may
-  // pretend it opened.
-  // Only 'absent' and 'symlink' are seeded: 'absent' is a fresh/legacy store,
-  // and a 'symlink' is a plant that writeStoreFile quarantines on the way. A
-  // real file is already correct, and 'other' (a directory, a device node) is
-  // NOT ours to replace — whichever writer actually needs it will fail closed
-  // inside the transaction, where a rollback exists.
-  const seed = (file, content) => {
+    const seed = (file, content) => {
     const state = storeFileState(file);
     if (state !== 'absent' && state !== 'symlink') return;
     if (!writeStoreFile(file, content)) {
@@ -270,25 +137,8 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
 
 export const KNOWLEDGE_MODES = new Set(['on', 'suggest', 'off', 'freeze', 'capture-only']);
 
-/**
- * Opt-in commit mode (Milestone 3 Task 6): 'none' (default — no mirroring)
- * or 'repo' (mirror ACTIVE learnings verbatim into
- * <workspace>/docs/knowledge/learnings/, see admin.mjs's mirrorLearnings).
- * Independent of KNOWLEDGE_MODES — the two fields persist side by side in
- * config.json, each read-modify-write preserving the other (writeStoreConfig
- * below): `knowledge freeze` must not reset commit, `knowledge commit repo`
- * must not reset mode.
- */
 export const KNOWLEDGE_COMMIT_MODES = new Set(['none', 'repo']);
 
-/**
- * Kill-switch mode (and opt-in commit mode) for the knowledge layer, read
- * from <store>/config.json. Read-only — never creates the store. Tolerant of
- * an absent or corrupt config (missing file, unreadable JSON, unrecognized
- * mode/commit): default mode is 'on' and default commit is 'none', so a
- * fresh or damaged store never silently blocks the whole layer nor silently
- * starts mirroring into the product repo.
- */
 export function readStoreConfig(workspace, { home } = {}) {
   const dir = storeDir(workspace, { home });
   let mode = 'on';
@@ -303,32 +153,19 @@ export function readStoreConfig(workspace, { home } = {}) {
   return { mode, commit };
 }
 
-/**
- * Read-modify-write: only the field(s) actually passed (`mode` and/or
- * `commit`) change — whichever one this call omits is preserved from the
- * current config exactly as-is, so `knowledge freeze` and `knowledge commit
- * repo` can never stomp on each other. The commit message names whichever
- * field this call changed.
- */
 export function writeStoreConfig(workspace, { home, mode, commit } = {}) {
   const tx = withStoreTransaction(workspace, { home }, ({ dir }) => {
     const current = readStoreConfig(workspace, { home });
     const nextMode = mode !== undefined ? mode : current.mode;
     const nextCommit = commit !== undefined ? commit : current.commit;
-    // Preserve any OTHER fields the raw config carries (e.g. the
-    // `defaultBranch` layer-routing override, git-context.mjs) — this
-    // read-modify-write owns only mode/commit, never the whole file.
-    let raw = {};
+        let raw = {};
     try {
       const parsed = JSON.parse(readStoreFile(path.join(dir, 'config.json')));
       if (parsed && typeof parsed === 'object') raw = parsed;
     } catch {
       // absent/corrupt — nothing extra to preserve
     }
-    // Through the choke point (R1), and CHECKED: a refused config write used to
-    // be invisible, so `knowledge freeze` reported the new mode while the store
-    // kept running in the old one. A refusal fails the transaction instead.
-    if (!writeStoreFile(path.join(dir, 'config.json'), JSON.stringify({ ...raw, mode: nextMode, commit: nextCommit }) + '\n')) {
+        if (!writeStoreFile(path.join(dir, 'config.json'), JSON.stringify({ ...raw, mode: nextMode, commit: nextCommit }) + '\n')) {
       throw new Error('refused to write config.json — the path does not resolve safely inside the knowledge store');
     }
     const message = mode !== undefined ? `knowledge: mode ${nextMode}` : `knowledge: commit ${nextCommit}`;
@@ -359,11 +196,6 @@ function ledgerPathFor(root) {
   return path.join(root, 'consolidated.jsonl');
 }
 
-/** Append-only episode-consumption ledger. Torn tail lines are tolerated; a
- * ledger that cannot be read safely (symlinked, over the read cap, outside the
- * store) reads as empty — the same tolerant default an absent one gets. Every
- * REWRITE goes through `writeLedger` below, which refuses on exactly that
- * unreadable case rather than truncating what it could not see. */
 export function readLedger(root) {
   const text = readStoreFile(ledgerPathFor(root));
   if (text === null) return [];
@@ -379,17 +211,6 @@ export function readLedger(root) {
   return entries;
 }
 
-/**
- * Append through the choke point: a real O_NOFOLLOW/O_APPEND write, so a ledger
- * too large to read whole is still appendable (a read-modify-write "append"
- * would truncate it).
- *
- * THROWS ON REFUSAL, never silently drops the entries (same discipline as S4's
- * "a rollback whose result nobody checked"): the ledger is what counts episode
- * consumption and three-strikes quarantine, so an append nobody noticed failing
- * would leave the store's own bookkeeping quietly wrong. Every caller runs
- * inside a transaction, which turns the throw into a rollback.
- */
 export function appendLedger(root, entries) {
   if (!entries || !entries.length) return;
   const ledgerPath = ledgerPathFor(root);
@@ -398,15 +219,6 @@ export function appendLedger(root, entries) {
   }
 }
 
-/**
- * Full ledger REWRITE (the purge/cleanup filter shape: read → drop entries →
- * write back). Unlike an append or a deliberate truncate, this one is only
- * correct if the read that produced `keptEntries` actually saw the file — so
- * it FAILS CLOSED when the ledger is present but unreadable, rather than
- * writing a filtered version of nothing over it. Throws so the surrounding
- * transaction rolls back; callers doing a deliberate WIPE write '' directly
- * and never come through here.
- */
 export function writeLedger(root, keptEntries) {
   const ledgerPath = ledgerPathFor(root);
   if (storeFileState(ledgerPath) === 'file' && readStoreFile(ledgerPath) === null) {
@@ -417,22 +229,11 @@ export function writeLedger(root, keptEntries) {
   }
 }
 
-/**
- * Raw, in-order governance entries — every line, one per human lifecycle
- * decision, torn/corrupt lines skipped (same tolerance as readLedger). This
- * is the shared parse used by both readGovernance (replayed into a
- * latest-per-id Map) and rewriteGovernance (filtered and rewritten as-is,
- * still one line per historical decision) — so the two never drift apart on
- * what counts as a well-formed line.
- */
 function readGovernanceEntries(dir) {
   const govPath = path.join(dir, 'governance.jsonl');
   if (storeFileState(govPath) === 'absent') return [];
   const text = readStoreFile(govPath);
-  // Present but unreadable (symlinked, over the read cap, escaping the store).
-  // Distinguished from absent — a tolerant READER treats it as empty, but a
-  // REWRITE must never truncate a file it could not see.
-  if (text === null) return null;
+    if (text === null) return null;
   const entries = [];
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
@@ -445,40 +246,6 @@ function readGovernanceEntries(dir) {
   return entries;
 }
 
-/**
- * Human governance ledger (Milestone 4): append-only record of retire/
- * dispute/confirm/promote decisions a person made on a learning — the half
- * of a learning's state a `consolidate --rebuild` wipe must never resurrect.
- * Replayed in file order, latest entry per id wins, so a dispute followed by
- * a confirm on the same id resolves to the confirm. Missing file → empty Map,
- * same as a fresh store with no decisions yet.
- *
- * EXCEPTION — promote is sticky (mirrors lifecycle.mjs's setLearningStatus,
- * which rejects retire/dispute/confirm outright against a promoted learning,
- * P2): once an id has a `promote` entry, a LATER entry for that same id
- * whose action is anything OTHER than `promote` is skipped here — it never
- * overrides the standing promote record in the replayed map. Without this, a
- * governance.jsonl written before that lifecycle guard existed (or hand-
- * edited directly — governance.jsonl is a plain file outside every CLI write
- * path's absorb/validation) could still carry a stray post-promote confirm/
- * retire/dispute record, and `readGovernance`'s plain latest-wins replay
- * would resolve to THAT instead of the promote — so a later
- * `consolidate --rebuild --yes` would regenerate the learning WITHOUT
- * `promoted_to`, silently erasing a promotion the ledger itself still
- * recorded. A LATER `promote` entry is still allowed to overwrite an earlier
- * one (e.g. correcting a recorded `--to` path) — only non-promote entries are
- * blocked from overriding a standing promote; there is no `unpromote`.
- */
-/**
- * REPLAY RULE (blueprint §5, normative): only the human DECISION set can ever
- * become an id's latest standing decision. `absorb-branch` entries — the
- * audit record a branch→golden promotion appends — are deliberately NOT in
- * this set: they are recorded for audit but skipped by the replay, so a
- * promotion can never displace a standing retire/dispute (the required
- * regression: retire → absorb-branch → `consolidate --rebuild --yes` still
- * lands retired). Unknown/future actions are likewise audit-only until they
- * are explicitly added here.
- */
 const REPLAY_DECISION_ACTIONS = new Set(['retire', 'dispute', 'confirm', 'promote']);
 
 export function readGovernance(dir) {
@@ -503,48 +270,24 @@ export function appendGovernance(dir, entry) {
   }
 }
 
-/**
- * Rewrite governance.jsonl keeping only entries where `keepPredicate(entry)`
- * is true — used by purgeEpisode (admin.mjs) to drop every historical record
- * for an id whose learning was just fully cascade-deleted. No-op when the
- * file is absent: a purge on a store that never recorded a governance
- * decision must never materialize the file.
- */
 export function rewriteGovernance(dir, keepPredicate) {
   const govPath = path.join(dir, 'governance.jsonl');
   if (storeFileState(govPath) === 'absent') return;
   const entries = readGovernanceEntries(dir);
-  // Fail closed, exactly like writeLedger: a filter-rewrite is only correct if
-  // the read saw the file. Truncating a governance ledger we could not read
-  // would silently erase standing human decisions.
-  if (entries === null) throw new Error(`refused to rewrite ${govPath} — it exists but could not be read safely`);
+    if (entries === null) throw new Error(`refused to rewrite ${govPath} — it exists but could not be read safely`);
   const kept = entries.filter(keepPredicate);
   if (!writeStoreFile(govPath, kept.length ? kept.map((e) => JSON.stringify(e)).join('\n') + '\n' : '')) {
     throw new Error(`refused to write ${govPath} — the path does not resolve safely inside the knowledge store`);
   }
 }
 
-/**
- * Parse learning frontmatter including the structured episodes block and the
- * flat anchors list. Only one list can be "open" at a time — episodes and
- * anchors items look similar (both start `  - `) so we track which block
- * we're inside and only apply that block's item shape.
- */
 export function parseLearningFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return { fm: {}, body: text.trim() };
   const fm = { episodes: [], anchors: [] };
   let openList = null; // 'episodes' | 'anchors' | null
   let current = null;
-  // Split on \r?\n, not '\n'. The opening match above already tolerates CRLF,
-  // so a CRLF file gets past it and then loses EVERY scalar field here: each
-  // line keeps a trailing \r, and the scalar matcher below (`(.*)$`) cannot
-  // match it — `.` excludes \r and `$` without the m flag is end-of-input.
-  // The failure is silent, and on Windows it fires after any store rollback
-  // (`git reset --hard`) or residue discard (`git checkout -- <path>`) when
-  // core.autocrlf is on, which is the Git-for-Windows default: a retired
-  // learning reads back with no status at all, i.e. as active.
-  for (const line of m[1].split(/\r?\n/)) {
+    for (const line of m[1].split(/\r?\n/)) {
     if (/^episodes:\s*$/.test(line)) {
       openList = 'episodes';
       current = null;
@@ -595,15 +338,6 @@ export function parseLearningFrontmatter(text) {
 
 const ESCAPE_MAP = { n: '\n', r: '\r', t: '\t', '"': '"', '\\': '\\' };
 
-/**
- * Reverse what `yamlQuote` does at write time: wrap in double quotes, then
- * escape `\`, `"`, and control chars. Only a value surrounded by
- * double quotes on both ends went through that escaping, so only that shape
- * gets unescaped — a single-pass regex so a real backslash (encoded as
- * `\\`) is never re-interpreted as the start of a second escape sequence.
- * Anything else (bare scalars, single-quoted legacy values) is only
- * quote-stripped, exactly as before.
- */
 function unquote(v) {
   const s = String(v ?? '').trim();
   const m = /^"([\s\S]*)"$/.exec(s);

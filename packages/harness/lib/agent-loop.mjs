@@ -1,12 +1,3 @@
-/**
- * Headless turn loop: complete → dispatch tools under controls → journal → stop.
- *
- * Design constraints from the live benchmark (CLI+engineer wins; this loop lost):
- * - Tool incentives beat text nudges. Explore (search/read) is hard-capped.
- * - Reproduce-first: system prompt and tool order push run-the-test before search.
- * - Context is budgeted: small tool results, short persona, compact old explores.
- * - No second execution path: tools map to the same command result functions as the CLI.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import { EXIT } from './style.mjs';
@@ -64,10 +55,6 @@ export const BENCHMARK_PROFILE = Object.freeze({
 const EXPLORE_TOOLS = new Set(['search', 'read']);
 const ACT_TOOLS = new Set(['edit', 'write', 'bash', 'exec']);
 
-/**
- * Tools available to the model. Order and copy are load-bearing:
- * act tools first; search last and demoted (benchmark: search attractor).
- */
 export const AGENT_TOOLS = Object.freeze([
   Object.freeze({
     name: 'bash',
@@ -289,10 +276,6 @@ export function searchCountOf(turns) {
   return n;
 }
 
-/**
- * Tool-level explore gate (benchmark: text nudges lost to search incentives).
- * Returns a refusal reason or null if the call may run.
- */
 export function exploreGate(call, { turns }) {
   if (call.name === 'search') {
     if (searchCountOf(turns) >= MAX_SEARCH_PER_RUN) {

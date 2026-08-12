@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * Maintainer wrapper — delegates to @dev-kit/harness index.
- * Usage: node scripts/index-knowledge.mjs
- */
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

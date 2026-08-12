@@ -1,18 +1,3 @@
-/**
- * `harness exec -- <argv...>` and `harness bash -- <script>` — Phase 3's
- * governed execution surface.
- *
- * Two commands rather than one with a `--shell` flag, deliberately. They carry
- * different risk and are separately policy-gated, and an auditor filtering the
- * event log for shell invocations should not have to trust a boolean inside a
- * payload to find them. The event types are separate for the same reason.
- *
- * `exec` never invokes a shell: `runProcess` hardcodes `shell: false`, so the
- * argv the operator wrote is the argv that runs — no word splitting, no glob
- * expansion, no `$(…)`. `bash` exists because some workflows genuinely need a
- * shell, and pretending otherwise just pushes people to write
- * `exec sh -c "…"`, which is the same risk with none of the labelling.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
@@ -41,15 +26,6 @@ const realpath = (p) => {
   }
 };
 
-/**
- * Everything after the first bare `--` is the command to run.
- *
- * The boundary is REQUIRED rather than optional: without it a flag meant for
- * the child (`--json`, `--workspace`) would be eaten by the harness's own
- * parser, and the operator would watch the harness reconfigure itself instead
- * of passing the argument along. Making it mandatory means there is exactly
- * one reading of every invocation.
- */
 export function splitAtBoundary(argv) {
   const i = argv.indexOf('--');
   if (i === -1) return { harnessArgs: argv, childArgs: null };
@@ -67,18 +43,6 @@ function repeatedFlag(argv, name) {
   return out.flatMap((v) => v.split(',').map((s) => s.trim()).filter(Boolean));
 }
 
-/**
- * A single-valued flag, validated rather than best-guessed.
- *
- * These flags are safety controls — the timeout that bounds a runaway process,
- * the cwd that confines it — and the previous version answered every malformed
- * spelling with a silent fallback to the default. `--timeout=` ran with the
- * configured default; `--cwd --timeout=1` swallowed the next flag as the cwd
- * value, resolved it to empty, and used the workspace; `--timeout 11 --timeout
- * 22` and `--timeout 11 --timeout=22` disagreed with each other about which one
- * won. A control the operator got wrong must say so, not proceed under a value
- * they did not choose. Found by the Codex phase review.
- */
 function singleFlag(argv, name) {
   const occurrences = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -118,12 +82,7 @@ function plan(argv, { shell }) {
     projectTrusted: isProjectTrusted({ workspace, copilotHome }),
   });
 
-  // F5 (Codex phase review): a configuration with parse errors previously fell
-  // back to defaults and RAN. The dropped key can be the gate itself — a user
-  // writing `exec.bash_enabled: definitely-not-false` got the permissive default
-  // `true` and a shell, while `config validate` exited 1 about the same file.
-  // An execute-class command must fail CLOSED on a policy it could not read.
-  if (config.errors.length) {
+    if (config.errors.length) {
     throw Object.assign(new Error('refusing to execute: the harness configuration has errors'), {
       code: 'E_DENIED',
       exit: EXIT.needsApproval,
@@ -131,11 +90,7 @@ function plan(argv, { shell }) {
     });
   }
 
-  // The P3AC2 policy gate: `bash` is allowed or denied separately from `exec`.
-  // Checked BEFORE the boundary error below, so a denied shell reports being
-  // denied rather than complaining about the syntax of a command it was never
-  // going to run.
-  if (shell && config.values['exec.bash_enabled'] !== true) {
+    if (shell && config.values['exec.bash_enabled'] !== true) {
     throw Object.assign(new Error('bash is disabled by configuration'), {
       code: 'E_DENIED',
       exit: EXIT.needsApproval,
@@ -149,23 +104,14 @@ function plan(argv, { shell }) {
       shell ? 'harness bash -- "<script>"' : 'harness exec -- <program> [args...]',
     );
   }
-  // F9 (Codex phase review): `bash` used to JOIN every post-boundary token with
-  // spaces into one script. `harness bash -- printf '[%s]' 'a b'` audited three
-  // argv entries and executed `printf [%s] a b` — different quoting, different
-  // behavior, and an audit describing something other than what ran. A shell
-  // script is one argument; asking for exactly one removes the ambiguity
-  // instead of resolving it silently.
-  if (shell && childArgs.length !== 1) {
+    if (shell && childArgs.length !== 1) {
     throw usageError(
       `bash takes exactly one script argument (got ${childArgs.length})`,
       'quote the whole script: harness bash -- "cmd one; cmd two"',
     );
   }
 
-  // The flag wins over configuration where it is given — an explicit argument
-  // is the operator speaking now — but it is still bounded by the same
-  // validator, so `--timeout` cannot exceed the ceiling either.
-  const rawTimeout = singleFlag(harnessArgs, '--timeout');
+    const rawTimeout = singleFlag(harnessArgs, '--timeout');
   const timeoutSeconds = rawTimeout === null || rawTimeout === ''
     ? config.values['exec.timeout_seconds']
     : resolveTimeoutSeconds(rawTimeout);
@@ -174,66 +120,34 @@ function plan(argv, { shell }) {
     allow: [...config.values['exec.allow_env'], ...repeatedFlag(harnessArgs, '--allow-env')],
   });
 
-  // A shell script is one argument to the shell, never a token list: joining
-  // multiple tokens would re-introduce the word-splitting `exec` exists to
-  // avoid, at the one boundary where it is hardest to see.
-  const resolvedShell = shell ? resolveShell() : null;
+    const resolvedShell = shell ? resolveShell() : null;
   const target = shell ? [...resolvedShell.argv, childArgs[0]] : childArgs;
 
-  // The isolation wrapper goes in FRONT of the target rather than replacing it,
-  // and is reported separately from `argv` in the audit — the operator asked to
-  // run their command, and an audit that showed `sandbox-exec …` as the thing
-  // they ran would misattribute it.
-  const { controls, networkWrapper, degraded } = resolveControls({ networkPolicy: config.values['exec.network'] });
+    const { controls, networkWrapper, degraded } = resolveControls({ networkPolicy: config.values['exec.network'] });
   const argvToRun = [...networkWrapper, ...target];
 
   return { flags, workspace, cwd, timeoutSeconds, envReport, argvToRun, childArgs, shell, controls, degraded, shellPath: resolvedShell?.shell ?? null };
 }
 
-/**
- * The execution audit entry (Phase 3 AC5) — written for EVERY execution.
- *
- * It lives here, in the one function both the handler and the `resultOf`
- * producer call, rather than in `cmdExec`/`cmdBash`. Emitting from the handler
- * alone meant `--output json-envelope|agent` spawned a child process and left
- * no execution record at all: the lane path never touches the handler. An audit
- * that a caller can skip by choosing an output format is not an audit.
- *
- * It records WHAT RAN — argv, cwd, timeout, and the environment the child could
- * see. An execution log that carries only an exit code cannot answer the
- * question it exists for. Env is names-and-counts only, never values: the
- * allowlist withheld those credentials, and writing them into the audit would
- * hand them back. Everything here passes through the event registry's redactor
- * before persistence, so a secret typed into the argv is masked in the record.
- */
 function emitAudit(ctx, mode, p, result) {
   const events = ctx?.events;
   const sink = typeof events?.withCommand === 'function' ? events.withCommand(mode) : events;
   sink?.emit?.(mode, {
-    // Outcome scalars stay top-level, where every other event type already
-    // puts them, so `harness events --failures` and the summaries read this
-    // record without knowing anything about executions.
-    result: result.status === 'ok' ? 'pass' : 'fail',
+        result: result.status === 'ok' ? 'pass' : 'fail',
     status: result.status,
     exitCode: result.exitCode,
     durationMs: result.durationMs,
     // The invocation descriptor: what ran, where, and under what policy.
     exec: {
       shell: p.shell,
-      // Which shell, not just whether one was used — `bash` resolves
-      // differently per platform, and an auditor reading "shell: true" cannot
-      // tell a POSIX sh from a Git-Bash on Windows.
-      shellPath: p.shellPath,
+            shellPath: p.shellPath,
       argv: p.childArgs,
       cwd: p.cwd,
       timeoutSeconds: p.timeoutSeconds,
       env: { allowed: p.envReport.allowed, droppedCount: p.envReport.dropped.length, refused: p.envReport.refused },
       signal: result.signal,
       truncated: result.truncated,
-      // P3AC1/P3AC3: what each control ACTUALLY achieved for this run, and any
-      // control that could not do what it declares. A degradation nobody
-      // records is a control nobody can audit.
-      controls: p.controls,
+            controls: p.controls,
       degraded: p.degraded.map((c) => ({ id: c.id, declared: c.declared, realized: c.realized, reason: c.reason })),
     },
   });
@@ -242,12 +156,7 @@ function emitAudit(ctx, mode, p, result) {
 async function execute(argv, ctx, { shell }) {
   const p = plan(argv, { shell });
 
-  // F3 (Codex phase review): `--dry-run` used to run the child anyway — and
-  // because the same flag suppresses the event log, the execution happened with
-  // no audit at all. A flag whose whole meaning is "show me what you would do"
-  // must not do it. The resolved plan is reported instead, which is the useful
-  // half of what the flag promised.
-  if (p.flags.dryRun) {
+    if (p.flags.dryRun) {
     return {
       schema: 1,
       mode: p.shell ? 'bash' : 'exec',
@@ -268,11 +177,7 @@ async function execute(argv, ctx, { shell }) {
   const { redactText } = createRedactor();
   const rows = [];
 
-  // The same bounded, redacted streamer `verify` uses for check output: a
-  // secret split across two chunks is reassembled before redaction, a PEM block
-  // is masked whole, and the byte budget counts the serialized row width. None
-  // of that is worth reimplementing differently for a second execution surface.
-  const streamer = createCheckOutputStreamer({
+    const streamer = createCheckOutputStreamer({
     check: p.shell ? 'bash' : 'exec',
     onEvent: (_event, fields) => rows.push(fields),
     redactText,
@@ -292,9 +197,7 @@ async function execute(argv, ctx, { shell }) {
   const result = {
     schema: 1,
     mode: p.shell ? 'bash' : 'exec',
-    // The argv is reported as a list, never joined: a joined string reads as
-    // something a shell interpreted, which for `exec` is precisely wrong.
-    argv: p.childArgs,
+        argv: p.childArgs,
     cwd: p.cwd,
     timeoutSeconds: p.timeoutSeconds,
     status: execution.status,
@@ -302,9 +205,7 @@ async function execute(argv, ctx, { shell }) {
     signal: execution.signalName,
     durationMs: execution.durationMs,
     truncated: execution.truncated,
-    // Names only. The audit answers "what could this process see", and a value
-    // here would put the very credentials the allowlist withheld into the log.
-    env: { allowed: p.envReport.allowed, droppedCount: p.envReport.dropped.length, refused: p.envReport.refused },
+        env: { allowed: p.envReport.allowed, droppedCount: p.envReport.dropped.length, refused: p.envReport.refused },
     controls: p.controls,
     output: rows,
   };
@@ -330,10 +231,7 @@ function render(result, flags) {
     note: `${result.env.droppedCount} dropped${result.env.refused.length ? ` · ${result.env.refused.length} refused` : ''}`,
     keyWidth,
   }));
-  // A control that could not do what it declares is printed BEFORE the output,
-  // where it is still read. `network: deny` that silently achieved nothing is
-  // the exact failure this phase exists to make impossible to ship quietly.
-  for (const control of result.controls || []) {
+    for (const control of result.controls || []) {
     if (control.declared === control.realized) continue;
     console.log(ui.line({
       state: 'warn',
@@ -358,22 +256,7 @@ function render(result, flags) {
 
 export function exitFor(result) {
   if (result.status in STATUS_EXIT) return STATUS_EXIT[result.status];
-  // The child's own code is passed through where it is a normal failure, so a
-  // caller scripting around `exec` sees what it would have seen running the
-  // command directly — the same contract `env`, `nice`, and `sudo` keep.
-  //
-  // KNOWN AMBIGUITY, kept deliberately (Codex phase review F10): a child that
-  // exits 8 is indistinguishable, by exit code alone, from a harness timeout,
-  // and one exiting 2 from a usage error. The alternative is to remap child
-  // codes into a private range, which breaks the passthrough contract that makes
-  // `exec` usable as a drop-in — GNU `timeout` pays exactly this cost with its
-  // 124/125/126/127 convention and is regularly surprising for it.
-  //
-  // The disambiguation is the envelope: `status` is harness-authored
-  // (ok|failed|timed-out|cancelled) and `exitCode` is the child's, so
-  // `--output json-envelope` always separates the two. A caller that must tell
-  // them apart should read the status rather than guess from the code.
-  return result.exitCode === null || result.exitCode === 0 ? 1 : result.exitCode;
+    return result.exitCode === null || result.exitCode === 0 ? 1 : result.exitCode;
 }
 
 export async function execResultOf(argv, ctx = {}) {
@@ -383,9 +266,7 @@ export async function execResultOf(argv, ctx = {}) {
 export async function cmdExec(argv, ctx = {}) {
   const result = await execute(argv, ctx, { shell: false });
   render(result, parseFlags(splitAtBoundary(argv).harnessArgs));
-  // The child's exit code cannot be reverse-mapped to a harness status — see
-  // `exitFor` — so the status is reported rather than inferred.
-  ctx.reportStatus?.(result.status === 'ok' ? 'ok' : result.status);
+    ctx.reportStatus?.(result.status === 'ok' ? 'ok' : result.status);
   return exitFor(result);
 }
 

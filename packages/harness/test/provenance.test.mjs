@@ -46,11 +46,6 @@ function head(ws) {
   return git(ws, ['rev-parse', 'HEAD']).stdout.trim();
 }
 
-/**
- * Pin the store's defaultBranch to the fixture branch so writes route GOLDEN
- * — this suite is about provenance stamping/preservation, not layer routing
- * (which fails closed to branch-local when the default is unresolvable).
- */
 function pinDefaultBranch(ws, home) {
   const branch = git(ws, ['symbolic-ref', '--short', 'HEAD']).stdout.trim();
   const { dir } = ensureStore(ws, { home });
@@ -181,10 +176,7 @@ test('near-cap STRENGTHEN with provenance never trips E_BYTE_CAP on the stamp (b
   assert.ok(provBytes > 0, 'fixture must actually carry provenance');
   const baseBytes = probeBytes - provBytes - 1; // minus the 1-byte probe body
 
-  // Pad the body so claim-only content sits just under the cap while the
-  // full file (with provenance) is OVER it. slug 'probe' reused for identical
-  // filename-independent content length; new home = fresh store.
-  const bodyLen = LEARNING_BYTE_CAP - baseBytes - 1;
+    const bodyLen = LEARNING_BYTE_CAP - baseBytes - 1;
   assert.ok(bodyLen > 0 && bodyLen + baseBytes + provBytes > LEARNING_BYTE_CAP, 'fixture math must straddle the cap');
   const home2 = tempDir('prov-home5-');
   pinDefaultBranch(ws, home2);
@@ -205,17 +197,12 @@ test('near-cap STRENGTHEN with provenance never trips E_BYTE_CAP on the stamp (b
     opsPath: writeOps(ws, [{ op: 'STRENGTHEN', target: 'sql/probe', episodes: [ep2] }]),
     home: home2,
   });
-  // The strengthen adds an episode block (~4 lines) of real claim bytes, so it
-  // may legitimately cross the cap — but if it rejects, it must be the CLAIM
-  // bytes, never the provenance bytes: re-check by the same exclusion.
-  if (strengthened.exitCode !== 0) {
+    if (strengthened.exitCode !== 0) {
     assert.equal(strengthened.rejected[0].code, 'E_BYTE_CAP');
     const after = listLearnings(dir2).find((l) => l.id === 'sql/probe');
     assert.ok(after.bytes - provenanceBytes(after.fm) + 150 > LEARNING_BYTE_CAP, 'rejection driven by claim bytes');
   }
-  // Either way, no ledger failure strike may cite provenance as the cause of a
-  // spurious quarantine march for the ORIGINAL near-cap write.
-  const failures = readLedger(dir2).filter((e) => e.failure);
+    const failures = readLedger(dir2).filter((e) => e.failure);
   for (const f of failures) assert.equal(f.failure, 'E_BYTE_CAP');
 });
 

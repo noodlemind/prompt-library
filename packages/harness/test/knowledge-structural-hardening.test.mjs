@@ -1,16 +1,3 @@
-// Structural regressions for four defect CLASSES in the knowledge store, each
-// of which survived multiple rounds of per-call-site fixes because the class
-// itself stayed representable:
-//
-//   S1  learning-file I/O outside the one guarded choke point (the symlink class)
-//   S2  a `.lock` a general-purpose rollback could delete, and a release that
-//       never checked ownership (the lock-release class)
-//   S3  `git status --porcelain` parsed by hand (the path-parsing class)
-//   S4  a rollback whose result nobody checked (the silent-failure class)
-//
-// Every test here is written against the ATTACKER'S move or the failure mode,
-// not against the shape of the fix.
-
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -38,9 +25,6 @@ import { QUARANTINE_DIR, readLearningFile, writeLearningFile } from '../lib/know
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
-// A non-git workspace, exactly like hand-edits.test.mjs: with no workspace git
-// context every write routes to the GOLDEN layer, which is what these tests are
-// about. Layer routing has its own suite.
 const ctx = () => ({ ws: tempDir('sh-ws-'), home: tempDir('sh-home-'), harnessHome: tempDir('sh-hh-') });
 
 function git(cwd, args) {
@@ -75,15 +59,6 @@ function seedLearning(c, slug = 'seeded-claim') {
   return `sql/${slug}`;
 }
 
-// ---------------------------------------------------------------------------
-// S1 — a symlink at a learning path is INERT EVERYWHERE, not just in absorb
-// ---------------------------------------------------------------------------
-
-// The verified exploit, verbatim: plant `learnings/sql/timeout.md -> <outside
-// file>`, then run a STRENGTHEN naming `sql/timeout`. Before the choke point,
-// absorb refused the link but LEFT IT LIVE, so listLearnings presented it as an
-// active learning, the STRENGTHEN resolved against it, and the write replaced
-// the OUTSIDE FILE with a rendered learning.
 test('S1: a planted symlink at a learning path cannot be strengthened — the outside target is byte-identical afterwards', () => {
   const c = ctx();
   seedLearning(c, 'anchor-claim');
@@ -115,11 +90,7 @@ test('S1: a planted symlink at a learning path cannot be strengthened — the ou
 });
 
 test('S1: writeLearningFile never writes THROUGH a symlinked leaf, and refuses a non-learning path shape', () => {
-  // A REAL store path shape (`<home>/knowledge/<id>`): the choke point refuses a
-  // derived root that could not be a store root at all, so `writeStoreFile` can
-  // no longer be handed `/Users/x/.ssh/config.json` and contain it against its
-  // own parent.
-  const root = path.join(tempDir('sh-io-'), 'knowledge', 'repo-id');
+    const root = path.join(tempDir('sh-io-'), 'knowledge', 'repo-id');
   fs.mkdirSync(root, { recursive: true });
   const victim = path.join(root, 'victim.txt');
   fs.writeFileSync(victim, 'OUTSIDE\n', 'utf8');
@@ -127,12 +98,7 @@ test('S1: writeLearningFile never writes THROUGH a symlinked leaf, and refuses a
   fs.mkdirSync(path.dirname(link), { recursive: true });
   fs.symlinkSync(victim, link);
 
-  // The planted LINK is moved into `.quarantine/` (rename never follows a
-  // symlink) and the real file is written in its place, so the path stops being
-  // a trap instead of being refused forever — the same rule the store's
-  // metadata writers follow. What must never happen is the write landing on the
-  // link's TARGET.
-  assert.equal(writeLearningFile(link, 'rendered learning\n'), true);
+    assert.equal(writeLearningFile(link, 'rendered learning\n'), true);
   assert.equal(fs.readFileSync(victim, 'utf8'), 'OUTSIDE\n', 'the outside target is untouched');
   assert.equal(fs.lstatSync(link).isSymbolicLink(), false);
   assert.equal(fs.readFileSync(link, 'utf8'), 'rendered learning\n');
@@ -140,15 +106,10 @@ test('S1: writeLearningFile never writes THROUGH a symlinked leaf, and refuses a
   assert.equal(q.length, 1, 'the link was preserved for inspection, not deleted');
   assert.ok(fs.lstatSync(path.join(root, QUARANTINE_DIR, q[0])).isSymbolicLink());
 
-  // Not a learning path at all — refused rather than "trusted because the
-  // caller asked", which is what a root argument would have permitted.
-  assert.equal(writeLearningFile(path.join(root, 'loose.md'), 'x'), false);
+    assert.equal(writeLearningFile(path.join(root, 'loose.md'), 'x'), false);
   assert.equal(writeLearningFile(path.join(root, 'learnings', 'deep', 'nested', 'x.md'), 'x'), false);
 });
 
-// `knowledge commit repo` copies learning bytes into a COMMITTED workspace
-// path, so following a planted link here published an arbitrary outside file
-// into the product repo's PR flow.
 test('S1: mirrorLearnings never mirrors content read through a symlinked learning path', () => {
   const c = ctx();
   seedLearning(c, 'mirrored-claim');
@@ -199,14 +160,6 @@ test('S1: absorb quarantines the planted link out of learnings/ instead of leavi
   assert.equal(tracked.includes(QUARANTINE_DIR), false, `quarantine must be gitignored: ${JSON.stringify(tracked)}`);
 });
 
-// ---------------------------------------------------------------------------
-// S2 — the lock survives `git clean -fd`, and is never released by a non-owner
-// ---------------------------------------------------------------------------
-
-// The `.gitignore` is written by the first TRANSACTION, not by `ensureStore`:
-// writing it is a store mutation, and `ensureStore` runs before the lock is
-// acquired (P3). `openStore` below is therefore how a store is "opened" for
-// these tests — one no-op transaction, exactly what any real command does.
 const openStore = (c) => {
   const tx = withStoreTransaction(c.ws, { home: c.harnessHome, label: 'open' }, () => ({ commitMessage: 'open' }));
   assert.equal(tx.ok, true, String(tx.error || ''));
@@ -262,9 +215,7 @@ test('S2: releaseStoreLock never removes a lock owned by somebody else', () => {
   assert.equal(mine.acquired, true);
   assert.equal(lockOwnership(lockPath, mine.token), 'owned');
 
-  // Another writer takes over the lock directory (the exact state the old
-  // "mkdir, swallow EEXIST" re-assert could not see).
-  fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({ token: 'someone-else', pid: 1 }) + '\n', 'utf8');
+    fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({ token: 'someone-else', pid: 1 }) + '\n', 'utf8');
   assert.equal(lockOwnership(lockPath, mine.token), 'foreign');
   assert.equal(reassertStoreLock(lockPath, mine.token), false, 'a foreign lock is never re-claimed');
   assert.equal(releaseStoreLock(lockPath, mine.token), false, 'and never released');
@@ -290,10 +241,6 @@ test('S2: a transaction that loses its lock mid-flight leaves the new holder alo
   assert.ok(fs.existsSync(lockPath), "the thief's lock was NOT deleted by our release");
   assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')).token, 'thief');
 });
-
-// ---------------------------------------------------------------------------
-// S3 — porcelain is parsed from `-z`, never from the C-quoted line format
-// ---------------------------------------------------------------------------
 
 test('S3: parsePorcelainZ decodes non-ASCII, spaces, quotes, backslashes, a literal " -> ", and rename pairs', () => {
   const z = [
@@ -342,14 +289,6 @@ test('S3: a hand edit to a non-ASCII learning path is absorbed, not silently ski
   assert.equal(listLearnings(dir).find((l) => l.id === 'café/délai').fm.source, 'human', 'and absorbed with honest provenance');
 });
 
-// WINDOWS: `>` is not a legal character in a Windows filename, so this path
-// cannot be brought into existence there at all (`fs.mkdirSync` fails). That
-// also means the hazard itself is unreachable on Windows — no file there can
-// ever contain the ` -> ` rename marker. WHAT IS LEFT UNCOVERED ON WINDOWS is
-// therefore ONLY the end-to-end absorb of such a path; the mis-split rule
-// itself (that `learnings/a -> b/c.md` is one path and not a rename pair) is
-// pinned on EVERY platform by the parsePorcelainZ test above, which feeds the
-// parser that exact entry as data rather than as a real file.
 test('S3: a learning path containing a literal " -> " is absorbed, not mis-split into a phantom path', {
   skip: process.platform === 'win32' ? 'a filename containing ">" cannot exist on Windows' : false,
 }, () => {
@@ -368,10 +307,6 @@ test('S3: a learning path containing a literal " -> " is absorbed, not mis-split
   const result = absorbHandEdits({ workspace: c.ws, home: c.harnessHome });
   assert.deepEqual(result.absorbed.map((a) => a.id), ['a -> b/c']);
 });
-
-// ---------------------------------------------------------------------------
-// S4 — rollback results are honest, and acted on
-// ---------------------------------------------------------------------------
 
 test('S4: rollbackStore reports failure when git cannot reset, instead of returning silently', () => {
   const c = ctx();
@@ -402,18 +337,11 @@ test('S4: rollbackStore reports failure when the tree is still dirty despite a z
   git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'tracked']);
   fs.writeFileSync(path.join(dir, 'learnings', 'sql', 'tracked-edit.md'), 'y\n', 'utf8');
 
-  // An unreachable checkpoint: `git reset --hard <sha>` fails, so the edit is
-  // still there — reported, never mistaken for a clean tree.
-  const res = rollbackStore(dir, 'f'.repeat(40));
+    const res = rollbackStore(dir, 'f'.repeat(40));
   assert.equal(res.ok, false);
   assert.equal(fs.readFileSync(path.join(dir, 'learnings', 'sql', 'tracked-edit.md'), 'utf8'), 'y\n');
 });
 
-// This is the machinery `rollbackToCheckpoint` exists for and that had ZERO
-// coverage: apply.mjs's write-time E_HEAD_MOVED gate is reached only AFTER a
-// branch bucket has been materialized, and its "nothing was written" promise
-// depends entirely on this discard actually happening before the transaction's
-// finalize commit.
 test('S4: rollbackToCheckpoint discards a post-materialization write back to the checkpoint', () => {
   const c = ctx();
   seedLearning(c, 'checkpoint-anchor');
@@ -448,9 +376,7 @@ test('S4: a transaction whose rollbackToCheckpoint FAILED never commits, even if
     // Make the rollback genuinely impossible.
     fs.writeFileSync(path.join(txDir, '.git', 'index.lock'), '', 'utf8');
     reported = rollbackToCheckpoint();
-    // A caller that IGNORES the result and returns normally, which is exactly
-    // what apply.mjs's E_HEAD_MOVED gate used to do.
-    return { commitMessage: 'test: must never land' };
+        return { commitMessage: 'test: must never land' };
   });
 
   assert.equal(reported, false, 'the failed rollback is reported as failed');
@@ -465,9 +391,6 @@ test('S4: a transaction whose rollbackToCheckpoint FAILED never commits, even if
   );
 });
 
-// A refresh that fails leaves an OLDER checkpoint on disk, and recovery resets
-// `--hard` to exactly that sha — destroying the sub-commit (an absorbed HUMAN
-// hand edit, in absorbOrAbort's case) that had just landed.
 test('S4: recordCheckpoint aborts when it cannot refresh the journal, rather than leaving a stale checkpoint', () => {
   const c = ctx();
   seedLearning(c, 'journal-anchor');
@@ -477,9 +400,7 @@ test('S4: recordCheckpoint aborts when it cannot refresh the journal, rather tha
     fs.writeFileSync(path.join(dir, 'learnings', 'sql', 'sub.md'), 'sub\n', 'utf8');
     git(dir, ['add', '-A']);
     git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'sub-commit']);
-    // Now make the journal path unwritable: a non-empty directory cannot be
-    // replaced by the journal's temp-then-rename write.
-    const journal = path.join(dir, '.git', 'harness-txn.json');
+        const journal = path.join(dir, '.git', 'harness-txn.json');
     fs.rmSync(journal, { force: true });
     fs.mkdirSync(journal, { recursive: true });
     fs.writeFileSync(path.join(journal, 'blocker'), 'x', 'utf8');
@@ -493,10 +414,6 @@ test('S4: recordCheckpoint aborts when it cannot refresh the journal, rather tha
   assert.match(git(tx.dir, ['log', '--format=%s', '-1']).stdout, /sub-commit/, 'the sub-commit survives');
 });
 
-// ---------------------------------------------------------------------------
-// Orphan teaching snapshot — snapshot and rewrite are all-or-nothing
-// ---------------------------------------------------------------------------
-
 test('a refused absorb rewrite leaves no orphaned teaching snapshot behind', { skip: isRoot ? 'chmod is not enforced for root' : false }, () => {
   const c = ctx();
   const id = seedLearning(c, 'orphan-anchor');
@@ -506,18 +423,7 @@ test('a refused absorb rewrite leaves no orphaned teaching snapshot behind', { s
   // A real hand edit, so absorb reaches the snapshot + rewrite steps.
   fs.writeFileSync(learning.file, fs.readFileSync(learning.file, 'utf8').replace('Claim body', 'Hand-edited body'), 'utf8');
 
-  // Then make the rewrite impossible. The MECHANISM has to differ by platform;
-  // the invariant under test does not.
-  //   POSIX  : a read-only DOMAIN DIRECTORY — the contained temp+rename write
-  //            cannot create its temp file, so it refuses at its first step.
-  //   WINDOWS: `chmod` on a directory only flips FILE_ATTRIBUTE_READONLY, which
-  //            Windows ignores for creating files inside it, so the POSIX trick
-  //            is a no-op there. A read-only DESTINATION FILE does bite:
-  //            MoveFileEx(MOVEFILE_REPLACE_EXISTING) refuses to replace it, so
-  //            the same contained write refuses at its LAST step (the rename)
-  //            instead of its first — the snapshot has already been written by
-  //            then, which is exactly the orphan window this test exists for.
-  const onWindows = process.platform === 'win32';
+    const onWindows = process.platform === 'win32';
   const blocked = onWindows ? learning.file : path.dirname(learning.file);
   fs.chmodSync(blocked, onWindows ? 0o444 : 0o555);
   let logged = [];

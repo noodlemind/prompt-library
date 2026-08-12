@@ -6,15 +6,6 @@ import { test } from 'node:test';
 import { runInsightCompound } from '../lib/compound.mjs';
 import { runRemember } from '../lib/knowledge/remember.mjs';
 
-/**
- * Sweep-completeness finding (probe C): runInsightCompound (compound.mjs) —
- * the primary episode WRITE path for both `harness compound --insight` and
- * `harness remember` — wrote via raw mkdirSync+writeFileSync with zero
- * containment. A symlinked docs/solutions directory let the write land
- * outside the workspace with `pass: true` and no error surfaced. Now routed
- * through writeFileContained, failing loudly instead.
- */
-
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
 test('probe C: runInsightCompound (compound --insight) refuses to write through a symlinked docs/solutions directory, and reports a clear blocked result', () => {

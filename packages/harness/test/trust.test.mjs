@@ -1,21 +1,3 @@
-/**
- * Phase 3 — project trust (P3AC6).
- *
- * Two properties carry the whole design, and both are written from the
- * attacker's side because that is the only side that matters here:
- *
- *   1. The trust record lives in the USER scope. A project that could ship its
- *      own approval would be self-certifying, and cloning a repository would
- *      grant it the authority it claims for itself.
- *   2. Approval is pinned to CONTENT. Approving a directory once and trusting
- *      it forever means a `git pull` can change the policy files under an
- *      approval nobody re-examined — same repository, same path, new authority.
- *
- * Everything untrusted fails SAFE: configuration falls back to the user and
- * default scopes, policy falls back to built-in enforcement. The failure mode is
- * always "stricter than the repo asked for", never "a repository nobody read
- * turned its own gates off".
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -67,8 +49,6 @@ test('a fresh project is untrusted, and says why', () => {
   assert.match(status.reason, /never been approved/);
 });
 
-// The record is a decision made at this machine. Nothing inside the repository
-// may write it.
 test('the trust record lives in the user scope, never in the workspace', () => {
   const s = scopes();
   approveProject(s);
@@ -185,8 +165,6 @@ test('an explicit --enforcement override still wins over the trust fallback', ()
   assert.equal(policy.enforcement, 'warn', 'the operator on the command line is not the untrusted party');
 });
 
-// The default that keeps fixture-driven tests working is a silent bypass if a
-// production caller forgets it. This is the guard, not a convention.
 test('every loadPolicy call under lib/ passes copilotHome', () => {
   const libDir = path.join(packageRoot, 'lib');
   const offenders = [];
@@ -196,9 +174,7 @@ test('every loadPolicy call under lib/ passes copilotHome', () => {
       if (entry.isDirectory()) { walk(full); continue; }
       if (!entry.name.endsWith('.mjs') || entry.name === 'policy.mjs') continue;
       const body = fs.readFileSync(full, 'utf8');
-      // Each call, up to its closing paren on the same line — every current
-      // call site is single-line.
-      for (const line of body.split('\n')) {
+            for (const line of body.split('\n')) {
         if (!line.includes('loadPolicy(')) continue;
         if (line.trimStart().startsWith('*') || line.trimStart().startsWith('//')) continue;
         if (line.includes('import ')) continue;
@@ -233,8 +209,6 @@ test('a bare `harness trust` reports status rather than changing anything', () =
   assert.equal(isProjectTrusted(s), false, 'the default verb must not grant anything');
 });
 
-// `trust status` is what a script branches on; making an untrusted project a
-// non-zero exit would make it unusable in exactly those scripts.
 test('trust status exits 0 whatever the answer is', () => {
   const s = scopes();
   assert.equal(run(['trust', 'status'], s).status, 0);

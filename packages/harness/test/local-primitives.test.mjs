@@ -1,17 +1,3 @@
-/**
- * Locally-added skills and agents.
- *
- * The workflow: someone obtains a primitive from an external source and drops
- * it into `~/.copilot/skills` or `~/.copilot/agents`, where every host already
- * looks. It is deliberately not in the harness lock, so `upgrade`/`uninstall`
- * leave it alone. The harness's job is to find it, validate it, and let the
- * operator register it.
- *
- * The first test is the one that matters most, because it pins a defect that
- * was actively dangerous: `doctor` classified a hand-added skill as a stale
- * orphan and told the operator to tombstone it in `retired.json` — advice that
- * would have made the next `upgrade` delete their own team's work.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -154,10 +140,6 @@ test('register moves a primitive from pending to registered, and unregister does
     .find((p) => p.path === rel).state, 'pending');
 });
 
-/**
- * The same rule project trust follows: an approval covers content, so an edit
- * after the fact has to be looked at again rather than riding the old one.
- */
 test('editing a registered primitive makes it stale rather than silently still registered', () => {
   const home = installedHome();
   const rel = addSkill(home, 'edited');
@@ -168,11 +150,6 @@ test('editing a registered primitive makes it stale rather than silently still r
   assert.match(status.reason, /changed since it was registered/);
 });
 
-/**
- * The marker lives in the user scope, never inside the primitive — the same
- * reason the trust store lives outside the project it describes. A file that
- * could register itself would mean anything dropped in arrives pre-approved.
- */
 test('a primitive cannot register itself', () => {
   const home = installedHome();
   const rel = addSkill(home, 'self-signing', '---\nname: self-signing\nregistered: true\ntrusted: true\n---\n');
@@ -204,10 +181,6 @@ test('a hand-added primitive survives upgrade', () => {
   assert.equal(fs.existsSync(path.join(home, agent)), true);
 });
 
-/**
- * Structurally guaranteed rather than incidental: `uninstall` removes exactly
- * the lock's files, and a hand-added primitive is never in the lock.
- */
 test('a hand-added primitive survives uninstall', () => {
   const home = installedHome();
   const skill = addSkill(home, 'persist-skill');

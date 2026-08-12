@@ -116,11 +116,6 @@ test('a bucket with a non-ancestor base is flagged ancestryOk: false', () => {
   assert.equal(report.buckets[0].ancestryOk, false);
 });
 
-// meta.json is a hand-editable cache, so an arbitrary `baseSha` string reached
-// both the rendered CLI row and the `--json` lane verbatim — the one untreated
-// field on a report whose every other untrusted string is shape-checked or
-// redacted. It now passes the same 40-hex gate `bucketAncestryOk` applies
-// before handing the value to git.
 test('a malformed bucket baseSha is dropped rather than rendered verbatim', () => {
   const ws = gitWorkspace('feature/basesha');
   const home = tempDir('kstatus-home4-');
@@ -181,10 +176,6 @@ test('CLI: harness knowledge status --json emits the report and a knowledge even
   assert.match(human.stdout, /sql/);
 });
 
-// `--since` already refused an option-shaped value; `--branch` and `--ids` did
-// not, so a separated form with a missing value swallowed the NEXT flag as its
-// argument (`--branch --ids x` set branch to "--ids" AND dropped `--ids`' own
-// effect) — a typo silently ran a different command than the one typed.
 test('CLI: --branch and --ids refuse a missing or flag-shaped value instead of swallowing the next flag', () => {
   const ws = gitWorkspace('feature/flagguard');
   const harnessHome = tempDir('kstatus-hh2-');

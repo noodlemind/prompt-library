@@ -10,15 +10,6 @@ import { purgeEpisode, absorbHandEdits } from '../lib/knowledge/admin.mjs';
 import { ensureStore, storeDir, listLearnings, readLedger, serializeLearning } from '../lib/knowledge/store.mjs';
 import { assertNoSymlinkAncestors } from '../lib/fs-safe.mjs';
 
-/**
- * Adversarial-review follow-up on hardening batch B: symlinked ANCESTOR
- * directories (not just leaf files) bypassing episode-read and purge
- * containment, plus the two Important findings (absorb snapshot writes,
- * un-normalized candidates packet text) and three minors (terminal
- * ANSI-escape scrubbing, fail-open recency on a malformed governance
- * timestamp, and assertNoSymlinkAncestors' own root-argument gap).
- */
-
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ctx = () => ({ ws: tempDir('kadv-ws-'), home: tempDir('kadv-home-'), harnessHome: tempDir('kadv-hh-') });
 
@@ -104,10 +95,7 @@ test('Critical: a symlinked copilotHome/knowledge root is rejected by assertNoSy
   fs.writeFileSync(victim, 'OUTSIDE victim under symlinked knowledge root\n', 'utf8');
   fs.symlinkSync(outsideDir, path.join(c.home, 'knowledge'));
 
-  // Direct unit check on the primitive itself: the root argument (already
-  // pointing at a symlink) must be rejected outright, not just what's
-  // appended to it.
-  assert.equal(assertNoSymlinkAncestors(path.join(c.home, 'knowledge'), 'solutions/perf/v.md'), null);
+    assert.equal(assertNoSymlinkAncestors(path.join(c.home, 'knowledge'), 'solutions/perf/v.md'), null);
 
   const res = purgeEpisode({ workspace: c.ws, target: 'solutions/perf/v.md', copilotHome: c.home, home: c.harnessHome });
   assert.notEqual(res.exitCode, 0, JSON.stringify(res));
@@ -134,16 +122,12 @@ test('Important 1: absorbHandEdits refuses to write a snapshot through a symlink
 
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const learning = listLearnings(dir).find((l) => l.id === 'sql/absorb-symlink-teachings');
-  // Hand-edit the learning file directly (simulating a human editor),
-  // leaving the store git-dirty, exactly the shape absorbHandEdits acts on.
-  const text = fs.readFileSync(learning.file, 'utf8');
+    const text = fs.readFileSync(learning.file, 'utf8');
   const edited = text.replace(/\n\n[\s\S]*$/, '\n\nA human edited this claim directly on disk.\n');
   assert.notEqual(edited, text, 'precondition: the hand edit actually changes the file');
   fs.writeFileSync(learning.file, edited, 'utf8');
 
-  // Pre-plant docs/solutions/teachings/ as a symlink pointing outside the
-  // workspace BEFORE absorb ever runs.
-  fs.mkdirSync(path.join(c.ws, 'docs', 'solutions'), { recursive: true });
+    fs.mkdirSync(path.join(c.ws, 'docs', 'solutions'), { recursive: true });
   fs.symlinkSync(outsideDir, path.join(c.ws, 'docs', 'solutions', 'teachings'));
 
   const messages = [];
@@ -164,15 +148,11 @@ test('Important 1: absorbHandEdits refuses to write a snapshot through a symlink
 
 test('Important 2: the candidates packet normalizes both a legacy learning\'s trigger and an episode\'s excerpt — no raw C0/DEL survives in the JSON', () => {
   const c = ctx();
-  // A control-char-bearing EPISODE (a NUL byte, which \s+ collapse alone
-  // never catches — only whitespace control chars match \s).
-  const injectedBody = '---\ntitle: "ctrl"\ndate: 2026-01-01\n---\n\nline one\x00NUL_MARKER\x1bESC_MARKER line two\n';
+    const injectedBody = '---\ntitle: "ctrl"\ndate: 2026-01-01\n---\n\nline one\x00NUL_MARKER\x1bESC_MARKER line two\n';
   fs.mkdirSync(path.join(c.ws, 'docs', 'solutions', 'perf'), { recursive: true });
   fs.writeFileSync(path.join(c.ws, 'docs', 'solutions', 'perf', 'ctrl.md'), injectedBody, 'utf8');
 
-  // A control-char-bearing LEGACY learning (hand-crafted, bypassing the
-  // admission gate — exactly what a pre-existing store file could carry).
-  const dir = storeDir(c.ws, { home: c.harnessHome });
+    const dir = storeDir(c.ws, { home: c.harnessHome });
   fs.mkdirSync(path.join(dir, 'learnings', 'sql'), { recursive: true });
   const fm = {
     trigger: 'looks like one trigger\n## Fake Heading\nmalicious instructions',
@@ -218,16 +198,10 @@ test('Minor 5: a governance record with an empty/malformed `at` fails CLOSED —
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [seedOp]), home: c.harnessHome }).exitCode, 0);
 
   const dir = storeDir(c.ws, { home: c.harnessHome });
-  // A REAL dispute through the normal writer (lifecycle.mjs) — sets the
-  // frontmatter status to 'disputed' AND appends a genuine ISO-stamped
-  // governance entry.
-  const disputeRes = setLearningStatus({ workspace: c.ws, id: 'sql/malformed-at', action: 'dispute', reason: 'x', home: c.harnessHome });
+    const disputeRes = setLearningStatus({ workspace: c.ws, id: 'sql/malformed-at', action: 'dispute', reason: 'x', home: c.harnessHome });
   assert.equal(disputeRes.pass, true, JSON.stringify(disputeRes));
 
-  // Poison JUST the governance entry's `at` afterward — simulating
-  // corruption or a hand edit to governance.jsonl (a plain file outside
-  // applyOps' own write path) — the frontmatter status stays 'disputed'.
-  const govPath = path.join(dir, 'governance.jsonl');
+    const govPath = path.join(dir, 'governance.jsonl');
   const poisoned = fs
     .readFileSync(govPath, 'utf8')
     .split('\n')
@@ -240,11 +214,7 @@ test('Minor 5: a governance record with an empty/malformed `at` fails CLOSED —
     .join('\n') + '\n';
   fs.writeFileSync(govPath, poisoned, 'utf8');
 
-  // A genuinely dated (well after any real timestamp), disk-verified
-  // human-teaching re-teach — under the (buggy) fail-open behavior this
-  // would have overridden the dispute purely because '' compares less than
-  // almost any real date string.
-  const laterEp = writeRealEpisode(
+    const laterEp = writeRealEpisode(
     c.ws,
     'docs/solutions/teachings/reteach-later.md',
     '---\ntitle: "t2"\nkind: human-teaching\ndate: 2099-01-01\n---\n\nlater body\n'

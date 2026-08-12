@@ -1,7 +1,3 @@
-/**
- * `harness model` — show/set/clear/refresh provider + model choice.
- * Guide-only for credentials: never stores API keys.
- */
 import path from 'node:path';
 import {
   DEFAULT_PROVIDER,
@@ -31,9 +27,7 @@ function loadAgentConfig({ workspace, copilotHome }) {
   const trusted = isProjectTrusted({ workspace, copilotHome });
   const resolved = resolveConfig({ copilotHome, workspace, projectTrusted: trusted });
   const values = resolved?.values ?? {};
-  // Active provider is always treated as enabled for display, so a config that
-  // sets agent.provider without updating the allowlist still shows a useful menu.
-  const enabledProviders = normalizeEnabledProviders(values['agent.providers']);
+    const enabledProviders = normalizeEnabledProviders(values['agent.providers']);
   const active = values['agent.provider'];
   if (active && PROVIDERS[active] && !enabledProviders.includes(active)) {
     enabledProviders.push(active);

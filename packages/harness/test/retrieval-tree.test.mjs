@@ -1,14 +1,3 @@
-/**
- * P2.3 — `tree`'s load-bearing properties: a bounded, deterministic view of a
- * corpus (P2AC3), and a navigation path that provably never creates the
- * knowledge store (P2AC6).
- *
- * The workspace fixtures are REAL git repos rather than an injected file list:
- * `trackedSourceFiles` is the enumerator under test as much as the builder is
- * — the whole point of routing through `git ls-files` is that untracked build
- * output never reaches the tree — and an injected list would assert the one
- * property that cannot break.
- */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -47,9 +36,7 @@ function fixture(t, prefix = 'harness-tree-') {
     write(ws, rel, `export const x = ${JSON.stringify(rel)};\n`);
   }
   execFileSync('git', ['add', '-A'], { cwd: ws, env: GIT_ENV });
-  // Untracked, and deliberately named to sort first: a raw filesystem walk
-  // would put it at the top of the tree.
-  write(ws, 'dist/bundle.mjs', 'export const built = 1;\n');
+    write(ws, 'dist/bundle.mjs', 'export const built = 1;\n');
   return { tmp, ws, home, copilotHome };
 }
 
@@ -76,8 +63,6 @@ test('tree workspace renders tracked source only, directories first, name-ordere
   assert.deepEqual(leaf.children, [], 'a file is a node with no children, not a special case');
 });
 
-// A pruned directory that reported empty counts would read as "nothing here",
-// which is the opposite of what the depth bound actually means.
 test('depth bounds the rendered levels while counts still describe what was elided', (t) => {
   const { ws, home, copilotHome } = fixture(t);
   const out = runTree({ subject: 'workspace', depth: 3, workspace: ws, home, copilotHome });
@@ -110,8 +95,6 @@ test('an out-of-range or non-numeric depth is a usage error, never a silent defa
   assert.equal(call(MAX_DEPTH).depth, MAX_DEPTH, 'the boundary value itself is allowed');
 });
 
-// An empty tree reads as "nothing tracked there" — it would tell a caller their
-// traversal probe found nothing rather than that it was refused.
 test('a path escaping the workspace is refused, not answered with an empty tree', (t) => {
   const { ws, home, copilotHome } = fixture(t);
   for (const bad of ['../outside', 'lib/../../outside', '/etc', 'lib/../..']) {
@@ -136,9 +119,7 @@ test('an unknown subject names the subjects that exist', (t) => {
     assert.match(err.hint, /workspace, knowledge/);
     return true;
   });
-  // A subject the architecture doc names but no phase has built yet must say
-  // "not yet", not "wrong word".
-  assert.throws(() => runTree({ subject: 'run', workspace: ws, home, copilotHome }), (err) => {
+    assert.throws(() => runTree({ subject: 'run', workspace: ws, home, copilotHome }), (err) => {
     assert.match(err.hint, /Phase 4a/);
     return true;
   });
@@ -258,14 +239,10 @@ test('the learnings store is grouped by domain when one exists', (t) => {
   assert.equal(child(child(learnings, 'db'), 'lock-order').status, 'quarantined', 'governance state is visible in place');
   assert.equal(out.totals.files, 6, 'documents and learnings share one count');
 
-  // A collection selects manifest entries; no spec can address a learning, so
-  // showing them under a filtered view would present unselected rows.
-  const filtered = runTree({ subject: 'knowledge', target: 'db-only', workspace: ws, home, copilotHome });
+    const filtered = runTree({ subject: 'knowledge', target: 'db-only', workspace: ws, home, copilotHome });
   assert.equal(child(filtered.root, 'learnings'), undefined);
 });
 
-// Manifest titles are free text: a credential pasted into one would otherwise
-// be republished by every navigation call.
 test('free text sourced from file content is redacted before it is returned', (t) => {
   const { ws, home, copilotHome } = fixture(t);
   const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
@@ -298,9 +275,7 @@ test('the same corpus renders byte-identically across runs', (t) => {
 
 test('output is capped at MAX_NODES and reports the cap instead of returning it all', (t) => {
   const { ws, home, copilotHome } = fixture(t);
-  // Enough documents that the tree cannot fit under the ceiling, built through
-  // the real manifest so the cap is exercised where it actually applies.
-  const entries = [];
+    const entries = [];
   for (let i = 0; i < MAX_NODES + 50; i += 1) {
     const id = String(i).padStart(5, '0');
     entries.push({ docid: `doc-${id}`, scope: 'global', path: `solutions/patterns/${id}.md`, title: `Doc ${id}`, category: 'patterns' });
@@ -314,9 +289,7 @@ test('output is capped at MAX_NODES and reports the cap instead of returning it 
   assert.equal(out.limits.nodesDropped, entries.length + 3 - MAX_NODES, 'the shortfall is stated, not implied');
   assert.equal(out.totals.files, entries.length, 'totals still describe the whole corpus');
 
-  // Pre-order truncation keeps the top of the tree, so what survives is the
-  // first rows of the rendered tree — not an arbitrary subset.
-  const patterns = child(child(out.root, 'global'), 'patterns');
+    const patterns = child(child(out.root, 'global'), 'patterns');
   assert.equal(patterns.children[0].name, 'doc-00000');
   assert.ok(runTree({ subject: 'knowledge', maxNodes: 5, workspace: ws, home, copilotHome }).totals.nodes <= 5);
   assert.equal(
@@ -326,9 +299,6 @@ test('output is capped at MAX_NODES and reports the cap instead of returning it 
   );
 });
 
-// P2AC6. `harness status` reads the store's existence as the signal for whether
-// this workspace has ever compounded anything; a navigation command that
-// materialized one would make that signal a lie.
 test('tree never creates the knowledge store or any directory', (t) => {
   const { tmp, ws, home, copilotHome } = fixture(t);
   seedKnowledge(copilotHome);

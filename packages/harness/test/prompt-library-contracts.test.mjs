@@ -10,8 +10,6 @@ import { hasCommand, describeCommand } from '../lib/registry.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
-// Token/tool efficiency budgets (AC25, AC32). A tracked surface over its cap
-// fails CI so a regression is caught before it lands.
 const ENGINEER_AGENT_MAX_TOKENS = 900;
 const SKILL_BODY_MAX_LINES = 300;
 const architecturePath = 'docs/architecture/engineer-harness.md';
@@ -35,12 +33,6 @@ const supersededArchitectureDocs = [
   'tool-native-harness-design.md',
 ];
 
-// Every text file is stored LF in the index, but no .gitattributes pins the
-// working-tree form, so Git for Windows (core.autocrlf=true by default) checks
-// them out CRLF. These assertions pin file *content*, not its checkout
-// encoding, so normalize back to the committed LF form. Without this, `\n`-
-// anchored frontmatter regexes silently miss on Windows and the per-line `\r`
-// inflates the token budgets (engineer.agent.md measured 904 rather than 892).
 function read(rel) {
   return fs.readFileSync(path.join(repoRoot, rel), 'utf8').replace(/\r\n/g, '\n');
 }
@@ -505,8 +497,6 @@ test('engineer step 8 runs harness compound to close the learn loop', () => {
 // for the handful of commands with subcommand/alternation syntax a flat
 // flag list can't express). These assertions were rewritten to pin the
 // REGISTRY-GENERATED equivalent (still rendering the identical `harness
-// help <command>` text) rather than grep bin/harness.mjs's source for a
-// literal `case`/CATALOG string that no longer exists there.
 test('read-only report command is registered and AC14 amendment is consistent', () => {
   assert.equal(hasCommand('report'), true, 'report command must be registered');
   const help = describeCommand('report');
@@ -544,9 +534,7 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   assert.equal(hasCommand('learnings'), true, 'learnings command registered');
   assert.equal(hasCommand('knowledge'), true, 'knowledge command registered');
   assert.equal(hasCommand('eval-knowledge'), true, 'eval-knowledge command registered');
-  // The M3 surfaces (suggest mode, commit mode, promote, MERGE/domain cap) are
-  // now the same public contract — the knowledge entry's usage names every mode.
-  assert.equal(
+    assert.equal(
     describeCommand('knowledge')?.usage,
     '<on|suggest|off|freeze|capture-only> | --status | purge <file|--all> | commit <none|repo> | migrate-store',
     'help documents the knowledge suggest mode, opt-in commit mode, and stranded-store migration'
@@ -567,31 +555,21 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   assert.match(events, /'remember'/, 'EVENT_TYPES includes remember');
   assert.match(events, /'learning'/, 'EVENT_TYPES includes learning');
   assert.match(events, /'knowledge'/, 'EVENT_TYPES includes knowledge');
-  // KNOWLEDGE_MODES is single-sourced in store.mjs and includes suggest;
-  // commands.mjs must import it rather than keep its own copy.
-  const store = read('packages/harness/lib/knowledge/store.mjs');
+    const store = read('packages/harness/lib/knowledge/store.mjs');
   assert.match(store, /KNOWLEDGE_MODES = new Set\(\[[^\]]*'suggest'[^\]]*\]\)/, 'store.mjs KNOWLEDGE_MODES includes suggest');
   const commands = read('packages/harness/lib/commands.mjs');
   assert.doesNotMatch(commands, /const KNOWLEDGE_MODES\s*=\s*new Set/, 'commands.mjs must not keep its own copy of KNOWLEDGE_MODES');
   assert.match(commands, /KNOWLEDGE_MODES[^=]*=[\s\S]*?await import\('\.\/knowledge\/store\.mjs'\)/, 'commands.mjs imports KNOWLEDGE_MODES from store.mjs');
-  // MEMORY-MODEL.md is the canonical memory model + threat model page (human
-  // register, lifecycle diagram, and governance ledger).
-  assert.ok(exists('docs/MEMORY-MODEL.md'), 'docs/MEMORY-MODEL.md exists');
+    assert.ok(exists('docs/MEMORY-MODEL.md'), 'docs/MEMORY-MODEL.md exists');
   const memoryModel = read('docs/MEMORY-MODEL.md');
   assert.match(memoryModel, /stateDiagram/, 'MEMORY-MODEL.md includes the lifecycle stateDiagram');
   assert.match(memoryModel, /promote/, 'MEMORY-MODEL.md documents learning promote');
   // packages/harness/README.md documents the opt-in commit mode.
   assert.match(read('packages/harness/README.md'), /knowledge commit/, 'README documents knowledge commit');
-  // Milestone 4: the governance ledger (retire/dispute/confirm/promote persist
-  // across `consolidate --rebuild --yes` and are mechanically reapplied) is
-  // now the same public contract.
-  assert.match(store, /export function readGovernance/, 'store.mjs exports readGovernance');
+    assert.match(store, /export function readGovernance/, 'store.mjs exports readGovernance');
   assert.match(apply, /governed/, 'apply.mjs tracks governed reapplication');
   assert.match(memoryModel, /governance/i, 'MEMORY-MODEL.md documents the governance ledger');
-  // The learnings quarantine line (surfaced by cmdLearnings) is pinned the
-  // same way the CATALOG strings above are — a verbatim match against the
-  // string a human actually sees, not just a loose keyword.
-  assert.match(
+    assert.match(
     commands,
     /quarantined episode\(s\) — inspect with harness consolidate --status, clear with knowledge purge <path>/,
     'commands.mjs renders the learnings quarantine line'

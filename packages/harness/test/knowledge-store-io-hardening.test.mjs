@@ -1,27 +1,3 @@
-// Structural regressions for the SECOND half of the store-I/O choke point.
-//
-// Round 5 built one guarded choke point for LEARNING files and explicitly
-// scoped store METADATA out as "a separate class". It is not a separate class:
-// every metadata file sits in the same human-writable directory a learning
-// does, so every one of them is as symlink-plantable as a learning path.
-//
-//   R1  a store-owned file written/read/removed outside the choke point
-//   R2  a quarantine unreachable for a TRACKED file replaced by a symlink
-//       (git reports ` T`, which contains no `M` and is not `??`)
-//   R3  a losing writer deleting the winning writer's transaction journal
-//   R4  a rollback that frees the lock with no ownership re-check
-//   R5  a stale-lock takeover that is narrowed but not atomic
-//   R6  an unowned live lock, a pre-lock store mutation, a clobbered
-//       `.gitignore`, an unchecked recovery rollback, and porcelain rename
-//       field order pinned only by a hand-built string
-//   R7  a symlink planted at a store-owned DIRECTORY (the allow-list covered
-//       file leaves only), a source contract evadable by how a path is spelled,
-//       a short `writeSync` truncating a ledger append, and an unmerged
-//       porcelain code recorded as a hand deletion
-//
-// Every test is written against the ATTACKER'S move or the failure mode, never
-// against the shape of the fix.
-
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -69,15 +45,7 @@ function git(cwd, args) {
       ...process.env,
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_CONFIG_SYSTEM: '/dev/null',
-      // Both config layers are nulled above, so git has no identity to fall
-      // back on. A developer machine hides that — its global identity is gone
-      // but git-for-macOS still runs a conflicting `merge`. On windows-latest
-      // there is no identity at all and merge refuses with exit 128
-      // ("unable to auto-detect email address"), which surfaced as a missing
-      // conflict entry rather than as the identity error it was. Supplying the
-      // identity through the environment keeps every invocation self-contained
-      // without reintroducing a config file the isolation is meant to remove.
-      GIT_AUTHOR_NAME: 'harness-test',
+            GIT_AUTHOR_NAME: 'harness-test',
       GIT_AUTHOR_EMAIL: 'harness-test@example.test',
       GIT_COMMITTER_NAME: 'harness-test',
       GIT_COMMITTER_EMAIL: 'harness-test@example.test',
@@ -137,14 +105,6 @@ function quarantined(dir) {
   return fs.existsSync(q) ? fs.readdirSync(q) : [];
 }
 
-// ---------------------------------------------------------------------------
-// R1 — every store-owned file goes through the choke point
-// ---------------------------------------------------------------------------
-
-// The verified exploit, verbatim: `ln -sf ~/.zshrc <store>/INDEX.md`, then any
-// `harness learning retire <id>` — rebuildIndex runs on retire/apply/confirm/
-// dispute/promote/absorb/purge/rebuild — truncates and replaces the outside
-// file. `ensureStore`'s fs.existsSync followed the link, so it never noticed.
 test('R1: a symlinked INDEX.md cannot be written through — the outside target survives a retire', () => {
   const c = ctx();
   const id = seedLearning(c, 'index-victim');
@@ -257,74 +217,12 @@ test('R1: a symlinked bucket meta.json / INDEX.md cannot be written through', ()
   assert.equal(JSON.parse(fs.readFileSync(path.join(bucketDir, 'meta.json'), 'utf8')).branchKey, 'feature-x');
 });
 
-// ---------------------------------------------------------------------------
-// R1/R7 — THE SOURCE CONTRACT, MADE UNEVADABLE
-// ---------------------------------------------------------------------------
-//
-// The previous version of this contract grepped for bare `fs` verbs whose
-// ARGUMENT TEXT contained a store filename LITERAL. That is a contract about
-// how a path is SPELLED, and every spelling dodges it — including the exact
-// shape of the historical `ensureStore` bug the round existed to close:
-//
-//     const indexPath = path.join(dir, 'INDEX.md');
-//     fs.writeFileSync(indexPath, INDEX_STUB);     // literal not in the args
-//
-// so did double quotes, template literals, `dir + '/INDEX.md'`, a destructured
-// `import { writeFileSync } from 'node:fs'`, a helper alias,
-// `fs.promises.writeFile`, and every verb outside its six-name list
-// (renameSync, unlinkSync, openSync+writeSync, truncateSync, cpSync, lstatSync,
-// readdirSync). It also scanned `lib/knowledge` NON-recursively.
-//
-// The contract below never looks at a path at all. It is three structural
-// rules whose conjunction is exhaustive:
-//
-//   1. REACHABILITY. In a store-writing module the fs module may be reached in
-//      exactly ONE way: `import fs from 'node:fs'`. No named import, no
-//      namespace import, no `node:fs/promises`, no `require`/dynamic `import`,
-//      no destructuring off `fs`, no computed `fs[...]`, no aliasing the module
-//      object. This is what makes rule 2's textual scan COMPLETE: after rule 1,
-//      every raw fs use in the file is literally `fs.<verb>`.
-//   2. PER-FILE VERB ALLOW-LIST. Every `fs.<verb>` must appear in the table
-//      below for that file. Not a deny-list of dangerous verbs — an allow-list
-//      of the ones each module is known to need, each justified. A NEW verb in
-//      an existing module, or ANY verb in a new module, fails until a human
-//      adds it deliberately.
-//   3. SCOPE. `lib/knowledge/**` RECURSIVELY (so a future subdirectory is
-//      covered), plus every module anywhere under `lib/` that imports
-//      `store-io.mjs` — i.e. the import-graph definition of "a store-writing
-//      module", so one living outside lib/knowledge is held to the same rule.
-
-/**
- * Permitted raw-`fs` verbs, per module, keyed by path relative to `lib/`.
- * Every entry is a DIRECTORY/PROBE operation on the store tree or a
- * WORKSPACE-path operation. No module may read, write, append or truncate
- * FILE BYTES on a store path — that is store-io.mjs's monopoly, and the two
- * content verbs that survive anywhere in the tree are on caller-supplied
- * workspace paths, named individually below.
- */
 const RAW_FS_ALLOW = new Map([
-  // The choke point itself: the ONE module allowed to touch store file leaves.
-  // `renameSync` is the quarantine (it moves the LINK, never its target);
-  // `lstatSync` is the never-follow probe; `rmSync` is removeStoreFile after
-  // assertRealpathContained; `mkdirSync` creates the quarantine bucket and
-  // re-creates a reclaimed store directory; `readdirSync(withFileTypes)` is the
-  // store-owned-DIRECTORY sweep, which reports each child's OWN type so the
-  // walk detects a symlinked directory instead of descending through it.
-  ['knowledge/store-io.mjs', ['lstatSync', 'mkdirSync', 'readdirSync', 'renameSync', 'rmSync']],
-  // Store repo plumbing: `.git`/`.lock` DIRECTORY probes, the lock mkdir/rmdir
-  // and its stale-takeover rename, the learnings-tree walk, residue removal,
-  // and realpathSync for the path-keyed store id. No content verb.
-  ['knowledge/store.mjs', ['existsSync', 'mkdirSync', 'readdirSync', 'realpathSync', 'renameSync', 'rmSync', 'statSync']],
-  // Maintenance: directory probes/walks, the workspace mirror tree, and the
-  // store-migration copy+remove. `cpSync` copies a legacy store DIRECTORY into
-  // its new id, never a store file's bytes on their own.
-  ['knowledge/admin.mjs', ['cpSync', 'existsSync', 'mkdirSync', 'readdirSync', 'renameSync', 'rmSync', 'rmdirSync']],
-  // `readFileSync` reads the CALLER'S ops.json (a workspace path the user
-  // passes on the command line), never a store file.
-  ['knowledge/apply.mjs', ['existsSync', 'readFileSync']],
-  // `readFileSync` reads a workspace EPISODE the caller cited; `writeFileSync`
-  // writes the temp ops.json handed to applyOps. Both workspace paths.
-  ['knowledge/remember.mjs', ['existsSync', 'mkdirSync', 'readFileSync', 'rmSync', 'writeFileSync']],
+    ['knowledge/store-io.mjs', ['lstatSync', 'mkdirSync', 'readdirSync', 'renameSync', 'rmSync']],
+    ['knowledge/store.mjs', ['existsSync', 'mkdirSync', 'readdirSync', 'realpathSync', 'renameSync', 'rmSync', 'statSync']],
+    ['knowledge/admin.mjs', ['cpSync', 'existsSync', 'mkdirSync', 'readdirSync', 'renameSync', 'rmSync', 'rmdirSync']],
+    ['knowledge/apply.mjs', ['existsSync', 'readFileSync']],
+    ['knowledge/remember.mjs', ['existsSync', 'mkdirSync', 'readFileSync', 'rmSync', 'writeFileSync']],
   ['knowledge/consolidate.mjs', ['existsSync', 'readdirSync']],
   ['knowledge/eval.mjs', ['existsSync']],
   ['knowledge/layer.mjs', ['existsSync', 'mkdirSync', 'renameSync']],
@@ -337,12 +235,6 @@ const RAW_FS_ALLOW = new Map([
   ['knowledge/status.mjs', ['existsSync']],
 ]);
 
-/**
- * Comment stripper that respects string and regex literals, so a `//` inside
- * `/^[a-z+]+:\/\//` or inside `'https://…'` never eats the rest of the line
- * (over-stripping would HIDE a violation, which is the one direction a
- * contract test must not fail in).
- */
 function stripCommentsJs(src) {
   const REGEX_ALLOWED_AFTER = /[(,=:[!&|?{};+\-*%~^<>]/;
   const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'case', 'in', 'of', 'new', 'delete', 'void', 'instanceof', 'do', 'else', 'yield', 'await']);
@@ -412,16 +304,6 @@ function stripCommentsJs(src) {
   return out;
 }
 
-/**
- * Rule 1, stated as an ALLOW-LIST (rule 3: allow-lists, not deny-lists).
- *
- * An ESM module can obtain another module's binding in exactly three ways:
- * a static `import`, a dynamic `import()`, or `require()`. The first is
- * allow-listed to ONE permitted form; the other two are not available at all.
- * `fsImportViolations` therefore enumerates every static import of the fs
- * module and requires each to be verbatim `import fs from 'node:fs'`, so a
- * spelling nobody thought of fails by default rather than by omission.
- */
 const FS_STATIC_IMPORT = /import\s+([^;'"]*?)\s*from\s*['"]((?:node:)?fs(?:\/promises)?)['"]/g;
 function fsImportViolations(src) {
   const out = [];
@@ -830,11 +712,7 @@ test('R6: a crash recovery whose rollback cannot clean the tree refuses to run',
     JSON.stringify({ pid: 999999, at: new Date().toISOString(), label: 'dead', checkpoint: 'f'.repeat(40), dirty: [] }) + '\n',
     'utf8'
   );
-  // Residue git cannot sweep: an untracked file inside a directory the process
-  // may not write to. `git reset --hard <unreachable sha>` fails outright and
-  // the plain fallback reset leaves the tree dirty — BOTH rollbacks fail, and
-  // the second one's result is the one nothing used to check.
-  const blocked = path.join(dir, 'blocked-residue');
+    const blocked = path.join(dir, 'blocked-residue');
   fs.mkdirSync(blocked, { recursive: true });
   fs.writeFileSync(path.join(blocked, 'residue.txt'), 'dead writer residue\n', 'utf8');
   const mode = fs.statSync(blocked).mode;
@@ -849,9 +727,6 @@ test('R6: a crash recovery whose rollback cannot clean the tree refuses to run',
   assert.match(String(tx.error?.message || ''), /residue|rollback/i);
 });
 
-// The single most-likely-wrong assumption in the porcelain parser — that `-z`
-// emits the NEW path first and the ORIGINAL second — verified against git
-// itself rather than a hand-built status string.
 test('R6/S3: parsePorcelainZ decodes a REAL git rename new-path-first', () => {
   const repo = tempDir('sio-rename-');
   git(repo, ['init', '-q', '-b', 'main']);
@@ -868,25 +743,6 @@ test('R6/S3: parsePorcelainZ decodes a REAL git rename new-path-first', () => {
   assert.equal(rename.origPath, 'orig-name.txt', 'the SECOND field is the original path');
   assert.equal(entries.length, 1, 'the paired field must be consumed, not left to misalign the next entry');
 });
-
-// ---------------------------------------------------------------------------
-// R7 — a symlink planted at a store-owned DIRECTORY
-// ---------------------------------------------------------------------------
-//
-// The choke point's allow-list covers FILE LEAVES only, and LEARNING_FILE_RE
-// matches `…/<domain>/<slug>.md` only, so a symlinked DIRECTORY produced no
-// absorb entry to quarantine at all. Verified end to end:
-//
-//   rm -rf <store>/learnings/sql && ln -s /tmp/evil <store>/learnings/sql
-//   → absorbHandEdits: absorbed=[] deleted=[] committed=false
-//   → next transaction → pass:true
-//   → git ls-files -s: 120000 … learnings/sql   (symlink COMMITTED)
-//   → listLearnings(dir): []                    (every learning silently gone)
-//
-// `ln -s /tmp/x <store>/learnings` is worse: ALL learnings vanish from every
-// read path and the CLI reports success throughout. The plant is self-reviving
-// — once tracked, every `git reset --hard` re-materializes it and `git clean
-// -fd` cannot sweep it.
 
 /** A directory OUTSIDE the store a planted directory symlink points at. */
 function outsideDir(name = 'evil') {
@@ -976,8 +832,6 @@ test('R7: a symlink planted at a BUCKET learnings directory is quarantined or re
   assert.ok(quarantined(dir).some((f) => f.includes('feature-q')), 'the bucket directory link is quarantined');
 });
 
-// The structural half: `git add -A` runs in exactly ONE place, so the refusal
-// belongs there — no future caller can reach staging around it.
 test('R7: commitStore itself refuses to stage a store whose owned directory is a symlink', () => {
   const c = ctx();
   seedLearning(c, 'commit-guard-anchor');
@@ -1010,14 +864,6 @@ test('R7: findSymlinkedStoreDirectories reports every owned directory shape and 
   assert.deepEqual(findSymlinkedStoreDirectories(dir).sort(), ['branches/k1/learnings/py', 'learnings/sql']);
 });
 
-// ---------------------------------------------------------------------------
-// R7 — "no caller can supply a wrong root" was a claim about CALLERS
-// ---------------------------------------------------------------------------
-
-// Deriving the containment root from the path's own shape does make the root a
-// fixed function of the path — but the shape match is by BASENAME, ANYWHERE on
-// the filesystem, so `<anything>/config.json` matched and was contained against
-// its own parent. `writeStoreFile('/Users/x/.ssh/config.json')` was accepted.
 test('R7: a store-shaped basename outside any store root is refused, not contained against its own parent', () => {
   const home = tempDir('sio-plausible-');
   const ssh = path.join(home, '.ssh');
@@ -1030,20 +876,11 @@ test('R7: a store-shaped basename outside any store root is refused, not contain
   assert.equal(writeStoreFile(victim, 'owned by the store\n'), false, 'the write must be refused outright');
   assert.equal(fs.readFileSync(victim, 'utf8'), before, 'the outside file must be byte-identical');
 
-  // The same basename inside a REAL store root (`<home>/knowledge/<id>`, the
-  // only shape storeDirForId ever builds) still works — the check narrows the
-  // allow-list, it does not break the store.
-  const store = path.join(home, 'knowledge', 'repo-id');
+    const store = path.join(home, 'knowledge', 'repo-id');
   fs.mkdirSync(store, { recursive: true });
   assert.equal(writeStoreFile(path.join(store, 'config.json'), '{"mode":"on"}\n'), true);
 });
 
-// ---------------------------------------------------------------------------
-// R7 — a short write must never silently truncate an appended ledger record
-// ---------------------------------------------------------------------------
-
-// `fs.writeSync` issues ONE write(2) and does not loop: a short write left the
-// ledger holding a partial JSON line and reported success.
 test('R7: appendFileContained loops until the whole record is written', () => {
   const root = tempDir('sio-append-');
   const record = `${JSON.stringify({ path: 'docs/solutions/x.md', learning: 'sql/x', at: '2026-01-01' })}\n`;
@@ -1069,13 +906,6 @@ test('R7: appendFileContained loops until the whole record is written', () => {
   assert.equal(fs.readFileSync(path.join(root, 'consolidated.jsonl'), 'utf8'), record, 'a short write must never truncate the record');
 });
 
-// ---------------------------------------------------------------------------
-// R7 — an unmerged porcelain code is not a hand deletion
-// ---------------------------------------------------------------------------
-
-// The `code.includes('D')` branch ran BEFORE the UNMERGED_CODES carve-out, so
-// `DD`/`UD`/`DU` were recorded as hand deletions → a governance `retire` that
-// survives `consolidate --rebuild`, for a conflict nobody resolved.
 test('R7: an unmerged (deleted-by-one-side) learning is never absorbed as a hand deletion', () => {
   const c = ctx();
   const id = seedLearning(c, 'unmerged-victim');
@@ -1099,11 +929,7 @@ test('R7: an unmerged (deleted-by-one-side) learning is never absorbed as a hand
 
   const porcelain = git(dir, ['status', '--porcelain', '-uall', '-z']).stdout;
   const entry = parsePorcelainZ(porcelain).find((e) => e.path === rel);
-  // The failure detail is part of the assertion because this precondition is
-  // about GIT's behaviour, not the store's: if a platform's git ever declines
-  // the merge for a reason other than the modify/delete conflict, the message
-  // has to say which reason rather than just "not found".
-  assert.ok(
+    assert.ok(
     entry,
     `git must report the conflicted learning — merge exit ${merge.status}, stdout ${JSON.stringify(merge.stdout)}, stderr ${JSON.stringify(merge.stderr)}, porcelain ${JSON.stringify(porcelain)}`
   );

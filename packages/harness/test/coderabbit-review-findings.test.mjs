@@ -1,13 +1,3 @@
-/**
- * The CodeRabbit review of this branch: one test per finding, each written to
- * fail against the pre-fix code.
- *
- * Same convention as the two Codex finding suites. The theme worth naming is
- * that FOUR commands had independently hand-rolled the same argv scan and three
- * got it wrong the same way — a boolean flag before a positional ate it. Each
- * failed differently, and `trust` failed silently and successfully, which is
- * the worst combination available. They now share `lib/positionals.mjs`.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -42,10 +32,7 @@ test('the value-flag set covers every non-boolean flag the registry declares', (
 });
 
 test('the value-flag set covers every flag parseFlags reads a value for', () => {
-  // The second authority: several global value flags never appear in the
-  // registry's help surface, and command flags never reach parseFlags. A list
-  // derived from only one of them drifts from the other.
-  const consumes = (name) => ['SENTINEL', '7'].some((v) => {
+    const consumes = (name) => ['SENTINEL', '7'].some((v) => {
     try { return JSON.stringify(parseFlags([name, v]) ?? {}).includes(v); } catch { return true; }
   });
   const candidates = ['--target', '--since', '--until', '--ids', '--branch', '--why', '--query', '--plan', '--host', '--limit', '--collection'];
@@ -81,9 +68,7 @@ test('verbOf matches a known verb wherever it appears, rather than guessing by p
   assert.equal(verbOf(['--json', 'approve'], ['status', 'approve', 'revoke'], { fallback: 'status' }), 'approve');
   assert.equal(verbOf(['--verbose', 'revoke'], ['status', 'approve', 'revoke'], { fallback: 'status' }), 'revoke');
   assert.equal(verbOf([], ['status', 'approve'], { fallback: 'status' }), 'status');
-  // An unknown word is still returned, so the caller reports "unknown verb"
-  // rather than silently doing something else.
-  assert.equal(verbOf(['frobnicate'], ['status'], { fallback: 'status' }), 'frobnicate');
+    assert.equal(verbOf(['frobnicate'], ['status'], { fallback: 'status' }), 'frobnicate');
 });
 
 test('`harness checks --json list` finds its verb', () => {
@@ -209,12 +194,7 @@ test('every bundle carries a unique directory id alongside its manifest name', (
 // --- hygiene --------------------------------------------------------------
 
 test('the vscode hook probe removes BOTH of its fixture directories', () => {
-  // Run in a CHILD with an isolated TMPDIR. Diffing the shared tmpdir picked up
-  // directories from suites running concurrently, so the test failed for a
-  // reason that had nothing to do with the code — and driven through the CLI it
-  // passed vacuously on a machine without hydrated hooks, which is how 85 leaked
-  // directories accumulated here before anyone noticed.
-  const jail = tempDir('cr-doc-jail-');
+    const jail = tempDir('cr-doc-jail-');
   const hooks = path.join(tempDir('cr-doc-hooks-'), 'hooks');
   const res = spawnSync(process.execPath, ['-e', `
     const { runVSCodeHookProbe } = await import(${JSON.stringify(path.join(packageRoot, 'lib', 'doctor.mjs'))});
@@ -231,10 +211,7 @@ test('the vscode hook probe removes BOTH of its fixture directories', () => {
 });
 
 test('the prune pass builds its drop set once instead of rescanning per entry', () => {
-  // Comments stripped first: the fix's own note names the call it removed, and
-  // a check that cannot tell prose from code would force the explanation out of
-  // the file that most needs it.
-  const source = fs.readFileSync(path.join(packageRoot, 'lib', 'retention.mjs'), 'utf8')
+    const source = fs.readFileSync(path.join(packageRoot, 'lib', 'retention.mjs'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
   assert.equal(/keep\.includes\(/.test(source), false,

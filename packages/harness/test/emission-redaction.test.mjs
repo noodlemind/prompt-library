@@ -1,19 +1,3 @@
-/**
- * Fix-wave regressions C2/C3 — the shared redacting emission boundary.
- *
- * C2: lib/commands.mjs's `emitJson` (and every legacy `--json` serializer)
- * and lib/envelope.mjs's JSONL rows used to serialize with a bare
- * `JSON.stringify` — no redaction. Verified live repro:
- * `harness learnings --why 'ghp_…' --json` printed the raw token.
- *
- * C3: lib/events.mjs's `writeEvent` appended the assembled event without
- * redaction; host/actor/session metadata is stamped AFTER the event
- * registry's payload-only redaction, so `HARNESS_HOST=token=<secret>`
- * leaked verbatim into events.jsonl.
- *
- * Both now route through lib/redact.mjs at the sink itself (redactValue /
- * redactedJson), with byte-identity preserved for secret-free data.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -150,14 +134,6 @@ test('C3: secret-free events persist byte-identically (field-for-field, no redac
   assert.equal(onDisk.result, 'pass');
 });
 
-// --- Round-2 P1: human/ledger output is now IN scope (AC6 absolute) ---------
-//
-// The user's decision widened the guarantee: the human ledger and the
-// HARNESS_DEBUG dump must redact too, not only the machine sinks. Verified
-// pre-fix leaks: `learnings --why token=…` echoed the raw token in the LEDGER
-// error block, and `HARNESS_DEBUG=1` printed a sanitized error followed by the
-// ORIGINAL raw stack.
-
 test('P1: `learnings --why <kv-secret>` on the LEDGER path (no --json) never prints the raw token', () => {
   const workspace = tempDir('emit-redact-why-ledger-');
   const res = runHarness(['learnings', '--why', KV_SECRET, '--workspace', workspace, '--no-color']);
@@ -175,29 +151,12 @@ test('P1: `learnings --why <github-token>` LEDGER path masks with the token kind
 
 test('P1: HARNESS_DEBUG=1 routes the raw error stack through the redactor (no post-sanitized raw dump)', () => {
   const workspace = tempDir('emit-redact-debug-');
-  // A bad --output value throws E_USAGE with the value echoed in its message;
-  // emitError sanitizes the block, and the HARNESS_DEBUG dump of the raw stack
-  // must be redacted too (pre-fix it printed `console.error(err)` verbatim).
-  const res = runHarness(['status', '--output', KV_SECRET, '--workspace', workspace], { env: { HARNESS_DEBUG: '1' } });
+    const res = runHarness(['status', '--output', KV_SECRET, '--workspace', workspace], { env: { HARNESS_DEBUG: '1' } });
   assert.notEqual(res.status, 0);
   assert.doesNotMatch(res.stderr, /abcdef1234567890/, 'the HARNESS_DEBUG stack must not leak the raw secret');
   assert.match(res.stderr, /«redacted:kv-secret»/, 'the debug dump must carry the mask');
   assert.match(res.stderr, /\bat\b/, 'the debug dump really printed a stack — otherwise this proves nothing');
 });
-
-// --- Round-2 P1: report --sync repersistence is a redaction boundary --------
-//
-// lib/telemetry-store.mjs copied workspace event rows into the GLOBAL store
-// with a bare JSON.stringify. Local rows are already redacted (C3), so this
-// test hand-writes RAW secrets straight into the local log to prove the sync
-// boundary masks independently, as defense in depth.
-
-// --- JSON-validity regression: adversarial secret/quote placements must ----
-// --- never produce malformed JSON through the real serialize-independent ---
-// --- sinks (JSONL row writer, events.jsonl append), not just redactedJson --
-// --- in isolation. See test/redact.test.mjs for the isolated table and the
-// --- root-cause explanation (a text pass over already-serialized JSON
-// --- consuming the escaping backslash before an escaped quote).
 
 const QUOTE_ADJACENT_KV_SECRET = 'no learning "token=abcdef1234567890" found';
 const STDOUT_QUOTE_ADJACENT_KV_SECRET = 'FAIL expected "token=abcdef1234567890" got x';

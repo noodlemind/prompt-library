@@ -10,9 +10,6 @@ import { consolidateStatus } from '../lib/knowledge/consolidate.mjs';
 import { runRemember } from '../lib/knowledge/remember.mjs';
 import { rebuildIndex } from '../lib/knowledge/apply.mjs';
 
-// Direct-write fixture (same shape domain-cap-merge.test.mjs's own
-// seedLearning uses) — fills a domain to DOMAIN_ACTIVE_CAP (25) active
-// learnings without 25 separate CLI round trips.
 function seedActiveLearning(dir, domain, slug) {
   const lines = [
     '---', 'schema: 1', `trigger: "seed trigger for ${slug}"`, 'status: active', 'source: auto', 'episodes:',
@@ -84,12 +81,6 @@ test('remember twice with the same trigger/domain supersedes in place: new claim
   assert.ok(ledger.some((e) => e.path === secondOut.episodePath), 'second episode consumed in the ledger');
 });
 
-// Controller ruling (post Task 5 review): a direct human statement outranks
-// stored state — a human re-teaching the SAME trigger/domain after a target
-// was disputed/retired must succeed, not get blocked by the cross-run
-// inactive-target gate item 3 added. The verified in-place re-teach shape
-// (new id === target, every episode disk-verified human-teaching) is exempt
-// from that gate; promoted targets are NOT (see the separate test below).
 test('remember re-teaching a DISPUTED learning under the same trigger overrides the dispute: active, source human, new body, governance confirm recorded', () => {
   const c = ctx();
   const first = run(c, [
@@ -115,11 +106,7 @@ test('remember re-teaching a DISPUTED learning under the same trigger overrides 
   assert.match(learning.body, /Corrected claim/);
   assert.doesNotMatch(learning.body, /First claim/);
 
-  // Governance interplay: Task 2's re-teach override must fire automatically
-  // (same allHumanTeaching evidence gates both) — the standing dispute
-  // record is neutralized by a fresh confirm, not left dangling for a future
-  // rebuild to reapply.
-  const gov = readGovernance(dir);
+    const gov = readGovernance(dir);
   assert.equal(gov.get(learningId).action, 'confirm', 'the re-teach override records a confirm over the standing dispute');
   assert.equal(gov.get(learningId).reason, 'superseded by re-teach');
 });
@@ -152,10 +139,6 @@ test('remember re-teaching a RETIRED learning under the same trigger overrides t
   assert.equal(gov.get(learningId).reason, 'superseded by re-teach');
 });
 
-// Promoted targets are explicitly NOT exempted — the promoted-target
-// rejection in remember.mjs (before applyOps is even invoked) is unchanged
-// by the inactive-target exemption, which only lives inside applyOps' own
-// SUPERSEDE/STRENGTHEN validation.
 test('remember re-teaching a PROMOTED learning under the same trigger still exits 2 with the primitive-path message', () => {
   const c = ctx();
   const first = run(c, [
@@ -204,9 +187,7 @@ test('remember --dry-run writes neither episode nor learning', () => {
 
 test('remember --dry-run does not absorb a dirty store hand edit (no new store commit)', () => {
   const c = ctx();
-  // Seed a real learning through the sole writer so the store exists with
-  // git history to compare against.
-  const seedRes = run(c, [
+    const seedRes = run(c, [
     'remember', 'Seed claim for the dry-run absorb regression.',
     '--trigger', 'a dry-run absorb regression trigger', '--domain', 'sql',
   ]);
@@ -215,9 +196,7 @@ test('remember --dry-run does not absorb a dirty store hand edit (no new store c
 
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const learning = listLearnings(dir).find((l) => l.id === seedOut.learningId);
-  // Hand-edit the learning file directly in the store repo — bypassing
-  // every CLI write path — leaving the store tree dirty.
-  fs.appendFileSync(learning.file, '\nA direct hand edit.\n');
+    fs.appendFileSync(learning.file, '\nA direct hand edit.\n');
   const headBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
   const dirtyBefore = spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout;
   assert.notEqual(dirtyBefore.trim(), '', 'precondition: store tree is dirty before the dry-run');
@@ -281,12 +260,6 @@ test('remember rolls back the episode file when applyOps rejects it (byte cap)',
   assert.deepEqual(remaining, [], 'rejected apply must not leave an orphaned episode file');
 });
 
-// Controller ruling: the byte-cap nextTools hint was hardcoded regardless of
-// the actual applyOps rejection reason. A domain-cap rejection is a genuine
-// non-byte-cap applyOps-level failure reachable through remember (a brand
-// new trigger/domain — an ADD — into an already-full domain), unlike a
-// disputed/retired-target rejection which the re-teach exemption above now
-// avoids entirely for a genuine remember call.
 test('remember on a domain-cap rejection surfaces the real reason, not the misleading byte-cap hint', () => {
   const c = ctx();
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });

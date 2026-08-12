@@ -18,23 +18,6 @@ import { retrievalExclusion } from '../lib/knowledge/retrieve.mjs';
 import { branchKeyFor } from '../lib/git-context.mjs';
 import { runOrient } from '../lib/orient.mjs';
 
-/**
- * Boundary regressions for the promotion lane, the layer boundary, and the
- * destructive/branch-name surfaces around them. Every test here reproduces a
- * concrete escape that the pre-fix code allowed:
- *
- *  A  promotion evidence laundering (op-asserted kind/plan, duplicate links)
- *  B  emitter-only admission gates (a hand-authored ops file bypassed them)
- *  C  `promoted_to_golden` erased on re-render (a tombstone that resurrects)
- *  D  a branch-local hand-delete writing a golden-binding governance retire
- *  F  `--layer golden` self-granted by an unattended agent
- *  H  three-strikes quarantine reset by switching branches
- *  I  prune destroying buckets `knowledge status` calls not-prunable
- *  J  the promote op-set written without fs-safe containment
- *  K  destructive ops without an fs-safe realpath guard
- *  L  raw branch names on the `--json` surfaces
- */
-
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -61,13 +44,7 @@ function featureWorkspace(branch = 'feature/hardening') {
   git(ws, ['config', 'user.email', 't@example.test']);
   git(ws, ['config', 'user.name', 'T']);
   if (branch) {
-    // Assert the checkout LANDED. `checkout -b` can fail for reasons that have
-    // nothing to do with the assertion under test — most notably a branch whose
-    // loose-ref path (`<ws>/.git/refs/heads/<branch>[.lock]`) exceeds the
-    // platform's path limit (Windows MAX_PATH = 260). git then exits 128 and
-    // HEAD silently stays on `main`, so every downstream layer assertion reads
-    // 'golden' instead of 'branch' and blames the routing code.
-    const co = git(ws, ['checkout', '-qb', branch]);
+        const co = git(ws, ['checkout', '-qb', branch]);
     assert.equal(co.status, 0, `checkout -b ${branch.slice(0, 40)}… failed: ${co.stderr}`);
   }
   return ws;
@@ -138,10 +115,6 @@ function cli(ws, home, args) {
 function sourceStamp(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
-
-// ---------------------------------------------------------------------------
-// A — promotion evidence laundering
-// ---------------------------------------------------------------------------
 
 test('A: a promotion op cannot re-label recorded evidence — kind/plan are copied from the source learning, never the ops file', () => {
   const ws = featureWorkspace('feature/launder');
@@ -225,10 +198,6 @@ test('A: a promotion op cannot inflate evidence by repeating one recorded episod
   assert.equal(listLearnings(dir).length, 0, 'golden untouched');
 });
 
-// ---------------------------------------------------------------------------
-// B — admission gates re-derived by the sole writer
-// ---------------------------------------------------------------------------
-
 test('B: a hand-authored promotion envelope is refused for path-shaped, detached, non-ancestor, and non-active sources — through consolidate --apply', () => {
   const ws = featureWorkspace('feature/gates');
   const home = tempDir('bh-home-b-');
@@ -268,10 +237,7 @@ test('B: a hand-authored promotion envelope is refused for path-shaped, detached
   assert.equal(detachedRes.status, 1, detachedRes.stdout + detachedRes.stderr);
   assert.match(JSON.parse(detachedRes.stdout).rejected[0].reason, /never promotable/);
 
-  // (3) non-active source: superseded on disk. renderLearning writes a FRESH
-  // golden file with superseded_by: null, so an ungated promotion strips the
-  // tombstone en route.
-  const supersededFile = source.file;
+    const supersededFile = source.file;
   fs.writeFileSync(supersededFile, fs.readFileSync(supersededFile, 'utf8').replace('superseded_by: null', 'superseded_by: sql/newer'), 'utf8');
   git(dir, ['add', '-A']);
   git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.test', 'commit', '-qm', 'hand edit']);
@@ -281,10 +247,7 @@ test('B: a hand-authored promotion envelope is refused for path-shaped, detached
   assert.match(JSON.parse(supersededRes.stdout).rejected[0].reason, /not an active, unpromoted bucket learning/);
   assert.equal(listLearnings(dir).length, 0, 'nothing was laundered into golden');
 
-  // (3b) a promotion envelope carries only file-touching ops — a hand-authored
-  // NOOP would otherwise consume its episodes into the GOLDEN ledger from any
-  // branch, since promotion mode pins the write layer to golden.
-  const noopRes = cli(ws, home, [
+    const noopRes = cli(ws, home, [
     'consolidate',
     '--apply',
     '--ops',
@@ -293,9 +256,7 @@ test('B: a hand-authored promotion envelope is refused for path-shaped, detached
   assert.equal(noopRes.status, 1, noopRes.stdout + noopRes.stderr);
   assert.match(JSON.parse(noopRes.stdout).rejected[0].reason, /never NOOP/);
 
-  // (4) non-ancestor bucket (force-push name reuse) — refused at write time
-  // from the bucket's OWN meta.json, never the envelope's copy.
-  fs.writeFileSync(supersededFile, fs.readFileSync(supersededFile, 'utf8').replace('superseded_by: sql/newer', 'superseded_by: null'), 'utf8');
+    fs.writeFileSync(supersededFile, fs.readFileSync(supersededFile, 'utf8').replace('superseded_by: sql/newer', 'superseded_by: null'), 'utf8');
   const metaPath = path.join(bucketDir, 'meta.json');
   fs.writeFileSync(metaPath, JSON.stringify({ ...readBucketMeta(bucketDir), baseSha: 'f'.repeat(40) }) + '\n');
   git(dir, ['add', '-A']);
@@ -306,10 +267,6 @@ test('B: a hand-authored promotion envelope is refused for path-shaped, detached
   assert.match(JSON.parse(reuseRes.stdout).rejected[0].reason, /unrelated history/);
   assert.equal(listLearnings(dir).length, 0, 'golden still untouched');
 });
-
-// ---------------------------------------------------------------------------
-// C — promoted_to_golden survives, and the tombstone is really inactive
-// ---------------------------------------------------------------------------
 
 test('C: a promoted bucket entry stays tombstoned — the bucket INDEX drops it, a STRENGTHEN cannot resurrect it, and prune --merged still sees it', () => {
   const ws = featureWorkspace('feature/tombstone');
@@ -332,9 +289,7 @@ test('C: a promoted bucket entry stays tombstoned — the bucket INDEX drops it,
     'the bucket INDEX must agree with retrievalExclusion and drop the tombstone'
   );
 
-  // A STRENGTHEN aimed at the tombstoned bucket entry must be refused, not
-  // re-rendered into a live claim that shadows the golden claim it became.
-  const more = writeFixEpisode(ws, 'docs/solutions/perf/tomb-b.md');
+    const more = writeFixEpisode(ws, 'docs/solutions/perf/tomb-b.md');
   const strengthen = applyOps({
     workspace: ws,
     opsPath: writeOps(ws, [{ op: 'STRENGTHEN', target: 'sql/tombstoned', episodes: [more] }]),
@@ -352,10 +307,6 @@ test('C: a promoted bucket entry stays tombstoned — the bucket INDEX drops it,
   assert.equal(pruned.pass, true, pruned.blockedReason);
   assert.deepEqual(pruned.removed, [key], 'prune --merged still recognizes the fully-promoted bucket');
 });
-
-// ---------------------------------------------------------------------------
-// D — a bucket hand-delete is not a store-wide retirement
-// ---------------------------------------------------------------------------
 
 test('D: hand-deleting a BRANCH copy never retires the golden claim of the same id (a golden-only delete still does)', () => {
   const ws = featureWorkspace(null); // start on main
@@ -384,9 +335,7 @@ test('D: hand-deleting a BRANCH copy never retires the golden claim of the same 
   assert.ok(goldenStill, 'the golden claim survives');
   assert.equal(isActiveFm(goldenStill.fm), true, 'and stays active');
 
-  // `consolidate --rebuild --yes` wipes the corpus and replays governance —
-  // with no retire recorded there is nothing for it to resurrect.
-  git(ws, ['checkout', '-q', 'main']);
+    git(ws, ['checkout', '-q', 'main']);
   const rebuilt = rebuildStore({ workspace: ws, home, yes: true, copilotHome: tempDir('bh-ch-d-') });
   assert.equal(rebuilt.pass, true, rebuilt.blockedReason);
   assert.equal(readGovernance(dir).has('sql/shared-x'), false, 'a rebuild cannot resurrect a retire that was never recorded');
@@ -401,14 +350,6 @@ test('D: hand-deleting a BRANCH copy never retires the golden claim of the same 
   assert.equal(readGovernance(dir).get('sql/shared-x')?.action, 'retire', 'no layer holds it any more — a real retirement');
 });
 
-// The other side of D's guard: "still held by another layer" has to mean
-// ACTIVE, not merely present on disk. A promotion leaves a
-// `promoted_to_golden` tombstone in the source bucket, and counting that
-// inactive remnant as a surviving holder meant deleting the PROMOTED GOLDEN
-// claim recorded no governance retire at all — so a later
-// `consolidate --rebuild --yes` (which drops the tombstone and re-consolidates
-// the still-present branch episode) silently resurrected the id the human had
-// deleted, with no veto to stop it.
 test('E: hand-deleting a PROMOTED golden claim still records a retire — an inactive bucket tombstone never suppresses governance', () => {
   const ws = featureWorkspace('feature/promo-delete');
   const home = tempDir('bh-home-e-');
@@ -445,10 +386,6 @@ test('E: hand-deleting a PROMOTED golden claim still records a retire — an ina
   assert.deepEqual(resurrected, [], 'a rebuild cannot bring back a claim the human deleted');
 });
 
-// ---------------------------------------------------------------------------
-// F — layer containment is not self-grantable
-// ---------------------------------------------------------------------------
-
 test('F: --layer golden needs the human-authority signal; --layer branch is refused instead of silently ignored', () => {
   const ws = featureWorkspace('feature/selfgrant');
   const home = tempDir('bh-home-f-');
@@ -469,10 +406,6 @@ test('F: --layer golden needs the human-authority signal; --layer branch is refu
   assert.equal(approved.exitCode, 0, JSON.stringify(approved.rejected));
   assert.equal(approved.layer, 'golden', 'an explicitly approved override still works');
 });
-
-// ---------------------------------------------------------------------------
-// H — quarantine is store-global, not per-branch
-// ---------------------------------------------------------------------------
 
 test('H: three strikes cannot be reset by switching branches — the quarantine marker is store-global and every lane reports it', () => {
   const ws = featureWorkspace('feature/strike-a');
@@ -503,10 +436,6 @@ test('H: three strikes cannot be reset by switching branches — the quarantine 
   assert.equal(status.quarantined.length, 1, 'consolidate --status reports the quarantine from any branch');
   assert.ok(!status.unconsolidated.some((u) => u.path === ep.path), 'a quarantined episode stops counting as debt in every lane');
 });
-
-// ---------------------------------------------------------------------------
-// I — prune previews and confirms before destroying live work
-// ---------------------------------------------------------------------------
 
 test('I: prune refuses to delete a bucket holding active, unpromoted learnings without --yes, and previews what is at stake', () => {
   const ws = featureWorkspace('feature/liveprune');
@@ -559,10 +488,6 @@ test('I: a bucket status calls prunable (nothing active) still prunes unattended
   assert.deepEqual(pruned.removed, [key]);
 });
 
-// ---------------------------------------------------------------------------
-// J / K — fs-safe containment on the write and the destructive paths
-// ---------------------------------------------------------------------------
-
 test('J: the promote op-set refuses to write through a symlinked .harness directory', () => {
   const ws = featureWorkspace('feature/opswrite');
   const home = tempDir('bh-home-j-');
@@ -582,12 +507,7 @@ test('K: every destructive knowledge path routes through an fs-safe realpath gua
   const guarded = [
     ['lib/knowledge/prune.mjs', /assertRealpathContained\(txDir, path\.join\('branches'/],
     ['lib/knowledge/layer.mjs', /assertRealpathContained\(dir, path\.join\('branches'/],
-    // Learning-file I/O no longer guards itself per call site: every read,
-    // write, and delete of a learning goes through store-io.mjs, which owns
-    // the guard once (S1). The contract is therefore that the choke point holds
-    // it AND that apply.mjs's promotion tombstone goes through the choke point
-    // rather than touching `fs` directly.
-    ['lib/knowledge/store-io.mjs', /assertRealpathContained\(p\.storeRoot, p\.rel\)/],
+        ['lib/knowledge/store-io.mjs', /assertRealpathContained\(p\.storeRoot, p\.rel\)/],
     ['lib/knowledge/apply.mjs', /writeLearningFile\(src\.file, serializeLearning\(/],
   ];
   for (const [rel, pattern] of guarded) {
@@ -601,18 +521,8 @@ test('K: every destructive knowledge path routes through an fs-safe realpath gua
   assert.match(layerSrc, /fs\.renameSync\(containedSource,/, 'the rename moves the CONTAINED source');
 });
 
-// ---------------------------------------------------------------------------
-// L — branch names on the --json surfaces
-// ---------------------------------------------------------------------------
-
 test('L: knowledge status --json redacts, flattens, and caps a bucket branch name; orient --json does the same and drops the absolute worktree', () => {
-  // Comfortably over both caps under test — the 64-char slug cap
-  // (branchKeyFor) and the 80-char display cap (BRANCH_DISPLAY_CAP /
-  // ORIENT_BRANCH_CAP) — while the branch stays SHORT ENOUGH TO EXIST. The ref
-  // is a real file at `<ws>/.git/refs/heads/feature/<name>`; at 220 chars that
-  // path ran past Windows' 260-char MAX_PATH, `checkout -b` failed, and HEAD
-  // stayed on `main` (routing then correctly reports 'golden', not 'branch').
-  const longBranch = `feature/${'z'.repeat(100)}`;
+    const longBranch = `feature/${'z'.repeat(100)}`;
   const ws = featureWorkspace(longBranch);
   const home = tempDir('bh-home-l-');
   seedBucketLearning(ws, home, 'branded');
@@ -639,17 +549,11 @@ test('L: knowledge status --json redacts, flattens, and caps a bucket branch nam
   assert.equal(orient.gitContext.branchKey, key, 'the derived key still surfaces');
 });
 
-// ---------------------------------------------------------------------------
-// Cross-cutting: the golden→branch confirm laundering
-// ---------------------------------------------------------------------------
-
 test('a branch-lane re-teach cannot append a confirm that cancels a standing GOLDEN retire', () => {
   const ws = featureWorkspace(null);
   const home = tempDir('bh-home-x-');
   const ep = writeFixEpisode(ws, 'docs/solutions/perf/vetoed.md', 'main');
-  // `remember --trigger vetoed` normalizes to the slug `vetoed`, so the branch
-  // re-teach lands on the SAME id as this golden claim.
-  assert.equal(applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, 'vetoed', { episodes: [ep] })]), home }).exitCode, 0);
+    assert.equal(applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, 'vetoed', { episodes: [ep] })]), home }).exitCode, 0);
   const { dir } = ensureStore(ws, { home });
   appendGovernance(dir, { id: 'sql/vetoed', action: 'retire', reason: 'human veto', to: null, at: new Date().toISOString() });
 
@@ -671,9 +575,7 @@ test('a branch-lane re-teach cannot append a confirm that cancels a standing GOL
 });
 
 test('rebuildIndex excludes branch→golden tombstones so INDEX.md agrees with retrievalExclusion', () => {
-  // A REAL store path shape (`<home>/knowledge/<id>`): the store-io choke point
-  // refuses a derived root that could not be a store root at all.
-  const dir = path.join(tempDir('bh-index-'), 'knowledge', 'repo-id');
+    const dir = path.join(tempDir('bh-index-'), 'knowledge', 'repo-id');
   fs.mkdirSync(path.join(dir, 'learnings', 'sql'), { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'learnings', 'sql', 'gone.md'),

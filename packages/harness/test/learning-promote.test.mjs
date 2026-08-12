@@ -28,12 +28,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// A REAL fix-kind episode file — verifyAdmittedEpisodeKinds (apply.mjs) now
-// disk-verifies every fix/insight-kind episode an ADD/STRENGTHEN/SUPERSEDE/
-// MERGE op offers (existence + sha256 match + no elevated-kind frontmatter)
-// before admitting it, so a fabricated sha256 pointing at a file that was
-// never written is rejected with E_SCHEMA. No frontmatter is required for
-// `fix` — plain content is legitimate evidence.
 function writeFixEpisode(ws, rel) {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -42,9 +36,6 @@ function writeFixEpisode(ws, rel) {
   return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
 
-// A REAL insight-kind episode file — verifyEpisodeKind requires the file's
-// OWN frontmatter to literally say `kind: insight` for an insight assertion
-// to verify.
 function writeInsightEpisode(ws, rel) {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -53,8 +44,6 @@ function writeInsightEpisode(ws, rel) {
   return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
 
-// Three fix-kind episode links across two distinct plans — promotion-eligible
-// (verified >= 3 && plans >= 2), the same fixture shape learnings-listing.test.mjs uses.
 function buildAddPromotable(ws) {
   return {
     op: 'ADD',
@@ -94,8 +83,6 @@ function seedInsightOnly(c) {
   return JSON.parse(applyRes.stdout).applied[0].id;
 }
 
-// A real, repo-relative primitive path the promote command can point at —
-// created inside the temp workspace so the "target must exist" check passes.
 function primitivePath(ws) {
   const rel = '.github/instructions/sql.instructions.md';
   const full = path.join(ws, rel);
@@ -104,14 +91,6 @@ function primitivePath(ws) {
   return rel;
 }
 
-// Direct-write fixture (same shape domain-cap-merge.test.mjs's own
-// seedLearning uses): seeding 25 active learnings through 5 real
-// `consolidate --apply` runs (the delta contract caps a run at 5
-// file-touches) would take many CLI round trips just to reach the cap.
-// Writing the learning files straight to the store — in the exact shape
-// renderLearning produces, with one qualifying fix episode each so `learning
-// promote` accepts them — plus a rebuildIndex call is an equivalent end
-// state and keeps this regression test fast.
 function seedActiveLearning(dir, domain, slug) {
   const lines = [
     '---', 'schema: 1', `trigger: "seed trigger for ${slug}"`, 'status: active', 'source: auto', 'episodes:',
@@ -127,20 +106,12 @@ function seedActiveLearning(dir, domain, slug) {
   fs.writeFileSync(file, lines.join('\n'), 'utf8');
 }
 
-// Milestone 4 Task 5 item 7(a): a domain filled to DOMAIN_ACTIVE_CAP (25)
-// active learnings blocks a plain ADD — but promoting one of the 25 drops it
-// out of every active-learning surface (isActiveFm excludes promoted_to),
-// freeing exactly one slot for a fresh ADD. This pins the hand-verified
-// interaction between promotion and the domain cap.
 test('cap-after-promote: promoting one of 25 active learnings frees room for a new ADD (final active <= 25)', () => {
   const c = ctx();
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   for (let i = 0; i < 25; i++) seedActiveLearning(dir, 'sql', `cap-fill-${i}`);
   rebuildIndex(dir);
-  // Committed, like the CLI always leaves the store: an UNCOMMITTED learning
-  // file is a hand edit, and absorbHandEdits (admin.mjs) captures those —
-  // including planted, never-tracked ones — and stamps them `source: human`.
-  commitStore(dir, 'seed: pre-existing store state');
+    commitStore(dir, 'seed: pre-existing store state');
   assert.equal(listLearnings(dir).filter((l) => isActiveFm(l.fm)).length, 25, 'precondition: domain at cap');
 
   const to = primitivePath(c.ws);
@@ -164,10 +135,6 @@ test('cap-after-promote: promoting one of 25 active learnings frees room for a n
   assert.equal(finalActive, 25, '24 remaining + 1 new = exactly at the cap');
 });
 
-// A learning whose ONLY kind: fix episode is pathless — a shape validateEpisodes
-// (apply.mjs) never lets an op create, but a malformed on-disk record (a hand
-// edit, or a stale pre-fix write) can carry. Written directly to the store,
-// bypassing every CLI write path, to reproduce that shape.
 function seedPathlessFixOnly(c) {
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const domainDir = path.join(dir, 'learnings', 'sql');
@@ -195,11 +162,7 @@ A claim whose only qualifying-kind episode lacks a path.
 `,
     'utf8'
   );
-  // Committed so this stays a STALE ON-DISK RECORD rather than an uncommitted
-  // hand edit — absorbHandEdits (admin.mjs) would otherwise capture the
-  // planted file, re-serialize it (dropping the pathless episode outright) and
-  // stamp it `source: human`, which is the wrong shape for this regression.
-  commitStore(dir, 'seed: stale on-disk record');
+    commitStore(dir, 'seed: stale on-disk record');
   return `sql/${slug}`;
 }
 
@@ -249,11 +212,7 @@ test('learning promote <id> --to <path> records promoted_to, commits, and retire
   const row = listOut.learnings.find((l) => l.id === id);
   assert.equal(row.status, 'promoted');
   assert.equal(listOut.counts.active, 0);
-  // Milestone 4 Task 5 item 5: a promoted row must never read
-  // promotionEligible: true again — its link counts still satisfy the
-  // threshold (3 fix links, 2 plans), but the behavior already lives in the
-  // primitive.
-  assert.equal(row.promotionEligible, false);
+    assert.equal(row.promotionEligible, false);
 
   // --why shows promotedTo.
   const whyRes = run(c, ['learnings', '--why', id]);
@@ -261,9 +220,7 @@ test('learning promote <id> --to <path> records promoted_to, commits, and retire
   const whyOut = JSON.parse(whyRes.stdout);
   assert.equal(whyOut.promotedTo, to);
   assert.equal(whyOut.status, 'promoted');
-  // Review follow-up: whyView must carry the same promoted guard listingView
-  // got — a promoted row is never eligible for promotion again.
-  assert.equal(whyOut.promotionEligible, false);
+    assert.equal(whyOut.promotionEligible, false);
 
   // consolidate --status --json: promotionCandidates no longer lists it.
   const statusRes = run(c, ['consolidate', '--status']);
@@ -286,11 +243,6 @@ test('insight-only learning promote exits 2 with a never-promote reason', () => 
   assert.match(out.blockedReason || '', /never promote/);
 });
 
-// A pathless kind: fix episode is not real evidence — every serializer drops
-// it on the next re-render (episodeLines, store.mjs/apply.mjs), so counting
-// it toward promotion eligibility would let a learning promote and then
-// immediately lose its only qualifying episode, leaving a promoted learning
-// with zero recorded evidence.
 test('learning promote is rejected when the only qualifying-kind episode is pathless — evidence that would vanish on re-render', () => {
   const c = ctx();
   const id = seedPathlessFixOnly(c);
@@ -321,8 +273,6 @@ test('learning promote on a missing id exits 1 with E_TARGET', () => {
 test('learning promote --to ../outside.md (relative escape) exits 2, learning untouched', () => {
   const c = ctx();
   const id = seedPromotable(c);
-  // The containment guard fires before the "does not exist" check, so this
-  // must reject even though nothing named outside.md exists anywhere.
 
   const res = run(c, ['learning', 'promote', id, '--to', '../outside.md']);
   assert.equal(res.status, 2, res.stderr || res.stdout);
@@ -388,9 +338,7 @@ test('a model-lane same-id SUPERSEDE against a promoted learning is rejected, pr
   const dir = storeDir(c.ws, { home: c.harnessHome });
   const ledgerBefore = readLedger(dir).length;
 
-  // A model-lane re-derivation: same domain/slug (in-place SUPERSEDE shape),
-  // fresh fix-kind episodes, no human-teaching assertion at all.
-  const supersedeOp = {
+    const supersedeOp = {
     op: 'SUPERSEDE',
     target: id,
     domain: 'sql',
@@ -480,11 +428,6 @@ test('a STRENGTHEN targeting a promoted learning is rejected and records no stri
   assert.equal(readLedger(dir).length, ledgerBefore, 'rejecting a promoted STRENGTHEN target must record no quarantine strike');
 });
 
-// Promoted is terminal for retire/dispute/confirm: none of the three may act
-// on a learning whose behavior already lives in a primitive. Without this
-// guard, a confirm would append a NEWER governance entry than the standing
-// `promote` record, and the next rebuild would forget the promotion entirely
-// (latest-entry-per-id replay).
 test('confirm/retire/dispute on a promoted learning all exit 2, promotion survives, and no governance entry is appended', () => {
   const c = ctx();
   const id = seedPromotable(c);

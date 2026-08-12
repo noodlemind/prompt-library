@@ -2,10 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-/** Where editors keep the Copilot login, honouring XDG and the caller's own
- * environment — reading `os.homedir()` unconditionally is what once made
- * readiness untestable and let a sign-in from some other install decide what
- * the picker offers. */
 export function copilotConfigDir(env = process.env) {
   if (env.XDG_CONFIG_HOME) return path.join(env.XDG_CONFIG_HOME, 'github-copilot');
   const home = env.HOME || env.USERPROFILE || os.homedir();

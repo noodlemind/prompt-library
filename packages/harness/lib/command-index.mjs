@@ -1,37 +1,3 @@
-/**
- * Command index — the flat, searchable index the TUI command palette renders
- * (docs/architecture/harness-cli-workbench.md §"Command palette").
- *
- * The palette is an index OVER the registry, never a second command grammar:
- * this module reads lib/registry.mjs's entries and projects them into rows,
- * and the CLI grammar is untouched. Three properties of that contract drive
- * every decision below.
- *
- * 1. ONE FLAT NAMESPACE. A command, each of its verbs, and each user-invocable
- *    skill are sibling rows. Reaching a capability never requires knowing its
- *    parent — `structural` is findable without knowing it lives under `index`.
- *    That is why this is a flat array and not a tree keyed by command.
- *
- * 2. NO `--` IS EVER TYPED. The index carries options so a capability can be
- *    *found*; it must never require one to be *written*. Hence `argvTokens`:
- *    every row states, as data, the argv the CLI already accepts. The palette
- *    resolves a row by walking those tokens (`resolveArgv`), never by parsing
- *    its own label back into flags — a label is a display string, and
- *    reconstructing argv from it at render time would put the palette's
- *    formatting in the dispatch path.
- *
- * 3. ANNOTATION IS OPTIONAL, NOT ASSUMED. `verbs`, `surfaces`, `userInvocable`
- *    and the per-flag `tui`/`requires`/`verbs` metadata are being populated
- *    entry by entry. Every read here is defensive (`entry.verbs || []`), and
- *    an un-annotated command still yields a row — the registry's own default
- *    is "discoverable", and forgetting to annotate must never silently remove
- *    a capability from the palette.
- *
- * Purity: same registry + same skills directory ⇒ byte-identical index. No
- * model call, no network, and — per the harness read-path invariant — no
- * directory or file is ever created. Filesystem enumeration order is never
- * trusted; skill directories are sorted explicitly before any row is built.
- */
 import fs from 'node:fs';
 import { listCommands, getCommand, SIDE_EFFECTS, SURFACES } from './registry.mjs';
 import { createEnvelope, STATUS } from './envelope.mjs';
@@ -43,16 +9,6 @@ import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
  * identically to the palette, so both carry `kind: 'verb'`. */
 export const ROW_KINDS = Object.freeze(['command', 'verb', 'skill']);
 
-/**
- * The token kinds an `argvTokens` template is built from. `command` and
- * `subcommand` are bare argv words, `flag` is a literal flag token, and
- * `value` is a slot filled in later from a picker (never typed) — see the
- * palette contract's "Values come from pickers".
- *
- * A `value` slot names its picker either by `flag` (the option it supplies)
- * or by `positional` (the declared positional it fills). A flag key always
- * starts with `--`, so one `values` map addresses both without collision.
- */
 export const TOKEN_KINDS = Object.freeze(['command', 'subcommand', 'flag', 'value']);
 
 /** Where skills are discovered, relative to the workspace root. Reported as a
@@ -78,23 +34,6 @@ function verbScope(def) {
   return Array.isArray(def.verbs) ? def.verbs : [];
 }
 
-/**
- * `requires` points in one of two directions, and only one of them means
- * "this is a refinement of something else".
- *
- * - UPWARD, at another `verb` flag: `--since requires --structural`. `since`
- *   is meaningless alone, so it attaches to the `index structural` row and is
- *   never listed independently.
- * - DOWNWARD, at a `prompt` flag: `--apply requires --ops`. Here the
- *   requirement is the verb's own parameter, not its parent — `apply` IS the
- *   capability and `--ops` is the value the palette asks for once it is
- *   chosen.
- *
- * Treating both alike demoted `consolidate apply` out of the index entirely,
- * violating the contract's "reaching a capability never requires knowing its
- * parent": `apply` became findable only by first knowing to look under
- * `consolidate`.
- */
 function dependsOnVerbFlag(entry, def) {
   const byName = new Map();
   for (const f of flagsOf(entry)) {
@@ -117,10 +56,6 @@ function isPromptFlag(entry, def) {
   return def.tui === 'prompt' && !dependsOnVerbFlag(entry, def);
 }
 
-/** `--structural` presents as the verb `structural`. This derives the DISPLAY
- * name from the flag; the reverse direction never happens — the row keeps the
- * real `--structural` token in `argvTokens`, so dispatch never depends on this
- * transformation being invertible. */
 function verbNameForFlag(def) {
   return def.name.replace(/^-+/, '');
 }
@@ -135,22 +70,10 @@ function valueTokenFor(def) {
     flag: def.name,
     valueName: def.valueName || 'value',
     required: Boolean(def.required),
-    // Where the answer comes from, when the registry knows. This is what turns
-    // "type it" into "pick it" — see lib/tui/values.mjs.
-    choices: normalizeChoices(def.choices),
+        choices: normalizeChoices(def.choices),
   };
 }
 
-/**
- * The value slot one declared positional contributes — a bare argv word, so
- * it must be a token in the template rather than an appended option: argv
- * position is what makes it that positional (`learning confirm <id>`).
- *
- * Always `required`, because a row only projects the positionals its own form
- * cannot run without. Without this, `learning confirm`, `knowledge commit`
- * and `knowledge purge` were rows no answer could complete: they resolved to
- * an invocation their own handler refuses.
- */
 function positionalToken(p) {
   return { kind: 'value', positional: p.name, valueName: p.name, required: true, choices: normalizeChoices(p.choices) };
 }
@@ -166,16 +89,6 @@ function positionalTokensForVerb(entry, declared) {
     .map(positionalToken);
 }
 
-/**
- * The palette-facing projection of one option: enough to open a picker and
- * label it, without leaking the whole registry flag definition.
- *
- * `sideEffect` is carried so a consumer can escalate the row's glyph once an
- * option is chosen. An option that declares none inherits the ENTRY's
- * maximum, never the row's — the registry has said nothing about this flag,
- * and the only sound assumption about silence is the worst the command can
- * do. Over-warning is a trust bug; under-warning is a safety bug.
- */
 function optionRow(entry, def) {
   const row = {
     flag: def.name,
@@ -191,14 +104,6 @@ function optionRow(entry, def) {
   return row;
 }
 
-/**
- * Prompt options that apply to one row. `verb` is the DECLARED subcommand this
- * row selects, or null for a bare command row and for a flag-derived verb row
- * (neither puts a bare verb token on argv, so verb-scoped flags cannot apply).
- * The applicability rule deliberately mirrors `validateArgs`'s own scoping
- * check in lib/registry.mjs — the palette must never offer a combination the
- * parser would then reject.
- */
 function promptsFor(entry, verb) {
   return flagsOf(entry)
     .filter((def) => {
@@ -209,26 +114,13 @@ function promptsFor(entry, verb) {
     .map((def) => optionRow(entry, def));
 }
 
-/**
- * The prompts for a flag-derived verb row, with the flag's own `requires`
- * hoisted to the front and marked required.
- *
- * `--apply requires --ops` means the palette cannot dispatch `consolidate
- * apply` without asking for an ops path — the requirement is this verb's
- * mandatory parameter, not an optional filter, and `validateArgs` now rejects
- * the combination without it. Ordering it first and flagging it `required`
- * keeps the picker's sequence honest.
- */
 function promptsForFlagVerb(entry, def, verb) {
   const byName = new Map(flagsOf(entry).map((f) => [f.name, f]));
   const required = requiresList(def)
     .map((req) => byName.get(req))
     .filter((f) => f && f.tui !== 'cli-only')
     .map((f) => ({ ...optionRow(entry, f), required: true }));
-  // `optionRow`'s identity field is `flag`, not `name` — deduping on the wrong
-  // key silently swallowed every optional prompt, since a Set of `undefined`
-  // matches all of them.
-  const requiredFlags = new Set(required.map((r) => r.flag));
+    const requiredFlags = new Set(required.map((r) => r.flag));
   return [...required, ...promptsFor(entry, verb).filter((p) => !requiredFlags.has(p.flag))];
 }
 
@@ -242,21 +134,6 @@ function refinementsFor(entry, ownFlag) {
     .map((def) => optionRow(entry, def));
 }
 
-/**
- * Dependent options that reach NO row anywhere — neither a row of their own
- * nor a refinement of one, because every flag they require was demoted too.
- * They land on the bare command row rather than disappearing: a capability
- * that exists must stay reachable, the same reason the registry defaults an
- * un-annotated command to visible.
- *
- * "No row anywhere" is the whole rule, and it is narrow on purpose. `--apply`
- * owns the `consolidate apply` row, yet its requirement `--ops` produces no
- * row, so a looser test attached it here as well — listing one capability
- * twice AND, because `resolveArgv` appends refinements, letting the
- * read-glyph `consolidate` row resolve to `consolidate --ops x.json --apply`,
- * which writes the store. No row plus any combination of its own refinements
- * may resolve to something more mutating than the row advertises.
- */
 function orphanRefinementsFor(entry, rowFlags) {
   return flagsOf(entry)
     .filter((def) => {
@@ -271,11 +148,7 @@ function orphanRefinementsFor(entry, rowFlags) {
 }
 
 function commandRow(entry, prompts, refinements) {
-  // A bare command row projects the positionals its no-argument form cannot
-  // run without — `remember <claim>`, `recall <query>`. Optional ones are
-  // left out: the row is already runnable, and asking for a value the
-  // invocation does not need is the flag syntax the palette exists to avoid.
-  const argvTokens = [
+    const argvTokens = [
     { kind: 'command', value: entry.name },
     ...positionalsOf(entry).filter((p) => p.required).map(positionalToken),
   ];
@@ -286,11 +159,7 @@ function commandRow(entry, prompts, refinements) {
     verb: null,
     label: entry.name,
     summary: entry.summary || '',
-    // The bare form's own consequence, not the entry's policy-facing maximum:
-    // `report` is classified `mutate` because `--sync` writes, but `harness
-    // report` alone only reads, and a glyph that over-warns is a glyph nobody
-    // reads.
-    sideEffect: SIDE_EFFECTS.includes(entry.bareSideEffect) ? entry.bareSideEffect : entry.sideEffect,
+        sideEffect: SIDE_EFFECTS.includes(entry.bareSideEffect) ? entry.bareSideEffect : entry.sideEffect,
     group: entry.group || 'general',
     argv: [entry.name],
     argvTokens,
@@ -315,41 +184,21 @@ function declaredVerbRow(entry, declared) {
     verb: declared.verb,
     label: `${entry.name} ${declared.verb}`,
     summary: declared.summary || entry.summary || '',
-    // Verb-level side effect wins: `knowledge status` reads where the command
-    // family as a whole mutates, and the palette shows the consequence of the
-    // row the user actually selected.
-    sideEffect: SIDE_EFFECTS.includes(declared.sideEffect) ? declared.sideEffect : entry.sideEffect,
+        sideEffect: SIDE_EFFECTS.includes(declared.sideEffect) ? declared.sideEffect : entry.sideEffect,
     group: entry.group || 'general',
-    // Literal tokens only, exactly as `flagVerbRow` does: a value slot is
-    // filled in later, so `learning confirm` is `['learning','confirm']` here.
-    argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
+        argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
     argvTokens,
     prompts: promptsFor(entry, declared.verb),
     refinements: [],
   };
 }
 
-/**
- * A verb backed by a flag (`index structural` → `['index','--structural']`).
- * A value-taking flag (`learnings why`) keeps its value slot in `argvTokens`
- * so the palette knows to open a picker before dispatching.
- *
- * `under` is the declared verb the flag is scoped to, or null when it applies
- * to the bare command. A scoped flag carries its subcommand token — `--merged`
- * is declared `verbs: ['prune']`, so its row is `knowledge prune merged` →
- * `['knowledge','prune','--merged']`. Emitting `['knowledge','--merged']`
- * instead would dispatch a combination the command ignores: the palette must
- * never offer a row whose argv does not do what the row says it does, and the
- * flat namespace still keeps `merged` findable without knowing its parent.
- */
 function flagVerbRow(entry, def, under) {
   const verb = verbNameForFlag(def);
   const argvTokens = [{ kind: 'command', value: entry.name }];
   if (under) {
     argvTokens.push({ kind: 'subcommand', value: under.verb });
-    // The scoped verb still demands its own arguments: `knowledge purge x`
-    // does not stop needing `x` because a flag row was built under it.
-    argvTokens.push(...positionalTokensForVerb(entry, under));
+        argvTokens.push(...positionalTokensForVerb(entry, under));
   }
   argvTokens.push({ kind: 'flag', value: def.name });
   const value = valueTokenFor(def);
@@ -362,38 +211,19 @@ function flagVerbRow(entry, def, under) {
     verb: qualified,
     label: `${entry.name} ${qualified}`,
     summary: def.description || entry.summary || '',
-    // Precedence: the flag's own declared effect (index --status never
-    // rebuilds), then the verb it sits under, then the entry.
-    sideEffect: SIDE_EFFECTS.includes(def.sideEffect)
+        sideEffect: SIDE_EFFECTS.includes(def.sideEffect)
       ? def.sideEffect
       : under && SIDE_EFFECTS.includes(under.sideEffect)
         ? under.sideEffect
         : entry.sideEffect,
     group: entry.group || 'general',
-    // The template: literal tokens only. A value slot is filled in later, so
-    // `learnings why` is `['learnings','--why']` here, exactly as documented.
-    argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
+        argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
     argvTokens,
     prompts: promptsForFlagVerb(entry, def, under ? under.verb : null),
     refinements: refinementsFor(entry, def.name),
   };
 }
 
-/**
- * A command whose TUI form is a picker: ONE row, and the picker is what it
- * opens.
- *
- * `model` produced five rows — an injected session word, the bare command, and
- * `set` / `show` / `clear` — for a capability that is one gesture. Every
- * reference CLI treats `/model` as a single entry that opens a chooser, because
- * show/set/clear are not three things to decide between: showing is what the
- * picker does on open, setting is what choosing does, and clearing is a row
- * inside it. The CLI keeps all three verbs, where scripting needs them and
- * `--help` explains them; only the palette collapses.
- *
- * The row still resolves to real argv (`['model']`), so a surface with no
- * picker — a piped session, a test — reaches the same capability the same way.
- */
 function pickerRow(entry) {
   return {
     id: `command:${entry.name}`,
@@ -424,11 +254,7 @@ function rowsForEntry(entry, surface) {
   const rows = [commandRow(entry, promptsFor(entry, null), orphanRefinementsFor(entry, rowFlags))];
   for (const declared of declaredVerbs) rows.push(declaredVerbRow(entry, declared));
   for (const def of verbFlags) {
-    // `assertValidFlagMetadata` already rejects a scope naming an undeclared
-    // verb, so `scoped` is normally the full list; the filter is only a guard
-    // against a half-written entry, and an empty result falls back to the
-    // unscoped row rather than dropping the capability.
-    const scoped = verbScope(def).map((v) => byVerb.get(v)).filter(Boolean);
+        const scoped = verbScope(def).map((v) => byVerb.get(v)).filter(Boolean);
     if (!scoped.length) rows.push(flagVerbRow(entry, def, null));
     else for (const under of scoped) rows.push(flagVerbRow(entry, def, under));
   }
@@ -438,19 +264,12 @@ function rowsForEntry(entry, surface) {
 function entryOnSurface(entry, surface) {
   const surfaces = Array.isArray(entry.surfaces) && entry.surfaces.length ? entry.surfaces : SURFACES;
   if (!surfaces.includes(surface)) return false;
-  // `userInvocable: false` marks a command the harness calls on the user's
-  // behalf. It is filtered from the palette only — the CLI and agent lanes
-  // still dispatch it, so hiding it there would break its actual callers.
-  if (surface === 'tui' && entry.userInvocable === false) return false;
+    if (surface === 'tui' && entry.userInvocable === false) return false;
   return true;
 }
 
 // --- skills ---------------------------------------------------------------
 
-/** Same minimal frontmatter reader lib/index-knowledge.mjs uses: one flat
- * `key: value` per line, quotes stripped. A skill's frontmatter is authored to
- * that shape by the primitive standard, and a real YAML parser is not a
- * dependency this package carries. */
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return {};
@@ -528,12 +347,7 @@ function skillRow(skill) {
   // correct reasoning that a skill is a workflow for the HOST to run and the
   // harness cannot run it — but a palette row that can only answer "this row
   // resolves to no command" is a dead end, and the palette's contract is that
-  // every row reaches a capability. From the harness, a skill IS a document:
-  // choosing it shows the workflow, which is both true and the thing an
-  // operator wants when they cannot remember what a skill does. Invoking it
-  // remains the host's job, and `read` is now an honest class because reading
-  // is exactly what happens.
-  const relPath = `${SKILLS_DIR}/${skill.dir}/SKILL.md`;
+    const relPath = `${SKILLS_DIR}/${skill.dir}/SKILL.md`;
   return {
     id: `skill:${skill.dir}`,
     kind: 'skill',
@@ -556,33 +370,12 @@ function skillRow(skill) {
 
 // --- index ----------------------------------------------------------------
 
-/** Total, deterministic ordering. Plain codepoint comparison, never
- * `localeCompare` — collation must not vary with the host's locale. Sorting by
- * label groups a command with its own verbs for free (`index` < `index status`
- * < `index structural`); the unique `id` breaks every remaining tie. */
 function compareRows(a, b) {
   if (a.label !== b.label) return a.label < b.label ? -1 : 1;
   if (a.id !== b.id) return a.id < b.id ? -1 : 1;
   return 0;
 }
 
-/**
- * Build the palette index for one surface.
- *
- * `surface` defaults to `'tui'` — the palette is the surface with neither
- * `--help` nor shell completion, and the only one this index exists for.
- * `'cli'` and `'agent'` project the same registry rows for tooling that wants
- * the surface membership, but carry no skills: a skill is dispatched by the
- * host, and there is nothing for a shell or the agent lane to invoke.
- *
- * Returns `{surface, skillsRoot, rows, collisions}`:
- *   - `rows`      — the flat index, sorted (see `compareRows`).
- *   - `skillsRoot`— the relative skills path when it was found, else null, so
- *                   a consumer can distinguish "no skills" from "not scanned".
- *   - `collisions`— names owned by BOTH a command and a skill. Surfaced rather
- *                   than resolved: both rows are always present, and this makes
- *                   the overlap auditable instead of implicit.
- */
 export function buildCommandIndex({ surface = 'tui', workspace = process.cwd() } = {}) {
   if (!SURFACES.includes(surface)) {
     throw new TypeError(`buildCommandIndex: unknown surface ${JSON.stringify(surface)} (expected ${SURFACES.join(' | ')})`);
@@ -612,22 +405,6 @@ export function buildCommandIndex({ surface = 'tui', workspace = process.cwd() }
   return { surface, skillsRoot, rows, collisions };
 }
 
-/**
- * Resolve one row into the argv the CLI already accepts.
- *
- * `values` maps a picker key — a flag name, or a positional's own name — to
- * the value chosen; anything absent is simply left out, so `resolveArgv(row)`
- * returns the row's own template (`['learnings','--why']`) and
- * `resolveArgv(row, {'--why': 'L-7'})` returns the complete invocation.
- * Boolean options are emitted as a bare flag when their value is truthy and
- * omitted otherwise.
- *
- * This is the one place a row becomes argv. Prompts and refinements are
- * appended in registry declaration order so a given `{row, values}` pair always
- * produces the identical argv — the resolved form is echoed into the ledger
- * after the run, and an unstable ordering would make that audit trail noise.
- * Returns null for a row with no argv at all (a skill).
- */
 export function resolveArgv(row, values = {}) {
   if (!row || !Array.isArray(row.argvTokens) || row.argvTokens.length === 0) return null;
   const argv = [];
@@ -652,16 +429,6 @@ export function resolveArgv(row, values = {}) {
   return argv;
 }
 
-/**
- * The index as a versioned envelope — the "programs / TUI" lane from the
- * output-lanes contract, and the only lane the palette has. Summary scalars
- * first (`createEnvelope` enforces the ordering), detail arrays after, so one
- * payload serves both a status line and the full palette.
- *
- * Emitting through the envelope is what makes the index consumable and
- * testable without a terminal: the TUI reads it in-process, and a test asserts
- * on it without rendering a single styled row.
- */
 export function commandIndexEnvelope({ surface = 'tui', workspace = process.cwd() } = {}) {
   const index = buildCommandIndex({ surface, workspace });
   const counts = { command: 0, verb: 0, skill: 0 };

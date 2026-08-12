@@ -1,10 +1,3 @@
-/**
- * P2.2 — `lookup <kind> <identifier>` against the kind list settled in
- * docs/architecture/harness-cli-workbench.md. The properties under test are the
- * ones a caller scripting against lookup depends on: not-found is a distinct
- * outcome from usage error, identifiers reuse the store's own keys, and no
- * resolver creates the knowledge store.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -56,9 +49,6 @@ test('the kind list matches the settled architecture contract, in order', () => 
   ]);
 });
 
-// Not-found and usage error are different outcomes. Collapsing them would make
-// "you asked for something that isn't here" indistinguishable from "you called
-// this wrong" — the distinction a script consuming lookup needs most.
 test('an unknown KIND is a usage error; a missing ENTITY is a not-found', () => {
   const ws = fixtureWorkspace();
 
@@ -81,8 +71,6 @@ test('a missing identifier is a usage error naming the kind', () => {
   assert.match(err.message, /requires an identifier/);
 });
 
-// Dropping run/resource from the kind list would report the KIND as wrong,
-// when in fact the kind is right and the store is empty until its phase lands.
 test('run and resource stay in the kind list and answer not-found naming their phase', () => {
   const ws = fixtureWorkspace();
   for (const kind of Object.keys(PENDING_KINDS)) {
@@ -139,9 +127,6 @@ test('a near-miss returns related candidates rather than a bare failure', () => 
   assert.ok(err.related.some((r) => r.id === 'harness-tests'));
 });
 
-// P2AC6 — the read-path invariant. A navigation command that seeds a store
-// turns a read into a write, and the store is the one place this CLI must not
-// create as a side effect of looking at it.
 test('no resolver creates the knowledge store', () => {
   const ws = fixtureWorkspace();
   const home = tempDir('lookup-store-home-');
@@ -176,8 +161,6 @@ test('lookup event reports the identifier it actually accepts', () => {
   assert.deepEqual(out.metadata.types, ['command.start', 'command.result']);
 });
 
-// Redaction is a data-boundary discipline: it must happen in the resolver,
-// before any lane sees the record.
 test('a secret in file content never reaches the preview', () => {
   const ws = fixtureWorkspace();
   fs.writeFileSync(path.join(ws, 'leak.txt'), 'token=ghp_abcdefghijklmnopqrstuvwxyz0123456789\n');

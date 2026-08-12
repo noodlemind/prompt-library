@@ -108,9 +108,7 @@ test('a --since that is not the prior index baseline is ignored, reported, and f
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
   assert.equal(runHarness(['index', '--structural'], { home, ws }).status, 0);
 
-  // Two commits after the index was built: `--since HEAD~1` would leave the
-  // first one's files stale under a current-looking meta.sha.
-  fs.writeFileSync(path.join(ws, 'src', 'pay.mjs'), 'export function charge() {}\nexport function first() {}\n');
+    fs.writeFileSync(path.join(ws, 'src', 'pay.mjs'), 'export function charge() {}\nexport function first() {}\n');
   git(['add', '.']);
   git(['commit', '-qm', 'one']);
   fs.writeFileSync(path.join(ws, 'src', 'audit.mjs'), 'export function audit() {}\nexport function second() {}\n');

@@ -1,11 +1,3 @@
-/**
- * `harness trust status|approve|revoke`.
- *
- * `status` is the discoverability half of the gate. A project whose config
- * silently does nothing because nobody approved it is indistinguishable from a
- * project whose config is wrong, so every state here carries a reason and the
- * exact list of files an approval pins.
- */
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { verbOf } from './positionals.mjs';
@@ -24,12 +16,7 @@ function usageError(message, hint) {
 
 function context(argv) {
   const flags = parseFlags(argv);
-  // Matched against TRUST_VERBS rather than taken positionally. The old scan
-  // read `approve` as the value of `--json`, found no positional, and fell back
-  // to `status` — so `harness trust --json approve` PRINTED THE CURRENT STATE
-  // AND EXITED 0 while recording no approval. An operator reading "not trusted"
-  // could not tell their request had been dropped rather than refused.
-  const verb = verbOf(argv, TRUST_VERBS, { fallback: 'status' });
+    const verb = verbOf(argv, TRUST_VERBS, { fallback: 'status' });
   return {
     flags,
     verb,
@@ -51,10 +38,7 @@ export async function trustResultOf(argv, ctx = {}) {
     ? approveProject({ workspace, copilotHome })
     : revokeProject({ workspace, copilotHome });
 
-  // P3AC6: "trust changes are recorded". Emitted from here rather than the
-  // handler so the envelope and agent lanes record the change too — the same
-  // gap that made `exec`'s audit skippable by choosing an output format.
-  const events = ctx?.events;
+    const events = ctx?.events;
   const sink = typeof events?.withCommand === 'function' ? events.withCommand('trust') : events;
   sink?.emit?.('trust', {
     result: 'pass',
@@ -93,8 +77,5 @@ export async function cmdTrust(argv, ctx = {}) {
     }
   }
 
-  // `status` answers a question and always succeeds at answering it; reporting
-  // an untrusted project as a command failure would make `trust status` unusable
-  // in exactly the scripts that need to branch on it.
-  return 0;
+    return 0;
 }

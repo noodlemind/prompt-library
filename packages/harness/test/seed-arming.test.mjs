@@ -41,8 +41,6 @@ function writeGlobalEpisode(copilotHome, category, name) {
 
 const ctx = () => ({ ws: gitWorkspace(), home: tempDir('seed-home-'), harnessHome: tempDir('seed-hh-') });
 
-// Deliberately not --json: the arming log line only prints on the human
-// (non-JSON) surface — `log()` in commands.mjs is a no-op under --json.
 const runInitRepo = (c, extra = []) =>
   spawnSync(process.execPath, [binPath, 'init-repo', '--workspace', c.ws, '--copilot-home', c.home, ...extra], {
     encoding: 'utf8',
@@ -72,14 +70,6 @@ test('init-repo arms pre-existing solution docs as consolidation debt', () => {
   assert.equal(status.due, true);
 });
 
-// Documents intended behavior (controller ruling): collectEpisodes' dual-root
-// scan — workspace docs/solutions AND <copilot-home>/knowledge/solutions — is
-// the established debt definition consolidateStatus uses everywhere (orient's
-// session-start drain surfaces the same debt), so a workspace with zero local
-// docs but a hydrated global copilot-home still arms real debt. This is not a
-// leak: --copilot-home is sandboxed to a temp dir here precisely so this test
-// (and every other init-repo call in the suite) can never resolve to a
-// developer's real ~/.copilot regardless of machine state.
 test('init-repo arms global copilot-home solutions even with no local docs/solutions', () => {
   const c = ctx();
   writeGlobalEpisode(c.home, 'perf', 'global-fix');
@@ -118,12 +108,6 @@ test('init-repo --dry-run reports what would be armed without creating the store
   assert.ok(!fs.existsSync(dir), 'dry-run must not create the knowledge store');
 });
 
-// Milestone 4 Task 5 item 6: the dry-run debt preview previously treated
-// EVERY ledger entry as consumed, including pure failure entries (no
-// `learning` outcome yet) — under-counting debt versus consolidateStatus's
-// splitLedger-based semantics (the non-dry-run path just below it). A ledger
-// with one genuinely-consumed entry and one failure-only entry must report
-// the failure episode as debt.
 test('init-repo --dry-run counts a failure ledger entry as debt (splitLedger semantics), not as consumed', () => {
   const c = ctx();
   writeEpisode(c.ws, 'perf', 'consumed-ep');

@@ -8,17 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { ensureStore, storeDir, listLearnings, readGovernance, rewriteGovernance } from '../lib/knowledge/store.mjs';
 
-/**
- * Milestone 4 Task 1: the governance ledger — primitives (readGovernance,
- * appendGovernance, rewriteGovernance in store.mjs) and every writer that
- * records a human's retire/dispute/confirm/promote decision. This is the
- * persistence half of the M3-review gap: a `consolidate --rebuild --yes`
- * wipes learnings but must never resurrect a human-RETIRED (or -disputed,
- * -confirmed, -promoted) claim's governance state. Reapplying that state
- * against a freshly regenerated corpus is Task 2 — this file only proves the
- * ledger is written correctly and survives every wipe path it should.
- */
-
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -35,10 +24,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// Writes a real fix-evidence file into the workspace at `rel` and returns an
-// episode object whose sha256 actually matches the file's on-disk content —
-// verifyAdmittedEpisodeKinds (apply.mjs) hashes the file at admission time,
-// so a fabricated sha256 rejects the whole op with E_SCHEMA.
 function EP(ws, over = {}) {
   const rel = over.path || 'docs/solutions/perf/x.md';
   const full = path.join(ws, rel);
@@ -64,9 +49,6 @@ const ADD = (ws, over = {}) => ({
   ...over,
 });
 
-// Two learnings per the brief: `a` via a consolidate --apply ADD op,
-// `b` via `remember` (human-direct, kind: human-teaching — qualifies for
-// promote without any extra fixture work).
 function seed(c) {
   const opsPath = writeOps(c.ws, [ADD(c.ws)]);
   const applyRes = run(c, ['consolidate', '--apply', '--ops', opsPath]);
@@ -99,8 +81,6 @@ function commitCount(dir) {
   return parseInt(res.stdout.trim(), 10);
 }
 
-// (a) learning retire <a> --reason x → readGovernance has the entry, and the
-// SAME commit as the retire carries governance.jsonl (never a follow-up commit).
 test('learning retire <id> --reason x appends a governance retire entry in the same commit as the retire', () => {
   const c = ctx();
   const { aId } = seed(c);
@@ -120,11 +100,7 @@ test('learning retire <id> --reason x appends a governance retire entry in the s
   assert.equal(entry.action, 'retire');
   assert.equal(entry.reason, 'x');
   assert.equal(entry.to, null);
-  // P1-9: governance entries now stamp a full ISO-8601 UTC timestamp (not a
-  // day-only date) — needed for the model-lane recency gate's
-  // strictly-newer-than-the-record comparison (overridesGovernanceRecency,
-  // apply.mjs).
-  assert.match(entry.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    assert.match(entry.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
 });
 
 // (b) dispute then confirm on the same id → latest entry (replay semantics) is the confirm.
@@ -165,8 +141,6 @@ test('learning promote <id> --to <path> records a governance promote entry carry
   assert.equal(entry.reason, null);
 });
 
-// (d) hand-delete a learning file + trigger absorb → retire record with the
-// hand-deletion reason.
 test('hand-deleting a learning file and absorbing it appends a governance retire entry with reason "hand deletion (absorbed)"', () => {
   const c = ctx();
   const { aId } = seed(c);
@@ -176,10 +150,7 @@ test('hand-deleting a learning file and absorbing it appends a governance retire
   assert.ok(learning, 'precondition: the learning exists in the store');
   fs.rmSync(learning.file, { force: true }); // human deletes the store file directly, bypassing the CLI entirely
 
-  // Any mutation command absorbs the hand edit first — `remember` drives
-  // applyOps, which absorbs it under its own lock (absorbOrAbort) as the
-  // first step of its transaction, before writing its own new learning.
-  const another = run(c, ['remember', 'another claim body', '--trigger', 'another trigger']);
+    const another = run(c, ['remember', 'another claim body', '--trigger', 'another trigger']);
   assert.equal(another.status, 0, another.stderr || another.stdout);
 
   const gov = readGovernance(dir);
@@ -211,16 +182,12 @@ test('consolidate --rebuild --yes wipes learnings but governance.jsonl survives 
   assert.deepEqual(govAfter.get(bId), govBefore.get(bId));
 });
 
-// (f) knowledge purge <sole episode of a> (cascade-deletes a) → a's record
-// gone, b's intact.
 test('knowledge purge <sole episode of a> cascade-deletes a and rewrites governance dropping a while keeping b', () => {
   const c = ctx();
   const { aId, bId } = seed(c);
   const dir = storeDir(c.ws, { home: c.harnessHome });
 
-  // Give both ids a governance record first, so the rewrite below has
-  // something to prove it drops selectively rather than emptying the file.
-  assert.equal(run(c, ['learning', 'dispute', aId, '--reason', 'a-review']).status, 0);
+    assert.equal(run(c, ['learning', 'dispute', aId, '--reason', 'a-review']).status, 0);
   assert.equal(run(c, ['learning', 'dispute', bId, '--reason', 'b-review']).status, 0);
   const govBefore = readGovernance(dir);
   assert.ok(govBefore.has(aId) && govBefore.has(bId), 'precondition: both ids have governance records');

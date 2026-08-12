@@ -1,16 +1,3 @@
-/**
- * `harness config show|get|set|validate` — the configuration surface.
- *
- * `show` leads with PROVENANCE rather than values alone. The question an
- * operator actually has is not "what is the timeout" but "why is it that, when
- * I set something else" — a config command that prints an effective value
- * without saying where it came from leaves the interesting half unanswered, and
- * this harness merges three sources with one of them deliberately able to lose.
- *
- * `set` is the only verb with a mutate side effect, declared per verb rather
- * than inherited from the entry's maximum, for the same reason `checks list`
- * does not inherit `checks run`'s execute class.
- */
 import path from 'node:path';
 import { parseFlags } from './flags.mjs';
 import { resolveCopilotHome } from './paths.mjs';
@@ -38,12 +25,6 @@ function notFoundError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_NOT_FOUND', exit: EXIT.notFound, hint });
 }
 
-/**
- * `--scope` is read straight from argv rather than added to lib/flags.mjs, the
- * same reason `--match` and `--source` are: parseFlags is shared by every
- * command, and a new value-flag there would also have to join
- * `FLAGS_WITH_VALUES` in argv.mjs or free-text parsing would swallow its value.
- */
 function readValueFlag(argv, name) {
   const boundary = argv.indexOf('--');
   const scan = boundary === -1 ? argv : argv.slice(0, boundary);
@@ -93,9 +74,7 @@ export async function configResultOf(argv, ctx = {}) {
     return {
       schema: 1,
       verb,
-      // Same reason as `checks`: without a `status` the envelope's default
-      // `ok` stood next to a body full of parse errors.
-      status: resolved.errors.length ? 'failed' : 'ok',
+            status: resolved.errors.length ? 'failed' : 'ok',
       files: resolved.files,
       settings: CONFIG_KEYS.map((k) => ({
         key: k,
@@ -109,10 +88,7 @@ export async function configResultOf(argv, ctx = {}) {
   }
 
   if (verb === 'validate') {
-    // Exits non-zero on a broken file so CI can gate on it. A config that does
-    // not parse is a policy nobody is enforcing, which is worse than an absent
-    // one because it looks present.
-    return {
+        return {
       schema: 1,
       verb,
       status: resolved.errors.length ? 'failed' : 'ok',
@@ -142,19 +118,12 @@ export async function configResultOf(argv, ctx = {}) {
   if (value === null) throw usageError(`config set requires a value`, `harness config set ${key} <value> --scope user|project`);
   const scope = rawScope || null;
   if (!scope) {
-    // No default scope, deliberately: guessing wrong writes a machine-wide
-    // decision into a repository, or a repository's needs onto a machine.
-    throw usageError('config set requires --scope', `--scope ${SCOPES.join(' or --scope ')}`);
+        throw usageError('config set requires --scope', `--scope ${SCOPES.join(' or --scope ')}`);
   }
   if (!SCOPES.includes(scope)) throw usageError(`unknown scope: ${scope}`, `--scope ${SCOPES.join(' or --scope ')}`);
 
   const written = setConfigValue({ scope, key, value, copilotHome, workspace });
-  // Trust is recomputed AFTER the write. `config.yaml` is a pinned file, so
-  // writing the project scope invalidates the approval that was covering it —
-  // reusing the pre-write boolean reported an effective value from a project
-  // that had just become `stale`, and the very next read disagreed. Found by
-  // the Codex phase review.
-  const trustedAfter = isProjectTrusted({ workspace, copilotHome });
+    const trustedAfter = isProjectTrusted({ workspace, copilotHome });
   const after = resolveConfig({ copilotHome, workspace, projectTrusted: trustedAfter });
   return {
     schema: 1,
@@ -163,17 +132,10 @@ export async function configResultOf(argv, ctx = {}) {
     scope,
     written: written.value,
     file: written.file,
-    // The effective value AFTER the write, which is not always what was just
-    // written — a restrictive key set loosely in the project scope leaves the
-    // user's value in force, and saying so here prevents the operator walking
-    // away believing a limit changed when it did not.
-    value: after.values[key],
+        value: after.values[key],
     ...after.provenance[key],
     effectiveChanged: after.values[key] === written.value,
-    // Surfaced because it is the likeliest surprise: a project-scope write makes
-    // the project's own approval stale, so the value just written does not take
-    // effect until someone re-approves after reading the change.
-    ...(scope === 'project' && !trustedAfter ? { trustNowStale: true } : {}),
+        ...(scope === 'project' && !trustedAfter ? { trustNowStale: true } : {}),
   };
 }
 
@@ -225,15 +187,6 @@ export async function cmdConfig(argv, ctx = {}) {
   return configExitFor(result);
 }
 
-/**
- * The exit code for a `config` result, on EVERY lane.
- *
- * `config validate` is meant to be gated on in CI, and `dispatchLane` returns 0
- * on any success path unless the entry declares this — so `config validate
- * --output json-envelope` exited 0 over a body saying `"valid": false`. Same
- * defect the Codex review found in `checks run`, in a command whose whole
- * purpose is likewise the exit code.
- */
 export function configExitFor(result) {
   if (result?.verb === 'validate') return result.valid ? EXIT.ok : 1;
   if (result?.verb === 'show') return result.errors?.length ? 1 : EXIT.ok;

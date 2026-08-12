@@ -1,17 +1,3 @@
-/**
- * The Codex phase-5 review: one test per finding, each written to fail against
- * the pre-fix code.
- *
- * Same convention as `codex-review-findings.test.mjs` for phase 3. The value is
- * not that the bugs are fixed — it is that the specific WRONG BEHAVIOR is
- * named, so a later refactor that reintroduces it fails here rather than in
- * someone's `~/.copilot`.
- *
- * Three of these were reporting-untruths rather than plain bugs, which is the
- * worse class: F2 deleted a file while reporting a successful withdrawal, F10
- * reported a withdrawal that never happened, and F13 was a comment asserting a
- * property the code did not have, guarded by a test that skipped the file.
- */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -44,10 +30,7 @@ function bundleHome(prefix, { contents = 'bundle bytes\n', rel = 'demo/SKILL.md'
     schema: 1, name: 'demo-bundle', version: '1.0.0', contributes: { skills: [rel] },
   }));
   fs.writeFileSync(path.join(dir, '.enabled'), '');
-  // Exactly how `cmdInstallOrUpgrade` calls it: approval IS the trust input, so
-  // removing `.enabled` genuinely disables the bundle here. Hardcoding the name
-  // instead would leave the withdrawal tests below asserting nothing.
-  const sync = (extra = {}) => syncBundles({ copilotHome: home, trustedNames: approvedBundleNames(home), ...extra });
+    const sync = (extra = {}) => syncBundles({ copilotHome: home, trustedNames: approvedBundleNames(home), ...extra });
   return { home, dir, sync, target: `skills/${rel}` };
 }
 
@@ -89,10 +72,7 @@ test('F2: a path the harness now ships is never withdrawn as a bundle leftover',
   sync();
   assert.equal(fs.existsSync(path.join(home, target)), true);
 
-  // The next release ships that path. Hydration writes the package's copy,
-  // placement refuses the bundle — and withdrawal used to delete the package
-  // file it had just written.
-  fs.writeFileSync(path.join(home, target), 'package bytes\n');
+    fs.writeFileSync(path.join(home, target), 'package bytes\n');
   const result = sync({ shippedFiles: new Set([target]) });
 
   assert.equal(fs.readFileSync(path.join(home, target), 'utf8'), 'package bytes\n',
@@ -208,9 +188,7 @@ test('F5: a symlinked primitive is refused, not followed', () => {
 test('F6: an oversized line is discarded even though it ends in a newline', async () => {
   const dir = tempDir('f6-');
   const file = path.join(dir, 'p.mjs');
-  // A complete, well-formed, enormous frame — the shape the old guard let past,
-  // because it only rejected buffers with NO newline in them.
-  fs.writeFileSync(file, `
+    fs.writeFileSync(file, `
     process.stdin.on('data', () => {});
     process.stdout.write(JSON.stringify({ type: 'log', level: 'info', text: 'x'.repeat(50000) }) + '\\n');
     setTimeout(() => {}, 1000);
@@ -305,17 +283,12 @@ test('F10: a deletion that fails is not reported as withdrawn, and keeps its rec
   sync();
   fs.rmSync(path.join(dir, '.enabled'));
 
-  // Make the containing directory unwritable so unlink fails with EACCES —
-  // the EBUSY/EACCES class the old `catch {}` swallowed as "already gone".
-  const parent = path.dirname(path.join(home, target));
+    const parent = path.dirname(path.join(home, target));
   const mode = fs.statSync(parent).mode;
   fs.chmodSync(parent, 0o500);
   try {
     const result = sync();
-    // The escape hatch is "the file really is gone" (running as root, where the
-    // unwritable directory cannot stop unlink) — NOT "it was reported
-    // withdrawn", which is exactly the false report this finding is about.
-    if (!fs.existsSync(path.join(home, target))) return;
+        if (!fs.existsSync(path.join(home, target))) return;
     assert.equal(result.withdrawn.includes(target), false,
       'the file is still on disk and the run said it had been withdrawn');
     assert.ok(result.retained.some((r) => r.target === target), 'the operator must learn the file is still there');
@@ -362,10 +335,7 @@ test('F12: a child that closes stdin but stays alive is still killed on close', 
   const dir = tempDir('f12-');
   const file = path.join(dir, 'p.mjs');
   const marker = path.join(dir, 'alive.txt');
-  // ESM, with a real import — an earlier version of this test used `require`
-  // in an .mjs child, so the heartbeat threw, the marker was never written, and
-  // the assertion compared '0' to '0' and passed against the broken code.
-  fs.writeFileSync(file, `
+    fs.writeFileSync(file, `
     import fs from 'node:fs';
     // Closing fd 0 AFTER the handshake lands is what makes the host's next
     // write fail with EPIPE — the condition that used to mark the handle closed.
@@ -409,17 +379,10 @@ test('F14: every declared value-taking flag is one the task parser knows about',
 });
 
 test('F14: nothing in the set is actually a boolean, which would skip a word of the task', () => {
-  // Two legitimate authorities, because the agent's own flags are parsed by
-  // `agent-cmd.mjs` and never reach `parseFlags`, while several value-taking
-  // globals (--plan, --host, --query) are parsed by `parseFlags` without ever
-  // appearing in the registry's help surface. A flag is fine if EITHER says so.
-  const declared = new Map(
+    const declared = new Map(
     [...GLOBAL_FLAGS, ...(getCommand('agent').args?.flags || [])].map((f) => [f.name, f.type]),
   );
-  // Probed with a word AND a number: `--limit` is numeric, so a string sentinel
-  // parses to NaN and vanishes from the result — a probe that only tried words
-  // would call a real value-taking flag a boolean.
-  const consumesAValue = (name) => ['SENTINEL', '7'].some((value) => {
+    const consumesAValue = (name) => ['SENTINEL', '7'].some((value) => {
     try {
       return JSON.stringify(parseFlags([name, value]) ?? {}).includes(value);
     } catch {
@@ -435,9 +398,6 @@ test('F14: nothing in the set is actually a boolean, which would skip a word of 
   assert.deepEqual(notValueTaking, [],
     'listing a boolean here makes the parser skip a word that belonged to the task');
 });
-
-// --- CodeRabbit critical: `resources remove` was a recursive delete on an
-//     unvalidated operator positional -------------------------------------
 
 test('CRITICAL: `resources remove` cannot delete anything outside the resources root', async () => {
   const { resolveBundleDir } = await import('../lib/resources-cmd.mjs');
@@ -507,10 +467,7 @@ test('FINAL-12: a base URL may not embed credentials', async () => {
 });
 
 test('FINAL-4: the adapter scrubs its own credential out of anything it sends back', () => {
-  // A gateway echoing the Authorization header into a 401 body put the key into
-  // `error.message`, then into the loop's `stopDetail`, then into the result.
-  // Core cannot mask it: core never sees the key.
-  for (const file of ['providers/openai-compatible.mjs', 'providers/anthropic.mjs']) {
+    for (const file of ['providers/openai-compatible.mjs', 'providers/anthropic.mjs']) {
     const src = fs.readFileSync(path.join(packageRoot, 'lib', file), 'utf8');
     assert.match(src, /function scrubCredential/, `${file} must scrub`);
     assert.match(src, /const safe = scrubCredential\(message,/,
@@ -535,20 +492,7 @@ test('FINAL-6: a provider failure after the deadline is a time budget, not a pro
 });
 
 test('FINAL-3: a running command can still be cancelled from the keyboard', async () => {
-  // THE DEFECT: in raw mode Ctrl-C is a keypress, not a signal, and keypresses
-  // were discarded while no `next()` was pending — which is exactly when a
-  // command is running. Cancellation was therefore impossible in the TUI.
-  //
-  // The original fix dropped raw mode for the duration of the dispatch so the
-  // terminal's own SIGINT would fire. That is no longer available: output is
-  // captured now rather than passed through, so the region stays on screen and
-  // has to keep repainting, and Esc — which the running block's sticky header
-  // promises cancels — only exists as a keypress in raw mode.
-  //
-  // So this asserts the BEHAVIOUR rather than the mechanism, which is what was
-  // ever at stake: an interrupt arriving with nothing pending must still reach
-  // the caller.
-  const { createInput } = await import('../lib/tui/input.mjs');
+    const { createInput } = await import('../lib/tui/input.mjs');
   const { PassThrough } = await import('node:stream');
   const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
   const output = Object.assign(new PassThrough(), { isTTY: true, columns: 60 });
@@ -562,9 +506,7 @@ test('FINAL-3: a running command can still be cancelled from the keyboard', asyn
   input.emit('keypress', null, { name: 'escape' });
   assert.equal(interrupts.length, 2, 'and so must Esc, which the sticky header promises cancels');
 
-  // With a promise pending the keys belong to the composer again, not to the
-  // interrupt path — otherwise Esc could never open anything.
-  const pending = session.next();
+    const pending = session.next();
   input.emit('keypress', null, { name: 'escape' });
   const event = await pending;
   assert.equal(event.intent, 'escape');

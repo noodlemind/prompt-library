@@ -1,41 +1,4 @@
-// Lexical symbol/import extractor — the default tier behind the repo-map's
-// extractor seam. Deterministic, dependency-free regex per language. A
-// tree-sitter tier (AC62) can implement the same `extract` shape later for
-// languages where precision is worth the dependency (Java/Python/TS/JS);
-// SQL and HCL stay lexical because their grammars add little here.
-//
-// EXPORT SURFACE: the result carries `exported` — the subset of `symbols` this
-// file publishes to other modules. It is what makes the structural checks
-// (removed-symbol-with-callers, unplanned-symbol-change) meaningful in the
-// DEFAULT tier: grammars are optional, so without lexical export detection
-// nothing is ever marked exported and those checks can never fire. Detection
-// is deliberately conservative — an export marker that names an identifier the
-// file also declares. Per language:
-//   js/ts  `export`ed declarations (function/class/const/let/var/type/
-//          interface/enum, incl. `export default`), `export { a, b as c }`
-//          lists and re-exports, `export * as ns from`, and the CommonJS
-//          `module.exports.x = ` / `exports.x = ` / `module.exports = { x }`.
-//   py     Python has no export keyword. CONVENTION: an explicit `__all__`
-//          list is authoritative when present; otherwise every module-level
-//          (column-0) `class`/`def` whose name does not start with `_` — the
-//          same approximation the tree-sitter tier applies, so both tiers
-//          agree on what "exported" means.
-//   java   `public` types, methods, and fields.
-//   sql/tf no module boundary, so nothing is reported as exported.
-//
-// REFERENCE SURFACE: the result also carries `references` — the names this
-// file EXPLICITLY imports by name from another module. Those are facts the
-// source states outright, not guessed call sites (the lexical tier still never
-// infers a call from a bare identifier), and they are what lets the caller-side
-// structural checks work in the default tier: without them a lexical index has
-// no edges at all, so "removed symbol still has callers" could never fire
-// outside an AST install.
-//
-// BOUNDED: `symbols`, `imports`, and `references` are capped here (not just in
-// consumers) so one hostile or generated file cannot balloon files.json — and
-// so the baseline side and the current side of a structural diff cap
-// identically.
-
+/** Lexical extract seam; tree-sitter tier lives in treesitter-extractor.mjs. */
 import path from 'node:path';
 
 const IMPORT_PATTERNS = [

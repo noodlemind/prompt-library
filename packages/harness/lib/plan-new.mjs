@@ -21,11 +21,6 @@ function classify(primitivePath) {
   return 'primitive';
 }
 
-/**
- * Build a valid, gate-ready plan skeleton so a model never authors the exact
- * frontmatter, status, capability_gaps shape, or PR2-PR7 governance block by
- * hand. Returns { path, content }. Pure — the CLI handles I/O and the date.
- */
 export function buildPlanSkeleton({
   type = 'feat',
   slug,

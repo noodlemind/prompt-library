@@ -142,9 +142,7 @@ test('a feature-branch apply lands in the bucket with meta.json, ledger, and IND
   assert.equal(meta.promotable, true);
   assert.ok(meta.createdAt);
 
-  // On the default branch the same episode is NOT golden-eligible (P4): its
-  // provenance-less shape routes to branch review once buckets exist.
-  git(ws, ['checkout', '-q', 'main']);
+    git(ws, ['checkout', '-q', 'main']);
   const ep = writeEpisode(ws, 'docs/solutions/perf/foreign.md', { branch: 'feature/bucket-write' });
   const goldenAttempt = applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'laundered', episodes: [ep] })]), home });
   assert.equal(goldenAttempt.exitCode, 1);
@@ -264,9 +262,7 @@ test('branch rename auto-migrates the bucket to the new key when unambiguous', (
 test('doctor K5 flags orphan buckets and K6 flags misrouted bucket contents', async () => {
   const ws = clonedWorkspace();
   const home = tempDir('route-home9-');
-  // Doctor reads the store via the UNSCOPED storeDir (HARNESS_HOME), so run
-  // it with HARNESS_HOME pointed at this test's home.
-  const { dir } = ensureStore(ws, { home });
+    const { dir } = ensureStore(ws, { home });
   const orphanKey = branchKeyFor('feature/deleted-branch');
   const bucketDir = ensureBucket(dir, { key: orphanKey, branch: 'feature/deleted-branch' });
   fs.mkdirSync(path.join(bucketDir, 'learnings', 'sql'), { recursive: true });
@@ -315,27 +311,11 @@ test('listBuckets sees a routed bucket and consolidate status reports the branch
   assert.equal(status.debt, 0, 'the bucket ledger consumed the episode — no phantom debt');
 });
 
-// Routing and provenance describe the same thing — the HEAD this write belongs
-// to — but were derived from TWO separate git reads, both taken BEFORE the
-// store lock existed. A checkout landing between them could stamp provenance
-// for one branch while routing the write to another's layer; a checkout
-// landing after both could cache golden routing from the default branch and
-// then write it out from a feature branch, bypassing branch isolation
-// entirely. The store lock cannot serialize the WORKSPACE's git operations, so
-// the snapshot is taken once inside the transaction and re-validated at write
-// time — fail closed, never a silent write to the stale layer.
-//
-// Deterministic reproduction: a store-side `pre-commit` hook moves the
-// workspace HEAD during the absorb sub-commit the transaction makes before its
-// own mutation phase — i.e. inside the exact window the two reads straddled.
 test('a workspace checkout landing mid-transaction aborts the write instead of routing it to the stale layer', () => {
   const ws = clonedWorkspace();
   const home = tempDir('route-home11-');
 
-  // Land a first claim on main (the default branch → golden) so the store has
-  // a tracked learning file to hand-edit — that edit is what makes the
-  // transaction's absorb step commit, and therefore run the hook.
-  const first = applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'settled-claim' })]), home });
+    const first = applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'settled-claim' })]), home });
   assert.equal(first.exitCode, 0, JSON.stringify(first.rejected));
   assert.equal(first.layer, 'golden');
 
@@ -367,13 +347,6 @@ test('a workspace checkout landing mid-transaction aborts the write instead of r
   assert.match(listLearnings(dir).find((l) => l.id === 'sql/settled-claim').body, /Hand-edited claim body\./);
 });
 
-// The same race, but from a FEATURE branch — where the run materializes a
-// branch bucket (mkdir + ledger + INDEX.md + meta.json) on its way to the
-// mutation phase. `E_HEAD_MOVED` promises "nothing was written", but that
-// materialization happened BEFORE the check, and the rejection returned
-// normally — so the transaction's own finalize committed the stale bucket
-// while reporting that nothing had been written. A rejection must leave the
-// store byte-identical to what it was.
 test('E_HEAD_MOVED from a feature branch is side-effect-free: no bucket is materialized, nothing is committed', () => {
   const ws = clonedWorkspace();
   const home = tempDir('route-home12-');
@@ -382,14 +355,10 @@ test('E_HEAD_MOVED from a feature branch is side-effect-free: no bucket is mater
   assert.equal(first.exitCode, 0, JSON.stringify(first.rejected));
   const { dir } = ensureStore(ws, { home });
 
-  // Route to a bucket: the run starts on a feature branch, so runOnce
-  // materializes `branches/<key>/` for it.
-  git(ws, ['checkout', '-qb', 'feature/original']);
+    git(ws, ['checkout', '-qb', 'feature/original']);
   const stableKey = branchKeyFor('feature/original');
 
-  // The hand edit is what makes the absorb step commit — and therefore run the
-  // hook that moves the workspace HEAD mid-transaction.
-  const learning = listLearnings(dir).find((l) => l.id === 'sql/settled-claim');
+    const learning = listLearnings(dir).find((l) => l.id === 'sql/settled-claim');
   fs.writeFileSync(
     learning.file,
     fs.readFileSync(learning.file, 'utf8').replace('Routed claim body.', 'Hand-edited claim body.'),
@@ -411,9 +380,7 @@ test('E_HEAD_MOVED from a feature branch is side-effect-free: no bucket is mater
   assert.deepEqual(listBuckets(dir), [], 'no bucket was materialized by a run that wrote nothing');
   assert.equal(fs.existsSync(bucketDirFor(dir, stableKey)), false, 'not even an empty bucket directory survives');
   assert.equal(listLearnings(dir).some((l) => l.id === 'sql/raced-claim'), false);
-  // Exactly one commit landed — the absorb of the hand edit, which is the
-  // transaction's checkpoint and legitimately survives. Nothing after it.
-  const headAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+    const headAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
   const subject = spawnSync('git', ['log', '--format=%s', '-1'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
   assert.notEqual(headAfter, headBefore, 'the absorb commit landed');
   assert.match(subject, /^human edit: /, 'and it is the LAST commit — no bucket was committed on top of it');

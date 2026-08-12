@@ -132,9 +132,7 @@ test('a protected golden claim (>=3 fix links or source human) is never shadowed
   assert.equal(branch.subordinate, true);
   assert.ok(isProtectedFm(golden.fm));
 
-  // Equal-score tie between the pair: the protected golden outranks its
-  // subordinate shadow (subordinate never wins the tie).
-  const ranked = rankLearnings({ workspace: ws, query: 'protected trigger tokens', home });
+    const ranked = rankLearnings({ workspace: ws, query: 'protected trigger tokens', home });
   assert.equal(ranked.length, 2);
   assert.equal(ranked[0].layer, undefined);
   assert.equal(ranked[1].subordinate, true);
@@ -169,9 +167,7 @@ test('branch-local wins an equal-score tie against a DIFFERENT golden id (layer 
   const ws = gitWorkspace('feature/tie');
   const home = tempDir('overlay-home5-');
   const { dir } = ensureStore(ws, { home });
-  // 'aaa/...' sorts before 'zzz/...', so the id tiebreak ALONE would put the
-  // golden claim first; the layer tiebreak must run first and flip it.
-  writeLearning(dir, 'aaa/golden-tie', { trigger: 'tie trigger tokens', body: 'Golden tie.' });
+    writeLearning(dir, 'aaa/golden-tie', { trigger: 'tie trigger tokens', body: 'Golden tie.' });
   const bucketDir = writeBucket(dir, branchKeyFor('feature/tie'), { branch: 'feature/tie' });
   writeLearning(bucketDir, 'zzz/branch-tie', { trigger: 'tie trigger tokens', body: 'Branch tie.' });
 
@@ -223,9 +219,7 @@ test('explain decomposition and the context pack carry the branch-local marker',
   const lines = buildLearningsLines(ranked).join('\n');
   assert.match(lines, /- \[sql\/marked\] \[branch-local\]/);
 
-  // Golden-only lines never carry the marker (query tokens disjoint from the
-  // bucket claim so only the golden learning surfaces).
-  writeLearning(dir, 'sql/plain', { trigger: 'entirely disjoint golden words', body: 'Plain claim.' });
+    writeLearning(dir, 'sql/plain', { trigger: 'entirely disjoint golden words', body: 'Plain claim.' });
   const plain = buildLearningsLines(rankLearnings({ workspace: ws, query: 'entirely disjoint golden words', home })).join('\n');
   assert.doesNotMatch(plain, /\[branch-local\]/);
 });

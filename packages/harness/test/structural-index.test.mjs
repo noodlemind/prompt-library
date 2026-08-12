@@ -142,11 +142,7 @@ test('incremental: unchanged files are not re-parsed; touched-but-identical file
 });
 
 test('--since is refused as a narrowing unless it matches the prior index baseline', async () => {
-  // The stale-index trap: an index built at A, three commits landing, then
-  // `--since HEAD~1`. Files changed in commits 1-2 are outside that diff, so
-  // they would keep their A-era entries verbatim while meta.sha is stamped to
-  // the new HEAD — an index that READS as current while carrying stale data.
-  const { ws, git } = gitRepo(FIXTURE);
+    const { ws, git } = gitRepo(FIXTURE);
   const home = tempHome();
   await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
   const builtAt = git(['rev-parse', 'HEAD']).stdout.trim();
@@ -191,11 +187,7 @@ test('--since is refused as a narrowing unless it matches the prior index baseli
 });
 
 test('co-located worktrees of one repo never serve each other structural tables', async () => {
-  // repoId hashes the ORIGIN REMOTE by design, so every worktree of a repo
-  // shares it; meta.sha is the only currency gate, and two worktrees sit at
-  // the same sha with different working-tree content. Without a per-worktree
-  // path segment each would read the other's symbol tables as its own.
-  const { ws, git } = gitRepo(FIXTURE);
+    const { ws, git } = gitRepo(FIXTURE);
   git(['remote', 'add', 'origin', 'https://example.test/shared-repo.git']);
   const linked = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-worktree-'));
   const target = path.join(linked, 'checkout');
@@ -237,9 +229,7 @@ test('--since: only files in the ref diff are re-parsed; the ref is validated', 
   fs.writeFileSync(path.join(ws, 'src', 'pay.mjs'), 'export function charge() {}\nexport function newSince() {}\n');
   git(['add', '.']);
   git(['commit', '-qm', 'change pay']);
-  // Drift another file's mtime so the fast path alone would NOT skip it —
-  // --since must keep it verbatim because it is outside the diff.
-  fs.utimesSync(path.join(ws, 'svc.py'), new Date(Date.now() + 9000), new Date(Date.now() + 9000));
+    fs.utimesSync(path.join(ws, 'svc.py'), new Date(Date.now() + 9000), new Date(Date.now() + 9000));
 
   const since = validateSinceRef(ws, base);
   assert.match(since, /^[0-9a-f]{40}$/);
@@ -301,9 +291,7 @@ test('a stale index is rejected from meta.json alone — the tables are never pa
   git(['add', '.']);
   git(['commit', '-qm', 'advance head']);
 
-  // orient runs this every turn; on a stale index the old order read and
-  // parsed all three tables (multi-MB in a real repo) only to discard them.
-  const opened = [];
+    const opened = [];
   const realOpen = fs.openSync;
   fs.openSync = (target, ...rest) => {
     opened.push(String(target));
@@ -361,9 +349,7 @@ test('a hand-edited or partial prior entry is discarded and rebuilt, never a cra
   const dir = structuralIndexDir(ws, { home });
   const files = JSON.parse(fs.readFileSync(path.join(dir, 'files.json'), 'utf8'));
   const stat = fs.statSync(path.join(ws, 'svc.py'));
-  // Same mtime+size as on disk, so the fast path WILL reuse it, but with no
-  // defs/refs arrays — the shape that used to abort the whole build.
-  files['svc.py'] = { hash: 'c'.repeat(64), mtime: stat.mtimeMs, size: stat.size };
+    files['svc.py'] = { hash: 'c'.repeat(64), mtime: stat.mtimeMs, size: stat.size };
   fs.writeFileSync(path.join(dir, 'files.json'), JSON.stringify(files));
 
   const ext = countingExtractor();
@@ -479,10 +465,7 @@ test('secret-shaped extracted names are redacted at index-write time', async () 
 });
 
 test('symbols named after Object.prototype members index as ordinary own keys', async () => {
-  // Regression: a repo defining `constructor` / `__proto__` / `toString`
-  // must not resolve to inherited prototype members in the symbol table —
-  // that made `.defs` access throw and aborted the whole build.
-  const { ws } = gitRepo({
+    const { ws } = gitRepo({
     'proto.mjs': 'export const constructor = 1;\nexport const __proto__ = 2;\nexport const toString = 3;\n',
   });
   const home = tempHome();
@@ -569,19 +552,14 @@ test('buildRepoMap prefers a current structural index and is byte-identical with
   const stale = buildRepoMap({ workspace: ws, query: 'charge payment' });
   assert.equal(stale.structural, false, 'meta.sha drift falls back to lexical');
 
-  // Deleting the index restores byte-identical pre-index output — the
-  // regression pin for "no structural index ⇒ unchanged lexical behavior".
-  git(['reset', '-q', '--hard', 'HEAD~1']);
+    git(['reset', '-q', '--hard', 'HEAD~1']);
   fs.rmSync(structuralIndexDir(ws, { home }), { recursive: true, force: true });
   const after = buildRepoMap({ workspace: ws, query: 'charge payment' });
   assert.equal(after.body, before.body, 'byte-identical output when no structural index exists');
 });
 
 test('no-network guard: source-text scan of the structural read modules for model/network markers', () => {
-  // A source-text scan of THESE files only — a tripwire against obvious
-  // model/network use creeping into the listed modules, not a proof that the
-  // whole runtime path is network-free.
-  const read = (rel) => fs.readFileSync(path.join(packageRoot, rel), 'utf8');
+    const read = (rel) => fs.readFileSync(path.join(packageRoot, rel), 'utf8');
   for (const rel of [
     'lib/repo-map/index.mjs',
     'lib/repo-map/scan.mjs',
@@ -611,9 +589,6 @@ test('no-network guard: source-text scan of the structural read modules for mode
 // ONE GENERATION ON DISK, ALWAYS (review finding). Writing the four tables one
 // by one into the live directory is four independent publications: a write that
 // refuses partway (or a reader arriving mid-build) sees this build's files.json
-// beside the previous build's meta.json. `meta.filesIndexed` is written as
-// `Object.keys(files).length`, so within ONE generation the two always agree —
-// which makes the pair a direct, deterministic probe for a mixed set.
 test('a refused table write never leaves a mixed generation on disk', async (t) => {
   const { ws, git } = gitRepo(FIXTURE);
   const home = tempHome();
@@ -629,12 +604,7 @@ test('a refused table write never leaves a mixed generation on disk', async (t) 
   git(['add', '.']);
   git(['commit', '-qm', 'add extra']);
 
-  // A DIRECTORY where graph.json belongs: the temp+rename write refuses
-  // (rename onto a directory is EISDIR), which is the same shape a symlinked
-  // ancestor or a full disk produces on any one table. Before the staged
-  // publish, files.json had ALREADY been overwritten with generation 2 while
-  // meta.json still described generation 1.
-  fs.rmSync(path.join(dir, 'graph.json'), { force: true });
+    fs.rmSync(path.join(dir, 'graph.json'), { force: true });
   fs.mkdirSync(path.join(dir, 'graph.json'));
 
   await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
@@ -648,10 +618,6 @@ test('a refused table write never leaves a mixed generation on disk', async (t) 
   );
 });
 
-// A CORRUPT PRIOR REBUILDS, IT NEVER CRASHES (review finding). symbols.json is
-// a plain hand-editable file; a null or primitive entry made symbolDelta
-// dereference `.defs` on it and throw straight out of `harness index
-// --structural`, recoverable only by deleting the index by hand.
 test('a null or primitive prior symbol entry rebuilds instead of crashing the build', async (t) => {
   const { ws } = gitRepo(FIXTURE);
   const home = tempHome();
@@ -671,9 +637,7 @@ test('a null or primitive prior symbol entry rebuilds instead of crashing the bu
 
   const rebuilt = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
   assert.equal(rebuilt.written, true, 'the build completes over a corrupt prior symbol table');
-  // Uncomparable priors count as CHANGED — the safe direction, never a silent
-  // "unchanged".
-  assert.ok(
+    assert.ok(
     rebuilt.delta.changed.names.includes(names[0]),
     `a null prior entry is reported changed: ${JSON.stringify(rebuilt.delta.changed)}`
   );

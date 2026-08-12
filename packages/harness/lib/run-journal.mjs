@@ -1,28 +1,3 @@
-/**
- * The run journal — what this harness did, in an order nobody can rewrite.
- *
- * A RUN is one invocation of the CLI. Until now the harness recorded events but
- * had no notion of the invocation they belonged to: `events.jsonl` held a flat
- * stream where a `verify` and the four checks it spawned were indistinguishable
- * from four unrelated commands that happened to run nearby. A run id is what
- * turns that stream into history.
- *
- * APPEND-ONLY MEANS NO ENTRY IS EVER MODIFIED. That is the property an audit
- * depends on, and it is deliberately narrower than "the file only ever grows" —
- * a journal that grows forever is one that eventually gets deleted by hand,
- * which loses more history than bounded retention ever would. Pruning therefore
- * writes a fresh file atomically and appends a `journal.pruned` record saying
- * what went and why: a journal that silently shrinks is worse than one that
- * admits it.
- *
- * A RUN WITH NO TERMINAL RECORD IS `running`, NOT `interrupted`. The status
- * vocabulary is fixed by the contract (running, succeeded, failed,
- * inconclusive, blocked, cancelled, timed-out) and `interrupted` is not in it.
- * Telling a live run from one whose process died needs liveness, not a new
- * status — so the recorded pid is checked and reported as a separate `live`
- * field. Inventing a status the contract does not list would have been the
- * easier lie.
- */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,13 +25,6 @@ export const RUN_STATUSES = Object.freeze([
 
 export const TERMINAL_RUN_STATUSES = Object.freeze(RUN_STATUSES.filter((s) => s !== 'running'));
 
-/**
- * Map a command's own reported status onto the run vocabulary.
- *
- * PREFERRED over the exit code, because the exit code cannot be reverse-mapped:
- * a child exiting 8 through `exec` is not a harness timeout, and only the
- * command knows which it was. Returns null when the command said nothing.
- */
 export function runStatusFromReported(status) {
   if (status === 'ok') return 'succeeded';
   if (status === 'failed') return 'failed';
@@ -65,15 +33,6 @@ export function runStatusFromReported(status) {
   return null;
 }
 
-/**
- * The fallback: what an exit code alone implies.
- *
- * SHARED BY EVERY SURFACE THAT OPENS A RUN. It lived in `bin/harness.mjs` while
- * the CLI was the only one; the Session Ledger then grew its own narrower copy,
- * and the two disagreed — the same usage error journaled as `inconclusive`
- * through the CLI and as `failed` through the TUI. "One kernel, one behaviour
- * path" has to include the record the kernel writes.
- */
 export function runStatusForExit(code, { cancelled = false, timedOut = false } = {}) {
   if (cancelled) return 'cancelled';
   if (timedOut) return 'timed-out';
@@ -89,37 +48,20 @@ export function runsPath(workspace) {
   return path.join(workspace, '.harness', RUNS_FILE);
 }
 
-/**
- * A stable run id.
- *
- * Time-ordered prefix so the journal sorts chronologically by id alone, plus
- * random bytes so two runs starting in the same millisecond — a real case under
- * `xargs -P` — cannot collide. Same construction as `eventId`, deliberately: a
- * reader who has learned to recognize one recognizes the other.
- */
 export function newRunId() {
   return `${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`;
 }
 
 function append(workspace, record, flags = {}) {
   if (ensureHarnessDir(workspace, false) === null) return null;
-  // P1-5 (Codex phase-4a review): `.harness` replaced by a symlink redirected
-  // every journal write outside the workspace — a read-class command could be
-  // made to append attacker-chosen bytes to an attacker-chosen path. The repo
-  // already has the primitive for this; use it rather than trusting the path's
-  // spelling.
-  if (!assertNoSymlinkAncestors(path.resolve(workspace), path.join('.harness', RUNS_FILE))) {
+    if (!assertNoSymlinkAncestors(path.resolve(workspace), path.join('.harness', RUNS_FILE))) {
     return null;
   }
-  // Redacted before it lands, on the same terms as every other persisted
-  // surface: a run record carries the argv, which is caller free-text.
-  const safe = createRedactor().redactValue(record);
+    const safe = createRedactor().redactValue(record);
   const file = runsPath(workspace);
   ensureNewlineTerminated(file);
   appendGuarded(file, `${JSON.stringify(safe)}\n`);
-  // Bounded by the same policy the event log uses, and it says so when it
-  // prunes — see lib/retention.mjs on why that is not a breach of append-only.
-  pruneJournalFile(file, {
+    pruneJournalFile(file, {
     retentionDays: retentionDaysFor(workspace, flags),
     markerFor: ({ removed, cutoff }) => ({
       schema: RUN_SCHEMA,
@@ -132,10 +74,6 @@ function append(workspace, record, flags = {}) {
   return safe;
 }
 
-/**
- * Open a run. Returns the record actually written, so a caller never has to
- * guess what was persisted after redaction.
- */
 export function startRun(workspace, { run, command, argv = [], plan = null, host = null, actor = null, pid = process.pid, harnessVersion = null, ts = new Date().toISOString(), flags = {} }) {
   return append(workspace, {
     schema: RUN_SCHEMA,
@@ -151,13 +89,6 @@ export function startRun(workspace, { run, command, argv = [], plan = null, host
   }, flags);
 }
 
-/**
- * Close a run with its terminal status.
- *
- * `status` is validated rather than accepted: a typo here would create a run
- * that no filter matches and no reader can classify, and it would be persisted
- * forever in an append-only file.
- */
 export function finishRun(workspace, { run, status, exitCode = null, durationMs = null, plan = null, ts = new Date().toISOString(), flags = {} }) {
   if (!TERMINAL_RUN_STATUSES.includes(status)) {
     throw new TypeError(`finishRun: status must be one of ${TERMINAL_RUN_STATUSES.join(', ')} (got ${JSON.stringify(status)})`);
@@ -174,11 +105,6 @@ export function finishRun(workspace, { run, status, exitCode = null, durationMs 
   }, flags);
 }
 
-/**
- * P2-6: a torn final line — a crash mid-append — would otherwise have the next
- * valid record concatenated onto it, losing BOTH. Terminate the file first so
- * recovery costs one damaged record rather than two.
- */
 function ensureNewlineTerminated(file) {
   try {
     const size = fs.statSync(file).size;
@@ -231,23 +157,13 @@ function pidAlive(pid) {
   }
 }
 
-/**
- * Fold the journal into one record per run.
- *
- * The start record supplies identity and the result record supplies the
- * outcome; a run missing the second is `running`, with `live` telling the
- * reader whether that is true or whether the process died without recording.
- */
 export function foldRuns(records, { isAlive = pidAlive } = {}) {
   const runs = new Map();
   for (const record of records) {
     if (!record?.run) continue;
     if (record.type === 'run.start') {
       const existing = runs.get(record.run);
-      // P2-17: the comment below has always said the first start is the truth,
-      // and the spread underneath quietly let a second one replace command,
-      // argv, actor, host, pid and start time. Now it says no.
-      if (existing?.startedAt) continue;
+            if (existing?.startedAt) continue;
       runs.set(record.run, {
         run: record.run,
         command: record.command,
@@ -266,11 +182,7 @@ export function foldRuns(records, { isAlive = pidAlive } = {}) {
       });
     } else if (record.type === 'run.result') {
       const existing = runs.get(record.run) || { run: record.run, command: null, argv: [], plan: null, host: null, actor: null, pid: null, startedAt: null };
-      // First terminal record wins. Tracked as an explicit flag rather than
-      // inferred from `finishedAt` being truthy — a result whose `ts` was null
-      // left the run looking un-terminated and let the NEXT result revise the
-      // outcome (P2-16).
-      if (existing.terminal) continue;
+            if (existing.terminal) continue;
       runs.set(record.run, {
         ...existing,
         status: record.status,
@@ -283,11 +195,7 @@ export function foldRuns(records, { isAlive = pidAlive } = {}) {
     }
   }
   return [...runs.values()].map((r) => {
-    // P2-15: a hand-edited or corrupted journal could carry a status outside
-    // the fixed vocabulary, and `resume` would then treat it as a terminal
-    // read-class run and call it resumable. An unrecognized status is reported
-    // as such rather than believed.
-    const known = RUN_STATUSES.includes(r.status);
+        const known = RUN_STATUSES.includes(r.status);
     return {
       ...r,
       status: known ? r.status : 'running',
@@ -299,19 +207,9 @@ export function foldRuns(records, { isAlive = pidAlive } = {}) {
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
-/**
- * P4aAC5 — query by status, command, host, plan, and date.
- *
- * `since`/`until` accept a bare date as well as a full timestamp, because
- * `--since 2026-08-09` is what a person types and rejecting it would be a
- * papercut on the one filter people reach for most.
- */
 export function queryRuns(runs, { status = null, command = null, host = null, plan = null, since = null, until = null } = {}) {
   const lower = (v) => (typeof v === 'string' ? v.toLowerCase() : v);
-  // Compared as INSTANTS. String comparison excluded any offset timestamp that
-  // was chronologically inside a UTC bound, and accepted `--since 2026-99-99`
-  // as a filter that silently matched nothing (P2-13).
-  const bound = (value, endOfDay) => {
+    const bound = (value, endOfDay) => {
     if (!value) return null;
     const text = DATE_ONLY.test(value)
       ? `${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`
@@ -337,14 +235,6 @@ export function queryRuns(runs, { status = null, command = null, host = null, pl
   });
 }
 
-/**
- * Newest first, by INSTANT.
- *
- * Filtering was already instant-based; display ordering was not, so a run
- * stamped `01:00-05:00` (later than `05:30Z`) sorted behind it. Two halves of
- * the same command disagreeing about which run is newer is worse than either
- * rule alone.
- */
 export function sortRuns(runs) {
   const at = (r) => {
     const parsed = Date.parse(r.startedAt || r.finishedAt || '');

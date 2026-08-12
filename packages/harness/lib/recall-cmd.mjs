@@ -14,10 +14,7 @@ export function runRecall({ workspace, copilotHome, flags, argv }) {
     limit: flags.limit || 3,
     collection: flags.collection,
     minScore: flags.minScore ?? 0.15,
-    // Redact secrets at the DATA boundary so EVERY untrusted field — including
-    // `path` and `docid` — is screened before it leaves here, covering both the
-    // rendered `harness recall` output AND the `--json` emit in one place.
-  }).map((e) => redactRecallEntry({
+      }).map((e) => redactRecallEntry({
     docid: e.docid || e.id,
     path: e.path,
     title: e.title || e.id,

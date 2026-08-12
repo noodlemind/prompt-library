@@ -1,51 +1,3 @@
-/**
- * `harness edit`, `harness write`, and `harness undo` — the governed file
- * mutation surface.
- *
- * WHY THESE ARE COMMANDS AND NOT AGENT TOOLS. The turn loop maps every tool
- * call onto a harness command argv (lib/agent-loop.mjs#dispatchToolCall), so a
- * tool IS a command: it inherits the audit event, the run journal, the
- * side-effect class and the palette row for free. Implementing file edits
- * inside the loop instead would have created a second write path that
- * `controls` never sees — the one property that file says it cannot give up.
- * Declaring them here fixes three surfaces at once: an operator gets
- * `harness edit`, the palette gets a row with value prompts, and the model gets
- * a tool.
- *
- * WHY THE HARNESS NEEDED THEM AT ALL. Before this, the only way to change a
- * file under the harness was to express it as shell — `sed -i`, a heredoc, a
- * redirect. That works for a person who already knows the file, and it is a
- * trap for a model: a live run spent ten turns emitting malformed shell and
- * wrote nothing. `get` could read a file and nothing could write one, which is
- * a missing capability rather than a missing convenience.
- *
- * THE FOUR CONTROLS, each taken from a shipped implementation rather than
- * invented here:
- *   1. UNIQUE MATCH (Claude Code's `Edit`). `--old` must occur exactly once.
- *      An edit that matched three places and changed all three, or matched the
- *      first, is an edit nobody can review from its arguments.
- *   2. READ BEFORE WRITE, ENFORCED STRUCTURALLY. `edit` needs a unique `--old`,
- *      which cannot be produced without having seen the file. `write` over an
- *      EXISTING file needs `--expect <sha256 prefix>` of the current content,
- *      which `get` reports. The proof travels IN THE ARGUMENT — there is no
- *      hidden per-session receipt, so the rule reads the same from the CLI, the
- *      palette and the loop, and a concurrent modification between the read and
- *      the write is caught rather than silently overwritten.
- *   3. UNDO (Amp ships it). Every mutation snapshots what was there first, so
- *      the answer to "that was wrong" is one command and not a git argument.
- *   4. PER-FILE SERIALIZATION (pi's file mutation queue). A read-verify-write
- *      is not atomic; two of them interleaved lose one of the edits. Each
- *      mutation holds an exclusive lock on its own path for the duration.
- *
- * WHAT AN EXPECTED FAILURE IS. A path outside the workspace, a missing file, no
- * match, an ambiguous match, a stale `--expect` — these return a `failed`
- * RESULT, they do not throw. The distinction matters at exactly one caller: the
- * turn loop treats a thrown refusal as fatal to the run (it means the harness
- * said no and will keep saying no), and a failed result as information handed
- * back to the model. A model naming a file that does not exist should be told
- * so and allowed to correct itself, which is the whole point of a loop; only a
- * policy refusal should end the run.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -61,11 +13,6 @@ const ui = createStyle({ argv: process.argv.slice(2) });
 
 export const EDIT_SCHEMA = 1;
 
-/** How long a lock may be held before a later mutation may break it. A lock is
- * only ever held across one read-verify-write of one file, which is
- * milliseconds; anything older belongs to a process that died holding it, and
- * refusing forever because of a crash three days ago is not a control, it is a
- * dead file nobody knows to delete. */
 const LOCK_STALE_MS = 30_000;
 
 /** The minimum `--expect` prefix. Eight hex characters is 32 bits — enough that
@@ -85,21 +32,6 @@ export function sha256(text) {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-/**
- * A flag whose value is arbitrary text.
- *
- * `parseFlags` knows a fixed vocabulary and cannot carry file content, and
- * `exec-cmd.mjs`'s `singleFlag` refuses any value starting with `-` — correct
- * for a timeout or a directory, wrong for a line of a markdown list. This takes
- * the next token VERBATIM, which is the only rule under which a diff can be
- * passed at all. `--old=<value>` remains available for a value that begins with
- * `--`, and is the form to use there: the registry's own argument walk stops
- * skipping at a `--`-shaped token, so the space form cannot express one.
- *
- * Repetition is refused rather than resolved. Two `--old` values mean the
- * caller believes something about this invocation that is not true, and picking
- * one silently edits a file on a guess.
- */
 export function literalFlag(argv, name) {
   const seen = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -143,10 +75,6 @@ function dryRunResult(mode, relPath, before, after) {
   };
 }
 
-/** The shared failure shape. Every refusal names a machine-readable `reason`
- * next to the sentence a person reads, so a caller can branch on the cause
- * without parsing prose — the loop shows the prose to the model, the palette
- * shows it to a person, and a test asserts on the reason. */
 function failed(mode, relPath, reason, message, hint) {
   return {
     schema: EDIT_SCHEMA,
@@ -166,31 +94,14 @@ function failed(mode, relPath, reason, message, hint) {
   };
 }
 
-/**
- * Take an exclusive lock on one path, or report why not.
- *
- * A directory entry created with `wx` is the lock: `O_CREAT|O_EXCL` is atomic
- * across processes, needs no daemon, and leaves a file whose mtime says when it
- * was taken. The lock name is a hash of the relative path rather than the path
- * itself so that a nested file cannot need a nested lock directory, and so a
- * path with a separator in it cannot escape `.harness/locks/`.
- */
 function acquireLock(workspace, relPath) {
   const dir = path.join(workspace, LOCK_DIR);
-  // Hash the RESOLVED path, not the spelling the caller used: `a.txt`,
-  // `./a.txt` and `sub/../a.txt` are one file, and hashing the raw string gave
-  // each of them its own lock — serialization that fails exactly when two
-  // callers disagree about how to write the path, which is the likeliest way
-  // for two callers to arrive at all.
-  const key = path.resolve(workspace, relPath);
+    const key = path.resolve(workspace, relPath);
   const file = path.join(dir, `${crypto.createHash('sha1').update(key).digest('hex').slice(0, 32)}.lock`);
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch {
-    // No lock directory means no serialization, and refusing every edit because
-    // `.harness` is unwritable would make the harness useless in a read-only
-    // checkout for a reason unrelated to the edit. Proceed unlocked and say so.
-    return { held: false, degraded: 'no lock directory', release: () => {} };
+        return { held: false, degraded: 'no lock directory', release: () => {} };
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -201,9 +112,7 @@ function acquireLock(workspace, relPath) {
       try {
         age = Date.now() - fs.statSync(file).mtimeMs;
       } catch {
-        // It vanished between the failed create and the stat — the holder
-        // finished. Loop once more and take it.
-        continue;
+                continue;
       }
       if (age < LOCK_STALE_MS) {
         return { held: false, degraded: null, busy: true, release: () => {} };
@@ -215,13 +124,7 @@ function acquireLock(workspace, relPath) {
       }
     }
   }
-  // Both attempts lost the race to re-create a lock we had judged stale, which
-  // means another process is actively taking it. Report BUSY so the caller
-  // refuses: proceeding here would be a read-verify-write running unserialized
-  // against a writer we have positive evidence is live — the exact interleaving
-  // the lock exists to prevent. Only a missing lock DIRECTORY degrades to
-  // proceeding, because that says nothing about contention.
-  return { held: false, degraded: 'could not take the lock', busy: true, release: () => {} };
+    return { held: false, degraded: 'could not take the lock', busy: true, release: () => {} };
 }
 
 /** Resolve a workspace-relative path, or null when it escapes. Kept as one
@@ -232,10 +135,6 @@ function resolveTarget(workspace, relPath) {
   return safeResolveUnderRoot(path.resolve(workspace), relPath);
 }
 
-/** Read a file as text, or report why it cannot be edited as text. `null`
- * content with `exists: false` is an absent file; `binary: true` is a file the
- * harness refuses to rewrite through a string API, because a NUL byte means a
- * utf8 round-trip is not lossless and an "edit" would corrupt it. */
 function readTarget(fullPath, workspaceResolved) {
   if (!fs.existsSync(fullPath)) return { exists: false, content: null, binary: false };
   const raw = readFileNoFollow(fullPath, { root: workspaceResolved });
@@ -244,14 +143,6 @@ function readTarget(fullPath, workspaceResolved) {
   return { exists: true, content: raw, binary: false };
 }
 
-/**
- * Record what a path held before this mutation, so `undo` can put it back.
- *
- * The snapshot is written BEFORE the mutation and the journal line AFTER it, so
- * a crash between the two leaves an orphan snapshot (harmless) rather than a
- * journal entry pointing at a file that was never written (an undo that would
- * restore nothing and report success).
- */
 function snapshot(workspace, relPath, previous) {
   if (ensureHarnessDir(workspace, false) === null) {
     return { id: null, reason: '.harness is not a real directory — this change was not made undoable' };
@@ -296,9 +187,7 @@ export function readUndoStack(workspace) {
     try {
       parsed = JSON.parse(line);
     } catch {
-      // A truncated last line is the normal shape of a crash during an append,
-      // not a corrupt store. Skipping it loses one undo, not the stack.
-      continue;
+            continue;
     }
     if (parsed?.type === 'undone' && parsed.ref) undone.add(parsed.ref);
     else if (parsed?.type === 'mutation' && parsed.id) entries.push(parsed);
@@ -308,15 +197,6 @@ export function readUndoStack(workspace) {
 
 // --- edit -----------------------------------------------------------------
 
-/**
- * Replace one exact, unique occurrence of `old` with `next`.
- *
- * Exact strings rather than a regex or a line range, deliberately: a regex is a
- * second language to get wrong at the moment of writing to disk, and a line
- * number is stale the instant anything above it moves. An exact substring that
- * must appear exactly once is the only form where the ARGUMENTS THEMSELVES
- * prove which edit was intended.
- */
 export function runEdit({ workspace, path: relPath, old, next, dryRun = false }) {
   const workspaceResolved = path.resolve(workspace);
   const full = resolveTarget(workspaceResolved, relPath);
@@ -340,9 +220,7 @@ export function runEdit({ workspace, path: relPath, old, next, dryRun = false })
       return failed('edit', relPath, 'binary', `${relPath} contains NUL bytes, so it is not editable as text`, null);
     }
 
-    // Counted, not just found: "how many" is the whole control, and `indexOf`
-    // alone cannot tell one match from four.
-    let matches = 0;
+        let matches = 0;
     let at = target.content.indexOf(old);
     const first = at;
     while (at !== -1) {
@@ -358,17 +236,9 @@ export function runEdit({ workspace, path: relPath, old, next, dryRun = false })
     }
 
     const before = target.content;
-    // Which line the match begins on, 1-indexed: the text before it, split the
-    // same CRLF-tolerant way the rest of this file splits, is exactly that many
-    // lines. An audit that says a file grew by nine bytes and not where cannot
-    // be reviewed without diffing the file.
-    const lineNumber = before.slice(0, first).split(/\r?\n/).length;
+        const lineNumber = before.slice(0, first).split(/\r?\n/).length;
     const after = before.slice(0, first) + next + before.slice(first + old.length);
-    // `--dry-run` promises to show what would happen without doing it, and a
-    // flag that writes anyway is worse than no flag — `exec` learned the same
-    // lesson. Everything above has already run, so the report is the real
-    // answer to "would this work": the file was found, and the match was unique.
-    if (dryRun) {
+        if (dryRun) {
       return {
         ...dryRunResult('edit', relPath, before, after),
         matches: 1,
@@ -411,28 +281,6 @@ export function runEdit({ workspace, path: relPath, old, next, dryRun = false })
 
 // --- write ----------------------------------------------------------------
 
-/**
- * Create a file, or replace one whose current content the caller can prove.
- *
- * `expect` is the compare-and-swap. Overwriting an existing file without it is
- * refused — not because writing is dangerous, but because a caller who has not
- * read the file cannot know what they are destroying, and "I meant to create
- * this" is indistinguishable from "I did not know it was there" once the bytes
- * are gone. A NEW file needs nothing: there is no content to be ignorant of.
- */
-/**
- * When a replacement is suspicious enough to demand stated intent.
- *
- * Measured failure, not a hypothetical: an agent run replaced a 777-line
- * module with a 50-line reconstruction through a write whose `--expect`
- * legitimately matched — the digest proves the caller READ the file, not that
- * they read ALL of it, and a bounded `read` shows ~450 lines of a 33KB file
- * before truncating. Both thresholds must hold: proportional (under half the
- * bytes) so a rewrite that keeps most of the content passes, and absolute
- * (over 2KB lost) so small files are not nannied about ordinary edits.
- * Deliberate shrinks state it — `--allow-shrink` — the same two-step as the
- * unique-match rule: the arguments themselves must carry the intent.
- */
 function isSuspiciousShrink(beforeBytes, afterBytes) {
   return afterBytes < beforeBytes / 2 && beforeBytes - afterBytes > 2048;
 }
@@ -443,10 +291,7 @@ export function runWrite({ workspace, path: relPath, content, expect = null, all
   if (!full) {
     return failed('write', relPath, 'escapes-workspace', `refusing to write outside the workspace: ${relPath}`, 'paths are relative to the workspace root, and may not traverse above it or through a symlink');
   }
-  // A digest is a hex string, and hex has no case. A caller who pasted an
-  // uppercase one was told the file had changed, which sent them to look for a
-  // concurrent writer that did not exist.
-  const expected = expect === null ? null : expect.trim().toLowerCase();
+    const expected = expect === null ? null : expect.trim().toLowerCase();
   if (expected !== null && expected.length < MIN_EXPECT_CHARS) {
     return failed('write', relPath, 'expect-too-short', `--expect needs at least ${MIN_EXPECT_CHARS} characters of the sha256`, 'harness get --path <file> --json reports the full digest');
   }
@@ -481,12 +326,7 @@ export function runWrite({ workspace, path: relPath, content, expect = null, all
         );
       }
     } else if (expected !== null) {
-      // A digest for a file that is not there. The caller believes they are
-      // replacing something, and creating it instead would satisfy the letter
-      // of the request while doing the opposite of what they checked for — the
-      // file they meant to update has been deleted or renamed, and they should
-      // find out from the command rather than from the next reader.
-      return failed(
+            return failed(
         'write',
         relPath,
         'stale',
@@ -549,18 +389,6 @@ export function runWrite({ workspace, path: relPath, content, expect = null, all
 
 // --- undo -----------------------------------------------------------------
 
-/**
- * Put back what the most recent `edit` or `write` replaced.
- *
- * An undo is NOT itself pushed onto the stack. Running `undo` twice therefore
- * reverses the two most recent mutations, which is what the word means
- * everywhere else; pushing would make the second call redo the first and turn
- * the command into a toggle nobody asked for.
- *
- * It refuses when the file has changed since the mutation it would reverse.
- * Restoring over someone else's later work is not an undo, it is a second,
- * unreviewed overwrite — and the caller cannot see it happen.
- */
 export function runUndo({ workspace, dryRun = false }) {
   const workspaceResolved = path.resolve(workspace);
   const stack = readUndoStack(workspaceResolved);
@@ -611,10 +439,7 @@ export function runUndo({ workspace, dryRun = false }) {
       }
       restored = { bytes: Buffer.byteLength(previous, 'utf8'), removed: false, sha256: sha256(previous) };
     } else {
-      // The mutation CREATED this file, so undoing it means the file should not
-      // exist. The content check above already proved nothing has been added to
-      // it since.
-      try {
+            try {
         fs.unlinkSync(full);
       } catch (error) {
         return failed('undo', entry.path, 'write-refused', `removing ${entry.path} was refused: ${error.message}`, null);
@@ -650,33 +475,15 @@ export function runUndo({ workspace, dryRun = false }) {
 
 // --- command surface ------------------------------------------------------
 
-/**
- * The audit entry, written for EVERY mutation — including the refused ones.
- *
- * It is emitted here, in the one function both the handler and the `resultOf`
- * producer call, for the same reason `exec`'s is: emitting from the handler
- * alone would mean `--output json-envelope|agent` changed a file and left no
- * record, and an audit a caller can skip by choosing an output format is not an
- * audit. Refusals are recorded too — "what did this agent try to change" is a
- * question the log has to be able to answer.
- */
 function emitAudit(ctx, result) {
-  // A dry run changed nothing, so there is nothing to audit. Recording it would
-  // put a passing `write` in the log for a file that was never touched, which
-  // is the one thing an execution log must never do. `exec` returns before its
-  // own audit for the same reason.
-  if (result.dryRun) return;
+    if (result.dryRun) return;
   const events = ctx?.events;
   const sink = typeof events?.withCommand === 'function' ? events.withCommand(result.mode) : events;
   sink?.emit?.(result.mode, {
     result: result.status === 'ok' ? 'pass' : 'fail',
     status: result.status,
     exitCode: result.exitCode,
-    // The invocation descriptor: which file, what happened to it, and the
-    // digests that let a reviewer tie this record to the bytes on disk. The
-    // CONTENT is deliberately absent — a durable log of every line the harness
-    // ever wrote is the most likely place for a pasted credential to survive.
-    file: {
+        file: {
       path: result.path,
       reason: result.reason,
       created: result.created,
@@ -701,17 +508,6 @@ function requirePath(relPath, mode) {
  * which values are opaque. */
 const LITERAL_FLAGS = Object.freeze(['--path', '--old', '--new', '--content', '--expect']);
 
-/**
- * The argv with every literal flag AND ITS VALUE removed — what `parseFlags`
- * is allowed to see.
- *
- * `parseFlags` scans the whole argv, and a literal VALUE that happens to look
- * like a harness flag was scanned too: `edit --old "--workspace" --new X`
- * consumed `--new` as the workspace path, resolved the edit against a
- * directory named `--new`, and failed with an error about the wrong thing.
- * The content of a replacement is data, and data must never reach the flag
- * parser.
- */
 function withoutLiteralFlags(argv) {
   const out = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -737,13 +533,7 @@ function planEdit(argv) {
   requirePath(relPath, 'edit');
   const old = literalFlag(argv, '--old');
   const next = literalFlag(argv, '--new');
-  // Empty is refused with the same message as absent, deliberately. An empty
-  // search string matches at every position, so the unique-match rule reported
-  // it as "appears more than once" — a true statement that sends the caller
-  // looking for a duplicate in their file instead of at their own argument.
-  // `--new` and `--content` may legitimately be empty (deleting text, an empty
-  // file), so only this one carries the check.
-  if (!old) throw usageError('edit requires --old <text>', 'harness edit --path <file> --old <text> --new <text>');
+    if (!old) throw usageError('edit requires --old <text>', 'harness edit --path <file> --old <text> --new <text>');
   if (next === null) throw usageError('edit requires --new <text>', 'harness edit --path <file> --old <text> --new <text>');
   return { flags, workspace, relPath, old, next };
 }
@@ -791,13 +581,8 @@ function render(result, flags) {
     value: result.path ?? '—',
     keyWidth,
   }));
-  // inertLine per row: a summary line quotes a path the caller supplied, and a
-  // path may carry an ANSI escape that would otherwise reach the terminal.
-  for (const row of result.output) console.log(`  ${inertLine(row.line)}`);
-  // A mutation that ran without its lock is still a mutation, but the operator
-  // should know serialization was not in force — a degradation nobody records
-  // is a control nobody can audit.
-  if (result.degraded) {
+    for (const row of result.output) console.log(`  ${inertLine(row.line)}`);
+    if (result.degraded) {
     console.log(ui.line({ state: 'warn', key: 'control', value: `unserialized: ${result.degraded}`, keyWidth }));
   }
   if (result.status === 'ok' && result.undo?.id) {
@@ -811,9 +596,7 @@ export function exitFor(result) {
 
 async function runCommand(argv, ctx, resultOf) {
   const result = await resultOf(argv, ctx);
-  // The same stripping the planners apply: this re-parse only asks about
-  // --json/--verbose, and a literal value shaped like a flag must not answer.
-  render(result, parseFlags(withoutLiteralFlags(argv)));
+    render(result, parseFlags(withoutLiteralFlags(argv)));
   ctx.reportStatus?.(result.status);
   return exitFor(result);
 }

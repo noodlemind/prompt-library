@@ -1,21 +1,3 @@
-/**
- * Regression coverage for the CLI-wiring seam added in P1.2 — the part
- * `test/envelope.test.mjs` and `test/agent-lane.test.mjs` deliberately don't
- * exercise, because they only test the pure library modules directly.
- *
- * Covers:
- *   - bin/harness.mjs's `extractOutputLane` end to end through the real CLI
- *     (`--output json-envelope|agent`, the `--output=value` equals-form, a
- *     missing value, an unrecognized value).
- *   - The exact Critical repro from fix round 1: `--output` appearing AFTER
- *     a literal `--` boundary must never be treated as the lane flag — the
- *     legacy `--json` output must stay byte-shape-identical (no envelope
- *     wrapper).
- *   - lib/registry.mjs's `dispatch`/`dispatchLane` ctx.output branching
- *     directly (faster, more precise than spawning the CLI for every case),
- *     including the Important-1 regression: the error-path agent-lane
- *     rendering must honor `entry.agentBudgetBytes`, same as the success path.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -152,10 +134,7 @@ test('CLI: --output after a literal `--` is inert free-text content — legacy -
   ]);
   assert.equal(withBoundary.status, 0, withBoundary.stderr);
   const body = JSON.parse(withBoundary.stdout);
-  // The legacy shape has no schema/command/status envelope wrapper at all —
-  // this is the exact property that regressed pre-fix (the run silently
-  // switched to the agent lane and discarded --json).
-  assert.ok(!('schema' in body), 'the legacy --json shape must never gain an envelope wrapper');
+    assert.ok(!('schema' in body), 'the legacy --json shape must never gain an envelope wrapper');
   assert.ok(!('status' in body), 'the raw orient result has no top-level status field — an envelope would add one');
   assert.ok('contextPack' in body);
   assert.ok('gateStatus' in body);
@@ -202,10 +181,7 @@ test('dispatch: ctx.output omitted (or "ledger") runs the legacy handler untouch
 // --- Important-1 regression: error-path agent-lane rendering must be budgeted too ---
 
 test('dispatchLane error path honors entry.agentBudgetBytes, same as the success path (regression: budget was previously dropped on error)', async () => {
-  // Deliberately small — enough for the untrusted-data fence skeleton plus a
-  // line or two; an unbudgeted render of the 500-char error would blow past
-  // this immediately.
-  const budgetBytes = 150;
+    const budgetBytes = 150;
   registerCommand({
     name: '__test-lane-error-budget',
     summary: 'test fixture for the error-path agent-lane budget regression',
@@ -220,28 +196,12 @@ test('dispatchLane error path honors entry.agentBudgetBytes, same as the success
 
   const { code, stdout } = await withCapturedStdout(() => dispatch(['__test-lane-error-budget'], { output: 'agent' }));
   assert.equal(code, 1);
-  // Minor #11: dispatchLane writes the rendered text VERBATIM — the trailing
-  // newline lives inside the budgeted, metered byte count, so stdout itself
-  // must honor the cap with nothing stripped.
-  assert.ok(
+    assert.ok(
     Buffer.byteLength(stdout, 'utf8') <= budgetBytes,
     `error-path agent-lane output (${Buffer.byteLength(stdout, 'utf8')} bytes) must honor agentBudgetBytes (${budgetBytes})`
   );
   assert.match(stdout, /^«untrusted-data»/, 'the fence survives even at a tight error budget');
 });
-
-// --- Critical regression: the json-envelope lane must redact, same as agent ---
-//
-// Pre-fix, dispatchLane's `agent` branch ran the rendered result through
-// renderAgentLane's redactor, but the `else` (json-envelope) branch right
-// next to it serialized the SAME data via a bare `JSON.stringify` — no
-// redaction at all. Live repro this pins:
-//   harness learnings --why 'token=abcdef1234567890' --output json-envelope
-// leaked the raw token verbatim in `error.message` on stderr. These two
-// tests use a registered fixture command (success and error paths) instead
-// of the real `learnings --why` handler so the assertion is a precise,
-// minimal reproduction of the registry.mjs bug itself, not incidental to
-// learnings' own control flow.
 
 const PLANTED_SECRET = 'token=abcdef1234567890';
 const KV_SECRET_MASK = '«redacted:kv-secret»';
@@ -271,10 +231,7 @@ test('dispatchLane json-envelope ERROR path redacts a secret-shaped error messag
     args: { flags: [], positionals: [] },
     handler: async () => 0,
     resultOf: async () => {
-      // Mirrors the real repro: an E_TARGET error whose message echoes
-      // caller-supplied input verbatim (learningsResultOf's
-      // `no learning ${flags.why}`).
-      throw Object.assign(new Error(`no learning ${PLANTED_SECRET}`), { code: 'E_TARGET', exit: 1 });
+            throw Object.assign(new Error(`no learning ${PLANTED_SECRET}`), { code: 'E_TARGET', exit: 1 });
     },
   });
 
@@ -285,17 +242,6 @@ test('dispatchLane json-envelope ERROR path redacts a secret-shaped error messag
   assert.equal(body.error.message, `no learning token=${KV_SECRET_MASK}`);
 });
 
-// --- Important-3 regression: lane-contract honesty -------------------------
-//
-// Pre-fix, a non-lane-aware registered command (anything without a
-// `resultOf`) silently ignored `--output json-envelope|agent` and rendered
-// its ordinary human ledger — no envelope, no error, no signal to the
-// caller that its request was ignored. Live repro this pins:
-//   harness gate --output json-envelope
-// printed plain ledger rows, not an envelope. Fixed: `dispatch()` now
-// rejects an unsupported (command, lane) combination with a structured
-// E_USAGE error, exit 2, naming the lane-bearing commands.
-
 test('CLI: a non-lane-aware command (gate) rejects --output json-envelope with a structured usage error, exit 2', () => {
   const workspace = tempDir('lane-unsupported-gate-ws-');
   const copilotHome = tempDir('lane-unsupported-gate-home-');
@@ -305,9 +251,7 @@ test('CLI: a non-lane-aware command (gate) rejects --output json-envelope with a
   assert.equal(result.status, 2);
   assert.match(result.stderr, /gate does not support --output json-envelope/);
   assert.match(result.stderr, /lane-bearing commands/);
-  // The pre-fix bug was a SILENT no-op — pin that gate never even started
-  // (no session write), not just that an error text now appears alongside it.
-  assert.equal(fs.existsSync(path.join(workspace, '.harness', 'session.json')), false, 'gate must not have run at all');
+    assert.equal(fs.existsSync(path.join(workspace, '.harness', 'session.json')), false, 'gate must not have run at all');
 });
 
 test('dispatch: a non-lane-aware command (gate) rejects ctx.output "json" with a structured E_USAGE error naming lane-bearing commands', async () => {
@@ -318,14 +262,7 @@ test('dispatch: a non-lane-aware command (gate) rejects ctx.output "json" with a
       assert.equal(err.code, 'E_USAGE');
       assert.equal(err.exit, 2);
       assert.match(err.message, /command gate does not support --output json-envelope/);
-      // `laneBearingCommands()` is built live from the whole registry, which
-      // by this point in the suite also carries other test files' own
-      // `registerCommand` fixtures (this module has no per-test registry
-      // reset) — so assert the THREE real pilots and the shape of each
-      // clause individually, not one exact contiguous "orient, learnings,
-      // status (--output ...)" substring, which would be a false failure
-      // the moment another resultOf-bearing fixture lands ahead of them.
-      assert.match(err.message, /lane-bearing commands: .*\borient\b/);
+            assert.match(err.message, /lane-bearing commands: .*\borient\b/);
       assert.match(err.message, /\blearnings\b/);
       assert.match(err.message, /\bstatus\b/);
       assert.match(err.message, /\(--output json-envelope\|agent\)/);
@@ -386,13 +323,6 @@ test('dispatch: ctx.output "ledger" (or omitted) is always accepted, regardless 
   const code = await dispatch(['gate', '--workspace', workspace, '--json'], { output: 'ledger' });
   assert.ok(Number.isInteger(code));
 });
-
-// --- Fix-wave Minor #11: metered bytes === written bytes -------------------
-//
-// Pre-fix, dispatchLane wrote `rendered.text + '\n'` but metered only
-// `rendered.bytes` — the trailing newline escaped both the budget and the
-// agent_lane telemetry, so the recorded byte count disagreed with what
-// actually hit stdout.
 
 test('CLI: the agent_lane event byte count equals the bytes actually written to stdout, newline included', () => {
   const workspace = tempDir('lane-meter-ws-');

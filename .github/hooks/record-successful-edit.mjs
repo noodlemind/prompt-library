@@ -16,9 +16,7 @@ let payload;
 try {
   payload = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
 } catch (error) {
-  // The mutation already ran; PostToolUse cannot block it. Surface the parse
-  // failure so the session is diagnosable instead of pretending to deny.
-  output({ continue: true, systemMessage: `[harness hook] invalid-hook-payload: ${error.message}` });
+    output({ continue: true, systemMessage: `[harness hook] invalid-hook-payload: ${error.message}` });
   process.exit(0);
 }
 

@@ -1,20 +1,3 @@
-/**
- * Phase 3 — `harness exec` and `harness bash`, the governed execution surface.
- *
- * `exec-policy.test.mjs` pins the policy module in isolation. This file pins
- * the properties that only exist once the policy is wired to a real child
- * process through the registry: that `exec` genuinely never reaches a shell,
- * that the two commands stay distinguishable in the audit log, that an
- * execution is recorded no matter which output lane the caller picked, and that
- * the exit code tells the truth on all of them.
- *
- * The lane coverage is the part worth stating plainly: the audit event and the
- * child's exit code both used to come from the handler alone, so
- * `--output json-envelope` spawned a process that left no execution record and
- * reported exit 0 next to `"status":"failed"`. An audit a caller can skip by
- * choosing an output format is not an audit, and an exit code that disagrees
- * with the envelope beside it is worse than no exit code.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -32,11 +15,6 @@ function tempDir(prefix) {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
-/**
- * `--workspace` is a HARNESS flag, so it has to land before the `--` boundary —
- * appended after it, it would be handed to the child, which is exactly the
- * confusion the mandatory boundary exists to prevent.
- */
 function run(argv, ws, { env = {} } = {}) {
   const boundary = argv.indexOf('--');
   const full = boundary === -1
@@ -61,18 +39,11 @@ function auditEvents(ws) {
     .filter((event) => event.type === 'exec' || event.type === 'bash');
 }
 
-// The single property that justifies `exec` existing next to `bash`. If a shell
-// were reachable here, the argv the operator reviewed would not be the argv that
-// runs, and every other control in this phase would be enforcing policy on the
-// wrong command.
 test('exec never reaches a shell — metacharacters arrive at the child verbatim', () => {
   const ws = tempDir('exec-noshell-');
   const marker = path.join(ws, 'substitution-ran');
   const seenFile = path.join(ws, 'seen.json');
-  // The child records what it received to a FILE rather than to stdout: the
-  // streamed output lane is budgeted and clips long rows, and this assertion is
-  // about argv fidelity, not about rendering.
-  const script = path.join(ws, 'record-args.js');
+    const script = path.join(ws, 'record-args.js');
   fs.writeFileSync(script, `require("node:fs").writeFileSync(${JSON.stringify(seenFile)}, JSON.stringify(process.argv.slice(2)));\n`);
 
   const tokens = [`$(touch ${marker})`, '*', '`id`', 'a;b', 'a|b', '$HOME', '>out.txt'];
@@ -93,9 +64,6 @@ test('bash does reach a shell — the reason it is a separate, separately gated 
   assert.match(res.stdout, /two/, 'the `;` must have been interpreted, or this is not a shell');
 });
 
-// AC2: "both are identified distinctly in events and evidence." A boolean
-// inside a payload would mean an auditor filtering for shell invocations has to
-// trust the payload; separate types mean the filter is the type.
 test('exec and bash are distinct event types, not one type with a flag', () => {
   const ws = tempDir('exec-types-');
   run(['exec', '--', process.execPath, '-e', '0'], ws);
@@ -108,9 +76,6 @@ test('exec and bash are distinct event types, not one type with a flag', () => {
   assert.equal(bashEvent.exec.shell, true);
 });
 
-// AC5: an audit entry for EVERY execution. The lane is the caller's choice of
-// output format; it must not be a choice about whether the execution is
-// recorded.
 for (const lane of [null, 'json-envelope', 'agent']) {
   test(`an execution is audited on the ${lane || 'ledger'} lane`, () => {
     const ws = tempDir('exec-audit-lane-');
@@ -125,8 +90,6 @@ for (const lane of [null, 'json-envelope', 'agent']) {
   });
 }
 
-// An execution log carrying only an exit code cannot answer the question it
-// exists for.
 test('the audit entry records what ran, where, and under what policy', () => {
   const ws = tempDir('exec-audit-body-');
   fs.mkdirSync(path.join(ws, 'sub'));
@@ -145,8 +108,6 @@ test('the audit entry records what ran, where, and under what policy', () => {
   assert.equal(event.result, 'fail');
 });
 
-// The allowlist withheld those credentials on purpose; writing them into the
-// audit would hand them straight back.
 test('the audit entry carries environment NAMES, never values', () => {
   const ws = tempDir('exec-audit-envnames-');
   run(['exec', '--allow-env', 'MY_BUILD_TOKEN', '--', process.execPath, '-e', '0'], ws, {
@@ -192,19 +153,13 @@ test('the envelope lane never reports a status its exit code contradicts', () =>
   assert.equal(res.status, 7, 'the process exit and the envelope must describe the same outcome');
 });
 
-// A `--` that is merely conventional gets omitted, and then the harness eats a
-// flag meant for the child. Requiring it means every invocation has one reading.
 test('the -- boundary is required, and a flag after it belongs to the child', () => {
   const ws = tempDir('exec-boundary-');
   const missing = run(['exec', '--no-events'], ws);
   assert.equal(missing.status, EXIT.usage);
   assert.match(missing.stderr + missing.stdout, /E_USAGE/);
 
-  // `--json` after the boundary must be a child argument, not a harness flag:
-  // if the harness had claimed it, stdout would be its own JSON envelope and
-  // the child would never see the token. A script FILE rather than `-e`,
-  // because node parses flag-shaped tokens after `-e <script>` as its own.
-  const script = path.join(ws, 'echo-args.js');
+    const script = path.join(ws, 'echo-args.js');
   fs.writeFileSync(script, 'console.log("ARGV:" + JSON.stringify(process.argv.slice(2)));\n');
   const passthrough = run(['exec', '--no-events', '--', process.execPath, script, '--json', '--workspace', '/etc'], ws);
   assert.equal(passthrough.status, EXIT.ok, passthrough.stderr);
@@ -222,8 +177,6 @@ test('a cwd outside the workspace is refused at the CLI boundary, not just in th
   assert.match(res.stderr + res.stdout, /escapes the workspace/);
 });
 
-// AC3: the timeout is enforced, and a timed-out run is its own terminal state —
-// never a generic failure. Exit 8 is the reserved code.
 test('a run that exceeds its timeout is terminated and reported as timed-out, exit 8', () => {
   const ws = tempDir('exec-timeout-');
   const res = run(['exec', '--no-events', '--timeout', '1', '--', process.execPath, '-e', 'setTimeout(() => {}, 60000)'], ws);
@@ -239,8 +192,6 @@ test('a secret in the child output is redacted before it is printed', () => {
   assert.match(res.stdout, /leak=/);
 });
 
-// Registry-declared metadata is what the palette and the later phases read; a
-// wrong side-effect class here mislabels the command everywhere it appears.
 test('both commands declare the execute side-effect class and carry all three lanes', () => {
   for (const name of ['exec', 'bash']) {
     const entry = getCommand(name);

@@ -1,34 +1,3 @@
-// Persistent structural codebase index (blueprint P3). Lives OUTSIDE the
-// knowledge git store at ~/.harness/index/<repo-id>/<worktree-id>/structural/
-// — derived and rebuildable: deleting the directory never loses knowledge, and
-// it never touches governance history. Four tables:
-//   files.json    per-file { hash, mtime, size, symbols, imports, complexity,
-//                 defs, refs, tier } — the superset the incremental rebuild
-//                 and symbol table are derived from
-//   symbols.json  declaration table: name → { defs: [{file,line,kind,
-//                 exported}], refs: [{file,line}] }
-//   graph.json    caller/callee approximation + module dependency edges;
-//                 unresolved edges preserved EXPLICITLY, never fabricated
-//   meta.json     { sha, branch, baseSha, generatedAt, extractorTier,
-//                 grammarVersions, ... } — the P9 generation-context stamp
-// All writes are atomic temp+rename through fs-safe's writeFileContained, and
-// the four together are published as ONE generation via a staged directory
-// swap (publishGeneration) so no reader can mix generations.
-// Building is async-command-path work (harness index --structural); READING
-// is fully synchronous so buildRepoMap/orient stay sync and model-free.
-//
-// Extracted names/locations are UNTRUSTED repo text: every string passes
-// redactSecrets + a length cap at index-WRITE time here, and every human or
-// agent render additionally passes inertLine (renderStructuralDigest).
-//
-// TWO READERS, ONE CONTRACT: `readStructuralIndex` here is the builder-side
-// tolerant reader for orient/buildRepoMap — raw tables, null when absent,
-// with `readStructuralIndexIfCurrent` gating on meta.sha. The verify/doctor
-// consumers instead read through lib/structural/shape.mjs, which adds an
-// explicit `{ present, reason }` skip signal, sha-shape validation, and
-// normalization of both accepted on-disk encodings. Both readers share the
-// fs-safe readFileNoFollow discipline (no-follow, dir-contained, size-capped).
-
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -45,8 +14,6 @@ import { MAX_IDENTIFIER_LENGTH } from './treesitter-extractor.mjs';
 
 export const STRUCTURAL_INDEX_VERSION = 1;
 
-// Bounded tables: a hostile or simply huge tree must not balloon the index
-// or any surface rendered from it.
 const MAX_SYMBOL_TABLE = 20_000;
 const MAX_DEFS_PER_SYMBOL = 20;
 const MAX_REFS_PER_SYMBOL = 50;
@@ -64,21 +31,10 @@ function sha256(text) {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
-/** ~/.harness/index/<repo-id>/<worktree-id>/structural — respects HARNESS_HOME
- * via harnessGlobalHome. The worktree segment (shape.mjs `worktreeId`) keeps
- * co-located worktrees of one repo from serving each other's tables: they
- * share a `repoId` and can sit at the same `meta.sha` with different content. */
 export function structuralIndexDir(workspace, { home } = {}) {
   return path.join(home || harnessGlobalHome(), 'index', repoId(workspace), worktreeId(workspace), 'structural');
 }
 
-/**
- * Read one table. Distinguishes ABSENT (`{ value: null, error: null }`) from
- * UNREADABLE — oversized past the fs-safe cap, symlinked, or corrupt JSON.
- * Collapsing the two (the old `|| {}`) turned a 10 MB+ or truncated table into
- * a silent empty one: a permanent silent full rebuild plus a bogus
- * "everything added" delta, with nothing on any surface saying so.
- */
 function readTable(dir, name) {
   const full = path.join(dir, name);
   if (!fs.existsSync(full)) return { value: null, error: null };
@@ -98,20 +54,10 @@ function readJson(dir, name) {
 function readMeta(dir) {
   const meta = readJson(dir, 'meta.json');
   if (!meta || typeof meta !== 'object') return null;
-  // `version` is written by the builder, so it is checked by the reader: an
-  // index from a NEWER writer must be skipped, never half-understood.
-  if (!Number.isFinite(meta.version) || meta.version > STRUCTURAL_INDEX_VERSION) return null;
+    if (!Number.isFinite(meta.version) || meta.version > STRUCTURAL_INDEX_VERSION) return null;
   return meta;
 }
 
-/**
- * Synchronous, tolerant read of the prebuilt index. Returns
- * { dir, meta, files, symbols, graph, unreadable } or null when no readable
- * index exists. `unreadable` lists tables that exist but could not be read —
- * loud rather than silently empty (doctor S1 surfaces it, the builder refuses
- * to diff against it). The `<home>/index` pre-check keeps the common no-index
- * case free of the repoId git spawn — orient calls this every session.
- */
 export function readStructuralIndex(workspace, { home } = {}) {
   if (!fs.existsSync(path.join(home || harnessGlobalHome(), 'index'))) return null;
   const dir = structuralIndexDir(workspace, { home });
@@ -132,13 +78,6 @@ export function readStructuralIndex(workspace, { home } = {}) {
   };
 }
 
-/**
- * The orient-side gate: hand back the index ONLY when its generation stamp
- * matches the current HEAD — otherwise consumers keep their unchanged lexical
- * behavior. Cheap when absent (one existsSync, no git spawn) and cheap when
- * STALE: meta.json is read and compared FIRST, so the common stale case never
- * parses (and discards) multi-megabyte tables on every orient turn.
- */
 export function readStructuralIndexIfCurrent(workspace, { home } = {}) {
   if (!fs.existsSync(path.join(home || harnessGlobalHome(), 'index'))) return null;
   const dir = structuralIndexDir(workspace, { home });
@@ -153,12 +92,6 @@ export function readStructuralIndexIfCurrent(workspace, { home } = {}) {
   return index;
 }
 
-/**
- * Validate a user-supplied `--since` ref: reject anything that could read as
- * a git option (leading `-`), then require `git rev-parse --verify` to
- * resolve it to a commit — always after `--end-of-options`. Returns the
- * resolved sha; throws the CLI usage-error shape otherwise.
- */
 export function validateSinceRef(workspace, ref) {
   const value = String(ref || '').trim();
   if (!value || value.startsWith('-')) {
@@ -185,9 +118,6 @@ function changedFilesSince(workspace, sha) {
   return new Set(out.split('\n').filter(Boolean));
 }
 
-// Names and free-text fields extracted from repo files are untrusted: redact
-// secret-shaped content FIRST (a truncated credential might no longer match
-// the screen), then cap the length.
 function cleanName(name) {
   const redacted = redactSecrets(String(name ?? ''));
   return redacted.length > MAX_IDENTIFIER_LENGTH ? redacted.slice(0, MAX_IDENTIFIER_LENGTH) : redacted;
@@ -216,12 +146,6 @@ function sanitizeEntry(res, { hash, mtime, size }) {
   };
 }
 
-/**
- * Is a prior `files.json` entry usable as-is? Reused entries are written back
- * verbatim and fed to buildSymbolTable, so a hand-edited or partially written
- * table must be REJECTED here (the file is re-parsed instead) rather than
- * crashing the build with a TypeError that only manual deletion recovers from.
- */
 function usablePriorEntry(entry) {
   return Boolean(
     entry &&
@@ -235,16 +159,9 @@ function usablePriorEntry(entry) {
 }
 
 function buildSymbolTable(files, truncation) {
-  // Null prototype: symbol names are untrusted repo text, and a repo defining
-  // `constructor`, `__proto__`, or `toString` must land as an ordinary own
-  // key, not resolve to an inherited Object.prototype member (which would
-  // make `.defs` access throw and abort indexing).
-  const symbols = Object.create(null);
+    const symbols = Object.create(null);
   const rels = Object.keys(files).sort();
-  // Own counter rather than Object.keys(symbols).length per def: that rebuilt
-  // the whole key array on every declaration, which is quadratic exactly where
-  // it hurts most (a repo big enough to approach the cap).
-  let distinct = 0;
+    let distinct = 0;
   for (const rel of rels) {
     for (const d of Array.isArray(files[rel]?.defs) ? files[rel].defs : []) {
       if (!d || typeof d.name !== 'string') continue;
@@ -259,10 +176,7 @@ function buildSymbolTable(files, truncation) {
       if (symbols[d.name].defs.length < MAX_DEFS_PER_SYMBOL) {
         symbols[d.name].defs.push({ file: rel, line: d.line, kind: d.kind, exported: d.exported });
       } else {
-        // Per-symbol cap: the symbol IS in the table, only its long def list is
-        // shortened. Tracked separately from the table-level cap because it
-        // costs recall (a caller we never list), never soundness.
-        truncation.symbolDetail = true;
+                truncation.symbolDetail = true;
       }
     }
   }
@@ -280,10 +194,7 @@ function buildSymbolTable(files, truncation) {
 
 function buildGraph(files, symbols, truncation) {
   const rels = Object.keys(files).sort();
-  // Module edges use the same basename-stem approximation the repo map uses
-  // for import-degree. An import that resolves to no tracked file is KEPT as
-  // an unresolved edge — recorded, never guessed into a target.
-  const byStem = new Map();
+    const byStem = new Map();
   for (const rel of rels) {
     const stem = path.basename(rel).replace(/\.\w+$/, '');
     if (!byStem.has(stem)) byStem.set(stem, []);
@@ -293,9 +204,7 @@ function buildGraph(files, symbols, truncation) {
   const unresolvedImports = [];
   for (const rel of rels) {
     for (const imp of files[rel].imports) {
-      // Strip a trailing source extension first: './b.mjs' must stem to 'b',
-      // not 'mjs' (the bare split would take the extension as the last part).
-      const last = imp
+            const last = imp
         .replace(/['"]/g, '')
         .replace(/\.(?:js|jsx|mjs|cjs|ts|tsx|py|java)$/i, '')
         .split(/[./\\]/)
@@ -577,13 +486,6 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   return { dir, written: !dryRun, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
 }
 
-/**
- * Budgeted text rendering of the structural index — the AGENT lane of the
- * three-audience contract (blueprint §9). Never raw index JSON: a bounded,
- * framed digest under a token budget (repo-map's 1000-token budget is the
- * precedent), every line passed through inertLine because symbol names and
- * paths are retrieved repo text.
- */
 export function renderStructuralDigest(index, { maxTokens = 1000 } = {}) {
   const { meta, files, symbols, graph } = index;
   const lines = [

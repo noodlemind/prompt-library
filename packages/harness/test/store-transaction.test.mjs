@@ -20,29 +20,6 @@ const runCli = (c, args) =>
     env: { ...process.env, HARNESS_HOME: c.harnessHome },
   });
 
-/**
- * Hardening batch A — store transactionality (P1-6/7/8 from the external
- * security review): every store writer now runs inside ONE single-writer
- * lock via withStoreTransaction (store.mjs), the lock spans validation
- * through the final commit (not just the mutation phase), and a real git
- * failure at add/commit time rolls back and surfaces as a failure instead of
- * a silently-swallowed "committed: false" success.
- *
- * This file covers the review's missing-coverage list:
- *  - lock semantics: every adopter (apply/lifecycle/purge/rebuild/config)
- *    returns E_LOCKED instead of proceeding while another writer holds the
- *    lock (deterministic — a live lock is held via direct mkdir, no process
- *    spawning or timing races).
- *  - kill/restart: a stale lock + a dirty (uncommitted, tracked) store tree
- *    left behind by a "crashed" writer is taken over cleanly by the next
- *    transaction — the dirty tree is absorbed as a hand edit, not destroyed.
- *  - git fault injection: a REAL git commit failure (not a clean tree) is
- *    distinguished from success and triggers a rollback + nonzero exit.
- *  - purge atomicity: a mid-purge store-transaction failure leaves the T1
- *    (workspace) episode file completely untouched — it is only ever
- *    deleted AFTER the store-side commit has succeeded.
- */
-
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
 const ctx = () => ({ ws: tempDir('stx-ws-'), home: tempDir('stx-home-'), harnessHome: tempDir('stx-hh-') });
@@ -90,18 +67,6 @@ function handEditBody(file, newBody) {
   fs.writeFileSync(file, next, 'utf8');
 }
 
-/**
- * Deterministic, cross-platform-safe git fault injection: a `pre-commit`
- * hook that always exits 1. This blocks ONLY `git commit` — `git add`,
- * `git reset --hard`, and `git clean -fd` are all untouched by hooks — so
- * the failure surfaces exactly where P1-7 says it must (the commit step)
- * without also wedging withStoreTransaction's own rollback (which itself
- * runs `reset --hard` + `clean -fd`). An alternative method (planting
- * `.git/index.lock` to fail `git add`) was tried and rejected: it ALSO blocks
- * the rollback's own `git reset --hard`, which would leave the newly-written
- * (uncommitted) file sitting in the working tree and make "store state
- * unchanged" assertions fail for a reason unrelated to the code under test.
- */
 function installFailingCommitHook(dir) {
   const hooksDir = path.join(dir, '.git', 'hooks');
   fs.mkdirSync(hooksDir, { recursive: true });
@@ -110,12 +75,6 @@ function installFailingCommitHook(dir) {
   return hookPath;
 }
 
-/**
- * A hook that permits the first `allowedCommits` commits to succeed, then
- * fails every commit after — deterministic, cross-platform-safe (a plain
- * counter file, no external state), and the shape needed to reproduce "the
- * absorb sub-commit lands, then the main mutation's own commit fails."
- */
 function installIntermittentCommitHook(dir, allowedCommits) {
   const hooksDir = path.join(dir, '.git', 'hooks');
   fs.mkdirSync(hooksDir, { recursive: true });
@@ -132,10 +91,6 @@ if [ "$N" -le ${allowedCommits} ]; then exit 0; else exit 1; fi
     { mode: 0o755 }
   );
 }
-
-// ---------------------------------------------------------------------------
-// Lock semantics: every adopter returns E_LOCKED instead of proceeding.
-// ---------------------------------------------------------------------------
 
 test('every store adopter (apply/lifecycle/purge/rebuild/config) returns E_LOCKED while another writer holds the lock', () => {
   const c = ctx();
@@ -184,9 +139,7 @@ test('every store adopter (apply/lifecycle/purge/rebuild/config) returns E_LOCKE
   assert.equal(configRes.code, 'E_LOCKED');
   assert.match(configRes.blockedReason, /E_LOCKED/);
 
-  // The live lock must be left exactly as it was — no adopter is allowed to
-  // remove or steal a fresh, contended lock.
-  assert.ok(fs.existsSync(lockPath), 'a live lock must never be removed by a contending writer');
+    assert.ok(fs.existsSync(lockPath), 'a live lock must never be removed by a contending writer');
 
   // Nothing any of the six calls above attempted actually landed.
   fs.rmSync(lockPath, { recursive: true, force: true });
@@ -211,33 +164,8 @@ test('the writeStoreConfig lock-failure CLI path (`harness knowledge on`) render
   fs.rmSync(lockPath, { recursive: true, force: true });
 });
 
-// ---------------------------------------------------------------------------
-// Kill/restart: a stale lock + dirty tree from a "crashed" writer.
-// ---------------------------------------------------------------------------
-
-/** The in-transaction intent journal (store.mjs) — present on disk only while
- * a transaction is between its first write and its commit/rollback, so its
- * absence is what distinguishes a genuine human hand edit from a dead
- * writer's residue. */
 const txnJournalPath = (dir) => path.join(dir, '.git', 'harness-txn.json');
 
-/**
- * "The writer really died mid-transaction", asserted the way each platform can
- * actually express it.
- *
- * POSIX delivers a real signal, so the parent observes `signal: 'SIGKILL'`.
- * WINDOWS HAS NO POSIX SIGNALS AT ALL: `process.kill(pid, 'SIGKILL')` maps to
- * `TerminateProcess(handle, SIGKILL)`, so the parent observes a nonzero exit
- * CODE and `signal: null`. Asserting the POSIX shape there tests the platform,
- * not the store.
- *
- * The precondition both platforms share is structural — and strictly stronger
- * than either kill check: the in-transaction intent journal is STILL ON DISK.
- * store.mjs writes it after the lock is taken, before `fn` runs, and removes it
- * once the transaction commits or rolls back, so its presence proves the writer
- * died BETWEEN its first write and its commit/rollback — exactly the state
- * these two tests need — no matter how the kill was delivered.
- */
 function assertDiedMidTransaction(child, dir) {
   if (process.platform === 'win32') {
     assert.equal(child.signal, null, 'Windows reports a terminated child by exit code, never by signal');
@@ -258,25 +186,17 @@ test('a crashed writer (stale lock + an uncommitted hand edit) is taken over cle
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const learning = listLearnings(dir).find((l) => l.id === id);
 
-  // A HUMAN hand-edited the learning file directly and the CLI process that
-  // was going to absorb it died before it could — leaving the tracked file
-  // dirty in the working tree with NO transaction journal behind it. That
-  // absence is the signal: nothing was mid-write, so the dirt is the human's.
-  handEditBody(learning.file, 'A crash-recovered hand edit that must survive takeover.');
+    handEditBody(learning.file, 'A crash-recovered hand edit that must survive takeover.');
   const dirty = gitPorcelainStatus(dir);
   assert.match(dirty, /M\s+learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
   assert.equal(fs.existsSync(txnJournalPath(dir)), false, 'precondition: no interrupted transaction — this dirt is a human edit');
 
-  // ...and its own `.lock` directory, now stale (old mtime — past the
-  // takeover threshold).
-  const lockPath = path.join(dir, '.lock');
+    const lockPath = path.join(dir, '.lock');
   fs.mkdirSync(lockPath);
   const old = new Date(Date.now() - 11 * 60 * 1000);
   fs.utimesSync(lockPath, old, old);
 
-  // The next transaction (any adopter — applyOps here) takes the stale lock
-  // over and proceeds.
-  const res = applyOps({
+    const res = applyOps({
     workspace: c.ws,
     opsPath: writeOps(c.ws, [ADD(c.ws, { slug: 'after-crash', episodePath: 'docs/solutions/perf/after-crash.md' })]),
     home: c.harnessHome,
@@ -285,10 +205,7 @@ test('a crashed writer (stale lock + an uncommitted hand edit) is taken over cle
   assert.match(res.staleLockRemoved || '', /stale lock/);
   assert.equal(fs.existsSync(lockPath), false, 'the lock is released again after takeover');
 
-  // The crash-recovered hand edit was absorbed as human authority, not wiped
-  // by any rollback — proving the takeover ran absorb-before-mutation inside
-  // the SAME lock the new op then used.
-  const after = listLearnings(dir).find((l) => l.id === id);
+    const after = listLearnings(dir).find((l) => l.id === id);
   assert.equal(after.fm.source, 'human');
   assert.match(after.body, /crash-recovered hand edit/);
 
@@ -296,13 +213,6 @@ test('a crashed writer (stale lock + an uncommitted hand edit) is taken over cle
   assert.ok(listLearnings(dir).some((l) => l.id === 'sql/after-crash'));
 });
 
-// The other half of the same distinction: dirt left by a writer that died
-// MID-TRANSACTION is CLI-authored residue, not a human edit. Without the
-// intent journal the takeover path could not tell the two apart, so the next
-// transaction's absorb inherited a model-authored partial write, snapshotted
-// it as `kind: human-teaching`, and stamped the learning `source: human` —
-// laundering a crash artifact into the store's highest authority tier (which
-// then protects it from demotion and exempts it from provisional damping).
 test('a writer killed MID-TRANSACTION leaves CLI residue, not human authority: takeover discards it and the committed claim survives', () => {
   const c = ctx();
   const id = seedLearning(c);
@@ -314,11 +224,7 @@ test('a writer killed MID-TRANSACTION leaves CLI residue, not human authority: t
     (_m, fm) => `${fm}A model-authored partial write that never reached a commit.\n`
   );
 
-  // A REAL crash: the child takes the store lock through the same
-  // withStoreTransaction every writer uses, overwrites a learning, and is
-  // SIGKILLed before it can commit or roll back — so nothing in its `finally`
-  // ever runs and the lock, the journal, and the dirty tree all survive it.
-  const storeModule = pathToFileURL(path.join(packageRoot, 'lib', 'knowledge', 'store.mjs')).href;
+    const storeModule = pathToFileURL(path.join(packageRoot, 'lib', 'knowledge', 'store.mjs')).href;
   const script = [
     "import fs from 'node:fs';",
     `import { withStoreTransaction } from ${JSON.stringify(storeModule)};`,
@@ -363,13 +269,6 @@ function gitPorcelainStatus(dir) {
   return spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout;
 }
 
-// Crash recovery used to be an all-or-nothing tree-wide decision: any dirt at
-// journal-write time disabled it wholesale. But absorb deliberately IGNORES
-// non-learning files (config.json, scratch notes, INDEX.md), so such a file
-// can sit uncommitted indefinitely — and its mere presence then disarmed
-// residue rollback for the LEARNING paths a later crash dirtied, handing the
-// dead writer's own partial write to the next transaction's absorb as
-// `source: human`. The decision has to be per-path.
 test('crash recovery is per-path: a dirty NON-learning file never disarms residue rollback for learning paths', () => {
   const c = ctx();
   const id = seedLearning(c);
@@ -377,9 +276,7 @@ test('crash recovery is per-path: a dirty NON-learning file never disarms residu
   const learning = listLearnings(dir).find((l) => l.id === id);
   const committed = fs.readFileSync(learning.file, 'utf8');
 
-  // Pre-existing, uncommitted, NON-learning dirt — absorb never touches it,
-  // so it can outlive any number of transactions.
-  const notes = path.join(dir, 'scratch-notes.txt');
+    const notes = path.join(dir, 'scratch-notes.txt');
   const notesText = 'a human left this here; absorb ignores it\n';
   fs.writeFileSync(notes, notesText, 'utf8');
 
@@ -426,20 +323,13 @@ test('crash recovery is per-path: a dirty NON-learning file never disarms residu
   assert.ok(listLearnings(dir).some((l) => l.id === 'sql/after-mixed-kill'));
 });
 
-// The journal is the ONLY thing that tells crash residue apart from a human
-// hand edit. A best-effort write that silently failed left the transaction
-// running UNMARKED — precisely the state whose residue the next transaction
-// absorbs as `source: human`. Fail closed instead: refuse the run.
 test('a transaction whose intent journal cannot be written is refused, not run unmarked', () => {
   const c = ctx();
   seedLearning(c);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const before = listLearnings(dir).map((l) => l.id).sort();
 
-  // Make the journal path unwritable in a way that needs no chmod (and so
-  // behaves identically for a root-running CI): a non-empty DIRECTORY sitting
-  // exactly where the journal file goes.
-  const journalPath = txnJournalPath(dir);
+    const journalPath = txnJournalPath(dir);
   fs.mkdirSync(journalPath, { recursive: true });
   fs.writeFileSync(path.join(journalPath, 'occupied'), 'x', 'utf8');
 
@@ -455,10 +345,6 @@ test('a transaction whose intent journal cannot be written is refused, not run u
   assert.deepEqual(listLearnings(dir).map((l) => l.id).sort(), before, 'the refused transaction wrote nothing');
   assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'and it still released the lock');
 });
-
-// ---------------------------------------------------------------------------
-// Git fault injection: a real commit failure rolls back and reports nonzero.
-// ---------------------------------------------------------------------------
 
 test('a real git commit failure (applyOps) rolls back the store, reports nonzero, and releases the lock', () => {
   const c = ctx();
@@ -487,10 +373,7 @@ test('a real git commit failure (setLearningStatus) rolls back and reports nonze
   const c = ctx();
   const id = seedLearning(c);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
-  // A plain ADD (not `remember`) lands as source: auto, status: provisional —
-  // captured here rather than hardcoding 'active' so this assertion pins
-  // "unchanged by the rolled-back dispute", not a specific seeded shape.
-  const statusBefore = listLearnings(dir).find((l) => l.id === id).fm.status;
+    const statusBefore = listLearnings(dir).find((l) => l.id === id).fm.status;
   installFailingCommitHook(dir);
 
   const res = setLearningStatus({ workspace: c.ws, id, action: 'dispute', reason: 'should not land', home: c.harnessHome });
@@ -502,11 +385,6 @@ test('a real git commit failure (setLearningStatus) rolls back and reports nonze
   const learning = listLearnings(dir).find((l) => l.id === id);
   assert.equal(learning.fm.status, statusBefore, 'the dispute never landed — rolled back');
 });
-
-// ---------------------------------------------------------------------------
-// Purge atomicity (P1-8): a mid-purge transaction failure leaves the T1
-// (workspace) episode file completely untouched.
-// ---------------------------------------------------------------------------
 
 test('purge atomicity: a mid-purge store-transaction failure leaves the T1 episode file and store state unchanged', () => {
   const c = ctx();
@@ -532,16 +410,11 @@ test('purge atomicity: a mid-purge store-transaction failure leaves the T1 episo
   assert.equal(res.exitCode, 1);
   assert.ok(res.blockedReason && res.blockedReason.length > 0);
 
-  // The episode file is deleted LAST, only after a successful store commit —
-  // the store transaction here failed BEFORE that point, so the file must
-  // still be exactly where it was.
-  assert.ok(fs.existsSync(path.join(c.ws, targetPath)), 'the T1 episode file must survive a failed purge transaction');
+    assert.ok(fs.existsSync(path.join(c.ws, targetPath)), 'the T1 episode file must survive a failed purge transaction');
   const survivingText = fs.readFileSync(path.join(c.ws, targetPath), 'utf8');
   assert.equal(survivingText, 'atomic target body\n', 'the episode file content is untouched, not partially written');
 
-  // Store state (learnings, still citing the target) is unchanged — the
-  // cascade was rolled back, not partially applied.
-  const learningsAfter = listLearnings(dir).map((l) => l.id).sort();
+    const learningsAfter = listLearnings(dir).map((l) => l.id).sort();
   assert.deepEqual(learningsAfter, learningsBefore);
   const learning = listLearnings(dir).find((l) => l.id === 'sql/atomic-purge');
   assert.ok(learning, 'the learning still exists — the cascade never removed it');
@@ -550,12 +423,6 @@ test('purge atomicity: a mid-purge store-transaction failure leaves the T1 episo
   assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released even after a purge failure');
 });
 
-// ---------------------------------------------------------------------------
-// Committed-snapshot mirror (P2): the workspace mirror must reflect only
-// COMMITTED store state. withStoreTransaction now runs it via afterCommit —
-// under the still-held lock, on the clean just-committed tree — so a
-// concurrent writer can never expose a dirty-then-rolled-back mutation to it.
-// ---------------------------------------------------------------------------
 test('withStoreTransaction runs afterCommit under the still-held lock on a clean, committed tree', () => {
   const c = ctx();
   seedLearning(c);
@@ -607,9 +474,7 @@ test('purge stages the T1 episode via a reversible rename: a successful purge de
   const res = purgeEpisode({ workspace: c.ws, target: targetPath, home: c.harnessHome });
   assert.equal(res.pass, true, res.blockedReason);
   assert.equal(fs.existsSync(path.join(c.ws, targetPath)), false, 'the episode file is deleted on a successful purge');
-  // The staged temp (renamed-away copy) must have been finalized (deleted),
-  // never left as `<slug>.md.purge-*` debris.
-  const perfDir = path.join(c.ws, 'docs', 'solutions', 'perf');
+    const perfDir = path.join(c.ws, 'docs', 'solutions', 'perf');
   const debris = fs.readdirSync(perfDir).filter((f) => f.includes('.purge-'));
   assert.deepEqual(debris, [], 'no staged temp file is left behind after a committed purge');
 });
@@ -648,9 +513,7 @@ test('purge re-run after a crash BEFORE commit removes both the store learning a
   };
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
 
-  // Crash BETWEEN the staging rename and the T2 commit: content sits in a
-  // `.purge-*` sibling, real path absent, and the store STILL references it.
-  const perfDir = path.join(c.ws, 'docs', 'solutions', 'perf');
+    const perfDir = path.join(c.ws, 'docs', 'solutions', 'perf');
   const debris = path.join(perfDir, 'leak-target.md.purge-88888-1');
   fs.renameSync(path.join(c.ws, targetPath), debris);
 
@@ -702,16 +565,6 @@ test('purge --all: a store-transaction failure leaves every learning and the led
   assert.equal(fs.existsSync(path.join(dir, '.lock')), false);
 });
 
-// ---------------------------------------------------------------------------
-// Hand-edit protection (hardening batch A follow-up, Important finding): a
-// REAL absorb-commit failure must never let the standard rollback run —
-// that would destroy a legitimate, uncommitted human edit absorbHandEdits
-// itself just wrote. absorbOrAbort (admin.mjs) turns this into a
-// StoreTransactionAbort that withStoreTransaction recognizes and treats
-// specially: no rollback, no further mutation, just a nonzero report with
-// the tree left exactly as absorb last touched it.
-// ---------------------------------------------------------------------------
-
 test('a real absorb-commit failure protects the uncommitted hand edit: no rollback, no mutation, the edit stays in the tree', () => {
   const c = ctx();
   const id = seedLearning(c);
@@ -736,16 +589,12 @@ test('a real absorb-commit failure protects the uncommitted hand edit: no rollba
 
   assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released even after an absorb-commit failure');
 
-  // No rollback happened: the hand edit is still sitting in the tree,
-  // uncommitted but byte-intact — not reverted to the pre-edit committed state.
-  const dirtyAfter = gitPorcelainStatus(dir);
+    const dirtyAfter = gitPorcelainStatus(dir);
   assert.match(dirtyAfter, /learnings\/sql\/not-null-hot-tables\.md/, 'the dirty tracked file survives — no rollback ran');
   const onDisk = fs.readFileSync(learning.file, 'utf8');
   assert.match(onDisk, /A human edit that must survive an absorb-commit failure/, 'the hand-edited body is still on disk, byte-intact');
 
-  // And the intended mutation never happened — absorbOrAbort threw BEFORE
-  // the main mutation (runOnce) ever ran.
-  assert.ok(!listLearnings(dir).some((l) => l.id === 'sql/should-never-land'), 'the intended mutation never landed');
+    assert.ok(!listLearnings(dir).some((l) => l.id === 'sql/should-never-land'), 'the intended mutation never landed');
 });
 
 test('a real absorb-commit failure (setLearningStatus) also protects the uncommitted hand edit', () => {
@@ -767,19 +616,6 @@ test('a real absorb-commit failure (setLearningStatus) also protects the uncommi
   assert.doesNotMatch(onDisk, /status: retired/, 'the retire action never landed — absorbOrAbort rejected before the mutation ran');
 });
 
-// A regression this file previously missed: applyOps' own absorb-commit
-// failure correctly protects the hand edit (StoreTransactionAbort, no
-// rollback) — but `remember` then ran a SEPARATE, SECOND withStoreTransaction
-// (its post-failure ledger-cleanup) that neither absorbed nor was
-// abort-aware. That second transaction's own finalize commit ALSO failed
-// (same persistently broken hook), and its finalize-failure branch called
-// the standard rollback unconditionally, wiping the still-uncommitted hand
-// edit the FIRST transaction had just protected. Fixed at two layers:
-// remember's cleanup transaction now runs absorbOrAbort first (matching
-// every other adopter), and withStoreTransaction's own rollback is now
-// guarded against destroying pre-existing dirt no intra-transaction commit
-// ever captured, regardless of which transaction (or how many transactions
-// deep) is asking.
 test('remember: a persistently broken git commit protects the hand edit across BOTH the absorb failure and its own ledger-cleanup transaction', () => {
   const c = ctx();
   const id = seedLearning(c);
@@ -790,10 +626,7 @@ test('remember: a persistently broken git commit protects the hand edit across B
   const dirtyBefore = gitPorcelainStatus(dir);
   assert.match(dirtyBefore, /learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
 
-  // A PERSISTENTLY failing hook — every commit in this store fails from here
-  // on, so BOTH applyOps' absorb attempt AND remember's own ledger-cleanup
-  // transaction (should it even attempt one) hit the same broken commit.
-  installFailingCommitHook(dir);
+    installFailingCommitHook(dir);
 
   const logBefore = spawnSync('git', ['log', '--oneline'], { cwd: dir, encoding: 'utf8' }).stdout.trim().split('\n');
 
@@ -808,10 +641,7 @@ test('remember: a persistently broken git commit protects the hand edit across B
   assert.equal(result.pass, false);
   assert.notEqual(result.exitCode, 0);
 
-  // The hand edit survives, byte-intact, uncommitted — neither transaction
-  // (applyOps' absorb, nor remember's own cleanup) was allowed to roll it
-  // back.
-  const afterText = fs.readFileSync(learning.file, 'utf8');
+    const afterText = fs.readFileSync(learning.file, 'utf8');
   assert.match(afterText, /A human edit that must survive\./, 'the hand edit must still be present after remember fails');
 
   // No new commit landed either — history is exactly what it was before.
@@ -820,13 +650,6 @@ test('remember: a persistently broken git commit protects the hand edit across B
 
   assert.equal(fs.existsSync(path.join(dir, '.lock')), false, 'the lock is released');
 });
-
-// ---------------------------------------------------------------------------
-// Rejection masking (hardening batch A follow-up, Rider 1): when the
-// three-strikes bookkeeping's own sub-commit fails, the ORIGINAL content
-// rejection (E_SECRET/E_LINT/...) must still surface — never collapsed into
-// a generic E_APPLY_FAILED.
-// ---------------------------------------------------------------------------
 
 test('a strike-recording commit failure surfaces the ORIGINAL content rejection, not a masked E_APPLY_FAILED', () => {
   const c = ctx();
@@ -850,27 +673,9 @@ test('a strike-recording commit failure surfaces the ORIGINAL content rejection,
   assert.match(res.rejected[0].reason, /secret-shaped/);
   assert.match(res.rejected[0].reason, /strike recording failed/);
 
-  // The failed strike-commit's own partial write was rolled back on the
-  // spot — the tree is clean again, so the transaction's own finalize never
-  // had anything dirty to inherit (and never risked failing a second time
-  // for the same underlying git reason).
-  assert.equal(gitPorcelainStatus(dir).trim(), '', 'the tree is clean — the strike-recording rollback ran');
+    assert.equal(gitPorcelainStatus(dir).trim(), '', 'the tree is clean — the strike-recording rollback ran');
   assert.equal(fs.existsSync(path.join(dir, '.lock')), false);
 });
-
-// ---------------------------------------------------------------------------
-// Checkpoint-sha rollback (hardening batch A, third pass): a rollback must
-// land on the last successful INTRA-TRANSACTION commit, not on whether some
-// dirty path merely "looks like" protected content. The dirty-content guard
-// this replaced broke exactly here: an in-place human-teaching reteach
-// legitimately re-writes the SAME file an earlier absorb sub-commit just
-// captured, so after a later commit failure the file is dirty again for a
-// reason that has nothing to do with the original hand edit — the old guard
-// mistook that for "still protected" and skipped the rollback entirely,
-// leaving the failed mutation's content fully readable (a phantom apply)
-// with the store reporting failure. Resetting to the actual last-known-good
-// commit sha has no such failure mode.
-// ---------------------------------------------------------------------------
 
 test('a commit hook that allows the absorb but blocks the reteach rolls back to the absorb commit, not past it — no phantom apply', () => {
   const c = ctx();
@@ -882,15 +687,9 @@ test('a commit hook that allows the absorb but blocks the reteach rolls back to 
   const dirtyBefore = gitPorcelainStatus(dir);
   assert.match(dirtyBefore, /learnings\/sql\/not-null-hot-tables\.md/, 'precondition: dirty tracked file');
 
-  // Commit #1 (the absorb sub-commit) succeeds; every commit after fails —
-  // specifically the main mutation's own finalize commit below.
-  installIntermittentCommitHook(dir, 1);
+    installIntermittentCommitHook(dir, 1);
 
-  // A verified in-place human-teaching reteach: same domain/slug as the
-  // target (new id === target), with a real human-teaching-kind episode
-  // whose own frontmatter says so — this is what applyOps treats as an
-  // in-place replacement, REWRITING THE SAME FILE absorb just committed.
-  const teachRel = 'docs/solutions/teachings/manual-reteach.md';
+    const teachRel = 'docs/solutions/teachings/manual-reteach.md';
   const teachFull = path.join(c.ws, teachRel);
   fs.mkdirSync(path.dirname(teachFull), { recursive: true });
   const teachText =
@@ -913,18 +712,14 @@ test('a commit hook that allows the absorb but blocks the reteach rolls back to 
   assert.equal(res.exitCode, 1);
   assert.equal(res.committed, false);
 
-  // The tree is fully clean — the failed reteach was rolled back, not left
-  // dirty-but-protected.
-  assert.equal(gitPorcelainStatus(dir).trim(), '', 'no phantom mutation left dirty in the tree');
+    assert.equal(gitPorcelainStatus(dir).trim(), '', 'no phantom mutation left dirty in the tree');
 
   // HEAD sits exactly at the absorb commit.
   const log = spawnSync('git', ['log', '--oneline'], { cwd: dir, encoding: 'utf8' }).stdout.trim().split('\n');
   assert.match(log[0], /^\S+ human edit: /, 'HEAD is the absorb commit');
   assert.equal(log.length, 2, 'exactly the seed commit plus the absorb commit — the failed reteach never landed');
 
-  // The hand edit survives (readable via the commit); the failed reteach's
-  // content is NOT visible anywhere — not a phantom apply.
-  const after = listLearnings(dir).find((l) => l.id === id);
+    const after = listLearnings(dir).find((l) => l.id === id);
   assert.match(after.body, /A human edit that must survive\./, 'the absorbed hand edit is the visible state');
   assert.doesNotMatch(after.body, /in-place reteach/, 'the failed reteach content must never be visible');
   assert.equal(after.fm.source, 'human');

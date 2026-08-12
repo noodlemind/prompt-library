@@ -18,12 +18,6 @@ export function termScore(tf, docLength, avgdl, idfVal, k1 = DEFAULT_K1, b = DEF
   return idfVal * ((tf * (k1 + 1)) / (tf + k1 * norm));
 }
 
-/**
- * Score document against query terms using inverted index postings.
- * @param {string[]} queryTerms
- * @param {object} index - { N, avgdl, docLengths, terms }
- * @returns {Map<string, number>} docId → raw BM25 score
- */
 export function scoreDocuments(queryTerms, index) {
   const { N, avgdl, docLengths, terms } = index;
   const scores = new Map();

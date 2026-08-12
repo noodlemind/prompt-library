@@ -75,13 +75,6 @@ test('repo map is query-ranked, budgeted, and code-relevant', () => {
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-// P1: `git ls-files` keeps listing a tracked path from the INDEX even after
-// its parent directory was swapped on disk for a symlink pointing outside
-// the workspace — and readFileNoFollow's O_NOFOLLOW only refuses a symlink
-// at the FINAL component, so the kernel happily followed the symlinked
-// ancestor and outside file content leaked into the generated map.
-// readFileSafe now validates every ancestor (assertNoSymlinkAncestors)
-// before each tracked read.
 test('a symlinked ancestor (src/ swapped for an outside symlink) never leaks outside content into the map; real files still mapped', () => {
   const { ws } = gitRepo({
     'src/payments.mjs': 'export function insidePayments() {}',
@@ -130,9 +123,7 @@ test('index --status reports drift deterministically', () => {
 test('writeCodebaseMap refuses to write through a symlinked docs/ directory', () => {
   const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-repomap-outside-'));
-  // A symlinked `docs/` pointing outside the workspace — a naive
-  // mkdir(recursive)+write would follow it and write the map there instead.
-  fs.symlinkSync(outside, path.join(ws, 'docs'));
+    fs.symlinkSync(outside, path.join(ws, 'docs'));
 
   const result = writeCodebaseMap({ workspace: ws });
   assert.equal(result, null, 'a symlinked docs/ must refuse the write, not follow it');

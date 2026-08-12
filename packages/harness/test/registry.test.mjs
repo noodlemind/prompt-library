@@ -26,10 +26,6 @@ function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-/** Spawn the CLI against a fixture that behaves like a project the user set
- * up: an isolated `--copilot-home` (so the suite never reads the developer's
- * real one) and an approved workspace (P3AC6 gates named-check execution on
- * trust; `test/trust.test.mjs` owns the gate itself). */
 function runHarness(args) {
   const full = [...args];
   const workspace = valueOf(full, '--workspace');
@@ -60,18 +56,9 @@ test('the three P1.1 pilots are registered', () => {
     assert.equal(hasCommand(name), true, `${name} should be registered`);
     assert.ok(getCommand(name), `${name} entry should be retrievable`);
   }
-  // P1.6 migrated every remaining command onto the same registry — the
-  // pilots are no longer the ONLY entries, just three among many; the
-  // command-count assertion moved to test/prompt-library-contracts.test.mjs
-  // ('single-entry' style coverage is out of scope here).
-  for (const name of PILOTS) assert.ok(listCommands().includes(name));
+    for (const name of PILOTS) assert.ok(listCommands().includes(name));
 });
 
-// P1.6: every command formerly reached through bin/harness.mjs's
-// hand-written switch is now registered too — the switch itself is deleted
-// (AC1). `help`/`--help`/`-h` is the one deliberate exception: it isn't a
-// command with a side-effect class of its own, so bin/harness.mjs handles it
-// directly rather than registering it (see bin/harness.mjs's own comment).
 test('every migrated command is registered; help stays a dedicated non-command branch', () => {
   for (const name of [
     'doctor', 'install', 'upgrade', 'uninstall', 'init-repo', 'index', 'plan-new',
@@ -99,11 +86,6 @@ test('every pilot entry declares read-only side-effect metadata', () => {
   }
 });
 
-// P1.6 requirement #7: every migrated command's sideEffect classification is
-// asserted, not just declared — read | mutate | execute per the registry's
-// own enum (lib/registry.mjs's assertValidEntry already rejects anything
-// else at registration time; this pins the actual classification per
-// command against the brief's read/mutate/execute judgment).
 test('P1.6 migrated commands carry the correct sideEffect classification', () => {
   const expected = {
     // read
@@ -114,13 +96,7 @@ test('P1.6 migrated commands carry the correct sideEffect classification', () =>
     events: 'read',
     'eval-knowledge': 'read',
     resolve: 'read',
-    // mutate — classified by mutating CAPABILITY, not default-invocation
-    // behavior: consolidate/gate/plan-new/index are mutate even though their
-    // default invocation is read-only; report is mutate for the same reason
-    // — `--sync` performs real writes to the global ~/.harness telemetry
-    // store (lib/telemetry-store.mjs), just as install/upgrade write to the
-    // equally-global ~/.copilot.
-    install: 'mutate',
+        install: 'mutate',
     upgrade: 'mutate',
     uninstall: 'mutate',
     'init-repo': 'mutate',
@@ -144,10 +120,6 @@ test('P1.6 migrated commands carry the correct sideEffect classification', () =>
   }
 });
 
-// P1.6 requirement #7: registry-level dispatch tests for at least the
-// mutate/execute-class commands — `dispatch()` called directly (not the CLI
-// process), proving the real handler runs and the side-effect actually
-// happens, not just that the entry is data-registered.
 test('dispatch: a mutate-class command (gate) actually mutates session state through the real handler', async () => {
   const workspace = tempDir('registry-mutate-gate-');
   fs.mkdirSync(path.join(workspace, 'docs', 'plans'), { recursive: true });
@@ -155,10 +127,7 @@ test('dispatch: a mutate-class command (gate) actually mutates session state thr
   assert.equal(fs.existsSync(sessionPath), false, 'precondition: no session yet');
 
   const code = await dispatch(['gate', '--workspace', workspace, '--json'], {});
-  // No locked plan present -> gate blocks, but it still WRITES session state
-  // (gateStatus, lastGateAt) regardless of pass/fail — that write is the
-  // mutate-class side effect under test here, not the exit code.
-  assert.ok(Number.isInteger(code));
+    assert.ok(Number.isInteger(code));
   assert.equal(fs.existsSync(sessionPath), true, 'gate must have written .harness/session.json');
   const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
   assert.match(session.lastGateAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -258,10 +227,7 @@ No open findings.
   git(['add', '.']);
   assert.equal(git(['commit', '-qm', 'baseline']).status, 0);
 
-  // "a trusted check", literally: P3AC6 gates named-check execution on trust,
-  // and this test dispatches directly rather than through `runHarness`, so it
-  // states the approval itself against its own throwaway home.
-  const copilotHome = tempDir('registry-execute-home-');
+    const copilotHome = tempDir('registry-execute-home-');
   approveProject({ workspace, copilotHome });
 
   const code = await dispatch(['verify', '--plan', rel, '--base', 'HEAD', '--workspace', workspace, '--copilot-home', copilotHome, '--json'], {});
@@ -335,9 +301,7 @@ test('validateArgs rejects an unknown flag with a structured E_USAGE error namin
 });
 
 test('validateArgs treats a flag-shaped next token as a missing value, not a swallowed one', () => {
-  // Mirrors the existing --why precedent (lib/flags.mjs): an unknown flag
-  // must never hide in another flag's value slot.
-  assert.throws(
+    assert.throws(
     () => validateArgs(getCommand('learnings'), ['--why', '--bogus']),
     (err) => {
       assert.equal(err.code, 'E_USAGE');
@@ -345,19 +309,9 @@ test('validateArgs treats a flag-shaped next token as a missing value, not a swa
       return true;
     }
   );
-  // A trailing bare value-flag (no following token at all) must not throw
-  // at the registry layer — cmdLearnings owns that usage message itself.
-  assert.doesNotThrow(() => validateArgs(getCommand('learnings'), ['--why']));
+    assert.doesNotThrow(() => validateArgs(getCommand('learnings'), ['--why']));
 });
 
-// Regression (fix round 1): only a *double*-dash token is a flag boundary —
-// matching lib/flags.mjs's own `next.startsWith('--')` check (e.g. --why at
-// flags.mjs:176) — so single-dash-shaped values (negative numbers,
-// dash-prefixed free text or ids) are still consumed as the preceding
-// flag's value, exactly like the pre-registry parsing behind the handler.
-// The earlier `!(next.startsWith('-') && next !== '-')` heuristic treated
-// ANY single-dash token as a flag boundary too, which wrongly rejected
-// these as "unknown flag" before the handler ever ran.
 test('validateArgs consumes a negative-number value for a numeric flag, not as a flag boundary', () => {
   assert.doesNotThrow(() => validateArgs(getCommand('orient'), ['--min-score', '-0.5', '--json']));
   assert.doesNotThrow(() => validateArgs(getCommand('orient'), ['--limit', '-3']));
@@ -442,11 +396,6 @@ test('CLI: registry-dispatched status still renders the human ledger line unchan
   assert.match(result.stdout, /home\s+/);
 });
 
-// P1.6: the switch this test's name originally referenced is deleted (AC1) —
-// `events` is itself a registered command now, dispatched through the same
-// `dispatch()` every other command uses. Kept (renamed) as a plain
-// behavioral regression check: a command outside this file's own pilot set
-// still produces its documented shape end to end.
 test('CLI: a non-pilot registered command (events) dispatches through the registry end to end', () => {
   const workspace = tempDir('registry-fallthrough-ws-');
   const result = runHarness(['events', '--workspace', workspace, '--json']);
@@ -456,9 +405,6 @@ test('CLI: a non-pilot registered command (events) dispatches through the regist
   assert.ok('count' in body);
 });
 
-// P1.6: no switch/default case remains — bin/harness.mjs's `else` branch
-// (unregistered, non-'help' command name) produces the same structured
-// E_USAGE shape the switch's `default:` case used to.
 test('CLI: a genuinely unknown top-level command produces a structured E_USAGE error', () => {
   const result = runHarness(['this-command-does-not-exist']);
 
@@ -466,19 +412,6 @@ test('CLI: a genuinely unknown top-level command produces a structured E_USAGE e
   assert.match(result.stderr, /unknown command: this-command-does-not-exist/);
 });
 
-// --- Regression (fix round 1): dash-shaped values must reach the handler --
-// The reviewer reproduced three cases where the registry's value-lookahead
-// treated a single-dash-prefixed next token as a flag boundary and rejected
-// it as "unknown flag" before the handler ever ran, diverging from the
-// pre-registry (parseFlags-driven) behavior below. Each assertion pins the
-// exact pre-registry outcome.
-
-// What this pins is ROUTING: the dash-shaped value must reach parseMinScore and
-// be rejected on its own terms, rather than being swallowed by the registry's
-// value-lookahead as an "unknown flag" before the handler ever runs. The error's
-// classification is incidental to that and has since been corrected — a
-// malformed flag value is caller misuse, so it reports E_USAGE/exit 2 like every
-// other usage error instead of the E_UNEXPECTED/exit 1 a bare Error produced.
 test('CLI repro 1: a negative-number --min-score value reaches parseMinScore unchanged (E_USAGE, exit 2)', () => {
   const workspace = tempDir('registry-repro1-ws-');
   const copilotHome = tempDir('registry-repro1-home-');
@@ -514,17 +447,6 @@ test('CLI repro 3: a dash-prefixed --why id is consumed as the lookup id, not re
   assert.equal(body.id, '-weird-id');
   assert.equal(body.blockedReason, 'E_TARGET: no learning -weird-id');
 });
-
-// --- requireArgs: a missing REQUIRED argument is E_USAGE/exit 2, never
-// E_UNEXPECTED/exit 1 ---------------------------------------------------
-// Pre-fix, recall/get/plan-new each threw a bare `new Error(...)` (no
-// `.code`/`.exit`) for a missing required argument — bin/harness.mjs's
-// catch-all then classified it as E_UNEXPECTED/exit 1, the same shape as a
-// genuine harness FAULT, indistinguishable from caller misuse by a
-// programmatic caller. lib/registry.mjs's `requireArgs` entries (recall,
-// get, plan-new) now catch this before the handler runs and throw the same
-// structured E_USAGE/exit-2 shape an unknown flag already used. Message
-// text is unchanged byte-for-byte — only classification and exit change.
 
 test('CLI: recall without a query is E_USAGE/exit 2 with the original message (was E_UNEXPECTED/exit 1)', () => {
   const workspace = tempDir('registry-recall-usage-ws-');
@@ -580,9 +502,6 @@ test('CLI: plan-new without --intent is E_USAGE/exit 2 with the original message
   assert.equal(body.error.exit, 2);
 });
 
-// A malformed --slug (present but not lowercase-hyphen) is the SAME message
-// as a missing one (buildPlanSkeleton's own guard covers both) — pin that
-// the "invalid", not just "missing", half of the same guard is also E_USAGE.
 test('CLI: plan-new with a malformed --slug is E_USAGE/exit 2 with the original message', () => {
   const workspace = tempDir('registry-plannew-badslug-usage-ws-');
   const result = runHarness([
@@ -623,20 +542,6 @@ test('CLI: a correctly-invoked recall/get/plan-new is unaffected by requireArgs'
   assert.equal(JSON.parse(planNew.stdout).created, false);
 });
 
-/**
- * The lane-parity guard.
- *
- * `dispatchLane` used to return EXIT.ok on every success path unless the entry
- * declared `exitOf`, so a result reporting `"status":"failed"` still exited 0.
- * That shipped twice — `exec`, then `checks run`, the latter caught only by an
- * external review — which is two more times than a rule enforced by memory
- * deserves.
- *
- * So the DEFAULT is now derived from the envelope status, and this exercises
- * the default directly rather than grepping for the shape of the mistake. An
- * earlier version of this test DID grep, passed while `config` was genuinely
- * broken, and is the reason this one drives real dispatch instead.
- */
 test('a lane-bearing result reporting a non-ok status exits non-zero without needing exitOf', async () => {
   const name = `probe-lane-parity-${process.pid}`;
   registerCommand({
@@ -671,10 +576,6 @@ test('a lane-bearing result reporting a non-ok status exits non-zero without nee
     'and a result with no status still succeeds, so nothing regressed for the read commands');
 });
 
-/**
- * `exitOf` remains the override for a command needing a SPECIFIC code rather
- * than a generic 1 — `exec` passes through its child's exit code.
- */
 test('exitOf overrides the derived default when a command needs a specific code', async () => {
   const name = `probe-exit-override-${process.pid}`;
   registerCommand({

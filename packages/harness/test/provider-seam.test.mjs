@@ -1,22 +1,3 @@
-/**
- * P5AC7/P5AC8 — the first-party provider seam.
- *
- * Two properties are load-bearing here and neither is enforceable by a comment,
- * so both are asserted at the source level in the style of the existing
- * `FORBIDDEN_WRITE_SURFACES` check.
- *
- *   1. Harness core links no model SDK and reads no provider key. The settled
- *      invariant is "CLI never calls an LLM; Harness never consumes a model",
- *      and out-of-process placement is what keeps it literally true rather than
- *      reinterpreted. Once a seam exists, the invariant stops being maintained
- *      by absence and starts being maintained by review — this test is what
- *      replaces the absence.
- *
- *   2. The seam is FIRST-PARTY ONLY. Phase 5 declined third-party executable
- *      extensions; the reversal that allowed a provider allowed exactly one
- *      caller. A bundle can still declare a `plugin:` field nobody reads, and
- *      that is precisely the route this test exists to keep shut.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -59,9 +40,7 @@ function libSources({ includeProviders = false } = {}) {
 // --- P5AC7: core links no model SDK and reads no key ----------------------
 
 test('P5AC7: harness core imports no model SDK', () => {
-  // The adapters directory is excluded on purpose — it is a separate PROCESS,
-  // which is the entire mechanism by which the invariant survives.
-  const forbidden = [
+    const forbidden = [
     '@anthropic-ai/sdk', 'anthropic', 'openai', '@google/generative-ai',
     '@azure/openai', 'cohere-ai', 'mistralai', 'ollama', 'langchain',
   ];
@@ -81,10 +60,7 @@ test('P5AC7: no module in core except the seam names a provider key at all', () 
   const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar);
   const offenders = [];
   for (const { rel, text } of libSources()) {
-    // `provider.mjs` is checked BY BEHAVIOR below rather than skipped here.
-    // Excluding it is how the previous version of this test passed while the
-    // property it claimed was false (Codex phase-5 review, F13).
-    if (rel === 'lib/provider.mjs') continue;
+        if (rel === 'lib/provider.mjs') continue;
     for (const keyVar of keyVars) {
       if (text.includes(keyVar)) offenders.push(`${rel} names ${keyVar}`);
     }
@@ -93,11 +69,7 @@ test('P5AC7: no module in core except the seam names a provider key at all', () 
 });
 
 test('P5AC7: the credential is touched exactly once, and goes nowhere but the child environment', () => {
-  // A getter counts every read, so this measures what the code DOES rather
-  // than what its comment says. `spawn` takes an environment object, so one
-  // read is unavoidable — the property worth asserting is that it is one, and
-  // that the value appears nowhere else.
-  let reads = 0;
+    let reads = 0;
   const parentEnv = { PATH: '/usr/bin' };
   Object.defineProperty(parentEnv, 'ANTHROPIC_API_KEY', {
     enumerable: true,
@@ -108,9 +80,7 @@ test('P5AC7: the credential is touched exactly once, and goes nowhere but the ch
   assert.equal(reads, 1, 'a second read is a second place the value can be captured');
   assert.equal(env.ANTHROPIC_API_KEY, 'sk-ant-SENTINEL', 'the child does need it');
 
-  // It must appear under its own name and nowhere else — not duplicated into a
-  // diagnostic field, not echoed into the base URL, not in the provider id.
-  const elsewhere = Object.entries(env).filter(([k, v]) => k !== 'ANTHROPIC_API_KEY' && String(v).includes('SENTINEL'));
+    const elsewhere = Object.entries(env).filter(([k, v]) => k !== 'ANTHROPIC_API_KEY' && String(v).includes('SENTINEL'));
   assert.deepEqual(elsewhere, [], 'the credential is in the environment, not in the report about it');
 });
 

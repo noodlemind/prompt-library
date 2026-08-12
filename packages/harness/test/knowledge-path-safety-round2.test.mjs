@@ -13,15 +13,6 @@ import { collectEpisodes, consolidateCandidates } from '../lib/knowledge/consoli
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { storeDir, listLearnings, serializeLearning } from '../lib/knowledge/store.mjs';
 
-/**
- * Round 2 of the adversarial review on hardening batch B: the same
- * ancestor-symlink vulnerability class found live in `harness get --path`
- * (path-safe.mjs's safeResolveUnderRoot was purely lexical) and its sibling
- * readers (recall-rank.mjs's resolveDocPath, index-knowledge.mjs's manifest
- * builder, findMatchingPlans' plan recall). Every workspace-path primitive
- * now physically validates via assertNoSymlinkAncestors.
- */
-
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
 function writeOps(dir, ops) {
@@ -80,9 +71,7 @@ test('a recall-manifest-resolved doc through a symlinked docs/solutions director
   fs.mkdirSync(path.join(ws, 'docs'), { recursive: true });
   fs.symlinkSync(outside, path.join(ws, 'docs', 'solutions'));
 
-  // A genuine, non-symlinked sibling proves the manifest build still works
-  // normally alongside the rejected symlinked root.
-  fs.mkdirSync(path.join(copilotHome, 'knowledge', 'solutions', 'perf'), { recursive: true });
+    fs.mkdirSync(path.join(copilotHome, 'knowledge', 'solutions', 'perf'), { recursive: true });
   fs.writeFileSync(
     path.join(copilotHome, 'knowledge', 'solutions', 'perf', 'legit.md'),
     '---\ntitle: "legit"\n---\n\nlegit content.\n',
@@ -94,9 +83,7 @@ test('a recall-manifest-resolved doc through a symlinked docs/solutions director
   assert.ok(!manifestText.includes('OUTSIDE_SECRET_SENTINEL'), 'the symlinked product docs/solutions never enters the manifest');
   assert.match(manifestText, /legit/, 'the real global entry is still indexed');
 
-  // harness get --docid for a fabricated id shaped like the symlinked entry
-  // must fail closed (never found), since it was never indexed.
-  assert.throws(() => runGet({ workspace: ws, copilotHome, flags: { docid: 'product-perf-secret' } }), /docid not found/);
+    assert.throws(() => runGet({ workspace: ws, copilotHome, flags: { docid: 'product-perf-secret' } }), /docid not found/);
 });
 
 test('findMatchingPlans returns nothing through a symlinked docs/plans directory, and still ranks real plans normally', () => {
@@ -117,11 +104,7 @@ test('the candidates packet normalizes an episode\'s title and tags — no raw c
   const ws = tempDir('probeG4-ws-');
   const harnessHome = tempDir('probeG4-hh-');
 
-  // A raw control char embedded directly in a single frontmatter line (no
-  // real newline needed — parseFrontmatter, consolidate.mjs, reads one line
-  // at a time and does no backslash-escape decoding, so a literal ESC/NUL
-  // byte on one line is read through verbatim).
-  const episodeText = '---\ntitle: "injected\x1btitle\x00marker"\ntags: "a,b"\ndate: 2026-01-01\n---\n\nfix body.\n';
+    const episodeText = '---\ntitle: "injected\x1btitle\x00marker"\ntags: "a,b"\ndate: 2026-01-01\n---\n\nfix body.\n';
   fs.mkdirSync(path.join(ws, 'docs', 'solutions', 'perf'), { recursive: true });
   fs.writeFileSync(path.join(ws, 'docs', 'solutions', 'perf', 'ctrl-title.md'), episodeText, 'utf8');
 
@@ -158,10 +141,7 @@ test('the candidates packet normalizes a learning\'s multi-line body PER LINE �
   const res = applyOps({ workspace: ws, opsPath: writeOps(ws, [op]), home: harnessHome });
   assert.equal(res.exitCode, 0, JSON.stringify(res));
 
-  // Hand-poison the learning's body with control chars, simulating a
-  // legacy/hand-edited file (bypasses admission, which only guards fresh
-  // ADD/SUPERSEDE/MERGE ops, not a direct file edit).
-  const dir = storeDir(ws, { home: harnessHome });
+    const dir = storeDir(ws, { home: harnessHome });
   const learning = listLearnings(dir).find((l) => l.id === 'sql/body-normalize');
   const poisonedBody = 'line one\x00NUL_MARKER\nline two\x1bESC_MARKER';
   fs.writeFileSync(learning.file, serializeLearning(learning.fm, poisonedBody), 'utf8');

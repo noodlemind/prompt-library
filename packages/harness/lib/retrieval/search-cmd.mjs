@@ -1,15 +1,3 @@
-/**
- * `harness search <query>` and `harness tree <subject>` — the command surface
- * over lib/retrieval/search.mjs and lib/retrieval/tree.mjs.
- *
- * Both live here rather than in lib/commands.mjs for the same reason
- * lookup-cmd.mjs does: the retrieval commands stay beside the kernel they
- * share instead of growing a 1900-line module further.
- *
- * Each declares a `resultOf`, which is the entire opt-in for the envelope and
- * agent lanes (`assertLaneSupported` derives lane support from its presence),
- * so both satisfy P2AC7 rather than shipping ledger-only.
- */
 import path from 'node:path';
 import { parseFlags } from '../flags.mjs';
 import { parseQueryFromArgv } from '../argv.mjs';
@@ -23,13 +11,6 @@ import { SOURCES } from './kernel.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
-/**
- * `--match` and `--source` are read straight from argv rather than added to
- * lib/flags.mjs: parseFlags is shared by every command, and a new value-flag
- * there would also have to join `FLAGS_WITH_VALUES` in argv.mjs or free-text
- * query parsing would swallow its value. Reading them here keeps the blast
- * radius to this command pair.
- */
 function readValueFlag(argv, name) {
   const eq = argv.find((a) => a.startsWith(`${name}=`));
   if (eq) return eq.slice(name.length + 1);
@@ -74,15 +55,6 @@ export async function searchResultOf(argv) {
   return searchResult(argv);
 }
 
-/**
- * The command that opens one result.
- *
- * A result is a location the harness can already read; what was missing was
- * anything joining "20 result(s)" to the reading of one. `get` is that command
- * — knowledge is addressed by its docid, everything else by its path, with the
- * `:line` suffix trimmed because a line anchor is part of the DISPLAY of a
- * location and not part of the file's name.
- */
 function openArgvFor(row) {
   if (row.source === 'knowledge' && row.id) return ['get', '--docid', String(row.id)];
   const location = typeof row.location === 'string' ? row.location : '';
@@ -96,14 +68,7 @@ export async function cmdSearch(argv, ctx = {}) {
   const { flags } = searchContext(argv);
   const result = searchResult(argv);
 
-  // RESULTS ARE THINGS YOU OPEN, not lines you read. A ledger block printed
-  // four of twenty and folded the rest behind `ctrl+o`, which unfolds them and
-  // still leaves nothing to press — the search could find a file and then had
-  // no answer to "so open it". The surface decides how to offer these; the
-  // command's job is only to say what they point at. `?.` because the CLI lane
-  // passes no such hook and does not need one: there, the printed path IS the
-  // affordance, since a shell can act on it.
-  ctx.reportSelection?.({
+    ctx.reportSelection?.({
     kind: 'results',
     title: `${result.total} result(s)`,
     items: result.results
@@ -123,11 +88,7 @@ export async function cmdSearch(argv, ctx = {}) {
   const keyWidth = keyWidthFor(['results', 'sources', 'more']);
   console.log(ui.line({ key: 'search', value: `${result.total} result(s)`, note: `match ${result.match}`, keyWidth }));
 
-  // A skipped or failed source is printed even in the human lane. The whole
-  // point of reporting partial failure is that a caller can tell "nothing
-  // matched" from "that corpus was never consulted"; hiding it here would
-  // restore exactly the ambiguity the envelope works to remove.
-  for (const s of result.sources.filter((x) => x.status !== 'ok')) {
+    for (const s of result.sources.filter((x) => x.status !== 'ok')) {
     console.log(ui.line({ state: s.status === 'failed' ? 'error' : 'warn', key: s.source, value: s.status, note: s.reason ?? undefined, keyWidth }));
   }
 

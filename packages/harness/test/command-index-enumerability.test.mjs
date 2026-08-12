@@ -1,32 +1,8 @@
-/**
- * AC8 — enumerability. Every verb reachable on the CLI must be enumerable
- * from the registry AS DATA. No capability may exist only inside a `usage:`
- * string.
- *
- * `describeCommand().usage` is either auto-generated from `args` (safe by
- * construction) or a hand-written override (lib/registry.mjs's escape hatch
- * for `index`, `report`, `knowledge`, `consolidate`, `learning`). The override
- * is the whole risk: it is prose, so a new subcommand can be documented there
- * and never declared — which is exactly how pi's command table drifted from
- * its dispatcher. `auditUsage` below re-derives every capability a usage line
- * names and requires each one to resolve against declared data.
- *
- * The audit is a pure function on `(entry, usage)` precisely so it can be
- * exercised against a SYNTHETIC entry carrying a prose-only verb — see "the
- * audit fires on every class of undeclared capability". Without that, a test
- * asserting "zero violations" could pass because the parser matches nothing.
- */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { GLOBAL_FLAGS, describeCommand, getCommand, listCommands } from '../lib/registry.mjs';
 import { buildCommandIndex } from '../lib/command-index.mjs';
 
-/**
- * Alternatives a usage line may name that are legitimately NOT verbs, flags,
- * positional names, or flag value-name enums. Each needs a stated reason —
- * an allow-list entry is a documented exception, not a silencer. Keyed
- * `<command>:<alternative>`; a stale key fails its own test below.
- */
 const USAGE_ALLOW_LIST = Object.freeze({
   'knowledge:file':
     'the argument to `purge <file>` — an episode file path supplied through the `target` positional, not a subcommand of its own',
@@ -52,28 +28,11 @@ function declaredNames(entry) {
   };
 }
 
-/**
- * Every capability `usage` names that does not resolve to registry data.
- * Returns `[{token, kind}]` — `kind` is `alternative` (inside an `<a|b>`
- * group), `bare` (a top-level subcommand word), or `flag` (a `--x` the entry
- * does not declare). `usedAllowKeys` collects the allow-list keys this call
- * consumed so the caller can detect stale exceptions.
- */
 function auditUsage(entry, usage, usedAllowKeys = new Set()) {
   const { flags, valueNames, verbs, positionals } = declaredNames(entry);
   const violations = [];
 
-  // Everything after a bare `--` is passthrough: the harness hands those tokens
-  // to a child process and never parses them (`exec -- <program> [args...]`).
-  // They are the CHILD's capability, not this entry's, so requiring them to
-  // resolve against registry data would demand the harness declare arguments it
-  // deliberately does not understand — and declaring them would be worse than
-  // the prose, because the palette would then offer pickers for them.
-  //
-  // A general rule rather than a per-command allow-list entry: it holds for any
-  // passthrough command, and it states the actual semantic instead of excusing
-  // five tokens by name.
-  const boundary = usage.search(/(^|\s)--(\s|$)/);
+    const boundary = usage.search(/(^|\s)--(\s|$)/);
   if (boundary !== -1) usage = usage.slice(0, boundary);
 
   const allowed = (token) => {
@@ -85,10 +44,7 @@ function auditUsage(entry, usage, usedAllowKeys = new Set()) {
 
   // Angle-bracket groups: `<on|suggest|off>`, `<file|--all>`, `<ref>`.
   for (const [, inner] of usage.matchAll(/<([^<>]*)>/g)) {
-    // The whole group is one flag's value name — `--risk <green|amber|red>`
-    // is that flag's enum, never three verbs (lib/registry.mjs says so on
-    // plan-new explicitly).
-    if (valueNames.has(inner)) continue;
+        if (valueNames.has(inner)) continue;
     for (const alt of inner.split('|').map((s) => s.trim()).filter(Boolean)) {
       if (verbs.has(alt) || flags.has(alt) || positionals.has(alt) || valueNames.has(alt)) continue;
       if (allowed(alt)) continue;
@@ -96,10 +52,7 @@ function auditUsage(entry, usage, usedAllowKeys = new Set()) {
     }
   }
 
-  // Bare words left once the groups are removed: knowledge's top-level
-  // `purge | commit | migrate-store` alternation, and buildUsage's optional
-  // positionals (`[query]`).
-  const bare = usage.replace(/<[^<>]*>/g, ' ').split(/[\s|[\]"]+/).filter(Boolean);
+    const bare = usage.replace(/<[^<>]*>/g, ' ').split(/[\s|[\]"]+/).filter(Boolean);
   for (const token of bare) {
     if (token.startsWith('-')) {
       if (!flags.has(token)) violations.push({ token, kind: 'flag' });

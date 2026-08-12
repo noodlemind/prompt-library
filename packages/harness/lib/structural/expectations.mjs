@@ -1,15 +1,3 @@
-// `structural-expectations` verify check — compares the structural diff of
-// the change against the plan. Advisory by default (policy.yaml v2 `checks:`
-// can escalate to warn/enforce); a missing or stale structural index skips
-// rather than guessing, so this check can never invent a failure.
-//
-// ONE RULE THROUGHOUT: never assert what was not compared. A file whose
-// baseline came from another extractor tier, a file in a language this check
-// cannot read, and a finding computed from a table the index build truncated
-// all stay INFORMATIONAL; and a run that compared nothing reports `skipped`,
-// never `passed` — a green gate over an empty comparison is worse than no
-// gate, because an `enforce` opt-in would read it as evidence.
-
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { extract, SOURCE_EXTENSIONS } from '../repo-map/lexical-extractor.mjs';
@@ -20,9 +8,6 @@ import { readStructuralIndex } from './shape.mjs';
 export const STRUCTURAL_CHECK_ID = 'structural-expectations';
 
 const EXPECTATION_CHANGES = new Set(['added', 'removed', 'modified']);
-// Findings are rendered and stored (evidence, ledger, JSON): the name lists
-// inside them are bounded like every other retrieved-text surface. A capped
-// list carries its own total so the count is never silently lost.
 const MAX_FINDING_NAMES = 50;
 
 function capList(list) {
@@ -56,18 +41,6 @@ function symbolFile(qualified) {
   return at === -1 ? String(qualified || '') : String(qualified).slice(0, at);
 }
 
-/** Per-changed-file structural diff against the baseline index.
- * Returns `{ diffs, tierSkipped, notEvaluated }`:
- * - `tierSkipped` maps files whose baseline entry was built by a non-lexical
- *   extractor tier — the current side of the diff is ALWAYS the lexical
- *   extractor, so comparing against a treesitter baseline would disagree on
- *   unchanged code and fabricate added/removed findings. Those files are
- *   skipped honestly (reported as informational `tier-mismatch-skipped`).
- * - `notEvaluated` maps changed files this check simply cannot speak about
- *   (a language the lexical extractor does not read, with no baseline entry).
- *   They are NOT diffed and, like tier skips, can never produce a finding —
- *   including an `unmet-required-expectation`, which would otherwise fire for
- *   every `.go`/`.rs`/`.rb` file regardless of what the change did. */
 function diffChangedFiles({ workspace, index, changedFiles }) {
   const rowsByFile = new Map();
   for (const row of index.symbols) {
@@ -87,12 +60,7 @@ function diffChangedFiles({ workspace, index, changedFiles }) {
       notEvaluated.set(file, `no baseline entry and ${ext || 'no extension'} is not a language this check reads`);
       continue;
     }
-    // Per-file tier gate: only a lexical-tier baseline entry diffs soundly
-    // against the lexical current side. An untiered entry inherits the
-    // index-wide meta.extractorTier — a legacy/fixture index with no tier
-    // anywhere still diffs, but an untiered file inside a treesitter-tier
-    // index must not be compared against lexical output.
-    const tier =
+        const tier =
       typeof fileEntry?.tier === 'string'
         ? fileEntry.tier
         : typeof index.meta?.extractorTier === 'string'
@@ -103,10 +71,7 @@ function diffChangedFiles({ workspace, index, changedFiles }) {
       continue;
     }
 
-    // readFileSafe: symlink-safe (ancestor walk + no-follow leaf, contained in
-    // the workspace) and size-capped — a committed symlink or oversized file
-    // reads as empty, exactly like a deleted file.
-    let current = [];
+        let current = [];
     let currentExported = [];
     const content = readFileSafe(workspace, file);
     if (content) {
@@ -129,9 +94,7 @@ function diffChangedFiles({ workspace, index, changedFiles }) {
 
     diffs.set(file, {
       added,
-      // The contract speaks about EXPORTED symbols: an added local helper is
-      // not a change to what other modules can see.
-      addedExported: added.filter((name) => currentExportedSet.has(name)),
+            addedExported: added.filter((name) => currentExportedSet.has(name)),
       removed: [...baselineNames].filter((name) => !currentSet.has(name)).sort(),
       removedExported: [...new Set(exportedRows.map((row) => row.name))].filter((name) => !currentSet.has(name)).sort(),
       baselineNames,
@@ -197,9 +160,7 @@ function evaluateExpectations(plan, diffs, tierSkipped = new Map(), notEvaluated
       informational.push({ type: 'malformed-expectation', entry, message: 'expected {file, symbol, change: added|removed|modified}' });
       continue;
     }
-    // A tier-skipped file has no diff to evaluate against — the expectation is
-    // unverifiable here, never a fabricated failure.
-    if (tierSkipped.has(entry.file)) {
+        if (tierSkipped.has(entry.file)) {
       informational.push({
         type: 'tier-mismatch-skipped',
         file: entry.file,
@@ -209,9 +170,7 @@ function evaluateExpectations(plan, diffs, tierSkipped = new Map(), notEvaluated
       });
       continue;
     }
-    // Same discipline for a file the check cannot read at all: "could not
-    // compare" is informational, never a required-expectation failure.
-    if (notEvaluated.has(entry.file)) {
+        if (notEvaluated.has(entry.file)) {
       informational.push({
         type: 'expectation-not-evaluated',
         file: entry.file,
@@ -223,19 +182,12 @@ function evaluateExpectations(plan, diffs, tierSkipped = new Map(), notEvaluated
     }
     if (expectationObserved(entry, diffs)) continue;
     const description = { type: 'unmet-expectation', file: entry.file, symbol: entry.symbol, change: entry.change };
-    // Only expectations explicitly marked required can fail the check; the
-    // rest are informational even when policy escalates the severity.
-    if (entry.required === true) findings.push({ ...description, type: 'unmet-required-expectation' });
+        if (entry.required === true) findings.push({ ...description, type: 'unmet-required-expectation' });
     else informational.push(description);
   }
   return { findings, informational };
 }
 
-/**
- * Run the structural-expectations check.
- * Returns `{ status: 'passed'|'failed'|'skipped', message, findings,
- * informational, baseline }` — a normal verify check body. Never throws.
- */
 export function runStructuralExpectations({ workspace, plan, changedFiles, home }) {
   try {
     const index = readStructuralIndex(workspace, { home });
@@ -261,9 +213,7 @@ export function runStructuralExpectations({ workspace, plan, changedFiles, home 
     const changedSet = new Set(changed);
     const allowed = parseImpactedFiles(plan);
     const { diffs, tierSkipped, notEvaluated } = diffChangedFiles({ workspace, index, changedFiles: changed });
-    // Per-file tier mismatches surface as informational notes, never findings:
-    // the skip is honest ("could not compare"), not evidence of a problem.
-    const tierNotes = [...tierSkipped].map(([file, tier]) => ({
+        const tierNotes = [...tierSkipped].map(([file, tier]) => ({
       type: 'tier-mismatch-skipped',
       file,
       tier,
@@ -275,11 +225,7 @@ export function runStructuralExpectations({ workspace, plan, changedFiles, home 
       message: `${file} not compared: ${reason}`,
     }));
 
-    // A truncated baseline table cannot support an assertion: past the cap a
-    // removed symbol simply has no recorded callers and the symbol table is
-    // incomplete, so these findings degrade to informational instead of
-    // claiming something the data cannot show.
-    const truncated = [
+        const truncated = [
       index.meta?.symbolsTruncated ? 'symbol table' : null,
       index.meta?.callEdgesTruncated ? 'call edges' : null,
     ].filter(Boolean);
@@ -296,9 +242,7 @@ export function runStructuralExpectations({ workspace, plan, changedFiles, home 
         findings.push(finding);
       }
     };
-    // Built on first use only: a run with no removed exports never walks the
-    // symbol/edge tables at all.
-    let callers = null;
+        let callers = null;
     for (const [file, diff] of diffs) {
       const symbolChanges = [...diff.addedExported, ...diff.removedExported];
       if (symbolChanges.length && !matchesScope(file, allowed)) {
@@ -339,11 +283,7 @@ export function runStructuralExpectations({ workspace, plan, changedFiles, home 
         baseline,
       };
     }
-    // Zero comparisons is not a pass. A run where every changed file was
-    // skipped (tier mismatch, unreadable language) or where nothing comparable
-    // changed examined NOTHING — reporting `passed` would be a green gate over
-    // an empty comparison, including under an `enforce` opt-in.
-    const skippedFiles = tierSkipped.size + notEvaluated.size;
+        const skippedFiles = tierSkipped.size + notEvaluated.size;
     if (diffs.size === 0) {
       return {
         status: 'skipped',

@@ -1,26 +1,3 @@
-/**
- * `@` file completion (P4bAC14).
- *
- * What phase 4b shipped for `@` was the string `"file references are not wired
- * yet"`. This is the wiring.
- *
- * IT IS WORKSPACE-CONFINED, and that is a governance property rather than a
- * convenience. Every other path the harness touches goes through
- * `safeResolveUnderRoot`; a completion that offered `../../.ssh/id_rsa` would
- * be the one surface that helps you name a file the rest of the system exists
- * to keep you from naming. Traversal is refused here, not filtered downstream.
- *
- * IT NEVER READS FILE CONTENT. Completion is a directory listing and nothing
- * more — the reference it produces is dispatched through the registry like any
- * other argument, and the command that receives it does its own reading under
- * its own rules.
- *
- * RANKING IS DELIBERATELY BORING: prefix beats substring, shallow beats deep,
- * directories sort with a trailing separator so one keystroke continues the
- * path. Fuzzy subsequence matching is offered only when nothing else hit,
- * because a fuzzy match that outranks an exact prefix is how a completion list
- * stops being predictable.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import { safeResolveUnderRoot } from '../path-safe.mjs';
@@ -42,10 +19,7 @@ function listDir(root, relDir) {
   try {
     full = relDir ? safeResolveUnderRoot(root, relDir) : root;
   } catch {
-    // Traversal, absolute path, or anything else that would leave the
-    // workspace. An empty list is the right answer: the path is not offered,
-    // and no error teaches the caller that the guard is worth probing.
-    return [];
+        return [];
   }
   try {
     return fs.readdirSync(full, { withFileTypes: true });
@@ -54,18 +28,9 @@ function listDir(root, relDir) {
   }
 }
 
-/**
- * Complete one `@` prefix.
- *
- * `prefix` is what follows the sigil, exactly as typed. A trailing separator
- * means "inside this directory"; anything else is a partial name in its parent.
- */
 export function completePath(prefix, { workspace = process.cwd(), limit = MAX_RESULTS } = {}) {
   const raw = String(prefix ?? '');
-  // A leading `/` or a `..` segment is refused rather than resolved: see the
-  // module note. `path.posix` throughout, because the reference a person types
-  // is a repo-relative path and stays one on Windows.
-  if (raw.startsWith('/') || raw.startsWith('\\') || raw.split(/[\\/]/).includes('..')) return [];
+    if (raw.startsWith('/') || raw.startsWith('\\') || raw.split(/[\\/]/).includes('..')) return [];
 
   const endsWithSep = /[\\/]$/.test(raw);
   const normalized = raw.replace(/\\/g, '/');
@@ -92,11 +57,7 @@ export function completePath(prefix, { workspace = process.cwd(), limit = MAX_RE
     scored.push({ path: isDir ? `${rel}/` : rel, name, kind: isDir ? 'dir' : 'file', score });
   }
 
-  // Nothing in the named directory: fall back to a bounded walk from the
-  // workspace root, so `@workbench` finds `docs/architecture/harness-cli-
-  // workbench.md` without the path being known in advance. This is the one
-  // fuzzy path, and it only runs when the precise one came back empty.
-  if (!scored.length && base && !relDir) {
+    if (!scored.length && base && !relDir) {
     for (const hit of walk(workspace, wanted, limit)) scored.push(hit);
   }
 

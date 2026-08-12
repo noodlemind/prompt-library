@@ -61,8 +61,6 @@ test('onStdout/onStderr stream live chunks that match the buffered result', asyn
   assert.equal(result.stderr, 'oops\n');
 });
 
-// P1.6 (carry-list c): a throwing onStdout/onStderr must not take the
-// buffered result down with it.
 test('a throwing onStdout/onStderr does not break buffering or the resolved result', async () => {
   const script = "process.stdout.write('hi\\n'); process.stderr.write('bye\\n');";
   const result = await runProcess({
@@ -92,12 +90,6 @@ test('maxBuffer truncates buffered stdout at a line boundary', async () => {
   assert.ok(result.stdout.endsWith('\n'), 'truncated stdout must end on a full line');
 });
 
-// `process.execPath` rather than the POSIX `sleep` binary: Windows ships no
-// `sleep`, so on win32 the spawn failed with ENOENT and the run settled
-// 'failed' before the timeout could ever fire — the assertion below would have
-// been red on the Windows job for a reason that has nothing to do with
-// timeouts. Node is guaranteed present on both platforms and sleeps
-// identically.
 test('timed-out kills the tree and reports status timed-out, not failed', async () => {
   const startedAt = Date.now();
   const result = await runProcess({
@@ -170,9 +162,7 @@ test('cancellation status wins over exit code even when the signal fires last-se
   });
   controller.abort();
   const result = await resultPromise;
-  // Either the process already exited 0 before the abort raced in, or it was
-  // killed — either way, once aborted the status must never read as 'failed'.
-  assert.notEqual(result.status, 'failed');
+    assert.notEqual(result.status, 'failed');
 });
 
 test('a pre-aborted signal resolves as cancelled without spawning', async () => {
@@ -186,9 +176,6 @@ test('a pre-aborted signal resolves as cancelled without spawning', async () => 
   assert.equal(result.stdout, '');
 });
 
-// Same reason as the timeout test above — no `sleep` binary exists on the
-// Windows runner, and an ENOENT spawn settles 'failed' before the abort lands,
-// so killFn is never called and `calls.length` reads 0.
 test('win32 termination path calls killFn once with no POSIX-style escalation', async () => {
   const controller = new AbortController();
   const calls = [];
@@ -213,18 +200,6 @@ test('win32 termination path calls killFn once with no POSIX-style escalation', 
   assert.equal(calls[0].plat, 'win32');
 });
 
-// Keys the OS/loader injects into EVERY spawned child BELOW the application
-// layer, whatever `env` object is handed to spawn. Their presence is never
-// evidence that runProcess merged `process.env`:
-//   - darwin: dyld/CoreFoundation adds __CF_USER_TEXT_ENCODING.
-//   - win32: libuv's make_program_env() copies a fixed list of "essential"
-//     variables out of the PARENT environment whenever the supplied
-//     environment block omits them (libuv src/win/process.c, `required_vars`
-//     — winsock will not initialize without SYSTEMROOT, and several Win32
-//     APIs need TEMP/PATH). That is why PATH arrives on Windows even though
-//     runProcess passes `env` straight through untouched.
-// Anything OUTSIDE this per-platform set that came from the parent is a real
-// merge bug, which is what the sentinel below proves is absent.
 const PLATFORM_INJECTED_ENV_KEYS = {
   darwin: ['__CF_USER_TEXT_ENCODING'],
   win32: [
@@ -243,10 +218,7 @@ const PLATFORM_INJECTED_ENV_KEYS = {
 };
 
 test('env passed explicitly is used as-is, not merged with process.env', async () => {
-  // A variable that exists ONLY in this process's environment and is on no
-  // platform's injected list — the single thing that would cross over if
-  // runProcess ever merged process.env into an explicit `env`.
-  process.env.HARNESS_RUNNER_ENV_LEAK_PROBE = 'parent-only';
+    process.env.HARNESS_RUNNER_ENV_LEAK_PROBE = 'parent-only';
   try {
     const result = await runProcess({
       argv: [process.execPath, '-e', 'process.stdout.write(JSON.stringify(process.env))'],
@@ -260,21 +232,12 @@ test('env passed explicitly is used as-is, not merged with process.env', async (
       undefined,
       'runProcess must never merge process.env into an explicitly supplied env'
     );
-    // ...and nothing else crossed over either, apart from the keys the
-    // platform itself injects. Windows environment names are case-insensitive
-    // by definition (libuv writes its injected names from uppercase literals,
-    // but the OS treats Path/PATH as one variable), so the comparison folds
-    // case there — that is the correct semantics, not a loosened check.
-    const fold = isWin32 ? (key) => key.toUpperCase() : (key) => key;
+        const fold = isWin32 ? (key) => key.toUpperCase() : (key) => key;
     const injected = new Set((PLATFORM_INJECTED_ENV_KEYS[process.platform] || []).map(fold));
     const leaked = Object.keys(seenEnv).filter((key) => key !== 'ONLY_VAR' && !injected.has(fold(key)));
     assert.deepEqual(leaked, [], `only ONLY_VAR plus platform-injected keys may reach the child; leaked: ${leaked.join(', ')}`);
     if (isWin32) {
-      // Pin the platform contract being tolerated rather than merely allowing
-      // it: PATH is present because libuv copied the PARENT's PATH verbatim
-      // into the block, not because the runner merged. If libuv ever stops
-      // doing this, this fails and the win32 allowlist above should shrink.
-      const seenPathKey = Object.keys(seenEnv).find((key) => key.toUpperCase() === 'PATH');
+            const seenPathKey = Object.keys(seenEnv).find((key) => key.toUpperCase() === 'PATH');
       assert.ok(seenPathKey, 'win32: libuv must inject PATH into the child environment block');
       assert.equal(seenEnv[seenPathKey], process.env.PATH, "win32 PATH must be libuv's verbatim copy of the parent PATH");
     } else {
@@ -291,27 +254,15 @@ test('throws on a malformed argv synchronously', () => {
   assert.throws(() => runProcess({ argv: 'not-an-array' }), TypeError);
 });
 
-// --- Fix-wave Important #6: abort after a failed spawn must not crash ------
-//
-// Verified pre-fix crash: spawning a nonexistent executable leaves
-// `child.pid` undefined ('error' fires asynchronously, no pid was ever
-// assigned); aborting in that window called killFn(undefined, ...) ->
-// process.kill(NaN) -> ERR_INVALID_ARG_TYPE thrown from inside the abort
-// listener, breaking the always-resolve contract.
-
 test('abort right after a failed spawn settles with a structured outcome — no ERR_INVALID_ARG_TYPE crash', async () => {
   const controller = new AbortController();
   const resultPromise = runProcess({
     argv: ['/definitely/not/a/real/executable-harness-fixwave'],
     signal: controller.signal,
   });
-  // Pre-fix this abort() call itself threw (the listener runs synchronously
-  // inside it and killFn crashed on the invalid pid).
-  controller.abort();
+    controller.abort();
   const result = await resultPromise;
-  // The abort was observed before the spawn error surfaced, so the outcome
-  // is 'cancelled' — the point is that it SETTLES, structured, either way.
-  assert.equal(result.status, 'cancelled');
+    assert.equal(result.status, 'cancelled');
   assert.equal(result.exitCode, null);
   assert.equal(result.stdout, '');
 });
@@ -322,9 +273,6 @@ test('a plain failed spawn (no abort) still settles as failed', async () => {
   assert.equal(result.exitCode, null);
 });
 
-// A short self-terminating child, again via `process.execPath` rather than
-// `sleep 0.4` — Windows has no `sleep`, and `sleep 0.4` is not even portable
-// across POSIX shells (fractional seconds are a GNU/BSD extension).
 test('a throwing killFn never breaks the always-resolve contract', async () => {
   const controller = new AbortController();
   const resultPromise = runProcess({
@@ -337,24 +285,9 @@ test('a throwing killFn never breaks the always-resolve contract', async () => {
   });
   await delay(50);
   controller.abort(); // pre-fix: the throw propagated out of the abort listener
-  // The child is never actually signalled (killFn throws every time, for
-  // SIGTERM and the SIGKILL escalation alike) — it simply finishes its short
-  // sleep, and the runner still settles with the cancelled outcome.
-  const result = await resultPromise;
+    const result = await resultPromise;
   assert.equal(result.status, 'cancelled');
 });
-
-// --- Fix-wave Important #7 (round 2): settlement AWAITS the group reap -------
-//
-// Pre-fix (round 1), a cancelled/timed-out run resolved on the direct child's
-// 'close' and only left an UNREF'd SIGKILL timer armed — so the CLI, which
-// awaits this promise and then calls process.exit, exited before the escalation
-// fired and a grandchild that ignored SIGTERM survived. A re-probe saw only
-// SIGTERM at exit, never the scheduled SIGKILL. The fix: the run does not
-// resolve 'cancelled'/'timed-out' until the whole process GROUP is confirmed
-// gone (past the SIGKILL escalation), bounded by groupReapTimeoutMs. Both tests
-// below assert settlement itself waits for the reap — neither relies on the
-// test's own event loop keeping the process alive for an unref'd timer.
 
 test('a cancelled run does not settle until the SIGKILL escalation has reaped the group (deterministic, injected probe)', async () => {
   const calls = [];
@@ -364,11 +297,7 @@ test('a cancelled run does not settle until the SIGKILL escalation has reaped th
   fakeChild.stdout = null;
   fakeChild.stderr = null;
 
-  // The injected group probe reports the group ALIVE until a SIGKILL is
-  // delivered — modelling a grandchild that ignores SIGTERM. The run must keep
-  // polling and must NOT resolve until the escalation has actually taken
-  // effect.
-  let sigkilled = false;
+    let sigkilled = false;
   const resultPromise = runProcess({
     argv: ['fake-cmd'],
     signal: controller.signal,
@@ -386,10 +315,7 @@ test('a cancelled run does not settle until the SIGKILL escalation has reaped th
   controller.abort(); // SIGTERM the group, arm the 100ms SIGKILL escalation
   fakeChild.emit('close', null, 'SIGTERM'); // direct child dies immediately
 
-  // Pre-fix this resolved right here, with calls === ['SIGTERM'] and the
-  // SIGKILL escalation abandoned. Post-fix it resolves only after the group is
-  // reaped, i.e. after SIGKILL — no delay()/keep-alive from the test needed.
-  const result = await resultPromise;
+    const result = await resultPromise;
   assert.equal(result.status, 'cancelled');
   assert.deepEqual(
     calls.map((c) => c.sig),
@@ -410,10 +336,7 @@ test(
       signalPidSeen = resolve;
     });
 
-    // The grandchild installs a SIGTERM handler and detaches from the stdio
-    // pipes (so the parent's 'close' fires the moment the parent dies —
-    // exactly the pre-fix regression window). `exec` makes $! the node pid.
-    const grandchildScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+        const grandchildScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
     const killGraceMs = 400;
     const resultPromise = runProcess({
       argv: [
@@ -440,18 +363,11 @@ test(
 
     const result = await resultPromise; // parent sh dies to SIGTERM -> close fires
     assert.equal(result.status, 'cancelled');
-    // The whole point: settlement waited for the group reap, so by the time the
-    // await returns the SIGTERM-ignoring grandchild is ALREADY gone. Asserted
-    // immediately, with the test doing nothing to keep the loop alive — pre-fix
-    // this fired while the grandchild was still very much alive (the escalation
-    // was abandoned once the owning process would have exited).
-    assert.ok(
+        assert.ok(
       !processExists(grandchildPid),
       `grandchild pid ${grandchildPid} must be reaped BEFORE the run settles`
     );
-    // And it genuinely went through the SIGKILL grace (it ignored SIGTERM), so
-    // settlement spanned at least the grace period rather than resolving early.
-    assert.ok(
+        assert.ok(
       result.durationMs >= killGraceMs - 100,
       `settlement (${result.durationMs}ms) must span the SIGKILL grace (${killGraceMs}ms) — proof the escalation path ran`
     );
