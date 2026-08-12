@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import { applyOps, rebuildIndex } from '../lib/knowledge/apply.mjs';
@@ -31,33 +28,9 @@ import {
 } from '../lib/knowledge/store.mjs';
 import { QUARANTINE_DIR, findSymlinkedStoreDirectories, storePathParts, writeStoreFile } from '../lib/knowledge/store-io.mjs';
 import { appendFileContained } from '../lib/fs-safe.mjs';
+import { tempDir, git, writeOps, storeScopes, packageRoot } from './helpers/index.mjs';
 
-const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
-
-const ctx = () => ({ ws: tempDir('sio-ws-'), home: tempDir('sio-home-'), harnessHome: tempDir('sio-hh-') });
-
-function git(cwd, args) {
-  return spawnSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: '/dev/null',
-      GIT_CONFIG_SYSTEM: '/dev/null',
-            GIT_AUTHOR_NAME: 'harness-test',
-      GIT_AUTHOR_EMAIL: 'harness-test@example.test',
-      GIT_COMMITTER_NAME: 'harness-test',
-      GIT_COMMITTER_EMAIL: 'harness-test@example.test',
-    },
-  });
-}
-
-function writeOps(dir, ops) {
-  const p = path.join(dir, 'ops.json');
-  fs.writeFileSync(p, JSON.stringify({ schema: 1, ops }));
-  return p;
-}
+const ctx = () => storeScopes({ prefix: 'sio-' });
 
 function EP(ws, rel) {
   const full = path.join(ws, rel);

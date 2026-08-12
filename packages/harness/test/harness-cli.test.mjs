@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -24,92 +23,7 @@ import { listCommands } from '../lib/registry.mjs';
 import { HELP_COMMAND_ORDER } from '../bin/harness.mjs';
 import YAML from 'yaml';
 import { approveProject } from '../lib/trust.mjs';
-
-const packageRoot = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..'
-);
-const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
-
-function tempDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-}
-
-function runHarness(args, options = {}) {
-  const full = [...args];
-  const workspace = valueOf(full, '--workspace');
-  let copilotHome = valueOf(full, '--copilot-home');
-    if (!copilotHome && workspace) {
-    copilotHome = tempDir('harness-home-');
-    full.push('--copilot-home', copilotHome);
-  }
-  if (workspace && copilotHome && options.trust !== false) {
-    try {
-      approveProject({ workspace, copilotHome });
-    } catch {
-      /* a fixture with no writable home is a test that does not need trust */
-    }
-  }
-  return spawnSync(process.execPath, [binPath, ...full], {
-    cwd: packageRoot,
-    encoding: 'utf8',
-    env: { ...process.env, ...(options.env || {}) },
-  });
-}
-
-/** Read a flag's value out of an argv, honoring `--flag=value`. */
-function valueOf(argv, name) {
-  const eq = argv.find((a) => typeof a === 'string' && a.startsWith(`${name}=`));
-  if (eq) return eq.slice(name.length + 1);
-  const i = argv.indexOf(name);
-  return i === -1 ? null : argv[i + 1] ?? null;
-}
-
-function writePlan(workspace, { frontmatter = '', activity = '- Plan created.' } = {}) {
-  const plansDir = path.join(workspace, 'docs', 'plans');
-  fs.mkdirSync(plansDir, { recursive: true });
-  const planPath = path.join(plansDir, '2026-05-22-fix-example-plan.md');
-  fs.writeFileSync(
-    planPath,
-    `---
-title: "Fix example"
-status: in-progress
-plan_lock: true
-phase: 1
-${frontmatter}---
-
-# Fix example
-
-## Overview
-
-Do the work.
-
-## Intent Contract
-
-- **Goal:** Fix example
-- **Expected outputs:** code change
-- **Success criteria:** tests pass
-
-## Acceptance Criteria
-
-- [ ] Example is fixed.
-
-## Verification Plan
-
-Run the relevant test command.
-
-## Impacted Files
-
-- src/example.ts
-
-## Activity
-
-${activity}
-`,
-    'utf8'
-  );
-  return planPath;
-}
+import { tempDir, runHarness, writePlan, packageRoot, binPath } from './helpers/index.mjs';
 
 function readEvents(workspace) {
   const eventsPath = path.join(workspace, '.harness', 'events.jsonl');

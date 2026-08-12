@@ -2,7 +2,7 @@
 plan_schema: 1
 title: "Harness test hygiene: de-bloat, layer, and stop review archaeology"
 type: refactor
-status: planned
+status: in-progress
 plan_lock: true
 phase: 1
 priority: P1
@@ -129,14 +129,14 @@ This plan restructures tests so they stay strict where it matters (security, des
 
 ### Inventory & policy
 
-- [ ] **AC1** Written inventory (in this plan’s Implementation Notes or `test/README.md`) maps every `*findings*`, `*hardening*`, `*adversarial*`, `*round*` test file → owning module(s) and decision: fold / keep / delete-after-fold.  
-- [ ] **AC2** Contributor policy documented (`packages/harness/test/README.md` or package README): **no new** `*-findings*.test.mjs`, `codex-*`, `coderabbit-*` souvenir test files; regressions go into module tests.  
-- [ ] **AC3** Policy states: prefer table-driven cases; prefer helpers; soft guidance ~300–400 lines per file before split.
+- [x] **AC1** Written inventory (in this plan’s Implementation Notes or `test/README.md`) maps every `*findings*`, `*hardening*`, `*adversarial*`, `*round*` test file → owning module(s) and decision: fold / keep / delete-after-fold.  
+- [x] **AC2** Contributor policy documented (`packages/harness/test/README.md` or package README): **no new** `*-findings*.test.mjs`, `codex-*`, `coderabbit-*` souvenir test files; regressions go into module tests.  
+- [x] **AC3** Policy states: prefer table-driven cases; prefer helpers; soft guidance ~300–400 lines per file before split.
 
 ### Helpers
 
-- [ ] **AC4** `test/helpers/` includes at least: temp dir lifecycle, workspace+copilot home, trust approve, sample plan writer, knowledge store bootstrap (or thin wrappers), `runHarness` / spawn helper used by CLI tests.  
-- [ ] **AC5** Top offenders adopt helpers: at minimum `harness-cli.test.mjs` (or its splits), one knowledge store test, one findings file being folded. Duplicated local `tempDir`/`writePlan` removed from those files.
+- [x] **AC4** `test/helpers/` includes at least: temp dir lifecycle, workspace+copilot home, trust approve, sample plan writer, knowledge store bootstrap (or thin wrappers), `runHarness` / spawn helper used by CLI tests.  
+- [x] **AC5** Top offenders adopt helpers: at minimum `harness-cli.test.mjs` (or its splits), one knowledge store test, one findings file being folded. Duplicated local `tempDir`/`writePlan` removed from those files.
 
 ### Structure
 
@@ -289,30 +289,36 @@ Review focus: security assertions still present; sole-writer paths intact; no pr
 
 ## Implementation Notes
 
-_To be filled by the implementer._
+### Helper API (Phase 1)
 
-### Inventory table (fill in Phase 0)
+- `test/helpers/{temp,workspace,plan,trust,cli,store,index}.mjs` + existing `tty.mjs`
+- Migrated onto helpers (assertions unchanged): `harness-cli.test.mjs`, `growth-report.test.mjs`, `knowledge-store-io-hardening.test.mjs`
+- Canonical inventory + contributor policy: `packages/harness/test/README.md`
+
+### Inventory table (Phase 0)
 
 | File | Lines (approx) | Owns / tests | Decision |
 |---|---|---|---|
-| `codex-phase5-findings.test.mjs` | ~525 | | fold → |
-| `codex-review-findings.test.mjs` | | | |
-| `coderabbit-review-findings.test.mjs` | | | |
-| `knowledge-adversarial-fixes.test.mjs` | | | |
-| `knowledge-boundary-hardening.test.mjs` | | | |
-| `knowledge-path-safety-round2.test.mjs` | | | |
-| `knowledge-recall-hardening.test.mjs` | | | |
-| `knowledge-store-io-hardening.test.mjs` | | | |
-| `knowledge-structural-hardening.test.mjs` | | | |
-| `verify-severity-hardening.test.mjs` | | | |
-| `harness-cli.test.mjs` | ~2708 | multi-domain | split |
-| … | | | |
+| `codex-phase5-findings.test.mjs` | ~525 | sync/retire, agent-loop, journal, providers | fold |
+| `codex-review-findings.test.mjs` | ~159 | trust, controls, config, flags, bash, checks | fold |
+| `coderabbit-review-findings.test.mjs` | ~230 | flags, trust, checks, config, bundles | fold |
+| `knowledge-adversarial-fixes.test.mjs` | ~239 | store-io / apply / get | fold → path-safety |
+| `knowledge-path-safety-round2.test.mjs` | ~169 | get, recall, candidates, sync | fold → path-safety |
+| `knowledge-boundary-hardening.test.mjs` | ~586 | promote, absorb, prune, governance | fold → promote/admin |
+| `knowledge-recall-hardening.test.mjs` | ~136 | context-pack / recall | fold → recall/pack |
+| `knowledge-store-io-hardening.test.mjs` | ~942 | store-io, lock | keep temp; rename later |
+| `knowledge-structural-hardening.test.mjs` | ~440 | learnings, absorb, rollback | fold into store |
+| `verify-severity-hardening.test.mjs` | ~459 | verify severity / payload | fold → verify |
+| `harness-cli.test.mjs` | ~2708 | multi-domain CLI | split (Phase 2) |
+
+Full table also in `packages/harness/test/README.md`.
 
 ### Timing log
 
 | When | Command | Duration |
 |---|---|---|
-| Baseline | `npm test` | |
+| Baseline (pre-helper migrate) | `npm test` | ~60s wall (1896 pass / 1 fail = dual live plans) |
+| Post Phase 1 | `npm test` | ~63s wall (1897 pass / 0 fail) |
 | Post Phase 4 unit | `npm run test:unit` | |
 | Post Phase 4 full | `npm test` | |
 
@@ -368,3 +374,13 @@ When done: summarize ACs, files split/deleted, helper API, timing before/after, 
 
 - Requirements drafted from suite diagnosis: ~40k lines, megatest CLI, review archaeology, single tty helper, knowledge sprawl.  
 - Companion to adaptive engineering growth-loop plan; hygiene must not weaken Adaptive Engineering invariants.
+
+### 2026-08-11 — Phase 0 + Phase 1
+
+- Inventory of 10 souvenir files + CLI megatest; decisions recorded in plan + `test/README.md`.
+- Shared helpers: temp, workspace, plan, trust, cli (`runHarness`), store (git/scopes/ops).
+- Migrated `harness-cli`, `growth-report`, `knowledge-store-io-hardening` onto helpers (no assertion rewrites).
+- Contributor policy landed in `test/README.md` (AC1–AC5).
+- Removed completed growth-loop plan so the repo keeps a single live dated plan (contract).
+- Targeted: harness-cli + store-io 130 pass; growth-report 8 pass.
+- Next: Phase 2 split `harness-cli.test.mjs`.
