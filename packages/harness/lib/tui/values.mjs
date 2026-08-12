@@ -25,6 +25,7 @@
  * must degrade to the old behaviour, never to a dead end.
  */
 import { PROVIDER_MODELS, providerReadiness } from '../provider.mjs';
+import { readModelCache } from '../model-cache.mjs';
 import { CONFIG_SCHEMA, CONFIG_KEYS, SCOPES } from '../config.mjs';
 import { readJournal, foldRuns } from '../run-journal.mjs';
 import { completePath } from './complete.mjs';
@@ -65,15 +66,31 @@ function providers({ parentEnv }) {
  * provider first, and the second question is only answerable in terms of the
  * first. Falls back to every known model when no provider has been chosen, so
  * the source is still useful for a flag (`--model`) asked in isolation.
+ *
+ * THE FETCHED CATALOGUE WINS. The model overlay has preferred what `model
+ * refresh` recorded since the cache existed; this picker kept offering the
+ * static table, so the same question got two different answers depending on
+ * which surface asked it. The static list survives as what it is everywhere
+ * else — the answer for a provider nobody has asked yet.
  */
-function models({ values }) {
+function models({ values, copilotHome }) {
+  const cache = copilotHome ? readModelCache(copilotHome) : {};
+  const listFor = (id) => {
+    const fetched = cache?.[id];
+    if (fetched?.models?.length) return { models: fetched.models, labels: fetched.labels ?? {}, fetched: true };
+    return { models: PROVIDER_MODELS[id] ?? [], labels: {}, fetched: false };
+  };
   const chosen = values?.provider ?? values?.['--provider'] ?? null;
-  if (chosen && PROVIDER_MODELS[chosen]) {
-    return PROVIDER_MODELS[chosen].map((m, i) => item(m, { note: i === 0 ? 'provider default' : '' }));
+  if (chosen && (PROVIDER_MODELS[chosen] || cache?.[chosen]?.models?.length)) {
+    const { models: list, labels, fetched } = listFor(chosen);
+    return list.map((m, i) => item(m, {
+      note: labels[m] || (i === 0 ? (fetched ? 'provider default · fetched' : 'provider default') : ''),
+    }));
   }
   const out = [];
-  for (const [provider, list] of Object.entries(PROVIDER_MODELS)) {
-    for (const m of list) out.push(item(m, { note: provider }));
+  const ids = new Set([...Object.keys(PROVIDER_MODELS), ...Object.keys(cache ?? {})]);
+  for (const provider of ids) {
+    for (const m of listFor(provider).models) out.push(item(m, { note: provider }));
   }
   return out;
 }
@@ -183,7 +200,7 @@ const RESOLVERS = {
  * the floor under every source so a failure to enumerate never blocks a
  * command that would otherwise run.
  */
-export function resolveValues(choices, { workspace = process.cwd(), parentEnv = process.env, values = {}, query = '' } = {}) {
+export function resolveValues(choices, { workspace = process.cwd(), copilotHome = null, parentEnv = process.env, values = {}, query = '' } = {}) {
   if (!choices) return { items: [], free: true };
   if (choices.literal) {
     return { items: choices.literal.map((v) => item(v)), free: false };
@@ -192,7 +209,7 @@ export function resolveValues(choices, { workspace = process.cwd(), parentEnv = 
   if (!resolver) return { items: [], free: true };
   let items = [];
   try {
-    items = resolver({ workspace, parentEnv, values, query }) || [];
+    items = resolver({ workspace, copilotHome, parentEnv, values, query }) || [];
   } catch {
     // An unreadable directory, a half-written journal: fall through to typing.
     // The command still runs; only the convenience is lost.

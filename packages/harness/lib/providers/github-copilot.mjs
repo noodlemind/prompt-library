@@ -18,20 +18,17 @@
  *      login. This is the zero-setup path: if Copilot works in the editor,
  *      `--provider github-copilot` works in the harness.
  *
- * The exchange calls `api.github.com/copilot_internal/v2/token` — the same
- * endpoint every editor integration uses — and caches the bearer until a
- * minute before its stated expiry. A 401 clears the cache and re-exchanges
+ * The exchange calls `copilot_internal/v2/token` on `api.github.com` — the
+ * same endpoint every editor integration uses — or on the host the seam
+ * normalized from `GITHUB_COPILOT_EXCHANGE_URL`, for GHE and data-residency
+ * accounts whose grant lives on their own domain. The bearer is cached until
+ * a minute before its stated expiry. A 401 clears the cache and re-exchanges
  * once, so an expiring bearer mid-run costs one retry, not the turn.
  *
  * The bearer and the oauth token are both scrubbed from every error and every
  * result, same rule as every adapter: this process is the only one that holds
  * them, so it is the only one that can reliably take them back out.
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import http from 'node:http';
-import https from 'node:https';
 import {
   toWireMessages,
   toWireTools,
@@ -39,7 +36,9 @@ import {
   scrubCredential,
   withRetry,
   streamCompletion,
+  httpRequest,
 } from './openai-compatible.mjs';
+import { findEditorOauthToken } from '../copilot-credential.mjs';
 
 const PROVIDER_ID = 'github-copilot';
 const DEFAULT_BASE_URL = 'https://api.githubcopilot.com';
@@ -67,8 +66,10 @@ export function endpointFromBearer(bearer) {
 function apiBaseUrl() {
   return process.env.HARNESS_PROVIDER_BASE_URL || cached?.endpoint || DEFAULT_BASE_URL;
 }
-const EXCHANGE_URL = 'https://api.github.com/copilot_internal/v2/token';
-const REQUEST_TIMEOUT_MS = Number(process.env.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS) || 120_000;
+// The exchange host moves with the account: github.com for the public cloud,
+// the tenant's own host for GHE / data residency. The seam validates and
+// normalizes GITHUB_COPILOT_EXCHANGE_URL into this variable.
+const EXCHANGE_URL = process.env.HARNESS_COPILOT_EXCHANGE_URL || 'https://api.github.com/copilot_internal/v2/token';
 
 /**
  * The client identity declared to the Copilot API.
@@ -123,65 +124,19 @@ export function initiatorFor(wireMessages) {
   return last?.role === 'tool' ? 'agent' : 'user';
 }
 
-function configDir() {
-  const xdg = process.env.XDG_CONFIG_HOME;
-  return xdg ? path.join(xdg, 'github-copilot') : path.join(os.homedir(), '.config', 'github-copilot');
-}
-
 /**
  * The operator's OAuth token. The seam (provider.mjs) normalizes whatever the
  * operator exported into HARNESS_COPILOT_OAUTH — this adapter never names a
  * GitHub variable, which is the P5AC7 invariant: only the seam names keys.
- * The editor's own store is the zero-setup fallback.
+ * The editor's own store is the zero-setup fallback, and the scan of it is
+ * SHARED with the seam (lib/copilot-credential.mjs): two copies of the ladder
+ * is how "signed in" and "not signed in" come to disagree.
  */
 function findOauthToken() {
-  if (process.env.HARNESS_COPILOT_OAUTH) return process.env.HARNESS_COPILOT_OAUTH;
-  for (const file of ['apps.json', 'hosts.json']) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(configDir(), file), 'utf8'));
-      for (const value of Object.values(parsed ?? {})) {
-        if (value && typeof value === 'object' && typeof value.oauth_token === 'string') {
-          return value.oauth_token;
-        }
-      }
-    } catch { /* absent or unreadable — try the next rung */ }
-  }
-  return null;
+  return process.env.HARNESS_COPILOT_OAUTH || findEditorOauthToken(process.env);
 }
 
 let cached = null; // { bearer, expiresAtMs, endpoint }
-
-function httpRequest(url, { method = 'GET', headers = {}, body = null, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
-  const u = new URL(url);
-  const transport = u.protocol === 'http:' ? http : https;
-  return new Promise((resolve, reject) => {
-    const req = transport.request(
-      {
-        protocol: u.protocol,
-        host: u.hostname,
-        port: u.port || undefined,
-        path: `${u.pathname}${u.search}`,
-        method,
-        headers: body ? { ...headers, 'content-length': Buffer.byteLength(body) } : headers,
-      },
-      (res) => {
-        let text = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => { text += c; });
-        res.on('end', () => resolve({ status: res.statusCode, text, headers: res.headers }));
-      },
-    );
-    req.on('error', (error) => reject(Object.assign(
-      new Error(`${PROVIDER_ID} request failed: ${error.code || error.message}`),
-      { retriable: true },
-    )));
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(Object.assign(new Error(`${PROVIDER_ID} request timed out after ${timeoutMs}ms`), { retriable: true }));
-    });
-    if (body) req.write(body);
-    req.end();
-  });
-}
 
 /** A bearer for the Copilot API, minted or cached. */
 async function bearerToken() {

@@ -246,7 +246,7 @@ test('the provider handle answers a completion through the real adapter process'
   // A stub API is out of scope; what is provable without network is that the
   // adapter speaks the protocol and reports a missing key as an error rather
   // than crashing the host.
-  const provider = startProvider({ parentEnv: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'not-a-real-key' } });
+  const provider = startProvider({ provider: 'anthropic', parentEnv: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'not-a-real-key' } });
   await assert.rejects(
     provider.complete({ messages: [{ role: 'user', content: 'hi' }] }, { timeout: 15_000 }),
     (error) => /anthropic|request failed/i.test(error.message),
@@ -256,7 +256,7 @@ test('the provider handle answers a completion through the real adapter process'
 });
 
 test('the provider handle exposes completion and close, and not the raw request channel', () => {
-  const provider = startProvider({ parentEnv: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'x' } });
+  const provider = startProvider({ provider: 'anthropic', parentEnv: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'x' } });
   assert.equal(typeof provider.complete, 'function');
   assert.equal(typeof provider.close, 'function');
   assert.equal('request' in provider, false,

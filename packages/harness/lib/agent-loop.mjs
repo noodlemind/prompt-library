@@ -48,6 +48,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EXIT } from './style.mjs';
+import { CONFIG_SCHEMA } from './config.mjs';
+import { PROVIDER_TIMEOUT_MS } from './provider.mjs';
 import { execResultOf, bashResultOf } from './exec-cmd.mjs';
 import { editResultOf, writeResultOf } from './edit-cmd.mjs';
 import { getResultOf } from './retrieval/compat-results.mjs';
@@ -55,20 +57,33 @@ import { searchResultOf } from './retrieval/search-cmd.mjs';
 
 export const AGENT_SCHEMA = 1;
 
+/** What one rendered tool result may hand the model — see renderToolResult. */
+export const TOOL_RESULT_MAX_BYTES = 16_000;
+
 /**
  * The window the `read` tool asks for.
  *
- * `renderToolResult` bounds what actually reaches the model at 16 kB, so asking
- * `get` for a little more than that costs nothing and means the truncation
- * happens in ONE place with one notice attached, rather than twice with the
- * inner one silent. The line count is high enough that most source files arrive
- * whole; `offset` exists for the ones that do not.
+ * `renderToolResult` bounds what actually reaches the model at
+ * TOOL_RESULT_MAX_BYTES, so asking `get` for a little more than that costs
+ * nothing and means the truncation happens in ONE place with one notice
+ * attached, rather than twice with the inner one silent. DERIVED, not
+ * re-spelled: the two numbers are one decision, and when they were separate
+ * literals nothing but a comment kept "a little more" true. The line count is
+ * high enough that most source files arrive whole; `offset` exists for the
+ * ones that do not.
  */
 export const READ_DEFAULT_LINES = 800;
-export const READ_MAX_BYTES = 20_000;
+export const READ_MAX_BYTES = TOOL_RESULT_MAX_BYTES + 4_000;
 export const DEFAULT_PERSONA = 'engineer';
-export const DEFAULT_MAX_TURNS = 30;
-export const DEFAULT_MAX_SECONDS = 1800;
+/**
+ * The budgets, whose values live in the CONFIG SCHEMA — `agent.max_turns` and
+ * `agent.max_seconds` are operator configuration now, and a default the config
+ * surface shows must be the same number this loop falls back to. Re-exported
+ * under the old names because the registry and the command surface already
+ * read them here.
+ */
+export const DEFAULT_MAX_TURNS = CONFIG_SCHEMA['agent.max_turns'].default;
+export const DEFAULT_MAX_SECONDS = CONFIG_SCHEMA['agent.max_seconds'].default;
 
 /**
  * Why the loop stopped, and what each means for the run.
@@ -578,7 +593,7 @@ async function readResultOf(argv, ctx = {}) {
 
 /** What the model is shown after a tool runs: the outcome scalars and the
  * output, already redacted by the streamer inside `exec`. */
-export function renderToolResult(result, { maxBytes = 16_000 } = {}) {
+export function renderToolResult(result, { maxBytes = TOOL_RESULT_MAX_BYTES } = {}) {
   const lines = [`status: ${result.status}`, `exit: ${result.exitCode ?? 'null'}`];
   if (result.signal) lines.push(`signal: ${result.signal}`);
   const body = (result.output || []).map((row) => (row.line !== undefined ? row.line : '…output truncated')).join('\n');
@@ -649,7 +664,9 @@ export async function runAgentLoop({
           // Bounded by whatever is left, with NO floor. The previous
           // `Math.max(1000, …)` deliberately granted a full second when 10 ms
           // remained, so the operator's wall clock was a suggestion at the edge.
-          { timeout: Math.max(1, Math.min(deadline - now(), 5 * 60_000)) },
+          // The ceiling is the seam's own PROVIDER_TIMEOUT_MS rather than a
+          // re-spelled five minutes, so the two cannot drift apart.
+          { timeout: Math.max(1, Math.min(deadline - now(), PROVIDER_TIMEOUT_MS)) },
         );
       } catch (error) {
         // A failure that arrives after the deadline IS the deadline. Reporting

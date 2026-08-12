@@ -22,12 +22,12 @@
 import http from 'node:http';
 import https from 'node:https';
 
-// The endpoint is harness-supplied rather than hardcoded, so this same adapter
-// reaches a proxy, a corporate gateway, LiteLLM, or any Anthropic-compatible
-// endpoint. `resolveBaseUrl` refuses plaintext off-loopback before it gets
-// here, so the credential cannot be downgraded onto an unencrypted wire by an
-// override.
-const BASE_URL = process.env.HARNESS_PROVIDER_BASE_URL || 'https://api.anthropic.com';
+// The endpoint is harness-supplied, full stop — no silent fallback. The seam
+// always sets this variable, so its absence means the process was started
+// outside the seam, and a hardcoded endpoint would mask that. `resolveBaseUrl`
+// refuses plaintext off-loopback before it gets here, so the credential cannot
+// be downgraded onto an unencrypted wire by an override.
+const BASE_URL = process.env.HARNESS_PROVIDER_BASE_URL || '';
 const API_PATH = '/v1/messages';
 const API_VERSION = '2023-06-01';
 
@@ -311,6 +311,10 @@ async function handle(message) {
 
   if (message.method !== 'complete') {
     send({ type: 'error', id: message.id, message: `unknown method: ${message.method}` });
+    return;
+  }
+  if (!BASE_URL) {
+    send({ type: 'error', id: message.id, message: 'HARNESS_PROVIDER_BASE_URL is not set in the provider environment' });
     return;
   }
   // Read by NAME from the variable the harness nominated, so a gateway that

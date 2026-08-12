@@ -26,8 +26,10 @@
  * should get "that call was malformed" from the loop and a chance to retry,
  * not take the run down.
  */
+import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import tls from 'node:tls';
 
 const PROVIDER_ID = process.env.HARNESS_PROVIDER_ID || 'openai-compatible';
 const BASE_URL = process.env.HARNESS_PROVIDER_BASE_URL || '';
@@ -142,14 +144,179 @@ export function parseArguments(raw) {
  */
 const REQUEST_TIMEOUT_MS = Number(process.env.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS) || 120_000;
 
+/** An operator-tunable integer, or its default when unset or malformed. */
+function envInt(name, fallback) {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : fallback;
+}
+
+/**
+ * The proxy contract every HTTP tool honours, implemented here because this
+ * process is the one that opens the socket. Plain `node:https` never reads
+ * the proxy variables on its own, so before this the adapters could only
+ * connect DIRECTLY — a hardcoded topology no corporate network satisfies.
+ *
+ * Scope, deliberately narrow: only https targets are ever proxied (a plain
+ * http base URL is loopback-only by the seam's own transport rule, and
+ * proxying loopback is never right), and the tunnel is the standard CONNECT.
+ */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0']);
+
+/** NO_PROXY, the way curl reads it: a comma list of suffixes, `*` for all,
+ * an optional leading dot and an optional port both tolerated. */
+export function noProxyMatches(list, hostname) {
+  if (!list) return false;
+  const host = String(hostname || '').toLowerCase();
+  for (const raw of String(list).split(',')) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    if (entry === '*') return true;
+    const bare = entry.replace(/^\./, '').replace(/:\d+$/, '');
+    if (host === bare || host.endsWith(`.${bare}`)) return true;
+  }
+  return false;
+}
+
+/** The proxy this target goes through, or null for a direct connection. */
+export function proxyFor(target, env = process.env) {
+  let u;
+  try {
+    u = typeof target === 'string' ? new URL(target) : target;
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'https:') return null;
+  if (LOOPBACK_HOSTS.has(u.hostname)) return null;
+  if (noProxyMatches(env.NO_PROXY || env.no_proxy, u.hostname)) return null;
+  const raw = env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy;
+  if (!raw) return null;
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A CONNECT tunnel through the proxy, resolved to the raw socket. Failures
+ * are retriable: a proxy that refused once is the network's weather, not the
+ * request's fault. A non-2xx answer to a CONNECT arrives as an ordinary
+ * RESPONSE, not a 'connect' event — miss that and a refusal leaves the
+ * promise pending forever.
+ */
+export function openTunnel(proxy, host, port, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+  return new Promise((resolve, reject) => {
+    const headers = {};
+    if (proxy.username) {
+      const cred = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password || '')}`;
+      headers['proxy-authorization'] = `Basic ${Buffer.from(cred).toString('base64')}`;
+    }
+    const viaTls = proxy.protocol === 'https:';
+    const req = (viaTls ? https : http).request({
+      host: proxy.hostname,
+      port: proxy.port || (viaTls ? 443 : 80),
+      method: 'CONNECT',
+      path: `${host}:${port}`,
+      headers,
+    });
+    let settled = false;
+    const fail = (message) => {
+      if (settled) return;
+      settled = true;
+      reject(Object.assign(new Error(message), { retriable: true }));
+    };
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      fail(`proxy CONNECT to ${host}:${port} timed out after ${timeoutMs}ms`);
+    });
+    req.on('connect', (res, socket) => {
+      if (settled) {
+        socket.destroy();
+        return;
+      }
+      if (res.statusCode === 200) {
+        settled = true;
+        resolve(socket);
+      } else {
+        socket.destroy();
+        fail(`proxy refused CONNECT to ${host}:${port}: HTTP ${res.statusCode}`);
+      }
+    });
+    req.on('response', (res) => {
+      res.resume();
+      fail(`proxy refused CONNECT to ${host}:${port}: HTTP ${res.statusCode}`);
+    });
+    req.on('error', (error) => fail(`proxy connection failed: ${error.code || error.message}`));
+    req.on('close', () => fail(`proxy closed the connection before establishing the tunnel to ${host}:${port}`));
+    req.end();
+  });
+}
+
+/** The connection options a proxied request adds: a CONNECT tunnel, wrapped in
+ * TLS for an https target. Returns `{}` for a direct connection so callers can
+ * spread it unconditionally. */
+async function tunnelOptions(url, { timeoutMs = REQUEST_TIMEOUT_MS, env = process.env } = {}) {
+  const proxy = proxyFor(url, env);
+  if (!proxy) return {};
+  const socket = await openTunnel(proxy, url.hostname, url.port || (url.protocol === 'https:' ? 443 : 80), { timeoutMs });
+  return {
+    createConnection: () => (url.protocol === 'https:' ? tls.connect({ socket, servername: url.hostname }) : socket),
+  };
+}
+
+/**
+ * One buffered HTTP exchange, proxy-aware, shared by every adapter in this
+ * directory — the Copilot adapter had its own copy of exactly this and the
+ * two would have drifted at the first fix. The streamed completion path below
+ * goes through the same tunnel logic.
+ */
+export async function httpRequest(url, { method = 'GET', headers = {}, body = null, timeoutMs = REQUEST_TIMEOUT_MS, env = process.env } = {}) {
+  const u = typeof url === 'string' ? new URL(url) : url;
+  const connection = await tunnelOptions(u, { timeoutMs, env });
+  const transport = u.protocol === 'http:' ? http : https;
+  return new Promise((resolve, reject) => {
+    const req = transport.request(
+      {
+        protocol: u.protocol,
+        host: u.hostname,
+        port: u.port || undefined,
+        path: `${u.pathname}${u.search}`,
+        method,
+        headers: body ? { ...headers, 'content-length': Buffer.byteLength(body) } : headers,
+        ...connection,
+      },
+      (res) => {
+        let text = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => { text += c; });
+        res.on('end', () => resolve({ status: res.statusCode, text, headers: res.headers }));
+      },
+    );
+    req.on('error', (error) => reject(Object.assign(
+      new Error(`${PROVIDER_ID} request failed: ${error.code || error.message}`),
+      { retriable: true },
+    )));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(Object.assign(new Error(`${PROVIDER_ID} request timed out after ${timeoutMs}ms`), { retriable: true }));
+    });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
 /**
  * Two retries on the failures that are the NETWORK'S fault — 429, 5xx, a
  * dropped socket, a timeout — with backoff and Retry-After honored. A flaky
  * gateway response used to kill an agent turn the operator had budgeted for
  * with --max-turns; a 4xx that is the REQUEST'S fault is never retried,
- * because the same request would fail the same way.
+ * because the same request would fail the same way. Both knobs cross the seam
+ * by name (providerEnv), for the operator behind a gateway whose weather
+ * needs more patience than the default.
  */
-export async function withRetry(attempt, { retries = 2, baseDelayMs = 1000 } = {}) {
+export async function withRetry(attempt, {
+  retries = envInt('HARNESS_PROVIDER_RETRIES', 2),
+  baseDelayMs = envInt('HARNESS_PROVIDER_RETRY_BASE_MS', 1000),
+} = {}) {
   let lastError;
   for (let i = 0; i <= retries; i += 1) {
     try {
@@ -167,6 +334,19 @@ export async function withRetry(attempt, { retries = 2, baseDelayMs = 1000 } = {
   throw lastError;
 }
 
+/** This package's own home page, for the attribution headers below — read
+ * from package.json rather than spelled here, so a fork or a rename does not
+ * keep advertising someone else's repository. */
+function packageLink() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    const repo = typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url;
+    return pkg.homepage || repo || null;
+  } catch {
+    return null;
+  }
+}
+
 function requestOptions() {
   const url = new URL(`${BASE_URL}/chat/completions`);
   const key = apiKey();
@@ -175,7 +355,8 @@ function requestOptions() {
   // OpenRouter ranks callers by these and the docs ask for them; they identify
   // the tool, carry nothing about the user, and are harmless elsewhere.
   if (PROVIDER_ID === 'openrouter') {
-    headers['http-referer'] = 'https://github.com/noodlemind/prompt-library';
+    const link = packageLink();
+    if (link) headers['http-referer'] = link;
     headers['x-openrouter-title'] = 'harness';
   }
   return { url, headers, transport: url.protocol === 'http:' ? http : https };
@@ -259,7 +440,12 @@ export function streamToResponse(acc) {
  */
 export function streamCompletion({ url, headers, transport, payload, providerId, onDelta = null, idleTimeoutMs = REQUEST_TIMEOUT_MS }) {
   let firstByte = false;
-  const attempt = () => new Promise((resolve, reject) => {
+  // The tunnel is acquired per attempt, before the request exists: a CONNECT
+  // refusal is retriable network weather and must count against the same
+  // retry budget as any other pre-first-byte failure.
+  const attempt = async () => {
+    const connection = await tunnelOptions(url, { timeoutMs: idleTimeoutMs });
+    return new Promise((resolve, reject) => {
     const acc = { content: '', toolCalls: [], finishReason: null, usage: null, model: null };
     let sse = false;
     let carry = '';
@@ -295,6 +481,7 @@ export function streamCompletion({ url, headers, transport, payload, providerId,
         path: `${url.pathname}${url.search}`,
         method: 'POST',
         headers: { ...headers, accept: 'text/event-stream', 'content-length': Buffer.byteLength(payload) },
+        ...connection,
       },
       (res) => {
         let body = '';
@@ -339,7 +526,8 @@ export function streamCompletion({ url, headers, transport, payload, providerId,
     });
     req.write(payload);
     req.end();
-  });
+    });
+  };
   // The guard travels in `retriable` (false once a byte has arrived), so a
   // mid-stream failure passes through withRetry without being re-attempted.
   return withRetry(attempt);

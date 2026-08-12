@@ -703,7 +703,9 @@ export async function runLedger({
     if (!prompt) return false;
     const resolved = prompt.type === 'boolean'
       ? { items: [{ value: true, label: 'yes', note: '' }, { value: false, label: 'no', note: '' }], free: false }
-      : resolveValues(prompt.choices, { workspace, values: pending?.values ?? {} });
+      // `copilotHome` reaches the model source so the picker offers the FETCHED
+      // catalogue — the same list the overlay shows — not the static table.
+      : resolveValues(prompt.choices, { workspace, copilotHome: resolveCopilotHome(copilotHome), values: pending?.values ?? {} });
     if (!resolved.items.length) return false;
 
     const rows = resolved.items.map((it) => ({

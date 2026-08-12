@@ -75,7 +75,8 @@ import {
 } from './edit-cmd.mjs';
 import { cmdAgent, agentResultOf, agentExitFor, agentJournalArgv, taskFromArgv } from './agent-cmd.mjs';
 import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TURNS, DEFAULT_PERSONA } from './agent-loop.mjs';
-import { PROVIDERS } from './provider.mjs';
+import { DEFAULT_PROVIDER, PROVIDERS } from './provider.mjs';
+import { GET_DEFAULT_LINES, GET_DEFAULT_MAX_BYTES } from './get-cmd.mjs';
 import {
   cmdSearch,
   searchResultOf,
@@ -1493,9 +1494,9 @@ registerCommand({
       // "at least one", which `requires` has no way to express.
       { name: '--docid', type: 'string', valueName: 'id', description: 'manifest doc id', required: false, default: null, tui: 'prompt' },
       { name: '--path', type: 'string', valueName: 'rel', description: 'relative file path', required: false, default: null, tui: 'prompt', choices: 'path' },
-      { name: '--lines', type: 'number', valueName: 'n', description: 'max lines (default 40)', required: false, default: 40, tui: 'prompt' },
+      { name: '--lines', type: 'number', valueName: 'n', description: `max lines (default ${GET_DEFAULT_LINES})`, required: false, default: GET_DEFAULT_LINES, tui: 'prompt' },
       { name: '--offset', type: 'number', valueName: 'n', description: 'first line of the window, 1-indexed (default 1)', required: false, default: 1, tui: 'prompt' },
-      { name: '--max-bytes', type: 'number', valueName: 'n', description: 'max excerpt bytes (default 2048)', required: false, default: 2048, tui: 'prompt' },
+      { name: '--max-bytes', type: 'number', valueName: 'n', description: `max excerpt bytes (default ${GET_DEFAULT_MAX_BYTES})`, required: false, default: GET_DEFAULT_MAX_BYTES, tui: 'prompt' },
     ],
   },
   handler: cmdGet,
@@ -1700,7 +1701,7 @@ registerCommand({
     positionals: [{ name: 'task...', description: 'what to do, in words', required: true, default: null }],
     flags: [
       { name: '--agent', type: 'string', valueName: 'persona', description: `which hydrated persona to run as (default ${DEFAULT_PERSONA})`, required: false, default: DEFAULT_PERSONA, tui: 'prompt' },
-      { name: '--provider', type: 'string', valueName: 'id', description: `which provider answers the model call: ${Object.keys(PROVIDERS).join('|')} (default anthropic)`, required: false, default: 'anthropic', tui: 'prompt' },
+      { name: '--provider', type: 'string', valueName: 'id', description: `which provider answers the model call: ${Object.keys(PROVIDERS).join('|')} (default ${DEFAULT_PROVIDER})`, required: false, default: DEFAULT_PROVIDER, tui: 'prompt' },
       { name: '--model', type: 'string', valueName: 'id', description: "the model to call; the provider's default when omitted", required: false, default: null, tui: 'prompt' },
       { name: '--max-turns', type: 'number', valueName: 'n', description: `stop after this many turns (default ${DEFAULT_MAX_TURNS})`, required: false, default: DEFAULT_MAX_TURNS, tui: 'prompt' },
       { name: '--max-seconds', type: 'number', valueName: 's', description: `stop after this much wall clock (default ${DEFAULT_MAX_SECONDS})`, required: false, default: DEFAULT_MAX_SECONDS, tui: 'prompt' },

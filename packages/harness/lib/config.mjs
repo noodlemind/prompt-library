@@ -27,8 +27,23 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { EXIT } from './style.mjs';
 import { writeFileContained } from './fs-safe.mjs';
+import { DEFAULT_PROVIDER } from './provider.mjs';
 
 export const CONFIG_SCHEMA_VERSION = 1;
+
+/**
+ * The legal ranges for the agent loop's operator bounds, spelled once.
+ *
+ * Both the schema validators below and `harness agent`'s own flag parsing
+ * (lib/agent-cmd.mjs) enforce these; before they shared a constant, the flag
+ * ranges lived only inside `boundedNumber` calls where the registry — the
+ * thing that documents the flags — could not see them.
+ */
+export const AGENT_LIMITS = Object.freeze({
+  maxTurns: Object.freeze({ min: 1, max: 500 }),
+  maxSeconds: Object.freeze({ min: 1, max: 86_400 }),
+  toolTimeout: Object.freeze({ min: 1, max: 3600 }),
+});
 
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
@@ -172,8 +187,9 @@ export const CONFIG_SCHEMA = Object.freeze({
     // have — the hydration target is Copilot, the personas are Copilot
     // agents — and it is the only one that needs no key exported: an editor
     // sign-in is the credential. A default nobody can use is a default that
-    // teaches people to pass a flag.
-    default: 'github-copilot',
+    // teaches people to pass a flag. The id itself is spelled once, in the
+    // seam — see DEFAULT_PROVIDER in lib/provider.mjs.
+    default: DEFAULT_PROVIDER,
     merge: 'override',
     description: 'default provider for `harness agent` (see: harness model)',
   },
@@ -182,6 +198,38 @@ export const CONFIG_SCHEMA = Object.freeze({
     default: '',
     merge: 'override',
     description: 'default model id; empty means the provider\'s own default',
+  },
+  'agent.max_turns': {
+    type: 'number',
+    default: 30,
+    // Restrictive by MINIMUM, same reasoning as exec.timeout_seconds: a
+    // smaller budget is the safer one, and a repository may tighten what a run
+    // can spend but never raise it. The flag still wins over both scopes —
+    // an operator at the keyboard is the authority the merge rule protects.
+    merge: 'restrictive',
+    restrict: (a, b) => Math.min(a, b),
+    description: 'default turn budget for `harness agent` (--max-turns overrides)',
+    validate: (value) => {
+      const { min, max } = AGENT_LIMITS.maxTurns;
+      if (!Number.isInteger(value) || value < min || value > max) {
+        throw usageError(`agent.max_turns must be an integer from ${min} to ${max}`);
+      }
+      return value;
+    },
+  },
+  'agent.max_seconds': {
+    type: 'number',
+    default: 1800,
+    merge: 'restrictive',
+    restrict: (a, b) => Math.min(a, b),
+    description: 'default wall-clock budget in seconds for `harness agent` (--max-seconds overrides)',
+    validate: (value) => {
+      const { min, max } = AGENT_LIMITS.maxSeconds;
+      if (!Number.isInteger(value) || value < min || value > max) {
+        throw usageError(`agent.max_seconds must be an integer from ${min} to ${max}`);
+      }
+      return value;
+    },
   },
 
   // ── Session Ledger presentation ────────────────────────────────────────
@@ -550,4 +598,53 @@ export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
     });
   }
   return { file: written, key, value: coerced, scope };
+}
+
+/**
+ * Remove keys from one scope, atomically — the other half of `set`.
+ *
+ * "Back to the default" means the key is ABSENT, so the shipped default — this
+ * build's or any future build's — takes over. `model clear` used to express it
+ * by writing the current default's VALUE into the file, which is the opposite:
+ * it pinned that day's literal at the chosen scope, and a user who cleared
+ * would have silently kept the old default forever after it changed.
+ *
+ * A file we could not fully parse is refused for the same reason `set` refuses
+ * it; a file that does not exist, or does not set the keys, is already in the
+ * asked-for state and is left untouched.
+ */
+export function unsetConfigValue({ scope, keys, copilotHome, workspace }) {
+  if (!SCOPES.includes(scope)) {
+    throw usageError(`unknown scope: ${scope}`, `scope must be one of: ${SCOPES.join(', ')}`);
+  }
+  const named = Array.isArray(keys) ? keys : [keys];
+  for (const key of named) {
+    if (!Object.hasOwn(CONFIG_SCHEMA, key)) {
+      throw usageError(`unknown config key: ${key}`, `known keys: ${CONFIG_KEYS.join(', ')}`);
+    }
+  }
+  const file = configPathFor(scope, { copilotHome, workspace });
+  const existing = loadConfigFile(file);
+  if (!existing.exists) return { file, keys: named, scope, removed: [] };
+  if (existing.errors.length) {
+    throw Object.assign(new Error(`refusing to write over a config with errors: ${existing.errors[0]}`), {
+      code: 'E_TARGET',
+      exit: 1,
+      hint: 'fix the file by hand, or run `harness config validate` to see every error',
+    });
+  }
+  const removed = named.filter((key) => key in existing.values);
+  if (!removed.length) return { file, keys: named, scope, removed };
+  const remaining = { ...existing.values };
+  for (const key of removed) delete remaining[key];
+  const root = scope === 'user' ? copilotHome : workspace;
+  const written = writeFileContained(root, path.relative(root, file), YAML.stringify({ version: CONFIG_SCHEMA_VERSION, ...remaining }));
+  if (!written) {
+    throw Object.assign(new Error(`could not write ${file}`), {
+      code: 'E_TARGET',
+      exit: 1,
+      hint: 'the path is not writable, or an ancestor is a symlink out of the scope root',
+    });
+  }
+  return { file: written, keys: named, scope, removed };
 }

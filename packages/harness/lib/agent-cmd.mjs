@@ -22,9 +22,12 @@ import { redactedJson, createRedactor } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { runOrient } from './orient.mjs';
-import { resolveConfig } from './config.mjs';
+import { AGENT_LIMITS, resolveConfig } from './config.mjs';
 import { isProjectTrusted } from './trust.mjs';
-import { startProvider, PROVIDERS } from './provider.mjs';
+import { readModelCache } from './model-cache.mjs';
+import {
+  DEFAULT_PROVIDER, PROVIDERS, isAutoModel, resolveDefaultModel, startProvider,
+} from './provider.mjs';
 import {
   AGENT_VALUE_FLAGS,
   BENCHMARK_PROFILE,
@@ -60,9 +63,14 @@ function agentDefaults({ argv = [] } = {}) {
       workspace,
       projectTrusted: isProjectTrusted({ workspace, copilotHome }),
     })?.values ?? {};
-    return { provider: values['agent.provider'] || '', model: values['agent.model'] || '' };
+    return {
+      provider: values['agent.provider'] || '',
+      model: values['agent.model'] || '',
+      maxTurns: values['agent.max_turns'] ?? null,
+      maxSeconds: values['agent.max_seconds'] ?? null,
+    };
   } catch {
-    return { provider: '', model: '' };
+    return { provider: '', model: '', maxTurns: null, maxSeconds: null };
   }
 }
 
@@ -177,10 +185,19 @@ export function planAgent(argv) {
   // Without the middle rung an operator on a Copilot subscription retyped
   // `--provider github-copilot` on every invocation — see `harness model`.
   const configured = agentDefaults({ argv });
-  const providerId = stringFlag(argv, '--provider') || configured.provider || 'github-copilot';
+  const providerId = stringFlag(argv, '--provider') || configured.provider || DEFAULT_PROVIDER;
   if (!(providerId in PROVIDERS)) {
     throw usageError(`unknown provider: ${providerId}`, `known providers: ${Object.keys(PROVIDERS).join(', ')}`);
   }
+  // `auto` — typed or configured — and "unset" both mean "nobody chose", and
+  // both resolve through the FETCHED catalogue before the static table: the
+  // provider's real, per-account list is on disk once `model refresh` has run,
+  // and answering `auto` with a hardcoded id while holding the real answer was
+  // exactly the guess the catalogue exists to retire.
+  const explicitModel = stringFlag(argv, '--model') || configured.model || null;
+  const model = explicitModel && !isAutoModel(explicitModel)
+    ? explicitModel
+    : resolveDefaultModel(providerId, readModelCache(copilotHome));
   return {
     flags,
     workspace,
@@ -188,10 +205,12 @@ export function planAgent(argv) {
     task,
     personaName,
     providerId,
-    model: stringFlag(argv, '--model') || configured.model || null,
-    maxTurns: boundedNumber(argv, '--max-turns', { min: 1, max: 500, fallback: DEFAULT_MAX_TURNS }),
-    maxSeconds: boundedNumber(argv, '--max-seconds', { min: 1, max: 86_400, fallback: DEFAULT_MAX_SECONDS }),
-    toolTimeoutSeconds: boundedNumber(argv, '--tool-timeout', { min: 1, max: 3600, fallback: null }),
+    model,
+    // The flag wins, then configuration, then the built-in default — the same
+    // ladder as the provider, with the bounds spelled once in AGENT_LIMITS.
+    maxTurns: boundedNumber(argv, '--max-turns', { ...AGENT_LIMITS.maxTurns, fallback: configured.maxTurns ?? DEFAULT_MAX_TURNS }),
+    maxSeconds: boundedNumber(argv, '--max-seconds', { ...AGENT_LIMITS.maxSeconds, fallback: configured.maxSeconds ?? DEFAULT_MAX_SECONDS }),
+    toolTimeoutSeconds: boundedNumber(argv, '--tool-timeout', { ...AGENT_LIMITS.toolTimeout, fallback: null }),
   };
 }
 

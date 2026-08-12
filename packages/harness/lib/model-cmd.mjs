@@ -19,9 +19,11 @@
  * provenance all work here for free. The credential never touches this file.
  */
 import path from 'node:path';
-import { PROVIDERS, providerReadiness, modelCatalog, fetchModels } from './provider.mjs';
+import {
+  DEFAULT_PROVIDER, PROVIDERS, providerReadiness, modelCatalog, fetchModels, resolveDefaultModel,
+} from './provider.mjs';
 import { readModelCache, writeModelCache, cacheAge } from './model-cache.mjs';
-import { resolveConfig, setConfigValue } from './config.mjs';
+import { resolveConfig, setConfigValue, unsetConfigValue } from './config.mjs';
 import { isProjectTrusted } from './trust.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { parseFlags } from './flags.mjs';
@@ -43,7 +45,7 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
   const provenance = resolved?.provenance ?? {};
 
   const cache = readModelCache(copilotHome);
-  const activeId = values['agent.provider'] || 'github-copilot';
+  const activeId = values['agent.provider'] || DEFAULT_PROVIDER;
   const readiness = providerReadiness({ parentEnv });
   const byId = new Map(readiness.map((r) => [r.id, r]));
   const active = byId.get(activeId) ?? null;
@@ -54,7 +56,10 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
      * describes a provider that is only ever contacted by the agent loop. */
     agentEnabled: Boolean(values['agent.enabled']),
     provider: activeId,
-    model: values['agent.model'] || active?.defaultModel || null,
+    // The model an unset choice actually resolves to — through the fetched
+    // catalogue first, exactly as `harness agent` resolves it, so the status
+    // line and the wire cannot disagree.
+    model: values['agent.model'] || resolveDefaultModel(activeId, cache) || null,
     modelIsDefault: !values['agent.model'],
     source: provenance['agent.provider']?.source ?? 'default',
     ready: Boolean(active?.ready),
@@ -159,7 +164,7 @@ export function modelPickerRows({ workspace, copilotHome, parentEnv = process.en
   // sends you back to the command line for the other half of one decision.
   if (status.source !== 'default') {
     rows.push({ section: true, label: 'forget the choice', note: `remembered in ${status.source}`, ready: true, disabled: true });
-    rows.push({ label: 'use the built-in default', clear: true, note: 'github-copilot · provider default model' });
+    rows.push({ label: 'use the built-in default', clear: true, note: `${DEFAULT_PROVIDER} · provider default model` });
   }
 
   // SYMMETRY. The picker offered `enable agent mode` when it was off and then
@@ -313,8 +318,11 @@ export async function cmdModel(argv, ctx = {}) {
   const scope = flags.scope === 'project' ? 'project' : 'user';
 
   if (verb === 'clear') {
-    setConfigValue({ scope, key: 'agent.provider', value: 'github-copilot', copilotHome, workspace });
-    setConfigValue({ scope, key: 'agent.model', value: '', copilotHome, workspace });
+    // REMOVED, not rewritten. Writing the current default's value here pinned
+    // that day's literal into the file: a user who "cleared" was actually
+    // opting out of every future change to the shipped default. Absent keys
+    // are what "back to the default" means.
+    unsetConfigValue({ scope, keys: ['agent.provider', 'agent.model'], copilotHome, workspace });
     console.log(ui.line({ state: 'ok', key: 'model', value: 'cleared', note: `${scope} scope · back to the built-in default` }));
     return EXIT.ok;
   }

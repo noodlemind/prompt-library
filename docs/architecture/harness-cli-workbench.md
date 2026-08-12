@@ -925,6 +925,23 @@ is deliberately deferred: probed on a live account, the alternate wires
 unlocked nothing the chat/completions wire refused — the entitlement gap is
 server-side, not a routing problem.
 
+**The seam's defaults are spelled once, and its knobs actually cross.** The
+default provider is one constant (`DEFAULT_PROVIDER` in `lib/provider.mjs`)
+that the config schema, the registry declaration and the command surface all
+read — it was once spelled in five places, two of which said `anthropic` while
+the runtime resolved `github-copilot`. An unset or `auto` model resolves
+through the **fetched catalogue** before the static table, so a refreshed
+account is answered from its own list rather than a guess. The adapter
+environment stays deny-all, with named passthroughs: the tuning variables
+(`HARNESS_PROVIDER_REQUEST_TIMEOUT_MS`, `HARNESS_PROVIDER_RETRIES`,
+`HARNESS_PROVIDER_RETRY_BASE_MS`), the proxy contract (`HTTPS_PROXY` /
+`HTTP_PROXY` / `NO_PROXY`, honoured by CONNECT tunnelling in the adapters),
+and for Copilot a `GITHUB_COPILOT_EXCHANGE_URL` override so a GHE or
+data-residency account can exchange its OAuth grant against its own host. The
+turn budgets are configuration (`agent.max_turns`, `agent.max_seconds` —
+restrictive by minimum, flag still wins), and `model clear` removes the keys
+rather than pinning the current default's literal into the file.
+
 `harness agent` is the loop that consumes the seam — orient, model call,
 governed tool call through `exec`/`bash`, one journal record per turn, stop on
 a stated condition. It runs a **benchmark profile** that keeps orientation,

@@ -40,6 +40,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAX_COMPLETION_LINE_BYTES, startPlugin } from './plugin-host.mjs';
 import { readModelCache } from './model-cache.mjs';
+import { findEditorOauthToken } from './copilot-credential.mjs';
 
 /** A model call is slower than a local tool: five minutes, because a long
  * generation that has not finished is usually still thinking rather than
@@ -83,6 +84,18 @@ export const AUTO_MODEL = 'auto';
 export function isAutoModel(model) {
   return typeof model === 'string' && model.trim().toLowerCase() === AUTO_MODEL;
 }
+
+/**
+ * THE default provider, spelled once.
+ *
+ * Copilot is primary — see `agent.provider` in lib/config.mjs for the argument.
+ * Every surface that needs a fallback (the config schema's default, `harness
+ * agent`'s last resort, `model` status, the registry's `--provider`
+ * declaration) imports this constant, because the last time it was spelled in
+ * five places two of them said `anthropic` and the CLI help lied about what
+ * happens when the flag is omitted.
+ */
+export const DEFAULT_PROVIDER = 'github-copilot';
 
 export const PROVIDERS = Object.freeze({
   anthropic: {
@@ -306,6 +319,21 @@ export function modelCatalog({ parentEnv = process.env, cache = {} } = {}) {
   });
 }
 
+/**
+ * The model that answers when nobody chose one — cache first, table second.
+ *
+ * The fetched catalogue is preferred-first (the Copilot adapter sorts it that
+ * way, and every list `model refresh` records leads with what the provider
+ * surfaced as most useful), so its head is the closest thing to "the
+ * provider's own default" the harness can claim for THIS account. The static
+ * `defaultModel` survives only as the answer for a provider nobody has asked —
+ * resolving `auto` to a hardcoded id for an account whose real catalogue is
+ * already on disk was the guess this function exists to retire.
+ */
+export function resolveDefaultModel(providerId, cache = {}) {
+  return cache?.[providerId]?.models?.[0] ?? PROVIDERS[providerId]?.defaultModel ?? null;
+}
+
 /** Loopback is the one place a plaintext base URL is not a mistake. */
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0']);
 
@@ -488,6 +516,29 @@ export function providerEnv(provider, { parentEnv = process.env, copilotClient =
   env.HARNESS_PROVIDER_ID = provider.id;
   env.HARNESS_PROVIDER_BASE_URL = resolveBaseUrl(provider, { parentEnv });
 
+  // Operator tuning the adapters read: request timeout, retry count, backoff
+  // base. Named here because the deny-all default otherwise strips them — the
+  // adapters honoured HARNESS_PROVIDER_REQUEST_TIMEOUT_MS from the day they
+  // shipped, and no production run could ever set it, because this function
+  // never forwarded it. A knob only tests can reach is not a knob.
+  for (const name of [
+    'HARNESS_PROVIDER_REQUEST_TIMEOUT_MS',
+    'HARNESS_PROVIDER_RETRIES',
+    'HARNESS_PROVIDER_RETRY_BASE_MS',
+  ]) {
+    if (parentEnv[name] !== undefined) env[name] = parentEnv[name];
+  }
+
+  // The proxy contract every HTTP tool honours. The adapter is the process
+  // that opens the socket, so it is the process that needs these; withholding
+  // them hardcoded an assumption of direct connectivity that no corporate
+  // network satisfies. A proxy URL may embed a proxy credential — that is the
+  // operator's own transport secret, and the child that already holds the
+  // provider key is the right child to trust with it.
+  for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy']) {
+    if (parentEnv[name] !== undefined) env[name] = parentEnv[name];
+  }
+
   // A provider may name extra parent variables its adapter needs — the
   // Copilot adapter reads the operator's existing GitHub auth. Only the named
   // variables cross; the deny-all default stands for everything else.
@@ -524,6 +575,27 @@ export function providerEnv(provider, { parentEnv = process.env, copilotClient =
     if (direct && !oauthShape.test(direct)) env.HARNESS_COPILOT_BEARER = direct;
     const oauth = (direct && oauthShape.test(direct) ? direct : null) || parentEnv.GH_TOKEN || parentEnv.GITHUB_TOKEN;
     if (oauth) env.HARNESS_COPILOT_OAUTH = oauth;
+    // Where the OAuth grant is exchanged for a bearer. github.com is the
+    // default, but a GHE / data-residency account exchanges against its own
+    // host — and a base URL that can move while the auth ladder cannot is only
+    // half an override. Same transport rule as every base URL: https, or
+    // loopback for a test double.
+    const exchange = parentEnv.GITHUB_COPILOT_EXCHANGE_URL;
+    if (exchange) {
+      let url;
+      try {
+        url = new URL(exchange);
+      } catch {
+        throw usageError('GITHUB_COPILOT_EXCHANGE_URL is not a valid URL', `got ${JSON.stringify(exchange)}`);
+      }
+      if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK.has(url.hostname))) {
+        throw usageError(
+          'GITHUB_COPILOT_EXCHANGE_URL must be https, or loopback http',
+          'the OAuth grant crosses this connection — it gets the same transport rule as a base URL',
+        );
+      }
+      env.HARNESS_COPILOT_EXCHANGE_URL = exchange;
+    }
   }
 
   const key = parentEnv[provider.keyVar];
@@ -609,30 +681,16 @@ export function providerReadiness({ parentEnv = process.env } = {}) {
 }
 
 /** Does an editor hold a Copilot grant? A file's EXISTENCE and shape, never
- * its contents beyond the one field that says a login happened. */
+ * its contents beyond the one field that says a login happened. The scan
+ * itself lives in lib/copilot-credential.mjs, shared with the adapter — two
+ * hand-rolled copies of the same ladder is how the seam and the adapter come
+ * to disagree about whether someone is signed in. */
 function copilotEditorLogin({ parentEnv = process.env } = {}) {
-  // THE ENVIRONMENT PASSED IN IS THE ENVIRONMENT USED. Reading `os.homedir()`
-  // directly meant this one check ignored its own argument: a caller handing in
-  // a clean environment still got the machine's real editor state, which made
-  // readiness untestable and let a sign-in from some other install decide what
-  // the picker offers.
-  const home = parentEnv.HOME || parentEnv.USERPROFILE || os.homedir();
-  const dir = parentEnv.XDG_CONFIG_HOME
-    ? path.join(parentEnv.XDG_CONFIG_HOME, 'github-copilot')
-    : path.join(home, '.config', 'github-copilot');
-  for (const file of ['apps.json', 'hosts.json']) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
-      for (const value of Object.values(parsed ?? {})) {
-        if (value && typeof value === 'object' && typeof value.oauth_token === 'string') return true;
-      }
-    } catch { /* absent or unreadable is simply "not signed in" */ }
-  }
-  return false;
+  return Boolean(findEditorOauthToken(parentEnv));
 }
 
 export function startProvider({
-  provider: providerId = 'anthropic',
+  provider: providerId = DEFAULT_PROVIDER,
   model: requestedModel = null,
   packageRoot = null,
   timeoutMs = PROVIDER_TIMEOUT_MS,

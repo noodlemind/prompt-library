@@ -5,6 +5,13 @@ import { findEntryByDocid, resolveDocPath } from './recall-rank.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 
+/** The default window — sized for a knowledge-store excerpt, which is what
+ * this command was built for. Exported because the registry declares the same
+ * defaults on the flags; two spellings of one number is how help text and
+ * behaviour drift apart. */
+export const GET_DEFAULT_LINES = 40;
+export const GET_DEFAULT_MAX_BYTES = 2048;
+
 function truncateUtf8(text, maxBytes) {
   let buf = Buffer.from(text, 'utf8');
   if (buf.length <= maxBytes) return text;
@@ -21,8 +28,8 @@ function truncateUtf8(text, maxBytes) {
 export function runGet({ workspace, copilotHome, flags }) {
   const docid = flags.docid;
   const relPath = flags.path;
-  const maxLines = flags.lines || 40;
-  const maxBytes = flags.maxBytes || 2048;
+  const maxLines = flags.lines || GET_DEFAULT_LINES;
+  const maxBytes = flags.maxBytes || GET_DEFAULT_MAX_BYTES;
   // Where the window starts, 1-indexed. A bounded read with no start can only
   // ever show the beginning of a file, which is fine for a knowledge-store
   // excerpt — what this command was built for — and useless for reading source:
