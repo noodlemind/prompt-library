@@ -742,14 +742,23 @@ registerCommand({
 
 registerCommand({
   name: 'index',
-  summary: 'rebuild knowledge index · --status reports drift · --structural builds the code symbol index',
+  summary: 'rebuild knowledge BM25 index · --status (knowledge + code) · --structural for code symbols',
   group: 'workspace',
   sideEffect: 'mutate',
     usage: '[--status] [--structural [--since <ref>]]',
   args: {
     positionals: [],
     flags: [
-            { name: '--status', type: 'boolean', description: 'read-only freshness report vs HEAD (never rebuilds)', required: false, default: false, tui: 'verb', sideEffect: 'read' },
+            {
+        name: '--status',
+        type: 'boolean',
+        description:
+          'read-only: knowledge BM25 freshness and code-symbol index status (never rebuilds)',
+        required: false,
+        default: false,
+        tui: 'verb',
+        sideEffect: 'read',
+      },
             {
         name: '--structural',
         type: 'boolean',

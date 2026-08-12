@@ -120,7 +120,11 @@ test('AC10: the CLI palette branch emits parseable JSON on stdout and exits 0', 
   assert.equal(payload.schema, ENVELOPE_SCHEMA_VERSION);
   assert.deepEqual(payload.collisions, ['consolidate', 'recall']);
   assert.ok(payload.rows.some((r) => r.id === 'skill:brainstorming'));
-  assert.ok(payload.rows.some((r) => r.id === 'verb:knowledge:promote'));
+  // Multi-verb families fold on the TUI palette into one sheet row.
+  const knowledge = payload.rows.find((r) => r.id === 'command:knowledge');
+  assert.ok(knowledge, 'knowledge stays on the palette');
+  assert.equal(knowledge.picker, 'verbs', 'its verbs open via the action sheet, not as top-level rows');
+  assert.equal(payload.rows.some((r) => r.id === 'verb:knowledge:promote'), false);
 
     assert.deepEqual(fs.readdirSync(workspace), ['.github']);
   assert.deepEqual(listTree(home), []);

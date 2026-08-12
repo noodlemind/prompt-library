@@ -367,14 +367,46 @@ export async function cmdIndex(argv) {
   }
 
   // Read-only freshness report — never rebuilds, zero model cost.
+  // Reports both planes: knowledge BM25 (`harness index`) and structural code
+  // (`harness index --structural`). Historical top-level fields are knowledge-only.
   if (hasFlag(argv, '--status')) {
     const { indexStatus } = await import('./index-status.mjs');
     const status = indexStatus({ workspace, copilotHome });
     if (flags.json) emitJson(flags, status);
     else {
-      const state = status.indexed ? (status.stale ? 'warn' : 'ok') : 'pending';
-      const value = status.indexed ? (status.stale ? 'stale' : 'current') : 'not built';
-      console.log(ui.line({ state, key: 'index', value, note: status.recommendation }));
+      const k = status.knowledge || status;
+      const s = status.structural;
+      const kState = !k.indexed ? 'pending' : (k.stale || k.empty) ? 'warn' : 'ok';
+      const kValue = !k.indexed
+        ? 'not built'
+        : k.empty
+          ? (k.stale ? 'empty · stale' : 'empty')
+          : (k.stale ? 'stale' : 'current');
+      console.log(ui.line({
+        state: kState,
+        key: 'knowledge',
+        value: kValue,
+        note: k.recommendation,
+        next: k.next || undefined,
+      }));
+      if (s) {
+        const unreadable = Array.isArray(s.unreadable) && s.unreadable.length > 0;
+        const sState = !s.indexed ? 'pending' : (s.stale || unreadable) ? 'warn' : 'ok';
+        const sValue = !s.indexed
+          ? 'not built'
+          : unreadable
+            ? 'unreadable'
+            : s.stale
+              ? 'stale'
+              : `current${s.filesIndexed != null ? ` · ${s.filesIndexed} files` : ''}${s.tier ? ` · ${s.tier}` : ''}`;
+        console.log(ui.line({
+          state: sState,
+          key: 'code',
+          value: sValue,
+          note: s.recommendation,
+          next: s.next || undefined,
+        }));
+      }
     }
     return 0;
   }
@@ -518,15 +550,23 @@ export async function cmdIndex(argv) {
   } else {
     const empty = result.entries === 0;
     const noteParts = [];
-    if (empty) noteParts.push('no solution docs under knowledge/solutions or docs/solutions yet');
+    if (empty) {
+      noteParts.push(
+        flags.dryRun
+          ? 'knowledge index dry run · 0 solutions under knowledge/solutions or docs/solutions'
+          : 'knowledge index recorded (meta written) · 0 solutions under knowledge/solutions or docs/solutions',
+      );
+    }
     if (result.staleLearnings) noteParts.push(`learnings excluded ${result.staleLearnings} (stale anchors)`);
     console.log(
       ui.line({
-        state: 'ok',
-        key: 'index',
+        // Empty corpus is a successful rebuild, but not a healthy recall index —
+        // warn so the ledger does not look fully green after "not built" → index.
+        state: empty ? 'warn' : 'ok',
+        key: 'knowledge',
         value: `${result.entries} entries · ${result.indexEntries ?? result.entries} postings`,
         note: noteParts.length ? noteParts.join(' · ') : undefined,
-        next: empty ? 'harness compound records the first learning' : undefined,
+        next: empty ? 'harness compound or harness remember, then index again' : undefined,
       })
     );
   }
