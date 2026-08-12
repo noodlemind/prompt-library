@@ -883,12 +883,26 @@ export async function cmdEvents(argv) {
 }
 
 export async function cmdReport(argv) {
-  const { buildReport, renderReport, hasBudgetBreach } = await import('./report.mjs');
+  const { buildReport, renderReport, hasBudgetBreach, loadReportEvents } = await import('./report.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
 
-  const { loadReportEvents } = await import('./report.mjs');
+  // Adaptive Engineering session-end growth report (kernel-only; no LLM).
+  if (flags.growth) {
+    const { buildGrowthReport, renderGrowthReport } = await import('./growth-report.mjs');
+    const events = loadReportEvents({ workspace });
+    const growth = buildGrowthReport({
+      workspace,
+      copilotHome,
+      events,
+      plan: flags.plan || null,
+    });
+    if (flags.json) emitJson(flags, growth);
+    else console.log(renderGrowthReport(growth, ui));
+    return 0;
+  }
+
   const { collectHostUsage, mergeHostUsage } = await import('./host-telemetry/index.mjs');
 
   let base = null;
@@ -984,6 +998,11 @@ export async function cmdCompound(argv) {
     exitCode: result.exitCode,
     result: result.pass ? (result.exitCode === 2 ? 'warn' : 'pass') : 'fail',
     blockedReason: result.blockedReason,
+    // Growth-loop fields (additive): session-end report reads these.
+    compoundStatus: result.pass ? 'completed' : 'skipped',
+    plan: result.plan || null,
+    path: result.path || null,
+    insight: result.kind === 'insight' || Boolean(flags.insight),
   });
 
   if (flags.json) {

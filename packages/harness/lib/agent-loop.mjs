@@ -48,8 +48,15 @@ export const STOP_REASONS = Object.freeze({
   cancelled: { status: 'cancelled', exit: EXIT.cancelled, summary: 'the run was cancelled' },
 });
 
+/**
+ * TEST / EFFICIENCY FIXTURE ONLY for the optional headless agent add-on.
+ * Not the Adaptive Engineering product lifecycle. Full AE is host @engineer
+ * + kernel gate/verify/compound. Drops of gate/verify/compound here are
+ * intentional for bare-container benchmarks — not product bugs to "fix".
+ */
 export const BENCHMARK_PROFILE = Object.freeze({
   id: 'benchmark',
+  testOnly: true,
   keeps: Object.freeze(['orient', 'retrieval', 'governed-exec', 'journal']),
   drops: Object.freeze([
     Object.freeze({ step: 'gate', precondition: 'a locked plan under docs/plans/' }),
@@ -58,6 +65,10 @@ export const BENCHMARK_PROFILE = Object.freeze({
     Object.freeze({ step: 'human-review', precondition: 'a reviewer' }),
   ]),
 });
+
+/** One-line product disclaimer for optional agent runs (AC11). */
+export const AGENT_ADDON_DISCLAIMER =
+  'optional add-on loop — not full Adaptive Engineering (host @engineer + gate/verify/compound)';
 
 const EXPLORE_TOOLS = new Set(['search', 'read']);
 const ACT_TOOLS = new Set(['edit', 'write', 'bash', 'exec']);

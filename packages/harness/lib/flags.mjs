@@ -90,6 +90,7 @@ export function parseFlags(argv) {
     sync: false,
     global: false,
     check: false,
+    growth: false,
     insight: false,
     title: null,
     category: null,
@@ -188,6 +189,7 @@ export function parseFlags(argv) {
     else if (a.startsWith('--session=')) flags.session = a.split('=').slice(1).join('=');
     else if (a === '--session') flags.session = scan[++i];
     else if (a === '--insight') flags.insight = true;
+    else if (a === '--growth') flags.growth = true;
     else if (a.startsWith('--title=')) flags.title = a.split('=').slice(1).join('=');
     else if (a === '--title') flags.title = scan[++i];
     else if (a.startsWith('--category=')) flags.category = a.split('=').slice(1).join('=');

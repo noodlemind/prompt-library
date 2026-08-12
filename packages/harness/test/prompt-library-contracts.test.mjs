@@ -20,7 +20,6 @@ const supersededArchitectureDocs = [
   'MEMORY-MODEL.md',
   'install.md',
   'onboarding/harness-quickstart.md',
-  'agent-loop.md',
 ];
 
 function read(rel) {
@@ -51,14 +50,24 @@ test('canonical concept doc defines task modes, ownership, gap handling, and run
   }
 });
 
-test('docs surface is a single concept doc plus plan/solution scaffolding', () => {
+test('docs surface is concept + agent-loop + plan/solution scaffolding', () => {
   const docsRoot = path.join(repoRoot, 'docs');
   const topLevel = fs.readdirSync(docsRoot).filter((name) => !name.startsWith('.')).sort();
-  assert.deepEqual(topLevel, ['adaptive-engineer-harness.md', 'plans', 'solutions']);
+  assert.deepEqual(topLevel, ['adaptive-engineer-harness.md', 'agent-loop.md', 'plans', 'solutions']);
   assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);
   }
+  const concept = read('docs/adaptive-engineer-harness.md');
+  for (const phrase of ['Host-first', 'Kernel-always', 'Agent-optional', 'Benchmark-test-only']) {
+    assert.match(concept, new RegExp(phrase, 'i'), `product model missing ${phrase}`);
+  }
+  const agentLoop = read('docs/agent-loop.md');
+  assert.match(agentLoop, /opt-in|optional/i);
+  assert.match(agentLoop, /BENCHMARK|benchmark|test/i);
+  assert.match(agentLoop, /@engineer/);
+  assert.doesNotMatch(read('packages/harness/README.md'), /harness agent[\s\S]{0,80}Adaptive Engineer runtime/i);
+  assert.match(read('packages/harness/README.md'), /opt-in add-on/i);
 });
 
 test('engineer agent is frozen, thin, and owns the only normative nine-step delivery lifecycle', () => {
@@ -484,7 +493,7 @@ test('engineer step 8 runs harness compound to close the learn loop', () => {
 test('read-only report command is registered and AC14 amendment is consistent', () => {
   assert.equal(hasCommand('report'), true, 'report command must be registered');
   const help = describeCommand('report');
-  assert.equal(help.usage, '[--sync] [--global] [--check] [--json]', 'help documents report');
+  assert.equal(help.usage, '[--growth] [--sync] [--global] [--check] [--json]', 'help documents report');
   // report must not write session/plan state — it only reads telemetry (and syncs under ~/.harness).
   const commands = read('packages/harness/lib/commands.mjs');
   const reportFn = commands.slice(commands.indexOf('export async function cmdReport'), commands.indexOf('export async function cmdValidatePlan'));

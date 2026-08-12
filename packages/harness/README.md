@@ -89,10 +89,21 @@ to Deliver before editing.
 | `validate-plan` | Read-only plan template / intent compliance |
 | `index` | Rebuild `knowledge/manifest.yaml` + `.harness-index/` |
 | `index --structural [--since <ref>]` | Build the persistent structural code index at `~/.harness/index/<repo-id>/<worktree-id>/structural/` (optional tree-sitter WASM tier for TS/JS/TSX, Python, Java; per-file lexical fallback; incremental; `--since` re-parses only the ref diff). Derived and rebuildable — safe to delete |
-| `compound` | Consume passed evidence, index learning, and record usage/outcome telemetry |
+| `compound` | After **passed** verify: reindex + telemetry from evidence/plan (**no** title/body required). Frictionless host sequence: `verify --plan P` then `compound --plan P` |
 | `compound --insight` | Evidence-free capture of investigation learnings (`kind: insight`, secret-scanned, ranked below verified fixes, never promotable) |
+| `report --growth` | Session-end Adaptive Engineering growth report (learnings recalled/cited, compound status, promotion-eligible) from events — **no LLM** |
+| `report` | Token-efficiency report from telemetry (primary token scoreboard; growth uses `--growth`) |
 | `consolidate` | Knowledge loop: `--status` debt gauge (quarantine + at-cap domains surfaced) · `--candidates` deterministic work packet, plus any id a human already retired/disputed/promoted (`governed`) so the skill doesn't waste an op re-deriving it · `--apply --ops <path>` validated sole writer of learnings via ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops (`suggest` mode requires `--yes`); mechanically reapplies a standing governance decision when a regenerated id matches one, returning `governed` |
 | `events` | Inspect schema-v2 `.harness/events.jsonl`; filter by session/failure or summarize |
+
+### Optional headless agent (not the Adaptive Engineer runtime)
+
+`harness agent` is an **opt-in add-on** (`agent.enabled`, default **off**). It is **not** full Adaptive Engineering — that remains host **`@engineer`** plus the kernel commands above. See [docs/agent-loop.md](../../docs/agent-loop.md) and the product model in [docs/adaptive-engineer-harness.md](../../docs/adaptive-engineer-harness.md).
+
+```bash
+harness config set agent.enabled true --scope user   # only if you want the add-on
+harness agent "task" --dry-run                       # shows optional-addon disclaimer
+```
 
 ### Knowledge (semantic memory)
 

@@ -4,6 +4,29 @@
 
 This is the only conceptual document for the system. Implementation lives in code and skills; this page is for shared understanding.
 
+## Product model (canonical)
+
+| Layer | Role | LLM calls from harness? |
+|-------|------|-------------------------|
+| **Host-first** — `@engineer` | Canonical Adaptive Engineer (modes, lifecycle, judgment) | Host-owned; not the harness kernel |
+| **Kernel-always** — `harness` CLI | Deterministic control plane (orient, gate, edit/exec, verify, compound, knowledge, report) | **Never** on the host path |
+| **Agent-optional** — `harness agent` | Minimal headless add-on when the user opts in (`agent.enabled`, default off) | Yes, opt-in only |
+| **Benchmark-test-only** | Efficiency/regression fixture for the add-on (`BENCHMARK_PROFILE`) | Test-only — **not** product lifecycle |
+
+Correct invariant: **the kernel never initiates LLM calls.** The optional agent process may, only when enabled. Full Adaptive Engineering is **host `@engineer` + kernel gate → verify → compound → consolidate/promote** — not the headless add-on loop.
+
+### Host growth loop (after every Deliver verify)
+
+```text
+harness verify --plan <path> [--learnings id1,id2]
+harness compound --plan <path>     # no title/body: uses passed evidence + plan
+harness report --growth            # session-end growth report
+```
+
+Verified `compound` does not re-ask for structure the evidence already implies. If compound cannot run (no plan, stale evidence, knowledge mode off on insight path), the event carries `blockedReason` / `compoundStatus: skipped` for the growth report — never silent success.
+
+Primary effectiveness metrics (not turn counts): verify-pass→compound rate, recall→cite linkage, verify→compound latency when timestamps exist, promotion-eligible yield, quarantine health. Turn/search caps are **secondary** and apply only to the optional agent / benchmark fixtures.
+
 ---
 
 ## Why it exists

@@ -933,10 +933,11 @@ registerCommand({
   outputModes: ['ledger', 'json'],
   surfaces: ['cli', 'tui'],
   usage: '[list]',
+  verbs: [
+    { verb: 'list', summary: 'show outstanding undos without reverting', sideEffect: 'read' },
+  ],
   args: {
-    positionals: [
-      { name: 'verb', description: 'list — show outstanding undos without reverting', required: false, default: null },
-    ],
+    positionals: [],
     flags: [],
   },
   handler: cmdUndo,
@@ -1311,19 +1312,21 @@ registerCommand({
 
 registerCommand({
   name: 'report',
-  summary: 'token-efficiency report from telemetry',
+  summary: 'token-efficiency or Adaptive Engineering growth report from events',
   group: 'engineer loop',
-    sideEffect: 'mutate',
-    bareSideEffect: 'read',
-    usage: '[--sync] [--global] [--check] [--json]',
-    instrument: false,
+  sideEffect: 'mutate',
+  bareSideEffect: 'read',
+  usage: '[--growth] [--sync] [--global] [--check] [--json]',
+  instrument: false,
   args: {
     positionals: [],
     flags: [
-            { name: '--sync', type: 'boolean', description: 'merge workspace events into the global store first', required: false, default: false, tui: 'verb' },
+      { name: '--growth', type: 'boolean', description: 'session-end Adaptive Engineering growth report (learnings, compound, promote)', required: false, default: false, tui: 'verb', sideEffect: 'read' },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'optional plan path for growth report context', required: false, default: null, tui: 'prompt', choices: 'plan', sideEffect: 'read' },
+      { name: '--sync', type: 'boolean', description: 'merge workspace events into the global store first', required: false, default: false, tui: 'verb' },
       { name: '--global', type: 'boolean', description: 'report across all synced workspaces', required: false, default: false, tui: 'verb', sideEffect: 'read' },
-            { name: '--check', type: 'boolean', description: 'exit non-zero on a budget breach (CI)', required: false, default: false, tui: 'cli-only' },
-            { name: '--host', type: 'string', valueName: 'name', description: 'host usage log to overlay (default: auto-detect)', required: false, default: null, tui: 'prompt', sideEffect: 'read' },
+      { name: '--check', type: 'boolean', description: 'exit non-zero on a budget breach (CI)', required: false, default: false, tui: 'cli-only' },
+      { name: '--host', type: 'string', valueName: 'name', description: 'host usage log to overlay (default: auto-detect)', required: false, default: null, tui: 'prompt', sideEffect: 'read' },
     ],
   },
   handler: cmdReport,

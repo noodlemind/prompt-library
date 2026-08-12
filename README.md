@@ -37,10 +37,13 @@ harness install
 |-------|------|
 | **Skills** (25) | Reusable workflows; most are engineer-internal |
 | **Agents** (21) | Specialists + engineer + implementer + coordinators |
-| **Harness CLI** | Orient, gate, verify, knowledge, optional headless `agent` loop |
+| **Harness CLI (kernel)** | Orient, gate, verify, compound, knowledge, `report --growth` — **no LLM** |
+| **Optional `harness agent`** | Opt-in headless add-on only (`agent.enabled`) — **not** the AE runtime |
 | **Knowledge** | Team solutions hydrated globally; product plans stay in the product repo |
 
 User-invocable skills: `/engineer`, `/harness-doctor`, `/project-readme`, `/triage-issues`.
+
+After a passed host verify: `harness compound --plan <p>` then `harness report --growth`.
 
 ---
 

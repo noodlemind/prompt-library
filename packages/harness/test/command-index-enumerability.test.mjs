@@ -161,6 +161,7 @@ const DECLARED_VERBS = Object.freeze({
   // override DOWN to read.
   model: ['show', 'set', 'clear', 'refresh'],
   resources: ['list', 'show', 'register', 'unregister', 'bundles', 'add', 'update', 'remove'],
+  undo: ['list'],
 });
 
 const VERB_FLAGS = Object.freeze({
@@ -171,7 +172,7 @@ const VERB_FLAGS = Object.freeze({
   knowledge: ['--merged'],
   learnings: ['--why'],
   orient: ['--explain'],
-  report: ['--sync', '--global'],
+  report: ['--growth', '--sync', '--global'],
 });
 
 /**
@@ -251,7 +252,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 54, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs + config’s 4 verbs + trust’s 3 verbs + run’s 4 verbs + resources’ 8 verbs + model’s 4 verbs');
+  assert.equal(Object.values(actual).flat().length, 55, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs + config’s 4 verbs + trust’s 3 verbs + run’s 4 verbs + resources’ 8 verbs + model’s 4 verbs + undo list');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -261,7 +262,7 @@ test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', (
     if (flags.length) actual[name] = flags;
   }
   assert.deepEqual(actual, { ...VERB_FLAGS }, 'a tui:"verb" disposition was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 13);
+  assert.equal(Object.values(actual).flat().length, 14);
 });
 
 // --- AC8: the index actually carries every enumerated verb ---------------
@@ -296,9 +297,9 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
       assert.ok(row.summary, `${command} ${verb} must carry its declared summary`);
     }
   }
-  // 66 minus `model`'s three, which the picker row now stands for.
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 63, '50 palette-visible declared verbs + 13 row-bearing verb flags');
-  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 67, 'the CLI surface keeps every verb');
+  // declared verbs + row-bearing verb flags; model verbs collapse to picker on TUI.
+  assert.equal(rows.filter((r) => r.kind === 'verb').length, 65, 'palette-visible declared verbs + row-bearing verb flags');
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 69, 'the CLI surface keeps every verb');
 });
 
 /**

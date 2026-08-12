@@ -22,6 +22,7 @@ import {
 } from './provider.mjs';
 import {
   AGENT_VALUE_FLAGS,
+  AGENT_ADDON_DISCLAIMER,
   BENCHMARK_PROFILE,
   DEFAULT_MAX_SECONDS,
   DEFAULT_MAX_TURNS,
@@ -217,10 +218,13 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
     return {
       schema: 1,
       dryRun: true,
+      runtime: 'optional-addon',
+      disclaimer: AGENT_ADDON_DISCLAIMER,
       task: p.task,
       persona: { name: persona.name, hydrated: persona.hydrated, source: persona.source },
       profile: {
         id: BENCHMARK_PROFILE.id,
+        testOnly: true,
         keeps: [...BENCHMARK_PROFILE.keeps],
         drops: BENCHMARK_PROFILE.drops.map((d) => ({ ...d })),
       },
@@ -251,7 +255,7 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
   });
   const spent = Math.floor((Date.now() - startedAt) / 1000);
 
-  return runAgentLoop({
+  const loopResult = await runAgentLoop({
     task: p.task,
     workspace: p.workspace,
     copilotHome: p.copilotHome,
@@ -275,6 +279,15 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
       }),
     onTurn: (turn, { text }) => emitTurn(ctx, p, turn, text),
   });
+  return {
+    ...loopResult,
+    runtime: 'optional-addon',
+    disclaimer: AGENT_ADDON_DISCLAIMER,
+    profile: {
+      ...(loopResult.profile || {}),
+      testOnly: true,
+    },
+  };
 }
 
 function emitTurn(ctx, p, turn, text) {
@@ -301,9 +314,20 @@ function emitTurn(ctx, p, turn, text) {
   });
 }
 
+function renderDisclaimer(result, keyWidth) {
+  console.log(ui.line({
+    state: 'warn',
+    key: 'runtime',
+    value: result.runtime || 'optional-addon',
+    note: result.disclaimer || AGENT_ADDON_DISCLAIMER,
+    keyWidth,
+  }));
+}
+
 function renderDryRun(result, flags) {
-  const keyWidth = keyWidthFor(['orientation', 'persona', 'profile', 'budget']);
+  const keyWidth = keyWidthFor(['runtime', 'orientation', 'persona', 'profile', 'budget']);
   console.log(ui.line({ state: 'ok', key: 'agent', value: result.task, note: 'dry run — nothing was called', keyWidth }));
+  renderDisclaimer(result, keyWidth);
   console.log(ui.line({ key: 'persona', value: result.persona.name, note: result.persona.hydrated ? result.persona.source : 'not hydrated — built-in fallback', keyWidth }));
   console.log(ui.line({ key: 'provider', value: `${result.provider} · ${result.model}`, note: `system prompt ${result.systemPromptBytes} bytes`, keyWidth }));
   console.log(ui.line({
@@ -313,7 +337,12 @@ function renderDryRun(result, flags) {
     note: result.orientation.reason || (result.orientation.materialized ? undefined : 'would be written'),
     keyWidth,
   }));
-  console.log(ui.line({ key: 'profile', value: result.profile.id, note: `keeps ${result.profile.keeps.join(', ')}`, keyWidth }));
+  console.log(ui.line({
+    key: 'profile',
+    value: result.profile.id,
+    note: `test fixture only · keeps ${result.profile.keeps.join(', ')}`,
+    keyWidth,
+  }));
   for (const drop of result.profile.drops) {
     console.log(ui.line({ state: 'warn', key: 'dropped', value: drop.step, note: `needs ${drop.precondition}`, keyWidth }));
   }
@@ -330,8 +359,9 @@ function render(result, flags) {
     renderDryRun(result, flags);
     return;
   }
-  const keyWidth = keyWidthFor(['orientation', 'persona', 'stopped', 'turns']);
+  const keyWidth = keyWidthFor(['runtime', 'orientation', 'persona', 'stopped', 'turns']);
   console.log(ui.line({ state: 'ok', key: 'agent', value: result.task, keyWidth }));
+  renderDisclaimer(result, keyWidth);
   console.log(ui.line({
     key: 'persona',
     value: result.persona.name,
@@ -345,8 +375,8 @@ function render(result, flags) {
     note: result.orientation.reason || undefined,
     keyWidth,
   }));
-  for (const drop of result.profile.drops) {
-    console.log(ui.line({ state: 'warn', key: 'not run', value: drop.step, note: `needs ${drop.precondition}`, keyWidth }));
+  for (const drop of result.profile?.drops || []) {
+    console.log(ui.line({ state: 'warn', key: 'not run', value: drop.step, note: `test fixture · needs ${drop.precondition}`, keyWidth }));
   }
   for (const turn of result.turns) {
     const state = turn.ended ? 'ok' : turn.tools.every((t) => t.dispatched && t.status === 'ok') ? 'ok' : 'warn';
