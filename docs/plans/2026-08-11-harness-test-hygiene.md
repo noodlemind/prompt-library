@@ -4,7 +4,7 @@ title: "Harness test hygiene: de-bloat, layer, and stop review archaeology"
 type: refactor
 status: in-progress
 plan_lock: true
-phase: 1
+phase: 2
 priority: P1
 risk: yellow
 autonomy: balanced
@@ -140,7 +140,7 @@ This plan restructures tests so they stay strict where it matters (security, des
 
 ### Structure
 
-- [ ] **AC6** `harness-cli.test.mjs` is split by domain **or** reduced so install/doctor/plan-gate/evidence/vscode/shim are not one opaque 2k+ line file.  
+- [x] **AC6** `harness-cli.test.mjs` is split by domain **or** reduced so install/doctor/plan-gate/evidence/vscode/shim are not one opaque 2k+ line file.  
 - [ ] **AC7** At least half of souvenir findings/hardening files (by count at inventory) are folded into module-named tests and deleted, **or** explicitly kept with a one-line reason in inventory (keep should be rare).  
 - [ ] **AC8** Remaining knowledge safety coverage is discoverable under stable names (e.g. `knowledge-store-*.test.mjs`, `knowledge-path-safety.test.mjs`) without `round2` / reviewer brands.
 
@@ -384,3 +384,9 @@ When done: summarize ACs, files split/deleted, helper API, timing before/after, 
 - Removed completed growth-loop plan so the repo keeps a single live dated plan (contract).
 - Targeted: harness-cli + store-io 130 pass; growth-report 8 pass.
 - Next: Phase 2 split `harness-cli.test.mjs`.
+
+### 2026-08-11 — Phase 2
+
+- Split `harness-cli.test.mjs` (102 tests, ~2.6k lines) into 9 domain files: help, plan-gate, evidence-verify, events-session, install-upgrade, vscode-hooks, orient-context, compound-telemetry, recall-index.
+- Extracted inter-test fixtures to `test/helpers/cli-fixtures.mjs` (versioned plan, checks, hooks, recall seed).
+- Deleted megatest; all 102 domain tests green.

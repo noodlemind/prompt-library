@@ -8,3 +8,17 @@ export { approveTrust, approveProject } from './trust.mjs';
 export { runHarness, valueOf, packageRoot, binPath } from './cli.mjs';
 export { git, storeScopes, writeOps, TEST_GIT_ENV } from './store.mjs';
 export { fakeTty } from './tty.mjs';
+export {
+  writeKnowledgeSolution,
+  runIndex,
+  writeProductSolution,
+  writeChecks,
+  writeVersionedPlan,
+  initGit,
+  runHook,
+  runHookWithPolicy,
+  hookResponse,
+  assertHookBlocked,
+  recordSuccessfulEdit,
+  primitiveAnalysis,
+} from './cli-fixtures.mjs';

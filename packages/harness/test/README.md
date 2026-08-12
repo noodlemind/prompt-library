@@ -25,8 +25,23 @@
 | `helpers/trust.mjs` | `approveTrust`, `approveProject` |
 | `helpers/cli.mjs` | `runHarness`, `valueOf`, `packageRoot`, `binPath` |
 | `helpers/store.mjs` | `git`, `storeScopes`, `writeOps`, `TEST_GIT_ENV` |
+| `helpers/cli-fixtures.mjs` | versioned plan, checks.yaml, git init, hooks, recall seed helpers |
 | `helpers/tty.mjs` | `fakeTty` (TUI render fixtures) |
 | `helpers/index.mjs` | re-exports above |
+
+### CLI domain splits (was `harness-cli.test.mjs`)
+
+| File | Domain |
+|------|--------|
+| `cli-help.test.mjs` | help + HELP_COMMAND_ORDER |
+| `cli-plan-gate.test.mjs` | plan parse, gate, scope, validate-plan |
+| `cli-evidence-verify.test.mjs` | evidence + verify |
+| `cli-events-session.test.mjs` | events / lifecycle ledger |
+| `cli-install-upgrade.test.mjs` | install, shim, runner, upgrade, doctor hydration |
+| `cli-vscode-hooks.test.mjs` | VS Code settings + host hooks |
+| `cli-orient-context.test.mjs` | orient / context-pack |
+| `cli-compound-telemetry.test.mjs` | compound + telemetry |
+| `cli-recall-index.test.mjs` | index / recall / get |
 
 Import from `./helpers/index.mjs` (or a specific file).
 
