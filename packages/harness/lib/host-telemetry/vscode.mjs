@@ -6,26 +6,6 @@ import { canonicalDirectoryRoot, directoryRootsOverlap } from './workspace-scope
 
 const NORMALIZED_WORKSPACE = Symbol('normalizedWorkspace');
 
-/**
- * VS Code / GitHub Copilot Chat host-usage adapter.
- *
- * Two sources, most-authoritative first:
- *  1. The Copilot session-state store (`<copilotHome>/session-state/<id>/
- *     events.jsonl`), which carries real per-session token totals including
- *     cache and reasoning tokens — see session-state.mjs.
- *  2. A normalized usage log (HARNESS_VSCODE_USAGE_LOG, or
- *     `~/.copilot/host-usage/vscode.jsonl`) for hosts or workflows that emit
- *     their own token counts.
- *
- * When both sources cover a session, authoritative shutdown totals remain the
- * only roll-up `usage`. Normalized requests survive as evidence-only events
- * under `requestUsage`, and the session records whether request count and token
- * sums fully reconcile. This preserves request-level diagnostics without
- * counting the same tokens twice. Both sources are marked `source: host` /
- * `estimated: false`. It never throws — with no usable source the report falls
- * back to harness estimates.
- */
-
 function candidateLogs(copilotHome) {
   const candidates = [];
   if (process.env.HARNESS_VSCODE_USAGE_LOG) candidates.push(process.env.HARNESS_VSCODE_USAGE_LOG);

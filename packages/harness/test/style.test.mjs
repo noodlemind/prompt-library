@@ -16,11 +16,7 @@ function style(overrides = {}) {
 
 test('truecolor terminal paints state.ok with 24-bit green', () => {
   const s = style();
-  // Closes with SGR 39 (default foreground), not SGR 0. `paint` sets a
-  // foreground and nothing else, so resetting everything did more than it
-  // meant to — and once blocks carry a background tint, a `0m` from the first
-  // painted fragment wiped the row's background for every cell after it.
-  assert.match(s.paint('ok', 'synced'), /\x1b\[38;2;134;201;154msynced\x1b\[39m/);
+    assert.match(s.paint('ok', 'synced'), /\x1b\[38;2;134;201;154msynced\x1b\[39m/);
 });
 
 test('256-color terminal falls back to indexed palette', () => {

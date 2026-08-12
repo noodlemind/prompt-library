@@ -5,19 +5,6 @@ import { listBuckets, bucketAncestryOk, safeBranchName, isBucketBaseSha } from '
 import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 import { indexStatus } from '../index-status.mjs';
 
-/**
- * `harness knowledge status` (blueprint P6, Phase 1): a read-only, layer-aware
- * report — golden per-domain counts, branch-bucket rows when buckets exist,
- * and the recall-index drift line (index-status.mjs's existing signals,
- * labeled as exactly what they measure). Never creates the store, never
- * mutates anything.
- *
- * Promotability is DERIVED from the key shape at decision time
- * (`detached-*` is never promotable) — bucket meta.json is a cache, never
- * authority. A bucket whose recorded baseSha provably shares no history with
- * the current HEAD (force-push name reuse) is flagged `ancestryOk: false`,
- * matching the overlay's read-time exclusion.
- */
 export function knowledgeStatus({ workspace, copilotHome, home } = {}) {
   const dir = storeDir(workspace, { home });
   const storeExists = fs.existsSync(dir);
@@ -53,10 +40,7 @@ export function knowledgeStatus({ workspace, copilotHome, home } = {}) {
   const buckets = [];
   if (storeExists) {
     for (const { key, dir: bucketDir, meta } of listBuckets(dir)) {
-      // ONE occupancy predicate, shared with `knowledge prune`'s confirmation
-      // gate (bucketCounts, consolidate.mjs) — the two used to disagree about
-      // which buckets held live work.
-      let active = 0;
+            let active = 0;
       let total = 0;
       let promoted = 0;
       try {
@@ -71,12 +55,7 @@ export function knowledgeStatus({ workspace, copilotHome, home } = {}) {
       buckets.push({
         key,
         branch: safeBranchName(meta?.branch),
-        // Same 40-hex gate `bucketAncestryOk` applies before handing the value
-        // to git (isBucketBaseSha, overlay.mjs). meta.json is hand-editable, so
-        // an arbitrary string here reached both the rendered row and the
-        // `--json` lane verbatim — the one untreated field on a report whose
-        // every other untrusted string is shape-checked or redacted.
-        baseSha: isBucketBaseSha(meta?.baseSha) ? meta.baseSha : null,
+                baseSha: isBucketBaseSha(meta?.baseSha) ? meta.baseSha : null,
         createdAt,
         ageDays,
         // Derived from the key shape, never trusted from meta (cache only).

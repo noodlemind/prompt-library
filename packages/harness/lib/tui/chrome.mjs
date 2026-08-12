@@ -1,32 +1,9 @@
-/**
- * The Session Ledger's chrome: a header banner, a hint row, a footer.
- *
- * THE BUDGET IS THREE ROWS, and the design fixes which three. Persistent chrome
- * is the hint row and the footer; the header is printed ONCE, into scrollback,
- * at the top of the session. That is not a compromise with the main-buffer
- * rule — it is the consequence of it. A bar pinned to the top of the viewport
- * needs the alternate screen, and the alternate screen costs scrollback,
- * selection and the terminal's own search, which is the trade the design
- * declines. A header that scrolls away with the session it opened is the honest
- * form of the same information.
- *
- * THE HINT ROW IS CONSEQUENCE CONTEXT, taken from Cursor CLI: what Enter will
- * do, stated at the point where Enter is pressed. It carries the mode, the gate
- * posture, and whether the shell is allowed — the three facts that change what
- * the next line does. Keys come last because they are learned once; the
- * posture changes under you.
- *
- * THE FOOTER IS TWO COLUMNS. Left is lifecycle (plan, gate, run); right is
- * scale (tests, learnings, knowledge generation). Clipping drops the right
- * column first and then whole segments from the right of the left column, so
- * the fact that changes what the next command does is the last thing to go.
- */
 import { displayWidth, clipTo, padTo } from './width.mjs';
 
 /** The footer's left column, in the order the design fixes. Configurable per
  * the mock's `statusline items` setting — Warp makes this configurable because
  * it is taste, and the same argument applies here. */
-export const DEFAULT_FOOTER_ITEMS = Object.freeze(['plan', 'gate', 'run', 'knowledge']);
+export const DEFAULT_FOOTER_ITEMS = Object.freeze(['plan', 'gate', 'agent', 'shell', 'run', 'knowledge']);
 
 const GATE_GLYPH = {
   pass: ['ok', 'ok'],
@@ -36,13 +13,6 @@ const GATE_GLYPH = {
   expired: ['warn', 'warn'],
 };
 
-/**
- * The session header, printed into scrollback once.
- *
- * Every field is omitted when unknown. A header that says `branch unknown` in a
- * container with no git repo reads as a broken lookup rather than as a fact
- * about the container.
- */
 export function renderHeader({
   ui,
   width = 80,
@@ -54,11 +24,7 @@ export function renderHeader({
   gate = null,
   run = null,
 } = {}) {
-  // TWO LINES, the field's identity rhythm: Claude Code gives identity a
-  // three-line block, Codex a boxed panel; a single 160-character line mixing
-  // identity with lifecycle read as data, not presence. Line one is WHERE —
-  // workspace, branch, commit. Line two is WHAT — the tool and the lifecycle.
-  const dot = ui.paint(gate && gate !== 'pass' && gate !== 'ok' ? 'warn' : 'ok', ui.unicode ? '●' : 'o');
+    const dot = ui.paint(gate && gate !== 'pass' && gate !== 'ok' ? 'warn' : 'ok', ui.unicode ? '●' : 'o');
   const sep = ui.paint('muted', ' · ');
 
   const where = [];
@@ -83,13 +49,6 @@ function clipLine(text, width, ui) {
   return displayWidth(text) <= width ? text : clipTo(ui.stripAnsi(text), width);
 }
 
-/**
- * The hint row — what Enter will do, and at what risk.
- *
- * `mode` and `gate` come first because they are the two that change; the keys
- * are a fixed tail. When the row does not fit, the keys go before the posture
- * does, for the same reason.
- */
 export function renderHint({
   ui,
   width = 80,
@@ -97,55 +56,68 @@ export function renderHint({
   gate = null, // accepted and unused: the gate's textual home is the footer
   shell = 'allowed',
   rerun = null,
+  agent = null,
 } = {}) {
   void gate;
   void shell;
   void rerun;
-  // THE ROW GREW BY ACCRETION AND NOBODY READ THE TOTAL. Each item arrived with
-  // its own good argument — the shell posture, what `replay` would repeat, the
-  // exit chord nothing else advertised, and finally the mode key — until seven
-  // of them sat under the cursor competing with the composer they were meant to
-  // support. `replay re-runs agent mode on` was the tell: a fragment that reads
-  // as a broken sentence, restating a block already on screen.
-  //
-  // WHAT SURVIVES IS WHAT YOU CAN ACT ON RIGHT NOW at the moment of typing:
-  // which mode you are in, what Enter will do, the key that changes the mode,
-  // and where the rest is. The others did not go away, they went somewhere they
-  // read better — `?` lists every key, the footer carries the standing facts,
-  // and `esc interrupt` is announced by the live region while something is
-  // actually running (`◐ agent … · esc cancels`), which is the only moment it
-  // means anything.
-  const parts = [ui.paint('muted', mode)];
-
+  void agent;
+  void mode;
+  // Mode/agent live on the rule label (right) and footer — hint is keys only
+  // so the chrome does not say "agent on" three times.
   const keys = [
     `${ui.paint('muted', ui.unicode ? '↵' : 'enter')} ${ui.paint('muted', 'run')}`,
-    // The gate that decides what a bare line MEANS, and the key that flips it.
     `${ui.paint('muted', 'shift+tab')} ${ui.paint('muted', 'mode')}`,
     `${ui.paint('muted', '?')} ${ui.paint('muted', 'keys')}`,
+    `${ui.paint('muted', '/')} ${ui.paint('muted', 'palette')}`,
   ];
   const sep = ui.paint('muted', ' · ');
-  const posture = parts.join(sep);
-  const full = `  ${posture}${sep}${keys.join(sep)}`;
+  const full = `  ${keys.join(sep)}`;
   if (displayWidth(full) <= width) return full;
-  const short = `  ${posture}`;
-  return displayWidth(short) <= width ? short : `  ${clipTo(ui.stripAnsi(posture), Math.max(0, width - 2))}`;
+  const shortKeys = keys.slice(0, 2);
+  const short = `  ${shortKeys.join(sep)}`;
+  return displayWidth(short) <= width ? short : `  ${clipTo(ui.stripAnsi(short), Math.max(0, width - 2))}`;
 }
 
-/**
- * The footer.
- *
- * `snapshot` carries whatever the session knows; absent facts are dropped
- * rather than rendered as placeholders, and the item order is configurable.
- */
 export function footerSegments(snapshot = {}, items = DEFAULT_FOOTER_ITEMS) {
   const { plan = null, planLocked = false, gate = null, run = null, runStatus = null } = snapshot;
   const build = {
     plan: () => (plan ? { token: 'muted', text: `plan ${plan}`, state: planLocked ? 'ok' : null } : null),
     gate: () => (gate ? { token: (GATE_GLYPH[gate] || ['warn'])[0], text: `gate ${gate === 'pass' ? 'ok' : gate}` } : null),
     run: () => (run ? { token: 'muted', text: `run ${run}`, state: runStatus } : null),
+    agent: () => {
+      if (snapshot.agent === true || snapshot.agent === 'on') {
+        return { token: 'info', text: 'agent on' };
+      }
+      if (snapshot.agent === false || snapshot.agent === 'off') {
+        return { token: 'muted', text: 'agent off' };
+      }
+      return null;
+    },
+    shell: () => {
+      if (snapshot.shell === 'denied' || snapshot.shell === false) {
+        return { token: 'warn', text: 'shell off' };
+      }
+      if (snapshot.shell === 'allowed' || snapshot.shell === true) {
+        return { token: 'muted', text: 'shell on' };
+      }
+      return null;
+    },
     knowledge: () => (snapshot.knowledge ? { token: 'muted', text: snapshot.knowledge } : null),
   };
   return items.map((k) => build[k]?.()).filter(Boolean);
+}
+
+/** Collapse a long workspace path for the footer (keep ~ and last two segments). */
+export function shortWorkspacePath(workspace, max = 42) {
+  const text = String(workspace ?? '');
+  if (!text || displayWidth(text) <= max) return text;
+  const parts = text.replace(/\\/g, '/').split('/').filter(Boolean);
+  if (parts.length <= 2) return clipTo(text, max);
+  const tail = parts.slice(-2).join('/');
+  const head = text.startsWith('~') ? '~/' : '…/';
+  const out = `${head}${tail}`;
+  return displayWidth(out) <= max ? out : clipTo(out, max);
 }
 
 export function renderFooter(snapshot = {}, {
@@ -154,16 +126,19 @@ export function renderFooter(snapshot = {}, {
   items = DEFAULT_FOOTER_ITEMS,
 } = {}) {
   const sep = ui.paint('muted', ' · ');
-  // THE WORKSPACE IS NOT AN ITEM. It heads the footer unconditionally, outside
-  // the configurable list, because it is the one fact that must never be
-  // missing: it decides which repository every block above acted on. Before
-  // this, the footer FELL BACK to a different renderer until the first command
-  // ran and then dropped the workspace entirely — the same surface changed
-  // shape mid-session, and lost its most important fact in the trade.
   const fixed = [];
-  if (snapshot.workspace) fixed.push(ui.paint('info', snapshot.workspace));
+  if (snapshot.workspace) {
+    fixed.push(ui.paint('info', shortWorkspacePath(snapshot.workspace, Math.min(48, Math.floor(width * 0.45)))));
+  }
   if (snapshot.branch) fixed.push(ui.paint('muted', snapshot.branch));
-  const lifecycle = footerSegments(snapshot, items).map((s) => {
+  // Prefer mode over redundant "agent on" when both exist.
+  const footerItems = items.includes('agent') && snapshot.mode
+    ? items.filter((k) => k !== 'agent')
+    : items;
+  if (snapshot.mode) {
+    fixed.push(ui.paint(snapshot.mode === 'commands' ? 'muted' : 'info', snapshot.mode));
+  }
+  const lifecycle = footerSegments(snapshot, footerItems).map((s) => {
     const glyph = s.state ? ` ${ui.glyph(s.state === 'ok' || s.state === 'succeeded' ? 'ok' : s.state === 'failed' ? 'error' : 'pending')}` : '';
     return `${ui.paint(s.token, s.text)}${glyph}`;
   });
@@ -171,17 +146,10 @@ export function renderFooter(snapshot = {}, {
   if (snapshot.tests) right.push(ui.paint('muted', snapshot.tests));
   if (snapshot.learnings) right.push(ui.paint('muted', snapshot.learnings));
   if (snapshot.generation) right.push(ui.paint('muted', `gen ${snapshot.generation}`));
-  // The version sits bottom-right — OpenCode's and Grok's home for it. In a
-  // real workspace the right column was otherwise empty, and a two-column
-  // footer with nothing on the right is a one-column footer.
-  // The model first, the version last: which model answers changes what the
-  // next agent run does; the version only changes what you are running.
   if (snapshot.model) right.push(ui.paint('info', snapshot.model));
   if (snapshot.version) right.push(ui.paint('muted', `harness ${snapshot.version}`));
 
   if (!fixed.length && !lifecycle.length && !right.length) return '';
-  // Clipping order: the right column goes whole, then lifecycle segments from
-  // the right — the workspace is the last thing standing.
   const compose = (life) => `  ${[...fixed, ...life].join(sep)}`;
   let life = [...lifecycle];
   let leftText = compose(life);
@@ -190,16 +158,18 @@ export function renderFooter(snapshot = {}, {
     life.pop();
     leftText = compose(life);
   }
+  // If still too wide, shrink workspace-first fixed path by recomposing without long path.
+  if (displayWidth(ui.stripAnsi(leftText)) + displayWidth(ui.stripAnsi(rightText)) > width && snapshot.workspace) {
+    const tighter = shortWorkspacePath(snapshot.workspace, 28);
+    const fixed2 = [];
+    if (tighter) fixed2.push(ui.paint('info', tighter));
+    if (snapshot.branch) fixed2.push(ui.paint('muted', snapshot.branch));
+    if (snapshot.mode) fixed2.push(ui.paint(snapshot.mode === 'commands' ? 'muted' : 'info', snapshot.mode));
+    leftText = `  ${[...fixed2, ...life].join(sep)}`;
+  }
   return twoColumn(leftText, rightText, width);
 }
 
-/**
- * Left flush, right flush, one row.
- *
- * When the two would collide the RIGHT column is dropped whole rather than
- * truncated: half of `34 learnings` reads as a different number, and a number
- * that is quietly wrong is worse than one that is absent.
- */
 export function twoColumn(left, right, width) {
   const lw = displayWidth(left);
   const rw = displayWidth(right);
@@ -209,12 +179,6 @@ export function twoColumn(left, right, width) {
   return `${left}${' '.repeat(Math.max(1, width - lw - rw))}${right}`;
 }
 
-/**
- * The exit ritual — printed into scrollback so it survives the session that
- * produced it. Taken from Grok Build, which prints the session's title, last
- * state and resume command on the way out; a session that ends with nothing to
- * show teaches nothing.
- */
 export function renderExit({ ui, counts, started, resume = 'harness tui', width = 80 } = {}) {
   const rows = [''];
   rows.push(ui.line({

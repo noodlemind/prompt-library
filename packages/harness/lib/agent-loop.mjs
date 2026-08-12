@@ -1,72 +1,59 @@
-/**
- * The turn loop (P5AC9, P5AC10) — orient, ask a model what to do, do it under
- * `controls`, journal the turn, repeat until a stated stop condition.
- *
- * This is the fifth of an agent the harness was missing. The other four were
- * already here: orientation (`orient`, the context pack, the repo map),
- * retrieval, governed execution (`exec`/`bash` behind the env allowlist, the
- * confined cwd, and the network control), and durable runs (the journal). What
- * was absent was the part that decides what to do next, because nothing in the
- * harness called a model. It does now, out of process — see `lib/provider.mjs`.
- *
- * IT ADDS NO SECOND EXECUTION PATH. A tool call is dispatched through the same
- * `execResultOf`/`bashResultOf` an operator's `harness exec` goes through, so a
- * model's command gets the same environment allowlist, the same starting
- * directory, the same timeout and the same audit record as one a person typed.
- * Reimplementing execution here would mean the one caller that cannot be
- * reasoned with got the untested copy.
- *
- * WHAT THAT IS NOT, stated plainly because an earlier version of this comment
- * said "confined" and a test claimed "a model cannot run outside the workspace"
- * (Codex final review). Neither was true. `resolveExecCwd` validates the
- * STARTING directory; nothing stops `cd ..`, an absolute path, or a detached
- * child that outlives the process-group kill. A model's tool call therefore has
- * exactly the authority the operator running the harness has — no more, and no
- * less — and that is the honest boundary.
- *
- * Real filesystem confinement needs a sandbox or container with the workspace
- * as the only writable mount. That is deliberately out of scope: "privileged
- * sandbox topology" is a named Non-Goal inherited from the agent-loop spec. The
- * consequence is that `harness agent` should be run where you would be willing
- * to run a shell script you have not read — which is what pointing a model at a
- * repository amounts to.
- *
- * IT IS PROVIDER-NEUTRAL. The loop speaks `{system, messages, tools}` and reads
- * back `{text, toolCalls, blocks}`; every wire shape belongs to the adapter.
- * An assistant turn is echoed back VERBATIM as opaque `blocks` — the loop does
- * not interpret them, so a provider whose content model differs does not need
- * this file changed.
- *
- * THE TRANSCRIPT IS NOT JOURNALED. Each turn records what it DID — which tools
- * ran, with what outcome, how long, how many tokens — and not what was said.
- * A conversation is the most likely place for a credential a person pasted or a
- * file the model read aloud to appear, and the journal is durable. The turn
- * record answers "what did this agent do", which is the question a run journal
- * exists for; the transcript answers "what did it think", which is a debugging
- * concern and belongs in the stream the operator is watching.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import { EXIT } from './style.mjs';
+import { CONFIG_SCHEMA } from './config.mjs';
+import { PROVIDER_TIMEOUT_MS } from './provider.mjs';
 import { execResultOf, bashResultOf } from './exec-cmd.mjs';
+import { TIMEOUT_MAX_SECONDS } from './exec-policy.mjs';
+import { editResultOf, writeResultOf } from './edit-cmd.mjs';
+import { getResultOf } from './retrieval/compat-results.mjs';
+import { searchResultOf } from './retrieval/search-cmd.mjs';
+import { todoResultOf } from './todo-cmd.mjs';
+import { applyResultOf } from './apply-cmd.mjs';
 
 export const AGENT_SCHEMA = 1;
-export const DEFAULT_PERSONA = 'engineer';
-export const DEFAULT_MAX_TURNS = 30;
-export const DEFAULT_MAX_SECONDS = 1800;
 
+/** Per-tool result ceiling shown to the model (context blow-up guard). */
+export const TOOL_RESULT_MAX_BYTES = 8_000;
+export const READ_DEFAULT_LINES = 240;
+export const READ_MAX_BYTES = TOOL_RESULT_MAX_BYTES + 2_000;
+export const SEARCH_ROWS = 8;
+/** Persona text beyond this is truncated — full engineer.md is not a runtime prompt. */
+export const PERSONA_MAX_BYTES = 2_000;
+/** Hard cap for the entire autonomous system card (AC9). */
+export const AUTONOMOUS_SYSTEM_MAX_BYTES = 2_048;
+/** Orientation pack ceiling in the system prompt (deliver / legacy). */
+export const ORIENTATION_MAX_BYTES = 4_000;
+
+/** After this many consecutive explore-only turns, further search/read is refused. */
+export const MAX_EXPLORE_STREAK = 3;
+/** Hard search calls per run (search attractor guard). */
+export const MAX_SEARCH_PER_RUN = 5;
+/** Keep full tool results for this many recent turns; older results are compacted. */
+export const TRANSCRIPT_FULL_TURNS = 6;
 /**
- * Why the loop stopped, and what each means for the run.
- *
- * Every terminal state is named rather than inferred from an exit code, because
- * "the model finished" and "we ran out of turns" are the same exit code away
- * from each other and mean opposite things about the result. The status is the
- * harness's own vocabulary (`ok|failed|cancelled|timed-out`), so a turn loop
- * appears in `run list` alongside every other command without a private
- * outcome language.
+ * Cap one model completion so a hung provider cannot burn the whole wall clock.
+ * Still bounded by the run deadline.
  */
+export const AGENT_COMPLETION_TIMEOUT_MS = 90_000;
+/** One automatic retry after a timed-out complete (not after other errors). */
+export const AGENT_COMPLETION_RETRIES = 1;
+
+export const DEFAULT_PERSONA = 'engineer';
+export const DEFAULT_MAX_TURNS = CONFIG_SCHEMA['agent.max_turns'].default;
+export const DEFAULT_MAX_SECONDS = CONFIG_SCHEMA['agent.max_seconds'].default;
+/**
+ * Default optional-agent profile id.
+ * `autonomous` is the first-class eval/long-horizon track (prefer with --verify-cmd).
+ * Existing efficiency fixtures may pass `--profile benchmark`.
+ */
+export const DEFAULT_PROFILE_ID = 'autonomous';
+
 export const STOP_REASONS = Object.freeze({
   done: { status: 'ok', exit: EXIT.ok, summary: 'the model finished and asked for nothing more' },
+  'verifier-pass': { status: 'ok', exit: EXIT.ok, summary: 'the task verifier passed' },
+  'verifier-missing': { status: 'failed', exit: 1, summary: 'autonomous run needs a task verifier for proven success' },
+  'verifier-failed': { status: 'failed', exit: 1, summary: 'the model stopped but the task verifier did not pass' },
   'turn-budget': { status: 'failed', exit: 1, summary: 'the turn budget was reached before the model finished' },
   'time-budget': { status: 'timed-out', exit: EXIT.timedOut, summary: 'the wall clock was reached before the model finished' },
   'tool-error': { status: 'failed', exit: 1, summary: 'a tool could not be dispatched at all' },
@@ -74,49 +61,113 @@ export const STOP_REASONS = Object.freeze({
   cancelled: { status: 'cancelled', exit: EXIT.cancelled, summary: 'the run was cancelled' },
 });
 
+const LIFECYCLE_DROPS_AUTONOMOUS = Object.freeze([
+  Object.freeze({ step: 'gate', precondition: 'a locked plan under docs/plans/' }),
+  Object.freeze({ step: 'verify', precondition: 'product harness verify --plan (use task --verify-cmd instead)' }),
+  Object.freeze({ step: 'compound', precondition: 'a knowledge store that outlives this run' }),
+  Object.freeze({ step: 'human-review', precondition: 'a reviewer' }),
+]);
+
 /**
- * The benchmark profile — what this loop does, and what it deliberately does
- * not.
- *
- * `engineer.agent.md` describes a nine-step lifecycle that presumes a
- * persistent product repository: `gate` wants a locked plan under `docs/plans/`,
- * `verify` wants named checks, `compound` wants a knowledge store that outlives
- * the container, and one step wants a human reviewer. A bare container has none
- * of those. Dropping them is honest; SYNTHESIZING them is not — a plan file
- * written to satisfy `gate` would measure ceremony rather than capability, and
- * would make the harness look governed in a run where nothing was governed.
- *
- * The drops are data so they can be reported. A reader of a finished run should
- * be able to see which parts of the lifecycle did not happen without knowing
- * this file exists.
+ * First-class autonomous / long-horizon solve track (evals, unattended).
+ * Same kernel tools as Deliver; no plan/gate/compound ceremony.
  */
-export const BENCHMARK_PROFILE = Object.freeze({
-  id: 'benchmark',
-  keeps: Object.freeze(['orient', 'retrieval', 'governed-exec', 'journal']),
-  drops: Object.freeze([
-    Object.freeze({ step: 'gate', precondition: 'a locked plan under docs/plans/' }),
-    Object.freeze({ step: 'verify', precondition: 'named checks in .github/harness/checks.yaml' }),
-    Object.freeze({ step: 'compound', precondition: 'a knowledge store that outlives this run' }),
-    Object.freeze({ step: 'human-review', precondition: 'a reviewer' }),
-  ]),
+export const AUTONOMOUS_PROFILE = Object.freeze({
+  id: 'autonomous',
+  track: 'autonomous',
+  testOnly: false,
+  shortCard: true,
+  maxTurnsDefault: 50,
+  maxSecondsDefault: 1800,
+  keeps: Object.freeze(['orient', 'retrieval', 'governed-exec', 'journal', 'task-verifier', 'todo', 'apply']),
+  drops: LIFECYCLE_DROPS_AUTONOMOUS,
 });
 
 /**
- * The tools the model may call.
- *
- * Exactly the harness's two governed execution surfaces, described in the terms
- * the model has to reason in. There is no `read_file`/`write_file` pair: the
- * container already has `cat` and `tee`, and adding harness-native file tools
- * would create a second write path that `controls` does not see — which is the
- * one property this loop cannot give up.
+ * Optional headless Deliver-oriented agent profile (product-minded prompt).
+ * Host @engineer remains the full Deliver owner; this does not replace hooks.
  */
+export const DELIVER_PROFILE = Object.freeze({
+  id: 'deliver',
+  track: 'deliver',
+  testOnly: false,
+  shortCard: false,
+  maxTurnsDefault: DEFAULT_MAX_TURNS,
+  maxSecondsDefault: DEFAULT_MAX_SECONDS,
+  keeps: Object.freeze(['orient', 'plan', 'gate', 'retrieval', 'governed-exec', 'verify', 'compound', 'journal']),
+  drops: Object.freeze([]),
+});
+
+/**
+ * TEST / EFFICIENCY FIXTURE ONLY — alias of autonomous drops with a fixture id.
+ * Not the Adaptive Engineering product lifecycle. Full AE is host @engineer
+ * + kernel gate/verify/compound.
+ */
+export const BENCHMARK_PROFILE = Object.freeze({
+  id: 'benchmark',
+  track: 'autonomous',
+  testOnly: true,
+  shortCard: true,
+  maxTurnsDefault: 50,
+  maxSecondsDefault: 1800,
+  keeps: Object.freeze(['orient', 'retrieval', 'governed-exec', 'journal']),
+  drops: LIFECYCLE_DROPS_AUTONOMOUS,
+});
+
+const PROFILE_BY_ID = Object.freeze({
+  deliver: DELIVER_PROFILE,
+  autonomous: AUTONOMOUS_PROFILE,
+  bench: AUTONOMOUS_PROFILE,
+  benchmark: BENCHMARK_PROFILE,
+});
+
+/** Resolve CLI/config profile name to a frozen profile object. */
+export function resolveProfile(name = DEFAULT_PROFILE_ID) {
+  const key = String(name || DEFAULT_PROFILE_ID).trim().toLowerCase();
+  const profile = PROFILE_BY_ID[key];
+  if (!profile) {
+    throw Object.assign(
+      new Error(`unknown agent profile: ${name}`),
+      {
+        code: 'E_USAGE',
+        exit: EXIT.usage,
+        hint: 'known profiles: deliver | autonomous | bench (alias) | benchmark (fixture)',
+      },
+    );
+  }
+  return profile;
+}
+
+export function listProfileIds() {
+  return ['deliver', 'autonomous', 'bench', 'benchmark'];
+}
+
+/** One-line product disclaimer for optional agent runs. */
+export const AGENT_ADDON_DISCLAIMER =
+  'optional add-on loop — not full Adaptive Engineering (host @engineer + gate/verify/compound)';
+
+const EXPLORE_TOOLS = new Set(['search', 'read']);
+const ACT_TOOLS = new Set(['edit', 'write', 'apply', 'bash', 'exec']);
+const READ_ONLY_TOOLS = new Set(['search', 'read']);
+const MUTATE_TOOLS = new Set(['edit', 'write', 'apply', 'todo']);
+
+/** todo list is read-only; add/complete/clear mutate and must stay serial. */
+function isReadOnlyCall(call) {
+  if (!call?.name) return false;
+  if (READ_ONLY_TOOLS.has(call.name)) return true;
+  if (call.name === 'todo') {
+    const verb = typeof call.input?.verb === 'string' ? call.input.verb.trim() : 'list';
+    return verb === 'list' || verb === '';
+  }
+  return false;
+}
+
 export const AGENT_TOOLS = Object.freeze([
   Object.freeze({
     name: 'bash',
     description:
-      'Run one shell script. The whole script is a single argument; use `;` or `&&` to sequence. '
-      + 'The environment is deny-all except an explicit allowlist, the working directory starts at the workspace root, '
-      + 'and the process group is terminated at the timeout. Returns exit code, status, and combined output.',
+      'Run one shell script (e.g. the failing test command). Prefer this FIRST when the task names a test or command. '
+      + 'Deny-all environment; cwd starts at the workspace root; process group killed at timeout.',
     schema: {
       type: 'object',
       properties: {
@@ -129,8 +180,8 @@ export const AGENT_TOOLS = Object.freeze([
   Object.freeze({
     name: 'exec',
     description:
-      'Run one program directly, never through a shell — no word splitting, no globbing, no command substitution. '
-      + 'Prefer this over `bash` whenever a shell is not genuinely needed. Same allowlist, starting directory, and timeout.',
+      'Run one program without a shell. Prefer over bash when no shell features are needed. '
+      + 'Use for the named test runner when argv is known.',
     schema: {
       type: 'object',
       properties: {
@@ -140,43 +191,116 @@ export const AGENT_TOOLS = Object.freeze([
       required: ['argv'],
     },
   }),
+  Object.freeze({
+    name: 'edit',
+    description:
+      'Replace one exact piece of text in an existing file. `old` must appear EXACTLY ONCE. '
+      + 'Prefer edit over write for any partial change.',
+    schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'file path relative to the workspace root' },
+        old: { type: 'string', description: 'the exact existing text, unique within the file' },
+        new: { type: 'string', description: 'the text to put in its place' },
+      },
+      required: ['path', 'old', 'new'],
+    },
+  }),
+  Object.freeze({
+    name: 'write',
+    description:
+      'Write a file in full. New files need only path+content. Existing files need `expect` (sha256 from read). '
+      + 'Replacing an existing file with much smaller content is refused. Prefer edit for partial changes.',
+    schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'file path relative to the workspace root' },
+        content: { type: 'string', description: 'the complete contents of the file' },
+        expect: { type: 'string', description: 'sha256 of the content being replaced; required when the file exists' },
+      },
+      required: ['path', 'content'],
+    },
+  }),
+  Object.freeze({
+    name: 'apply',
+    description:
+      'Apply multiple file edits in one all-or-nothing batch (CAS). Each item is path+old+new or path+content(+expect). '
+      + 'Prefer for coordinated multi-file fixes. Single write path — same as edit/write.',
+    schema: {
+      type: 'object',
+      properties: {
+        changes: {
+          type: 'array',
+          description: 'list of {path, old, new} or {path, content, expect?}',
+          items: { type: 'object' },
+        },
+      },
+      required: ['changes'],
+    },
+  }),
+  Object.freeze({
+    name: 'todo',
+    description:
+      'Durable worklist for long-horizon tasks. verb: list|add|complete|clear. '
+      + 'Use add to track steps; complete when done. State lives under .harness/todo.json.',
+    schema: {
+      type: 'object',
+      properties: {
+        verb: { type: 'string', description: 'list | add | complete | clear' },
+        text: { type: 'string', description: 'item text for add' },
+        id: { type: 'string', description: 'item id for complete' },
+      },
+      required: ['verb'],
+    },
+  }),
+  Object.freeze({
+    name: 'read',
+    description:
+      'Read a known path. Use after you know which file failed (from a test run or the task). '
+      + 'Do not search when the path is already known. Returns a line window, total lines, and whole-file sha256.',
+    schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'file path relative to the workspace root' },
+        offset: { type: 'number', description: 'first line to return, 1-indexed (default 1)' },
+        lines: { type: 'number', description: `maximum lines to return (default ${READ_DEFAULT_LINES})` },
+      },
+      required: ['path'],
+    },
+  }),
+  Object.freeze({
+    name: 'search',
+    description:
+      'Last resort: find a path when the task and test output do not name one. '
+      + 'Do not search as a first step. Limited per run; repeated search without acting is refused.',
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'what to look for, in words — not a regex or a glob' },
+      },
+      required: ['query'],
+    },
+  }),
 ]);
 
 const TOOL_NAMES = new Set(AGENT_TOOLS.map((t) => t.name));
 
-/**
- * Flags that consume the token after them.
- *
- * F14 (Codex phase-5 review): `taskFromArgv` assumed every `--flag` took a
- * value, so `harness agent --dry-run fix the bug` ate `fix` and ran the task
- * "the bug" — silently, which is the worst way to get a task wrong.
- *
- * Declared here rather than in `lib/registry.mjs` only because the registry
- * imports this module; `test/codex-phase5-findings.test.mjs` asserts this set
- * matches the registry's own `type: 'string'` declarations exactly, so the two
- * cannot drift. The registry stays the source of truth for what a flag IS.
- */
 export const AGENT_VALUE_FLAGS = Object.freeze([
   '--agent', '--provider', '--model', '--max-turns', '--max-seconds', '--tool-timeout',
   '--workspace', '--copilot-home', '--output', '--plan', '--host', '--limit', '--query',
+  '--profile', '--verify-cmd',
 ]);
 
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
 }
 
-/**
- * The persona, resolved from wherever the harness hydrated it.
- *
- * `~/.copilot/agents/<name>.agent.md` is where `install` puts it and where every
- * host already looks, so the loop reads the same file the editor would rather
- * than shipping a second copy that can drift from it.
- *
- * A missing persona DEGRADES rather than fails. A bare container that never ran
- * `harness install` still has a task to attempt, and refusing it would report a
- * hydration problem as an agent failure. What it must not do is pretend: the
- * result says which persona was used and whether it came from a file.
- */
+function clipBytes(text, maxBytes) {
+  if (typeof text !== 'string') return text;
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  return `${Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8')}\n…truncated`;
+}
+
 export function resolvePersona(copilotHome, name = DEFAULT_PERSONA) {
   if (!/^[a-z0-9][a-z0-9-]*$/i.test(name)) {
     throw usageError(`invalid persona name: ${name}`, 'persona names are the agent file stems, e.g. engineer');
@@ -190,164 +314,330 @@ export function resolvePersona(copilotHome, name = DEFAULT_PERSONA) {
   }
 }
 
-/**
- * The system prompt: who the model is, what it can reach, and what is out of
- * scope here and why.
- *
- * The last part is the one worth defending. Handing `engineer.agent.md` to a
- * model in a bare container without saying which of its nine steps are
- * impossible produces an agent that spends turns looking for `docs/plans/` and
- * reports being blocked. Naming the dropped steps and their missing
- * preconditions is both more honest and strictly more useful than silence.
- */
-export function buildSystemPrompt({ persona, profile = BENCHMARK_PROFILE, orientation = null }) {
+function autonomousSystemCard({ hasVerifier = false } = {}) {
+  const lines = [
+    'You are a headless coding agent on the autonomous track (same harness kernel as Deliver; no plan/gate/compound).',
+    '',
+    '## Workflow',
+    '1. Reproduce — run the failing test/command with bash/exec when named.',
+    '2. Read only the failing path; edit surgically (edit or multi-file apply).',
+    '3. Use todo for multi-step work.',
+    hasVerifier
+      ? '4. The harness re-runs the task verifier after mutations; stop when it is green.'
+      : '4. Re-run the same command to prove the fix; then stop with no tool call.',
+    '',
+    '## Limits',
+    `- Search last resort (max ${MAX_SEARCH_PER_RUN}/run).`,
+    `- After ${MAX_EXPLORE_STREAK} explore-only turns, read/search is refused.`,
+    '- Prefer edit/apply over full-file rewrite. No ceremony artifacts unless asked.',
+    '',
+    `OUT OF SCOPE: ${LIFECYCLE_DROPS_AUTONOMOUS.map((d) => d.step).join(', ')}.`,
+  ];
+  return lines.join('\n');
+}
+
+function deliverSystemBody({ persona, orientation = null }) {
   const parts = [];
   if (persona.text) {
-    parts.push(persona.text.trim());
+    parts.push(clipBytes(persona.text.trim(), PERSONA_MAX_BYTES));
   } else {
     parts.push(
       `You are the ${persona.name} agent running headless under the harness CLI. `
       + 'Work carefully and verify what you change.',
     );
   }
-  parts.push(
-    [
-      `## Runtime profile: ${profile.id}`,
-      '',
-      'You are running headless, with no editor host and no human to ask. '
-      + `This profile keeps ${profile.keeps.join(', ')}.`,
-      '',
-      'These lifecycle steps are OUT OF SCOPE for this run because their preconditions are absent. '
-      + 'Do not attempt them and do not create the artifacts they would need:',
-      ...profile.drops.map((d) => `- ${d.step} — needs ${d.precondition}`),
-      '',
-      'Act by calling the tools. Every command runs with a deny-all environment, a working directory confined '
-      + 'to the workspace, and a timeout; a non-zero exit is information to work with, not a reason to stop. '
-      + 'When the task is complete, reply with a short summary and call no tool — that is how you finish.',
-    ].join('\n'),
-  );
-  if (orientation) parts.push(`## Orientation\n\n${orientation}`);
+  parts.push([
+    '## Runtime: deliver (optional agent)',
+    '',
+    'Product-oriented headless run. Host @engineer remains the accountable Deliver owner.',
+    'If the workspace has a locked plan, respect gate/verify norms. Prefer surgical edits.',
+    '',
+    '### Workflow',
+    '1. Orient from context; reproduce failing commands with bash/exec.',
+    '2. Edit surgically; re-run checks.',
+    '3. Prefer product `harness verify --plan` when a plan exists; do not skip proof.',
+    '',
+    '### Hard limits',
+    `- Search is limited to ${MAX_SEARCH_PER_RUN} calls per run.`,
+    `- After ${MAX_EXPLORE_STREAK} consecutive explore-only turns, further read/search is refused.`,
+  ].join('\n'));
+  if (orientation) {
+    parts.push(`## Orientation\n\n${clipBytes(orientation, ORIENTATION_MAX_BYTES)}`);
+  }
   return parts.join('\n\n');
 }
 
 /**
- * Orientation, degraded cleanly.
- *
- * `orient` writes `.harness/context-pack.md`, which is the harness's actual
- * product here — the ranked repo map, matched plans, and recalled learnings a
- * model would otherwise have to discover by reading the tree. In a container
- * with no git repo and no index, `runOrient` may return nothing useful, and that
- * is a legitimate outcome rather than an error: a four-file task has nothing to
- * orient over. The loop reports what it got and continues.
+ * Build the system prompt for the optional agent loop.
+ * Autonomous: short card (≤2KB). Deliver: persona clip + product workflow.
  */
+export function buildSystemPrompt({
+  persona,
+  profile = AUTONOMOUS_PROFILE,
+  orientation = null,
+  hasVerifier = false,
+} = {}) {
+  const resolved = profile?.id ? profile : resolveProfile(profile);
+  if (resolved.shortCard || resolved.track === 'autonomous' || resolved.testOnly) {
+    // Autonomous / benchmark: short card only — do not inject full engineer.agent.md body.
+    let card = autonomousSystemCard({ hasVerifier });
+    if (orientation && resolved.id !== 'benchmark') {
+      // Light orientation clip only if room remains.
+      const room = AUTONOMOUS_SYSTEM_MAX_BYTES - Buffer.byteLength(card, 'utf8') - 32;
+      if (room > 200) {
+        card = `${card}\n\n## Orientation\n\n${clipBytes(orientation, Math.min(room, 800))}`;
+      }
+    }
+    // Benchmark fixture: keep OUT OF SCOPE wording tests expect + persona marker when present historically.
+    // Persona: only a tiny optional one-liner if hydrated and tiny; never blow the cap.
+    if (persona?.text && resolved.id === 'benchmark') {
+      // Legacy tests expect SPECIFIC-PERSONA-MARKER in benchmark-default runs.
+      // Keep a clipped persona prefix for benchmark fixture compatibility only.
+      const clipped = clipBytes(persona.text.trim(), 400);
+      card = `${clipped}\n\n${card}`;
+    }
+    return clipBytes(card, AUTONOMOUS_SYSTEM_MAX_BYTES);
+  }
+  return deliverSystemBody({ persona, orientation });
+}
+
 export async function orientForTask({ workspace, copilotHome, task, runOrientFn, dryRun = false }) {
   try {
-    // `dryRun` has to reach `runOrient` or orientation writes the context pack
-    // and the session on a run whose whole promise is that it writes nothing.
-    // It was being handed no flag at all.
     const result = runOrientFn({ workspace, copilotHome, flags: { workspace, limit: 3, dryRun }, query: task });
-    if (!result) return { available: false, materialized: false, reason: 'orientation refused (.harness is not a real directory)', pack: null };
-    // Under a dry run the pack was computed but not persisted, so there is
-    // nothing to read. That is NOT the same as being unable to orient, and
-    // reporting it as unavailable would tell the operator their container is
-    // broken when it is fine.
+    if (!result) {
+      return { available: false, materialized: false, reason: 'orientation refused (.harness is not a real directory)', pack: null };
+    }
     if (dryRun) {
-      return { available: true, materialized: false, reason: null, pack: null, contextPack: result.contextPack, repoMap: result.repoMap ?? null };
+      return {
+        available: true,
+        materialized: false,
+        reason: null,
+        pack: null,
+        contextPack: result.contextPack,
+        repoMap: result.repoMap ?? null,
+      };
     }
     const packPath = path.join(workspace, result.contextPack || '');
     const pack = fs.readFileSync(packPath, 'utf8');
-    return { available: true, materialized: true, reason: null, pack, contextPack: result.contextPack, repoMap: result.repoMap ?? null };
+    return {
+      available: true,
+      materialized: true,
+      reason: null,
+      pack: clipBytes(pack, ORIENTATION_MAX_BYTES),
+      contextPack: result.contextPack,
+      repoMap: result.repoMap ?? null,
+    };
   } catch (error) {
-    // Orientation is context, not correctness. A container without a repo, an
-    // index, or a knowledge store still has a task to attempt, and reporting
-    // "no orientation" beats refusing to start.
     return { available: false, materialized: false, reason: error.message, pack: null };
   }
 }
 
-
-/**
- * How long one tool may run, from the bounds the OPERATOR set.
- *
- * The model may ASK for a timeout — a long build genuinely needs one — but
- * `--tool-timeout` is a control the operator set, so it is a CEILING and never
- * a default beneath it. The first version took the model's value whenever it
- * supplied one, which meant an operator who capped tools at 5 seconds got 3600
- * the moment the model asked for it.
- *
- * `null` means "say nothing", and that is load-bearing: `exec` then applies the
- * configured `exec.timeout_seconds`. Returning a computed number in that case
- * would let the loop RAISE a timeout the operator lowered in their config,
- * which is the opposite of what a ceiling is for. The wall clock is enforced
- * separately, by cancellation — see `dispatchToolCall`.
- */
 export function resolveToolTimeout({ requested, ceiling = null }) {
   const bounds = [];
   if (Number.isFinite(requested) && requested > 0) bounds.push(Math.floor(requested));
   if (Number.isFinite(ceiling)) bounds.push(Math.floor(ceiling));
   if (!bounds.length) return null;
-  return Math.max(1, Math.min(...bounds));
+  return Math.min(TIMEOUT_MAX_SECONDS, Math.max(1, Math.min(...bounds)));
 }
 
-/**
- * The signal that stops a tool at the wall clock.
- *
- * Enforcing `--max-seconds` by shortening `--timeout` looked simpler and was
- * wrong: with no `--tool-timeout` there is no operator value to shorten, so the
- * loop would have had to invent one — and any number it invented would override
- * a lower `exec.timeout_seconds` the operator had configured, raising a limit
- * while claiming to lower one.
- *
- * Cancellation has neither problem. It bounds the tool by the deadline no matter
- * what `exec` was configured to allow, it cannot raise anything, and the run
- * already speaks `cancelled` as a first-class status, so the tool reports the
- * truth about why it stopped.
- */
 function deadlineSignal(remainingSeconds, existing) {
   if (!Number.isFinite(remainingSeconds)) return existing ?? undefined;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(0, remainingSeconds * 1000));
-  // The process must not be held open by a timer whose only job is to fire on a
-  // deadline the run may well beat.
   timer.unref?.();
   const signal = existing ? AbortSignal.any([existing, controller.signal]) : controller.signal;
   return { signal, done: () => clearTimeout(timer) };
 }
 
+export function exploreStreakOf(turns) {
+  let streak = 0;
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    const tools = turns[i].tools;
+    if (tools.length && tools.every((t) => EXPLORE_TOOLS.has(t.tool))) streak += 1;
+    else break;
+  }
+  return streak;
+}
+
+export function searchCountOf(turns) {
+  let n = 0;
+  for (const turn of turns) {
+    for (const t of turn.tools) {
+      if (t.tool === 'search' && t.dispatched) n += 1;
+    }
+  }
+  return n;
+}
+
+export function exploreGate(call, { turns }) {
+  const streak = exploreStreakOf(turns);
+  if (call.name === 'search') {
+    if (searchCountOf(turns) >= MAX_SEARCH_PER_RUN) {
+      return `search budget exhausted (${MAX_SEARCH_PER_RUN} per run) — run the test or edit a known path`;
+    }
+    if (streak >= MAX_EXPLORE_STREAK) {
+      return `explore streak is ${MAX_EXPLORE_STREAK}+ turns of read/search only — use bash/exec to reproduce or edit/write to act`;
+    }
+  }
+  if (call.name === 'read' && streak >= MAX_EXPLORE_STREAK) {
+    return `explore streak is ${MAX_EXPLORE_STREAK}+ turns of read/search only — use bash/exec or edit/write to act`;
+  }
+  return null;
+}
+
+/** Whether the latest completed turn was a failed bash/exec (reproduce signal). */
+export function lastTurnWasFailedAction(turns) {
+  const last = turns[turns.length - 1];
+  if (!last?.tools?.length) return false;
+  return last.tools.some(
+    (t) => ACT_TOOLS.has(t.tool) && t.dispatched && t.tool !== 'edit' && t.tool !== 'write' && t.tool !== 'apply'
+      && (t.exitCode === null || t.exitCode === undefined ? t.status !== 'ok' : t.exitCode !== 0),
+  );
+}
+
+export function lastTurnMutated(turns) {
+  const last = turns[turns.length - 1];
+  return Boolean(last?.tools?.some((t) => MUTATE_TOOLS.has(t.tool) && t.dispatched));
+}
+
+export function turnMutated(turn) {
+  return Boolean(turn?.tools?.some((t) => MUTATE_TOOLS.has(t.tool) && t.dispatched && t.status === 'ok'));
+}
+
 /**
- * Dispatch one tool call through the governed surface.
- *
- * The distinction that matters is between a tool that RAN and failed, and a
- * tool that could not be dispatched at all. The first is ordinary — a compile
- * error, a failing test — and is handed back to the model, which is the whole
- * point of a loop. The second means the harness refused: a denied shell, a cwd
- * outside the workspace, a configuration that would not parse. That is not
- * something the model can work around by trying again, and continuing would
- * burn the budget re-asking a question already answered no.
+ * Run the task verifier via kernel exec (argv only — no free shell from plan strings).
+ * @returns {{ ok: boolean, result?: object, reason?: string }}
  */
-export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {}, timeoutSeconds = null, remainingSeconds = null }) {
+export async function runTaskVerifier({
+  verifyCmd,
+  workspace,
+  copilotHome,
+  ctx = {},
+  remainingSeconds = null,
+} = {}) {
+  if (!Array.isArray(verifyCmd) || !verifyCmd.length) {
+    return { ok: false, reason: 'missing verify-cmd' };
+  }
+  const argvList = verifyCmd.filter((a) => typeof a === 'string');
+  if (!argvList.length) return { ok: false, reason: 'empty verify-cmd' };
+
+  const base = ['--workspace', workspace];
+  if (copilotHome) base.push('--copilot-home', copilotHome);
+  const timeout = resolveToolTimeout({ requested: remainingSeconds, ceiling: remainingSeconds });
+  const execArgv = timeout === null
+    ? [...base, '--', ...argvList]
+    : [...base, '--timeout', String(timeout), '--', ...argvList];
+
+  const bound = deadlineSignal(remainingSeconds, ctx.signal);
+  const runCtx = bound && bound.signal ? { ...ctx, signal: bound.signal } : ctx;
+  try {
+    const result = await execResultOf(execArgv, runCtx);
+    const ok = result.status === 'ok' && result.exitCode === 0;
+    return { ok, result, reason: ok ? undefined : `verifier exit ${result.exitCode ?? 'none'}` };
+  } catch (error) {
+    return { ok: false, reason: error.message, result: null };
+  } finally {
+    bound?.done?.();
+  }
+}
+
+export async function dispatchToolCall(call, {
+  workspace,
+  copilotHome,
+  ctx = {},
+  timeoutSeconds = null,
+  remainingSeconds = null,
+  turns = [],
+} = {}) {
   if (!TOOL_NAMES.has(call.name)) {
     return { dispatched: false, reason: `unknown tool: ${call.name}`, fatal: false };
   }
+
+  const blocked = exploreGate(call, { turns });
+  if (blocked) {
+    return { dispatched: false, reason: blocked, fatal: false };
+  }
+
   const input = call.input && typeof call.input === 'object' ? call.input : {};
   const base = ['--workspace', workspace];
   if (copilotHome) base.push('--copilot-home', copilotHome);
-  const timeout = resolveToolTimeout({ requested: input.timeout, ceiling: timeoutSeconds });
-  if (timeout !== null) base.push('--timeout', String(timeout));
 
   let argv;
   let run;
-  if (call.name === 'bash') {
-    if (typeof input.script !== 'string' || !input.script.trim()) {
-      return { dispatched: false, reason: 'bash requires a non-empty `script`', fatal: false };
+  let timeout = null;
+  let fatalOnThrow = true;
+
+  if (call.name === 'bash' || call.name === 'exec') {
+    timeout = resolveToolTimeout({ requested: input.timeout, ceiling: timeoutSeconds });
+    const execBase = timeout === null ? base : [...base, '--timeout', String(timeout)];
+    if (call.name === 'bash') {
+      if (typeof input.script !== 'string' || !input.script.trim()) {
+        return { dispatched: false, reason: 'bash requires a non-empty `script`', fatal: false };
+      }
+      argv = [...execBase, '--', input.script];
+      run = bashResultOf;
+    } else {
+      const list = Array.isArray(input.argv) ? input.argv.filter((a) => typeof a === 'string') : [];
+      if (!list.length) return { dispatched: false, reason: 'exec requires a non-empty `argv` array of strings', fatal: false };
+      argv = [...execBase, '--', ...list];
+      run = execResultOf;
     }
-    argv = [...base, '--', input.script];
-    run = bashResultOf;
+  } else if (call.name === 'search') {
+    fatalOnThrow = false;
+    const query = typeof input.query === 'string' ? input.query.trim() : '';
+    if (!query) return { dispatched: false, reason: 'search requires a non-empty `query`', fatal: false };
+    argv = [...base, query];
+    run = searchToolResultOf;
+  } else if (call.name === 'todo') {
+    fatalOnThrow = false;
+    const verb = typeof input.verb === 'string' ? input.verb.trim() : 'list';
+    if (!['list', 'add', 'complete', 'clear'].includes(verb)) {
+      return { dispatched: false, reason: 'todo verb must be list | add | complete | clear', fatal: false };
+    }
+    argv = [...base, verb];
+    if (typeof input.text === 'string' && input.text) argv.push('--text', input.text);
+    if (typeof input.id === 'string' && input.id) argv.push('--id', input.id);
+    run = todoResultOf;
+  } else if (call.name === 'apply') {
+    fatalOnThrow = false;
+    if (!Array.isArray(input.changes) || !input.changes.length) {
+      return { dispatched: false, reason: 'apply requires a non-empty `changes` array', fatal: false };
+    }
+    let json;
+    try {
+      json = JSON.stringify(input.changes);
+    } catch {
+      return { dispatched: false, reason: 'apply changes must be JSON-serializable', fatal: false };
+    }
+    argv = [...base, '--changes', json];
+    run = applyResultOf;
   } else {
-    const list = Array.isArray(input.argv) ? input.argv.filter((a) => typeof a === 'string') : [];
-    if (!list.length) return { dispatched: false, reason: 'exec requires a non-empty `argv` array of strings', fatal: false };
-    argv = [...base, '--', ...list];
-    run = execResultOf;
+    fatalOnThrow = false;
+    const rel = typeof input.path === 'string' ? input.path.trim() : '';
+    if (!rel) return { dispatched: false, reason: `${call.name} requires a \`path\` relative to the workspace root`, fatal: false };
+    if (call.name === 'read') {
+      argv = [...base, '--path', rel, '--max-bytes', String(READ_MAX_BYTES)];
+      const lines = Number.isFinite(input.lines) && input.lines > 0 ? Math.floor(input.lines) : READ_DEFAULT_LINES;
+      argv.push('--lines', String(lines));
+      if (Number.isFinite(input.offset) && input.offset > 1) argv.push('--offset', String(Math.floor(input.offset)));
+      run = readResultOf;
+    } else if (call.name === 'edit') {
+      if (typeof input.old !== 'string' || input.old === '') {
+        return { dispatched: false, reason: 'edit requires a non-empty `old` — the exact existing text to replace', fatal: false };
+      }
+      if (typeof input.new !== 'string') {
+        return { dispatched: false, reason: 'edit requires `new` — the replacement text (use an empty string to delete)', fatal: false };
+      }
+      argv = [...base, '--path', rel, '--old', input.old, '--new', input.new];
+      run = editResultOf;
+    } else {
+      if (typeof input.content !== 'string') {
+        return { dispatched: false, reason: 'write requires `content` — the complete contents of the file', fatal: false };
+      }
+      argv = [...base, '--path', rel, '--content', input.content];
+      if (typeof input.expect === 'string' && input.expect) argv.push('--expect', input.expect);
+      run = writeResultOf;
+    }
   }
 
   const bound = deadlineSignal(remainingSeconds, ctx.signal);
@@ -356,25 +646,97 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
     const result = await run(argv, runCtx);
     return { dispatched: true, result, timeoutSeconds: timeout };
   } catch (error) {
-    // A refusal from the governed surface — denied, misconfigured, or confined
-    // — is fatal to the loop. See the note above.
-    return { dispatched: false, reason: error.message, hint: error.hint ?? null, fatal: true, code: error.code ?? null };
+    return {
+      dispatched: false,
+      reason: error.message,
+      hint: error.hint ?? null,
+      fatal: fatalOnThrow,
+      code: error.code ?? null,
+    };
   } finally {
     bound?.done?.();
   }
 }
 
-/** What the model is shown after a tool runs: the outcome scalars and the
- * output, already redacted by the streamer inside `exec`. */
-export function renderToolResult(result, { maxBytes = 16_000 } = {}) {
+/**
+ * Dispatch a batch of tool calls. Read-only tools may run in parallel;
+ * mutate/exec remain serial (and serial relative to each other).
+ */
+export async function dispatchToolBatch(calls, options = {}) {
+  if (!calls.length) return [];
+
+  const allReadOnly = calls.every((c) => isReadOnlyCall(c));
+  if (allReadOnly && calls.length > 1) {
+    return Promise.all(calls.map((call) => dispatchToolCall(call, options)));
+  }
+
+  const outcomes = [];
+  let i = 0;
+  while (i < calls.length) {
+    const call = calls[i];
+    if (isReadOnlyCall(call)) {
+      const group = [];
+      while (i < calls.length && isReadOnlyCall(calls[i])) {
+        group.push(calls[i]);
+        i += 1;
+      }
+      const groupOut = await Promise.all(group.map((c) => dispatchToolCall(c, options)));
+      outcomes.push(...groupOut);
+    } else {
+      outcomes.push(await dispatchToolCall(call, options));
+      i += 1;
+    }
+  }
+  return outcomes;
+}
+
+async function searchToolResultOf(argv, ctx = {}) {
+  const result = await searchResultOf(argv, ctx);
+  const hits = (result.results || []).slice(0, SEARCH_ROWS);
+  const lines = hits.map((r) => `${r.location || r.id}  ${String(r.snippet || '').replace(/\s+/g, ' ').slice(0, 100)}`);
+  const header = hits.length
+    ? `${result.total} match${result.total === 1 ? '' : 'es'}${result.total > hits.length ? `, showing ${hits.length}` : ''}`
+    : 'no matches — try different words, or run the failing test for a path';
+  return {
+    schema: 1,
+    mode: 'search',
+    status: 'ok',
+    exitCode: 0,
+    total: result.total ?? hits.length,
+    output: [{ line: header }, { line: '' }, ...lines.map((line) => ({ line }))],
+  };
+}
+
+async function readResultOf(argv, ctx = {}) {
+  const result = await getResultOf(argv, ctx);
+  const from = result.offset ?? 1;
+  const to = from + (result.lines ?? 0) - 1;
+  const total = result.totalLines ?? result.lines ?? 0;
+  const header = total > to || from > 1
+    ? `${result.path} — lines ${from}-${to} of ${total}. Call read again with \`offset\` to see more.`
+    : `${result.path} — ${total} lines, complete.`;
+  return {
+    schema: 1,
+    mode: 'read',
+    path: result.path,
+    status: 'ok',
+    exitCode: 0,
+    sha256: result.sha256 ?? null,
+    truncated: result.truncated ?? false,
+    output: [
+      { line: header },
+      { line: `sha256: ${result.sha256 ?? 'unknown'}` },
+      { line: '' },
+      { line: result.excerpt },
+    ],
+  };
+}
+
+export function renderToolResult(result, { maxBytes = TOOL_RESULT_MAX_BYTES } = {}) {
   const lines = [`status: ${result.status}`, `exit: ${result.exitCode ?? 'null'}`];
   if (result.signal) lines.push(`signal: ${result.signal}`);
   const body = (result.output || []).map((row) => (row.line !== undefined ? row.line : '…output truncated')).join('\n');
-  let text = `${lines.join('\n')}\n\n${body}`;
-  if (Buffer.byteLength(text, 'utf8') > maxBytes) {
-    text = `${Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8')}\n…truncated`;
-  }
-  return text;
+  return clipBytes(`${lines.join('\n')}\n\n${body}`, maxBytes);
 }
 
 function normalizeCalls(completion) {
@@ -383,33 +745,86 @@ function normalizeCalls(completion) {
 }
 
 /**
- * Run the loop.
- *
- * `startProviderFn` is injected rather than imported so the loop is testable
- * without a network or a key — the same seam `spawnFn` gives the runner. It is
- * the ONLY way a completion enters this function, which is also what keeps the
- * "core never consumes a model" boundary a single reviewable line.
+ * Compact old tool results to bound context.
+ * Autonomous: general compaction of old tool results.
+ * Explore-only stubs retained for deliver/benchmark compatibility.
  */
+export function compactMessages(messages, {
+  keepTurns = TRANSCRIPT_FULL_TURNS,
+  mode = 'explore', // 'explore' | 'all'
+} = {}) {
+  const toolUserIndexes = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i]?.role === 'user' && Array.isArray(messages[i].toolResults)) toolUserIndexes.push(i);
+  }
+  if (toolUserIndexes.length <= keepTurns) return messages;
+  const dropBefore = toolUserIndexes[toolUserIndexes.length - keepTurns];
+  return messages.map((m, i) => {
+    if (i >= dropBefore || m.role !== 'user' || !Array.isArray(m.toolResults)) return m;
+    if (mode === 'all') {
+      return {
+        ...m,
+        toolResults: m.toolResults.map((r) => ({
+          ...r,
+          output: r.isError
+            ? clipBytes(String(r.output || ''), 400)
+            : '[earlier tool result omitted to save context]',
+        })),
+      };
+    }
+    const onlyExplore = m.toolResults.every((r) => /^(status: ok|search budget|explore streak|too many consecutive)/.test(String(r.output || ''))
+      || String(r.output || '').includes('match')
+      || String(r.output || '').includes('sha256:'));
+    if (!onlyExplore) return m;
+    return {
+      ...m,
+      toolResults: m.toolResults.map((r) => ({
+        ...r,
+        output: r.isError ? r.output : '[earlier explore result omitted to save context]',
+      })),
+    };
+  });
+}
+
+function profileSummary(profile) {
+  return {
+    id: profile.id,
+    track: profile.track ?? (profile.testOnly ? 'autonomous' : profile.id),
+    testOnly: Boolean(profile.testOnly),
+    keeps: [...(profile.keeps || [])],
+    drops: (profile.drops || []).map((d) => ({ ...d })),
+  };
+}
+
 export async function runAgentLoop({
   task,
   workspace,
   copilotHome,
   persona,
-  profile = BENCHMARK_PROFILE,
+  profile = AUTONOMOUS_PROFILE,
   orientation = null,
   maxTurns = DEFAULT_MAX_TURNS,
   maxSeconds = DEFAULT_MAX_SECONDS,
   toolTimeoutSeconds = null,
+  verifyCmd = null,
   startProviderFn,
   ctx = {},
   signal = null,
   onTurn = null,
   now = () => Date.now(),
 }) {
+  const resolvedProfile = profile?.id ? profile : resolveProfile(profile);
+  const isAutonomous = resolvedProfile.track === 'autonomous' || resolvedProfile.testOnly;
+  const hasVerifier = Array.isArray(verifyCmd) && verifyCmd.length > 0;
   const startedAt = now();
   const deadline = startedAt + maxSeconds * 1000;
-  const system = buildSystemPrompt({ persona, profile, orientation: orientation?.pack ?? null });
-  const messages = [{ role: 'user', text: task }];
+  const system = buildSystemPrompt({
+    persona,
+    profile: resolvedProfile,
+    orientation: orientation?.pack ?? null,
+    hasVerifier,
+  });
+  let messages = [{ role: 'user', text: task }];
   const turns = [];
 
   const provider = startProviderFn();
@@ -417,6 +832,11 @@ export async function runAgentLoop({
   let detail = null;
   let finalText = '';
   const usage = { inputTokens: 0, outputTokens: 0 };
+  let budgetNudged = false;
+  let lastExploreNudgeAt = 0;
+  let completionRetries = 0;
+  let verifier = null;
+  let mutatedSinceVerifier = false;
 
   try {
     while (!stop) {
@@ -424,25 +844,59 @@ export async function runAgentLoop({
       if (turns.length >= maxTurns) { stop = 'turn-budget'; break; }
       if (now() >= deadline) { stop = 'time-budget'; break; }
 
+      const remainingTurns = maxTurns - turns.length;
+      if (!budgetNudged && turns.length > 0 && remainingTurns <= Math.max(2, Math.floor(maxTurns / 4))) {
+        budgetNudged = true;
+        messages.push({
+          role: 'user',
+          text: hasVerifier
+            ? `Budget check: ${remainingTurns} of ${maxTurns} turns remain. Converge — change code so the task verifier passes.`
+            : `Budget check: ${remainingTurns} of ${maxTurns} turns remain. Converge — change code, re-run verification, finish.`,
+        });
+      }
+
+      const streak = exploreStreakOf(turns);
+      if (streak >= MAX_EXPLORE_STREAK && streak !== lastExploreNudgeAt) {
+        lastExploreNudgeAt = streak;
+        messages.push({
+          role: 'user',
+          text:
+            `You have explored for ${streak} consecutive turns without bash/exec/edit/write. `
+            + 'Act now: edit a known path or re-run the failing command. Further read/search will be refused.',
+        });
+      }
+
+      messages = compactMessages(messages, {
+        keepTurns: TRANSCRIPT_FULL_TURNS,
+        mode: isAutonomous ? 'all' : 'explore',
+      });
+
       const turnIndex = turns.length + 1;
       const turnStartedAt = now();
       let completion;
       try {
-        completion = await provider.complete(
-          // A SNAPSHOT, not the live array. The out-of-process path serializes
-          // immediately so it could not tell the difference, but a provider
-          // holding a reference that keeps mutating under it is a bug waiting
-          // for the first in-process caller.
-          { system, messages: [...messages], tools: AGENT_TOOLS },
-          // Bounded by whatever is left, with NO floor. The previous
-          // `Math.max(1000, …)` deliberately granted a full second when 10 ms
-          // remained, so the operator's wall clock was a suggestion at the edge.
-          { timeout: Math.max(1, Math.min(deadline - now(), 5 * 60_000)) },
+        const remainingMs = deadline - now();
+        const timeout = Math.max(
+          1,
+          Math.min(remainingMs, AGENT_COMPLETION_TIMEOUT_MS, PROVIDER_TIMEOUT_MS),
         );
+        completion = await provider.complete(
+          { system, messages: [...messages], tools: AGENT_TOOLS },
+          { timeout },
+        );
+        completionRetries = 0;
       } catch (error) {
-        // A failure that arrives after the deadline IS the deadline. Reporting
-        // it as `provider-error` blamed the provider for the operator's budget
-        // and produced exit 7 where 8 was the truth.
+        const timedOut = /timed out/i.test(String(error?.message || ''));
+        if (timedOut && completionRetries < AGENT_COMPLETION_RETRIES && now() < deadline) {
+          completionRetries += 1;
+          messages.push({
+            role: 'user',
+            text:
+              'Previous model call timed out. Continue with one short step only: '
+              + 'run the named test command, or make a single surgical edit, then stop or re-verify.',
+          });
+          continue;
+        }
         stop = signal?.aborted ? 'cancelled' : now() >= deadline ? 'time-budget' : 'provider-error';
         detail = error.message;
         break;
@@ -453,10 +907,6 @@ export async function runAgentLoop({
       finalText = typeof completion?.text === 'string' ? completion.text : '';
       const calls = normalizeCalls(completion);
 
-      // F8 (Codex phase-5 review): the deadline was checked only at the TOP of
-      // a turn, so a completion arriving after it was reported as `done` — a
-      // run that ran out of time looked like a run that finished. It is checked
-      // again here, before the answer is acted on or accepted.
       if (now() >= deadline) {
         turns.push(recordTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: false }));
         onTurn?.(turns[turns.length - 1], { text: finalText });
@@ -464,51 +914,138 @@ export async function runAgentLoop({
         break;
       }
 
-      // The assistant's own content goes back verbatim: the loop does not
-      // interpret it, so a provider whose content model differs needs no change
-      // here. See the module note.
       messages.push({ role: 'assistant', blocks: completion?.blocks ?? [], text: finalText });
 
       if (!calls.length) {
         turns.push(recordTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: true }));
         onTurn?.(turns[turns.length - 1], { text: finalText });
-        stop = 'done';
+
+        // Autonomous with verifier: model "done" is not success unless verifier is green.
+        if (isAutonomous && hasVerifier) {
+          const v = await runTaskVerifier({
+            verifyCmd,
+            workspace,
+            copilotHome,
+            ctx,
+            remainingSeconds: (deadline - now()) / 1000,
+          });
+          verifier = {
+            ran: true,
+            ok: v.ok,
+            exitCode: v.result?.exitCode ?? null,
+            reason: v.reason ?? null,
+          };
+          if (v.ok) {
+            stop = 'verifier-pass';
+          } else {
+            stop = 'verifier-failed';
+            detail = v.reason || `verifier exit ${v.result?.exitCode ?? 'unknown'}`;
+          }
+        } else if (isAutonomous && !hasVerifier && resolvedProfile.id === 'autonomous') {
+          // First-class autonomous success is verifier-shaped (AC11–AC12).
+          // Without --verify-cmd, model prose alone is not ok success-with-proof.
+          stop = 'verifier-missing';
+          detail = 'pass --verify-cmd <argv...> for verifier-shaped success';
+        } else {
+          // deliver / benchmark fixture: model-done remains a valid stop
+          stop = 'done';
+        }
         break;
       }
+
+      if (completion?.stopReason === 'length') {
+        const refusals = calls.map((call) => ({
+          id: call.id,
+          output: 'output-token limit hit — tool arguments may be truncated; none were run; re-issue the calls',
+          isError: true,
+        }));
+        turns.push(recordTurn({
+          turnIndex,
+          turnStartedAt,
+          now,
+          tools: calls.map((call) => ({ tool: call.name, dispatched: false, reason: 'truncated by the output-token limit' })),
+          usage: completion?.usage ?? null,
+          ended: false,
+        }));
+        onTurn?.(turns[turns.length - 1], { text: finalText });
+        messages.push({ role: 'user', toolResults: refusals });
+        continue;
+      }
+
+      const outcomes = await dispatchToolBatch(calls, {
+        workspace,
+        copilotHome,
+        ctx,
+        timeoutSeconds: toolTimeoutSeconds,
+        remainingSeconds: (deadline - now()) / 1000,
+        turns,
+      });
 
       const toolResults = [];
       const toolRecords = [];
       let fatal = null;
-      for (const call of calls) {
-        if (signal?.aborted) { fatal = { reason: 'cancelled', cancelled: true }; break; }
-        // …and again between calls in one batch. Three tool calls where the
-        // first exhausts the budget used to spawn all three, the last two with
-        // a negative remaining time. Nothing starts after the deadline.
-        if (now() >= deadline) { fatal = { reason: 'the wall clock was reached mid-batch', expired: true }; break; }
-        const outcome = await dispatchToolCall(call, {
-          workspace,
-          copilotHome,
-          ctx,
-          timeoutSeconds: toolTimeoutSeconds,
-          remainingSeconds: (deadline - now()) / 1000,
-        });
-        if (!outcome.dispatched && outcome.fatal) { fatal = outcome; break; }
+
+      for (let i = 0; i < calls.length; i += 1) {
+        const call = calls[i];
+        const outcome = outcomes[i] || { dispatched: false, reason: 'missing outcome', fatal: true };
+        if (signal?.aborted) {
+          toolRecords.push({ tool: call.name, dispatched: false, reason: 'cancelled', status: 'cancelled' });
+          fatal = { reason: 'cancelled', cancelled: true };
+          break;
+        }
+        if (now() >= deadline && !outcome.dispatched) {
+          toolRecords.push({ tool: call.name, dispatched: false, reason: 'wall clock', status: 'cancelled' });
+          fatal = { reason: 'the wall clock was reached mid-batch', expired: true };
+          break;
+        }
+        if (!outcome.dispatched && outcome.fatal) {
+          const aborted = /abort|cancel|timed? ?out|wall.?clock/i.test(String(outcome.reason || ''));
+          toolRecords.push({
+            tool: call.name,
+            dispatched: false,
+            reason: outcome.reason,
+            status: aborted || now() >= deadline ? 'cancelled' : 'failed',
+          });
+          fatal = outcome.expired || now() >= deadline
+            ? { reason: outcome.reason || 'the wall clock was reached mid-batch', expired: true }
+            : outcome;
+          break;
+        }
         if (!outcome.dispatched) {
-          // A malformed call the model can fix by trying again — hand the
-          // reason back rather than spending the run on it.
           toolResults.push({ id: call.id, output: outcome.reason, isError: true });
           toolRecords.push({ tool: call.name, dispatched: false, reason: outcome.reason });
           continue;
         }
-        toolResults.push({ id: call.id, output: renderToolResult(outcome.result), isError: outcome.result.status !== 'ok' });
+        let output = renderToolResult(outcome.result);
+        const failedAction = (call.name === 'bash' || call.name === 'exec')
+          && (outcome.result.status !== 'ok' || (Number.isFinite(outcome.result.exitCode) && outcome.result.exitCode !== 0));
+        if (failedAction) {
+          output += '\n\nThe command failed. Prefer one focused `read` of the failing path, then `edit`, then re-run this command. Do not keep searching.';
+        }
+        // Wall-clock abort on a long tool: surface cancelled status for the operator journal.
+        const timedOut = now() >= deadline
+          || outcome.result.status === 'cancelled'
+          || outcome.result.signal === 'SIGTERM'
+          || outcome.result.signal === 'SIGKILL';
+        const status = timedOut && (call.name === 'bash' || call.name === 'exec') && outcome.result.status !== 'ok'
+          ? 'cancelled'
+          : outcome.result.status;
+        toolResults.push({ id: call.id, output, isError: outcome.result.status !== 'ok' || failedAction });
         toolRecords.push({
           tool: call.name,
           dispatched: true,
-          status: outcome.result.status,
+          status,
           exitCode: outcome.result.exitCode,
           durationMs: outcome.result.durationMs,
           timeoutSeconds: outcome.result.timeoutSeconds ?? outcome.timeoutSeconds ?? null,
         });
+        if (MUTATE_TOOLS.has(call.name) && outcome.result.status === 'ok') {
+          mutatedSinceVerifier = true;
+        }
+        if (timedOut && (call.name === 'bash' || call.name === 'exec')) {
+          fatal = { reason: 'the wall clock was reached mid-batch', expired: true };
+          break;
+        }
       }
 
       const turn = recordTurn({ turnIndex, turnStartedAt, now, tools: toolRecords, usage: completion?.usage ?? null, ended: false });
@@ -521,9 +1058,43 @@ export async function runAgentLoop({
         break;
       }
       messages.push({ role: 'user', toolResults });
+
+      // After a mutation batch on autonomous+verifier, run the task verifier.
+      if (isAutonomous && hasVerifier && mutatedSinceVerifier) {
+        const v = await runTaskVerifier({
+          verifyCmd,
+          workspace,
+          copilotHome,
+          ctx,
+          remainingSeconds: (deadline - now()) / 1000,
+        });
+        verifier = {
+          ran: true,
+          ok: v.ok,
+          exitCode: v.result?.exitCode ?? null,
+          reason: v.reason ?? null,
+        };
+        if (v.ok) {
+          stop = 'verifier-pass';
+          finalText = finalText || 'task verifier passed';
+          break;
+        }
+        mutatedSinceVerifier = false;
+        messages.push({
+          role: 'user',
+          text:
+            `Task verifier failed (exit ${v.result?.exitCode ?? 'n/a'}${v.reason ? `: ${v.reason}` : ''}). `
+            + 'Fix the remaining issue and mutate again; the harness will re-run the verifier.',
+        });
+      }
     }
   } finally {
     provider.close();
+  }
+
+  // Budget exhaust while verifier never green → non-ok (already non-ok status).
+  if ((stop === 'turn-budget' || stop === 'time-budget') && isAutonomous && hasVerifier && !verifier?.ok) {
+    detail = detail || 'budget exhausted before task verifier passed';
   }
 
   const reason = STOP_REASONS[stop] || STOP_REASONS['provider-error'];
@@ -531,7 +1102,7 @@ export async function runAgentLoop({
     schema: AGENT_SCHEMA,
     task,
     persona: { name: persona.name, hydrated: persona.hydrated },
-    profile: { id: profile.id, keeps: [...profile.keeps], drops: profile.drops.map((d) => ({ ...d })) },
+    profile: profileSummary(resolvedProfile),
     orientation: orientation
       ? { available: orientation.available, contextPack: orientation.contextPack ?? null, reason: orientation.reason ?? null }
       : { available: false, contextPack: null, reason: 'orientation not attempted' },
@@ -548,6 +1119,15 @@ export async function runAgentLoop({
     usage,
     durationMs: now() - startedAt,
     text: finalText,
+    verifier,
+    metrics: {
+      pass: reason.status === 'ok',
+      steps: turns.length,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      durationMs: now() - startedAt,
+      stopReason: stop,
+    },
   };
 }
 

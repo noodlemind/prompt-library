@@ -90,14 +90,13 @@ export function isIndexStale(indexDir, manifestUpdated) {
 }
 
 export function runBuildPostingsIndex({ entries, indexDir, manifestUpdated, flags }) {
-  if (!entries.length) {
-    if (!flags.dryRun && fs.existsSync(indexDir)) {
-      fs.rmSync(indexDir, { recursive: true, force: true });
-    }
-    return { entryCount: 0, indexDir };
-  }
-
-  const postings = buildPostingsIndex(entries);
+  // Always persist meta (including entryCount: 0) so `index --status` can
+  // distinguish "never built" from "built empty — no solution docs yet".
+  // Previously empty rebuilds deleted .harness-index, so status forever said
+  // "not built" even after a successful `harness index`.
+  const postings = entries.length
+    ? buildPostingsIndex(entries)
+    : { N: 0, avgdl: 1, docLengths: Object.create(null), terms: Object.create(null), entries: Object.create(null) };
   const meta = {
     version: 1,
     updated: manifestUpdated,
@@ -107,5 +106,5 @@ export function runBuildPostingsIndex({ entries, indexDir, manifestUpdated, flag
   };
 
   writePostingsIndex(indexDir, postings, meta, flags);
-  return { entryCount: entries.length, indexDir };
+  return { entryCount: entries.length, indexDir, empty: entries.length === 0 };
 }

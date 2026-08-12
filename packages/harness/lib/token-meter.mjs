@@ -1,13 +1,3 @@
-/**
- * Deterministic token estimation for harness telemetry.
- *
- * The harness cannot read the host model's real usage, so it estimates the
- * cost of what it injects and emits. The estimate is a chars/4 baseline (the
- * commonly used rule of thumb) with a small word-count correction so short,
- * whitespace-heavy text is not undercounted. Field names follow the
- * OpenTelemetry gen_ai.usage.* convention so downstream tooling can read them.
- */
-
 const CHARS_PER_TOKEN = 4;
 
 /** Estimate tokens for a string (or any JSON-serializable value). */
@@ -20,10 +10,6 @@ export function estimateTokens(value) {
   return Math.max(byChars, byWords);
 }
 
-/**
- * Build a gen_ai.usage-style object from input/output text (or pre-counted
- * token totals). Returns null only when both sides are empty.
- */
 export function usageFields({ input = '', output = '' } = {}) {
   const inputTokens = typeof input === 'number' ? input : estimateTokens(input);
   const outputTokens = typeof output === 'number' ? output : estimateTokens(output);

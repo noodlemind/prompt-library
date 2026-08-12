@@ -10,12 +10,6 @@ import { listingView, whyView } from '../lib/knowledge/listing.mjs';
 import { buildLearningsLines, LEARNINGS_DATA_PREAMBLE } from '../lib/context-pack.mjs';
 import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
 
-/**
- * Hardening batch B: P1-5 (structural pack injection via a multi-line
- * trigger, fixed at both admission and render time) and the P1-1 residual
- * (unvalidated episode `plan` field).
- */
-
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ctx = () => ({ ws: tempDir('kinj-ws-'), home: tempDir('kinj-home-'), harnessHome: tempDir('kinj-hh-') });
 
@@ -92,11 +86,7 @@ test('P1-5: a multi-line BODY is still allowed — only trigger is restricted', 
 
 test('P1-5: a legacy learning file hand-crafted with an embedded newline in its trigger renders as ONE line in the listing, --why, and the context pack', () => {
   const c = ctx();
-  // Simulate a learning written before the admission gate existed (or hand-
-  // edited directly): construct fm with a raw embedded newline in trigger,
-  // exactly what `unquote` would hand back after parsing an on-disk
-  // yamlQuote-escaped value.
-  const injectedTrigger = 'looks like one trigger\n## Fake Heading\nmalicious instructions here';
+    const injectedTrigger = 'looks like one trigger\n## Fake Heading\nmalicious instructions here';
   const fm = {
     trigger: injectedTrigger,
     status: 'active',
@@ -112,9 +102,7 @@ test('P1-5: a legacy learning file hand-crafted with an embedded newline in its 
   const file = path.join(dir, 'learnings', 'sql', 'legacy-injected.md');
   fs.writeFileSync(file, serializeLearning(fm, 'a legacy claim body'), 'utf8');
 
-  // Sanity: the parser really does hand back a raw embedded newline (proving
-  // this test reproduces the actual round-trip, not a strawman).
-  const reparsed = parseLearningFrontmatter(fs.readFileSync(file, 'utf8'));
+    const reparsed = parseLearningFrontmatter(fs.readFileSync(file, 'utf8'));
   assert.ok(reparsed.fm.trigger.includes('\n'), 'precondition: the parsed trigger really does carry a raw newline');
 
   // 1) harness learnings (listingView)
@@ -122,12 +110,7 @@ test('P1-5: a legacy learning file hand-crafted with an embedded newline in its 
   const row = listing.learnings.find((l) => l.id === 'sql/legacy-injected');
   assert.ok(row, 'the legacy learning appears in the listing');
   assert.equal(row.trigger.split('\n').length, 1, 'the listing trigger renders as one line');
-  // "## Fake Heading" is still present as inert TEXT (inertLine collapses
-  // the control char to a space, it does not delete surrounding words) —
-  // the security property is that it can never start its OWN line (a real
-  // markdown heading requires being at a line start), never that the words
-  // vanish entirely.
-  assert.doesNotMatch(row.trigger, /(^|\n)## Fake Heading/, 'the injected heading never starts its own line');
+    assert.doesNotMatch(row.trigger, /(^|\n)## Fake Heading/, 'the injected heading never starts its own line');
 
   // 2) harness learnings --why (whyView)
   const why = whyView({ workspace: c.ws, id: 'sql/legacy-injected', home: c.harnessHome });
@@ -135,26 +118,16 @@ test('P1-5: a legacy learning file hand-crafted with an embedded newline in its 
   assert.equal(why.trigger.split('\n').length, 1, 'the --why trigger renders as one line');
   assert.equal(why.claimLine.split('\n').length, 1, 'the --why claim line renders as one line');
 
-  // 3) the context pack's learnings section (buildLearningsLines) — feed it
-  // exactly the shape rankLearnings hands back for this store.
-  const ranked = rankLearnings({ workspace: c.ws, query: 'legacy claim', home: c.harnessHome });
+    const ranked = rankLearnings({ workspace: c.ws, query: 'legacy claim', home: c.harnessHome });
   const rankedRow = ranked.find((r) => r.id === 'sql/legacy-injected');
   assert.ok(rankedRow, 'the legacy learning ranks for a matching query');
   const packLines = buildLearningsLines([rankedRow]);
   const bulletLine = packLines.find((l) => l.startsWith('- [sql/legacy-injected]'));
   assert.ok(bulletLine, 'the learning renders as a single bullet');
   assert.doesNotMatch(bulletLine, /\n/, 'the bullet itself never contains a raw newline');
-  // The pack is a joined array of lines — no OTHER line in it may start with
-  // the injected heading either (that would mean it broke out as its own
-  // pack line despite living inside a single array entry).
-  assert.ok(!packLines.some((l) => l !== bulletLine && l.includes('## Fake Heading')), 'the injected heading never becomes its own pack line');
+    assert.ok(!packLines.some((l) => l !== bulletLine && l.includes('## Fake Heading')), 'the injected heading never becomes its own pack line');
 });
 
-// P1#2a: the STRUCTURAL data-not-instructions guarantee. The entire learnings
-// section — for EVERY learning kind, not just insight — is framed as inert
-// DATA, so an un-caught executable command in a stored learning is presented
-// as a past claim, never an instruction to run. The insight-only advisory
-// label still rides ON TOP for provenance.
 test('P1#2a: the learnings section frames ALL learnings as data-not-instructions, including a FIX-backed (non-advisory) learning', () => {
   const fixRow = { id: 'sql/x', advisory: false, trigger: 'when adding columns', claimLine: 'use two-step backfill' };
   const lines = buildLearningsLines([fixRow]);
@@ -169,9 +142,7 @@ test('P1#2a: the learnings section frames ALL learnings as data-not-instructions
   const bulletIdx = lines.findIndex((l) => l.startsWith('- [sql/x]'));
   assert.ok(headerIdx !== -1 && headerIdx < preambleIdx && preambleIdx < bulletIdx, 'preamble sits between the header and the first learning');
 
-  // The fix-backed learning itself is NOT advisory-fenced — that per-line
-  // provenance label stays insight-only, layered on top of the section frame.
-  const bullet = lines.find((l) => l.startsWith('- [sql/x]'));
+    const bullet = lines.find((l) => l.startsWith('- [sql/x]'));
   assert.ok(!bullet.includes('[unverified memory — advisory]'), 'a fix-backed learning carries no insight advisory label');
 
   // An insight learning keeps the advisory label ON TOP of the shared frame.

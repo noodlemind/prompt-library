@@ -1,33 +1,17 @@
-/**
- * The provider adapters, driven end to end against a local stub server.
- *
- * WHY A STUB RATHER THAN A MOCK: everything interesting about an adapter is in
- * the parts a mock replaces. Whether the request reaches the right path, whether
- * the credential is on the right header, whether a JSON-string `arguments`
- * field is parsed, whether a 429 body becomes a readable message — none of that
- * is exercised by stubbing the HTTP call. A real server on loopback costs
- * milliseconds and tests the thing that ships.
- *
- * It also proves the loop completes a task against something that genuinely
- * answers over HTTP, which is the closest this suite can get to a live model
- * without a key or a network.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { agentResultOf } from '../lib/agent-cmd.mjs';
 import { PROVIDERS, providerEnv, resolveBaseUrl, startProvider } from '../lib/provider.mjs';
+import { AGENT_TOOLS } from '../lib/agent-loop.mjs';
 
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
 
-/**
- * A stub that speaks whichever format is asked of it. `reply` receives the
- * parsed request body and returns `[status, body]`, so a test can assert on
- * what the adapter SENT as well as on what it does with the answer.
- */
 async function stubServer(reply) {
   const seen = [];
   const server = http.createServer((req, res) => {
@@ -74,7 +58,7 @@ function scaffold(prefix) {
 // --- the registry ---------------------------------------------------------
 
 test('every provider resolves to an adapter that exists on disk', () => {
-  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   for (const provider of Object.values(PROVIDERS)) {
     assert.ok(fs.existsSync(path.join(root, 'lib', provider.adapter)), `${provider.id} → ${provider.adapter}`);
     assert.ok(provider.defaultModel, `${provider.id} needs a default model or --provider alone is unusable`);
@@ -87,10 +71,7 @@ test('the OpenAI-compatible providers share ONE adapter, and copilot only adds a
   assert.equal(new Set(shared).size, 1,
     'near-identical files would guarantee a tool-call fix lands in one and the others keep the bug');
   assert.ok(shared.length >= 10, `the table rows all ride the shared adapter (${shared.length})`);
-  // github-copilot differs only in how the credential comes to exist: its
-  // adapter IMPORTS the wire shaping from the shared one rather than copying
-  // it, pinned here so the import cannot quietly become a fork.
-  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const copilot = fs.readFileSync(path.join(root, 'lib', 'providers', 'github-copilot.mjs'), 'utf8');
   assert.match(copilot, /from '\.\/openai-compatible\.mjs'/);
   assert.doesNotMatch(copilot, /function toWireMessages/, 'shaping lives once');
@@ -253,13 +234,14 @@ test('the loop completes a task end to end against a server that actually answer
   const { ws, home } = scaffold('adapter-e2e');
   const marker = path.join(ws, 'proof.txt');
   const stub = await stubServer((body, n) => {
-    if (n === 1) return [200, openAiToolCall('bash', JSON.stringify({ script: `echo proven > ${marker}` }))];
+        if (n === 1) return [200, openAiToolCall('bash', JSON.stringify({ script: `echo proven > "${marker}"` }))];
     return [200, openAiText('the file is written')];
   });
   try {
     const result = await agentResultOf([
       'write', 'the', 'file',
       '--workspace', ws, '--copilot-home', home, '--no-events',
+      '--profile', 'benchmark',
       '--provider', 'ollama', '--model', 'stub-1',
     ], {}, {
       startProviderFn: () => startProvider({
@@ -275,9 +257,7 @@ test('the loop completes a task end to end against a server that actually answer
     assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'proven',
       'a model answering over HTTP drove a governed tool call that changed the filesystem');
 
-    // The second request must carry the tool RESULT, in this format's shape —
-    // one `role: "tool"` message per result, which the loop knows nothing about.
-    const followUp = stub.seen[1].body.messages;
+        const followUp = stub.seen[1].body.messages;
     const toolMessage = followUp.find((m) => m.role === 'tool');
     assert.ok(toolMessage, 'the result has to get back to the model or the loop is a one-shot');
     assert.equal(toolMessage.tool_call_id, 'call_a');
@@ -294,14 +274,15 @@ test('the system prompt travels as a system message in this format, without the 
   const stub = await stubServer(() => [200, openAiText('done')]);
   try {
     await agentResultOf([
-      'a', 'task', '--workspace', ws, '--copilot-home', home, '--no-events', '--provider', 'ollama',
+      'a', 'task', '--workspace', ws, '--copilot-home', home, '--no-events',
+      '--profile', 'benchmark', '--provider', 'ollama',
     ], {}, {
       startProviderFn: () => startProvider({ provider: 'ollama', parentEnv: { PATH: process.env.PATH, OLLAMA_BASE_URL: stub.base } }),
     });
     const first = stub.seen[0].body.messages[0];
     assert.equal(first.role, 'system');
     assert.match(first.content, /OUT OF SCOPE/);
-    assert.ok(Array.isArray(stub.seen[0].body.tools) && stub.seen[0].body.tools.length === 2);
+        assert.ok(Array.isArray(stub.seen[0].body.tools) && stub.seen[0].body.tools.length === AGENT_TOOLS.length);
     assert.equal(stub.seen[0].body.tools[0].type, 'function', 'this format nests the schema under `function`');
     assert.ok(stub.seen[0].body.tools[0].function.parameters, 'and calls it `parameters`, not `input_schema`');
   } finally {
@@ -319,9 +300,7 @@ test('the Anthropic adapter honors a base URL override, including a path prefix'
   try {
     const provider = startProvider({
       provider: 'anthropic',
-      // A gateway that mounts Anthropic under a prefix — the endpoint must be
-      // appended to it, not replace it.
-      parentEnv: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'sk-ant-stub', ANTHROPIC_BASE_URL: `${stub.base}/anthropic` },
+            parentEnv: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'sk-ant-stub', ANTHROPIC_BASE_URL: `${stub.base}/anthropic` },
     });
     const result = await provider.complete({ messages: [{ role: 'user', text: 'hi' }] }, { timeout: 15_000 });
     provider.close();
@@ -334,7 +313,6 @@ test('the Anthropic adapter honors a base URL override, including a path prefix'
   }
 });
 
-
 // --- the second wave: rows, retry, and a subscription ---------------------
 
 test('the provider table covers the round-one set, each with a distinct key variable', () => {
@@ -346,10 +324,7 @@ test('the provider table covers the round-one set, each with a distinct key vari
   ]) {
     assert.ok(ids.includes(expected), `${expected} is missing from the table`);
   }
-  // A shared key variable would make one provider's credential reach another's
-  // process — and `github-models` deliberately does NOT reuse GITHUB_TOKEN,
-  // which core names for redaction and for the exec denylist.
-  const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar);
+    const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar);
   assert.equal(new Set(keyVars).size, keyVars.length - 1,
     'only zen/zen-go intentionally share OPENCODE_API_KEY');
   assert.equal(PROVIDERS['github-models'].keyVar, 'GITHUB_MODELS_TOKEN');
@@ -389,9 +364,7 @@ test('COPILOT: a subscription is a credential ladder, resolved by the seam', () 
   const viaGh = providerEnv(copilot, { parentEnv: { GH_TOKEN: 'gho_from_cli' } });
   assert.equal(viaGh.HARNESS_COPILOT_OAUTH, 'gho_from_cli');
 
-  // Rung 3: nothing exported — the adapter falls back to the editor's store,
-  // so the seam must NOT refuse to start.
-  const none = providerEnv(copilot, { parentEnv: { PATH: '/usr/bin' } });
+    const none = providerEnv(copilot, { parentEnv: { PATH: '/usr/bin' } });
   assert.equal(none.HARNESS_PROVIDER_BASE_URL, 'https://api.githubcopilot.com');
   assert.equal(none.HARNESS_COPILOT_OAUTH, undefined);
 });
@@ -428,10 +401,38 @@ test('withRetry retries what the network broke and never what the request broke'
 });
 
 test('the shared adapter does not attach a stdin listener when merely imported', async () => {
-  // The copilot adapter imports the wire shaping. If importing also attached
-  // the IPC loop, two adapters would answer every request in that process.
-  const before = process.stdin.listenerCount('data');
+    const before = process.stdin.listenerCount('data');
   await import('../lib/providers/openai-compatible.mjs');
   assert.equal(process.stdin.listenerCount('data'), before,
     'the stdin loop attaches only when the file IS the adapter process');
+});
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('the provider root is decoded, so an install under a path with a space works', () => {
+  const encoded = 'file:///Users/Jane%20Doe/harness/lib/provider.mjs';
+  assert.equal(path.dirname(new URL(encoded).pathname), '/Users/Jane%20Doe/harness/lib',
+    'this is the value the old code used');
+  assert.equal(path.dirname(fileURLToPath(encoded)), '/Users/Jane Doe/harness/lib');
+
+  const source = fs.readFileSync(path.join(packageRoot, 'lib', 'provider.mjs'), 'utf8');
+  assert.equal(/new URL\(import\.meta\.url\)\.pathname/.test(source), false,
+    'provider path resolution must percent-decode so spaces work');
+});
+
+test('a base URL may not embed credentials', async () => {
+  const { PROVIDERS, resolveBaseUrl } = await import('../lib/provider.mjs');
+  assert.throws(
+    () => resolveBaseUrl(PROVIDERS.openai, { parentEnv: { OPENAI_BASE_URL: 'https://user:pass@gateway.example.com/v1' } }),
+    (e) => e.code === 'E_USAGE' && /credentials/.test(e.message),
+  );
+});
+
+test('the adapter scrubs its own credential out of anything it sends back', () => {
+  for (const file of ['providers/openai-compatible.mjs', 'providers/anthropic.mjs']) {
+    const src = fs.readFileSync(path.join(packageRoot, 'lib', file), 'utf8');
+    assert.match(src, /function scrubCredential/, `${file} must scrub`);
+    assert.match(src, /const safe = scrubCredential\(message,/,
+      `${file} must scrub at the single emit choke point`);
+  }
 });

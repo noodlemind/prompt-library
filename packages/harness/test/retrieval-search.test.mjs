@@ -1,10 +1,3 @@
-/**
- * P2.1 — `search`'s load-bearing properties: five match modes over the kernel's
- * four corpora, an empty result set that is a SUCCESS, determinism across runs,
- * an absent corpus that is reported rather than dropped, bounded regex, the
- * read-path invariant (P2AC6 — nothing here may create the knowledge store), and
- * redaction at the data boundary.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,12 +19,6 @@ const write = (root, rel, body) => {
 
 const git = (ws, args) => spawnSync('git', ['-C', ws, ...args], { encoding: 'utf8' });
 
-/**
- * A workspace with tracked source files, a plan, and a knowledge manifest —
- * enough for every mode except `symbol`, which needs a structural index and gets
- * one only where a test asks for it. Deliberately NOT a knowledge store: its
- * absence is what the read-path invariant test observes.
- */
 function fixture(prefix = 'search-') {
   const ws = tempDir(prefix);
   const copilotHome = tempDir(`${prefix}home-`);
@@ -126,13 +113,7 @@ test('ranked match scores knowledge, learnings, plans AND code in one federation
 
   assert.ok(out.results.some((r) => r.source === 'plans'), 'plans rank in the same federation');
 
-  // Ranked code is SERVED now — by distinct-term matching over tracked files —
-  // rather than skipped. The old behaviour refused the corpus a developer
-  // cares most about from the DEFAULT search mode, which read in the field as
-  // "search doesn't work"; the approved design's own search frame shows code
-  // hits in a ranked query. The fixture's src/lease.mjs contains the terms, so
-  // it must surface with a pinned first-match location.
-  const code = statusOf(out, 'code');
+    const code = statusOf(out, 'code');
   assert.equal(code.status, 'ok', code.reason ?? '');
   const codeHit = out.results.find((r) => r.source === 'code');
   assert.ok(codeHit, 'ranked reaches code without flags or an index');
@@ -180,10 +161,7 @@ test('regex match is bounded: an over-long pattern is refused before any corpus 
     return true;
   });
 
-  // Line-oriented evaluation is what defuses catastrophic backtracking: the
-  // classic (a+)+$ pattern against a long non-matching line must return, not
-  // hang. A whole-file subject is the shape that blows up.
-  const ws = fx.ws;
+    const ws = fx.ws;
   write(ws, 'src/long.mjs', `const s = '${'a'.repeat(5000)}';\n`);
   git(ws, ['add', '-A']);
   git(ws, ['commit', '-q', '-m', 'long line']);
@@ -268,9 +246,7 @@ test('the learnings corpus ranks and literal-matches, and honors the retrieval g
   assert.ok(ranked.results[0].generation.startsWith('sha256:'), 'the store generation is content-derived');
   assert.match(ranked.results[0].reason, /trigger|claim/);
 
-  // The exclusion is a property of the corpus, not of the ranker: literal search
-  // must not surface what ranked search hides.
-  const literal = search(fx, { query: 'fencing token', mode: 'literal', sources: 'learnings' });
+    const literal = search(fx, { query: 'fencing token', mode: 'literal', sources: 'learnings' });
   assert.deepEqual(ids(literal), ['learnings:storage/fencing-token-renewal']);
 });
 
@@ -284,8 +260,6 @@ test('reasons appear only under explain', () => {
   for (const row of loud.results) assert.ok(row.reason, 'every result explains itself under --explain');
 });
 
-// P2AC1: an empty result set is a valid answer. Turning it into an error would
-// make "I found nothing" indistinguishable from "I could not look".
 test('an empty result set is success with zero results, never an error', () => {
   const fx = fixture('search-empty-');
   for (const mode of MATCH_MODES) {
@@ -305,16 +279,12 @@ test('the same query against the same generation is byte-identical', () => {
     assert.equal(first, second, `${mode} must be byte-identical across runs`);
   }
 
-  // Source order in the envelope follows the kernel's published tie-break order,
-  // not the order the caller happened to spell the scopes in.
-  const a = search(fx, { query: 'lease', mode: 'literal', sources: 'plans,code,knowledge' });
+    const a = search(fx, { query: 'lease', mode: 'literal', sources: 'plans,code,knowledge' });
   const b = search(fx, { query: 'lease', mode: 'literal', sources: ['knowledge', 'code', 'plans'] });
   assert.equal(JSON.stringify(a), JSON.stringify(b));
   assert.deepEqual(a.sources.map((s) => s.source), ['code', 'knowledge', 'plans']);
 });
 
-// A silently missing corpus is indistinguishable from one with no matches, and
-// the two mean opposite things to the caller.
 test('a missing corpus is reported as skipped and a broken one as failed', () => {
   const bare = { ws: tempDir('search-bare-'), copilotHome: tempDir('search-bare-home-'), home: tempDir('search-bare-hh-') };
   const out = search(bare, { query: 'anything', mode: 'literal' });
@@ -337,8 +307,6 @@ test('a missing corpus is reported as skipped and a broken one as failed', () =>
   assert.ok(partial.results.some((r) => r.source === 'code'), 'healthy corpora still contribute');
 });
 
-// P2AC6: read paths never create the knowledge store. A retrieval command that
-// seeds a store turns "look at this repo" into a write.
 test('searching a workspace with no knowledge store does not create one', () => {
   const fx = fixture('search-readpath-');
   const dir = storeDir(fx.ws, { home: fx.home });
@@ -352,9 +320,6 @@ test('searching a workspace with no knowledge store does not create one', () => 
   assert.equal(fs.existsSync(path.join(fx.home, 'knowledge')), false, 'nor its parent');
 });
 
-// Redaction is a DATA-boundary discipline, and the cap must come AFTER it: a
-// slice taken first can cut a credential in half and leave the fragment
-// unmatched by the pattern that would have caught it whole.
 test('a secret-shaped string in indexed content never reaches a result', () => {
   const fx = fixture('search-redact-');
   const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';

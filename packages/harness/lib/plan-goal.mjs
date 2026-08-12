@@ -17,10 +17,6 @@ export function intentContractHasContent(text) {
   return stripped.length > 0;
 }
 
-/**
- * Goal lives in the active plan: ## Intent Contract + frontmatter intent fields.
- * Returns null when no plan or no goal signal.
- */
 export function extractGoalFromPlan(plan) {
   if (!plan) return null;
 

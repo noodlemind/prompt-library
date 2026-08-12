@@ -1,20 +1,3 @@
-/**
- * Coverage for lib/event-registry.mjs (P1.5) — the central event registry —
- * plus the dispatch-pipeline wiring it enables in lib/registry.mjs and the
- * additive lib/events.mjs schema/vocabulary changes it depends on.
- *
- * Per the task-5 brief (requirement #7):
- *   - emission shape (emit / withCommand)
- *   - actor detection (injected env)
- *   - redaction-before-persistence (a marker redactor demonstrably runs on
- *     the persisted payload BEFORE it reaches writeEvent)
- *   - command.start flag-names-only guarantee (never values)
- *   - agent-lane bytes event (AC10 metering wiring)
- *   - injectable clock determinism
- * plus integration coverage of the dispatch()/dispatchLane() wiring in
- * lib/registry.mjs and one real end-to-end CLI run proving events.jsonl
- * compatibility (requirement #6).
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -141,11 +124,7 @@ test('detectActor: empty-string HARNESS_HOST does not count as a host marker', (
 test('createEventRegistry derives actor once via detectActor when not injected, and stamps it on every event', () => {
   const writeEvent = spyWriteEvent();
   const registry = createEventRegistry({ writeEvent, clock: () => 't' });
-  // No explicit `actor` — falls back to the real detectActor(process.env).
-  // We only assert shape here (kind is always one of the three), not the
-  // live env's actual value, since that would make the test environment-
-  // dependent.
-  registry.emit('learning', {});
+    registry.emit('learning', {});
   const { actor } = writeEvent.calls[0];
   assert.ok(['user', 'host', 'ci'].includes(actor.kind));
 });
@@ -158,9 +137,7 @@ test('redaction runs on the payload BEFORE it reaches writeEvent (marker redacto
   const markerRedactor = {
     redactValue(value) {
       redactCalled = true;
-      // A visible, distinguishing transform so we can assert writeEvent
-      // received the REDACTED shape, not the raw one.
-      return { ...value, secret: '«redacted:marker»' };
+            return { ...value, secret: '«redacted:marker»' };
     },
   };
   const registry = createEventRegistry({ writeEvent, redactor: markerRedactor, actor: { kind: 'user' } });
@@ -194,14 +171,7 @@ test('withCommand(...).emit also redacts before persistence', () => {
 
 test('summarizeArgFlags: extracts only flag NAMES, never values (schema-free conservative default)', () => {
   const argv = ['--query', 'super secret task', '--limit', '5', '--explain', '-c', 'team'];
-  // Without a flag-type schema, boolean-ness is unknowable from shape alone
-  // (`--explain -c` and `--why -explain-mode` are indistinguishable), so the
-  // conservative default assumes --explain might take a value too and
-  // consumes the following single-dash token (-c) as that value, dropping
-  // it from the summary — see summarizeArgFlags's doc comment for why this
-  // is the safe failure mode: a dropped name (false negative) is harmless,
-  // a leaked value misclassified as a name (false positive) is not.
-  assert.deepEqual(summarizeArgFlags(argv), ['--query', '--limit', '--explain']);
+    assert.deepEqual(summarizeArgFlags(argv), ['--query', '--limit', '--explain']);
 });
 
 test('summarizeArgFlags: with a flag-type schema (as lib/registry.mjs\'s dispatch/dispatchLane supply via flagIndex(entry)), a boolean flag never swallows the next flag name', () => {
@@ -341,19 +311,6 @@ test('the json lane (not agent) never records an agent_lane event', async () => 
   assert.equal(writeEvent.calls.some((e) => e.type === 'agent_lane'), false);
 });
 
-// --- review round 1 (Important): command.start / agent_lane must carry an
-// explicit, non-tallied result:'pending' marker -------------------------
-//
-// lib/events.mjs's writeEvent() computes a `result` field via
-// eventResult({result, exitCode, checks}), which DEFAULTS TO 'pass' when
-// neither `result` nor a meaningful exitCode/checks is supplied.
-// command.start (fires before the handler runs) and agent_lane (a byte-
-// count metering record) have no outcome of their own, so — left unset —
-// each one would silently inflate `harness events --summary`'s pass count.
-// lib/registry.mjs now stamps `result: 'pending'` on both; these tests
-// assert the PERSISTED event (not just the in-memory payload before it
-// reaches writeEvent) carries it.
-
 test('dispatchLane: the persisted command.start event carries result:"pending", not the eventResult() pass default', async () => {
   registerCommand({
     name: '__test-start-pending-lane',
@@ -385,11 +342,7 @@ test('runHandler (legacy/ledger branch): the persisted command.start event also 
 
   const writeEvent = spyWriteEvent();
   const events = createEventRegistry({ writeEvent, actor: { kind: 'user' } });
-  // Important-3 fix (lane-contract honesty): a resultOf-less entry no longer
-  // silently accepts an output lane it can't render (`assertLaneSupported`
-  // now rejects that combination outright) — 'ledger' (the only lane this
-  // fixture actually supports) is what exercises the legacy handler here.
-  await dispatch(['__test-start-pending-ledger'], { output: 'ledger', events });
+    await dispatch(['__test-start-pending-ledger'], { output: 'ledger', events });
 
   const start = writeEvent.calls.find((e) => e.type === 'command.start');
   assert.ok(start);
@@ -413,9 +366,7 @@ test('dispatchLane: the persisted agent_lane event carries result:"pending" on t
   const metered = writeEvent.calls.find((e) => e.type === 'agent_lane');
   assert.ok(metered);
   assert.equal(metered.result, 'pending');
-  // The metering record's own fields (command, bytes) must survive unchanged
-  // alongside the added result marker.
-  assert.equal(metered.command, '__test-agent-lane-pending-success');
+    assert.equal(metered.command, '__test-agent-lane-pending-success');
   assert.equal(typeof metered.bytes, 'number');
 });
 
@@ -440,16 +391,6 @@ test('dispatchLane: the persisted agent_lane event carries result:"pending" on t
   assert.equal(metered.result, 'pending');
 });
 
-// --- Minor fix: a pending event must not persist a fabricated exitCode:0 --
-//
-// lib/events.mjs#writeEvent used to stamp `exitCode: payload.exitCode ?? 0`
-// unconditionally — a `command.start`/`agent_lane` ('pending') event, which
-// fires BEFORE the command has run at all, therefore persisted a real,
-// misleadingly-successful-looking `exitCode: 0` instead of simply having no
-// exit code yet. These tests exercise the REAL lib/events.mjs#writeEvent
-// (not the spy the tests above use), since the bug was specifically in that
-// function's own field-construction logic.
-
 test('lib/events.mjs#writeEvent omits exitCode entirely for a pending event, but still persists a caller-supplied exitCode (including 0)', () => {
   const workspace = tempDir('events-exitcode-omit-ws-');
 
@@ -460,28 +401,20 @@ test('lib/events.mjs#writeEvent omits exitCode entirely for a pending event, but
   const metered = writeRealEvent(workspace, {}, { type: 'agent_lane', command: 'x', result: 'pending' });
   assert.equal('exitCode' in metered, false, 'agent_lane is the other pending-only event type');
 
-  // A REAL exit code the caller supplied — including the falsy-but-real 0 —
-  // must still persist; this is a no-op fix for every caller with an actual
-  // outcome, not a blanket removal of the field.
-  const finished = writeRealEvent(workspace, {}, { type: 'command.result', command: 'x', result: 'pass', exitCode: 0 });
+    const finished = writeRealEvent(workspace, {}, { type: 'command.result', command: 'x', result: 'pass', exitCode: 0 });
   assert.equal('exitCode' in finished, true);
   assert.equal(finished.exitCode, 0);
   const failed = writeRealEvent(workspace, {}, { type: 'command.result', command: 'x', result: 'fail', exitCode: 1 });
   assert.equal(failed.exitCode, 1);
 
-  // The persisted-to-disk rows must agree with the in-memory return values
-  // (writeEvent's return value is the exact object appended to the file).
-  const onDisk = readEvents(workspace, 10);
+    const onDisk = readEvents(workspace, 10);
   assert.equal(onDisk.length, 4);
   assert.equal('exitCode' in onDisk.find((e) => e.id === started.id), false);
   assert.equal('exitCode' in onDisk.find((e) => e.id === metered.id), false);
   assert.equal(onDisk.find((e) => e.id === finished.id).exitCode, 0);
   assert.equal(onDisk.find((e) => e.id === failed.id).exitCode, 1);
 
-  // No consumer regression: eventResult()'s pass/warn/fail tally never
-  // needed exitCode for these two pending records anyway (they always carry
-  // an explicit `result`) — summarizeEvents must still count sensibly.
-  const summary = summarizeEvents(onDisk);
+    const summary = summarizeEvents(onDisk);
   assert.equal(summary.total, 4);
   assert.equal(summary.pass, 1);
   assert.equal(summary.fail, 1);
@@ -583,11 +516,7 @@ test('dispatch: the legacy-handler (ledger) branch also brackets with command.st
 
   const writeEvent = spyWriteEvent();
   const events = createEventRegistry({ writeEvent, actor: { kind: 'user' } });
-  // Important-3 fix (lane-contract honesty): this fixture has no `resultOf`,
-  // so it only supports the 'ledger' lane — requesting 'agent'/'json' for it
-  // would now be a structured E_USAGE error (see test/output-lane-wiring.test.mjs),
-  // not a silent fallthrough. 'ledger' is what exercises the legacy handler here.
-  const code = await dispatch(['__test-ledger-branch-events'], { output: 'ledger', events });
+    const code = await dispatch(['__test-ledger-branch-events'], { output: 'ledger', events });
   assert.equal(code, 0);
 
   const types = writeEvent.calls.map((e) => e.type);
@@ -608,10 +537,7 @@ test('dispatch: a thrown error from the legacy handler still emits command.resul
 
   const writeEvent = spyWriteEvent();
   const events = createEventRegistry({ writeEvent, actor: { kind: 'user' } });
-  // 'ledger' — see the comment on the previous test for why (this fixture
-  // has no resultOf, so 'agent'/'json' would now be a structured E_USAGE
-  // error, not a fallthrough).
-  await assert.rejects(() => dispatch(['__test-ledger-branch-throws'], { output: 'ledger', events }), (err) => err === original);
+    await assert.rejects(() => dispatch(['__test-ledger-branch-throws'], { output: 'ledger', events }), (err) => err === original);
 
   const result = writeEvent.calls.find((e) => e.type === 'command.result');
   assert.ok(result);
@@ -640,20 +566,11 @@ test('end-to-end CLI: --output json-envelope on a registered pilot appends valid
   assert.ok(types.includes('command.start'));
   assert.ok(types.includes('command.result'));
 
-  // The existing `harness events` command must still read this file without
-  // choking on the new event types/fields (requirement #6).
-  const eventsCmd = runHarness(['events', '--workspace', workspace, '--json']);
+    const eventsCmd = runHarness(['events', '--workspace', workspace, '--json']);
   assert.equal(eventsCmd.status, 0, eventsCmd.stderr);
   assert.doesNotThrow(() => JSON.parse(eventsCmd.stdout));
 });
 
-// P1.6 (carry-list, AC7 widening): the ledger/--json path used to be
-// deliberately excluded from ctx.events (see the superseded test this one
-// replaces, in git history) so that AC8 (verify's Ctrl-C cancellation ->
-// command.result with a real status) works uniformly whether or not
-// `--output` is present, and so every registered command gets the same
-// baseline dispatch telemetry bin/harness.mjs's docs describe. This test now
-// asserts the OPPOSITE of the old restriction on purpose.
 test('end-to-end CLI: the legacy ledger/--json path on the same pilot NOW gains command.start/command.result events too', () => {
   const workspace = tempDir('event-registry-e2e-ledger-ws-');
   const copilotHome = tempDir('event-registry-e2e-ledger-home-');
@@ -668,9 +585,6 @@ test('end-to-end CLI: the legacy ledger/--json path on the same pilot NOW gains 
   assert.deepEqual(events.map((e) => e.result), ['pending', 'pass']);
 });
 
-// --- review round 1 regression: `harness events --summary` must not show
-// phantom passes (the reviewer's exact repro, reproduced end to end) -----
-
 test('end-to-end CLI: a successful pilot run under --output agent summarizes to exactly ONE pass, not one per event', () => {
   const workspace = tempDir('event-registry-summary-ok-ws-');
   const copilotHome = tempDir('event-registry-summary-ok-home-');
@@ -678,10 +592,7 @@ test('end-to-end CLI: a successful pilot run under --output agent summarizes to 
   const result = runHarness(['status', '--workspace', workspace, '--copilot-home', copilotHome, '--output', 'agent']);
   assert.equal(result.status, 0, result.stderr);
 
-  // Three events persist for one real outcome: command.start (pending),
-  // agent_lane (pending, metering only), command.result (the real pass) —
-  // pre-fix, eventResult()'s default inflated ALL THREE to 'pass'.
-  const events = readEvents(workspace);
+    const events = readEvents(workspace);
   assert.deepEqual(
     events.map((e) => e.type),
     ['command.start', 'agent_lane', 'command.result']
@@ -697,9 +608,7 @@ test('end-to-end CLI: a successful pilot run under --output agent summarizes to 
   assert.equal(summary.warn, 0);
   assert.equal(summary.fail, 0);
 
-  // Same assertion via the actual `harness events --summary --json` CLI
-  // surface the reviewer used to reproduce this.
-  const summaryCmd = runHarness(['events', '--workspace', workspace, '--summary', '--json']);
+    const summaryCmd = runHarness(['events', '--workspace', workspace, '--summary', '--json']);
   assert.equal(summaryCmd.status, 0, summaryCmd.stderr);
   const body = JSON.parse(summaryCmd.stdout);
   assert.equal(body.summary.pass, 1);
@@ -722,9 +631,7 @@ test('end-to-end CLI: a FAILING pilot run (learnings --why <bad-id>) summarizes 
     'json-envelope',
   ]);
   assert.equal(result.status, 1); // E_TARGET
-  // dispatchLane's error branch writes the JSON error envelope to STDERR
-  // (console.error), matching the existing json-envelope error convention.
-  const body = JSON.parse(result.stderr);
+    const body = JSON.parse(result.stderr);
   assert.equal(body.status, 'failed');
 
   const events = readEvents(workspace);
@@ -736,10 +643,7 @@ test('end-to-end CLI: a FAILING pilot run (learnings --why <bad-id>) summarizes 
   assert.equal(events[1].result, 'fail');
 
   const summary = summarizeEvents(events);
-  // Pre-fix (reviewer's repro): pass:1, fail:1 — a phantom 50% pass rate for
-  // a command that failed outright. Post-fix: the command.start event no
-  // longer tallies as a pass at all.
-  assert.equal(summary.total, 2);
+    assert.equal(summary.total, 2);
   assert.equal(summary.pass, 0, 'no phantom pass from command.start');
   assert.equal(summary.fail, 1);
 

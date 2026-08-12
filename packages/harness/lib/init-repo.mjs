@@ -120,21 +120,11 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
     log('created knowledge/manifest.yaml (optional fallback)');
   }
 
-  // Arm pre-existing solution docs as consolidation debt (design §5): armed
-  // at init, drained at first session start (Task 8 does the draining).
-  // Advisory — never fails init — and never materializes an empty knowledge
-  // store for a workspace with no solution docs to arm: the store is only
-  // created once there is at least one episode to arm, and dry-run never
-  // creates it at all.
-  try {
+    try {
     const episodes = collectEpisodes({ workspace, copilotHome });
     if (episodes.length > 0) {
       if (flags.dryRun) {
-        // Reuse splitLedger's consumed semantics (consolidate.mjs) — a pure
-        // failure entry (three-strikes bookkeeping, no `learning` outcome
-        // yet) must still count as debt, matching what consolidateStatus
-        // reports for the non-dry-run path below.
-        const { consumed } = splitLedger(readLedger(storeDir(workspace)));
+                const { consumed } = splitLedger(readLedger(storeDir(workspace)));
         const debt = episodes.filter((e) => !consumed.has(`${e.path}@${e.sha256}`)).length;
         if (debt > 0) {
           log(`armed ${debt} existing solution doc(s) as consolidation debt — drains at first session start`);

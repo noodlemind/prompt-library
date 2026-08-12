@@ -7,12 +7,6 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { storeDir } from '../lib/knowledge/store.mjs';
 
-// Mechanical guard for the branch invariant: every read/advisory knowledge
-// command must be a non-creating read against the T2 store — only a real
-// write path (remember, consolidate --apply, consolidate --rebuild --yes,
-// knowledge purge) may materialize <home>/knowledge/<repo-id>/. A storeless
-// workspace running any of the commands below must leave the store absent.
-
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -45,11 +39,7 @@ for (const args of NON_CREATING_COMMANDS) {
     assert.equal(fs.existsSync(dir), false, 'precondition: no store yet');
 
     const res = run(c, args);
-    // Not asserting on exit code — several of these commands legitimately
-    // fail/blocked-exit against an empty workspace (e.g. eval-knowledge with
-    // no store, learning retire on a missing id). The only invariant under
-    // test is that the store was never created as a side effect.
-    void res;
+        void res;
 
     assert.equal(
       fs.existsSync(dir),

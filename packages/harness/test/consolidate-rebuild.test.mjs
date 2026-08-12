@@ -115,9 +115,7 @@ test('consolidate --rebuild --yes on an empty store: exit 0, archived 0', () => 
 
 test('consolidate --rebuild on a workspace with no knowledge store yet stays store-read-only without --yes; --yes may create it', () => {
   const c = ctx();
-  // No consolidate/remember has ever run here — the learnings store must not
-  // exist yet under this HARNESS_HOME.
-  const dir = storeDir(c.ws, { home: c.harnessHome });
+    const dir = storeDir(c.ws, { home: c.harnessHome });
   assert.equal(fs.existsSync(dir), false, 'precondition: no store yet');
 
   const blocked = run(c, ['consolidate', '--rebuild']);
@@ -140,9 +138,7 @@ test('consolidate --rebuild --yes threads copilotHome so fresh debt includes glo
   const c = ctx();
   seedAutoLearning(c); // one product-local episode, consolidated (debt 0 before rebuild)
 
-  // A second, unconsolidated episode under the GLOBAL copilot home — must be
-  // picked up by the post-rebuild debt count alongside the product-local one.
-  const globalDir = path.join(c.home, 'knowledge', 'solutions', 'perf');
+    const globalDir = path.join(c.home, 'knowledge', 'solutions', 'perf');
   fs.mkdirSync(globalDir, { recursive: true });
   fs.writeFileSync(
     path.join(globalDir, 'global-fix.md'),

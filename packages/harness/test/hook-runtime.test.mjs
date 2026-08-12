@@ -530,9 +530,7 @@ test('plan edits require a fresh implement gate before product mutation', () => 
   const plan = writePlan(workspace);
   writePassedGate(workspace, plan);
 
-  // Routine Activity logging is part of the workflow and must not invalidate
-  // the gate: the digest covers the Activity-stripped contract text only.
-  fs.appendFileSync(path.join(workspace, plan), '\n### Session log\n\n- Activity appended mid-phase.\n');
+    fs.appendFileSync(path.join(workspace, plan), '\n### Session log\n\n- Activity appended mid-phase.\n');
   const activityAllowed = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
     tool_input: { filePath: 'src/schema.json' },

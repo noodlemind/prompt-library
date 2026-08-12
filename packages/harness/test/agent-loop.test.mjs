@@ -1,16 +1,3 @@
-/**
- * P5AC9/P5AC10 — the turn loop.
- *
- * The loop is the one component in the harness whose caller cannot be reasoned
- * with, so most of what is pinned here is about what a model CANNOT cause: it
- * cannot reach an execution path other than the governed one, cannot escape the
- * environment allowlist by asking, cannot run past the budgets, and cannot put
- * a transcript into a durable record.
- *
- * The provider is injected throughout. That is not only a convenience for
- * offline tests — it is the same seam that keeps "core never consumes a model"
- * to a single reviewable line, so testing through it tests the real shape.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,18 +5,24 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { agentResultOf, taskFromArgv } from '../lib/agent-cmd.mjs';
+import { agentJournalArgv, agentResultOf, taskFromArgv } from '../lib/agent-cmd.mjs';
+import { hasCommand } from '../lib/registry.mjs';
 import {
   AGENT_TOOLS,
+  AGENT_VALUE_FLAGS,
   BENCHMARK_PROFILE,
+  MAX_EXPLORE_STREAK,
+  MAX_SEARCH_PER_RUN,
   STOP_REASONS,
   buildSystemPrompt,
   dispatchToolCall,
+  exploreGate,
   renderToolResult,
   resolvePersona,
   resolveToolTimeout,
 } from '../lib/agent-loop.mjs';
-import { getCommand } from '../lib/registry.mjs';
+import { GLOBAL_FLAGS, getCommand } from '../lib/registry.mjs';
+import { parseFlags } from '../lib/flags.mjs';
 import { EXIT } from '../lib/style.mjs';
 import { setRunContext, clearRunContext } from '../lib/run-context.mjs';
 import { createEventRegistry } from '../lib/event-registry.mjs';
@@ -51,10 +44,6 @@ function scaffold(prefix, { persona = 'engineer', personaText = '# Engineer\n\nB
   return { ws, home };
 }
 
-/**
- * A scripted provider. Each entry is one completion, in order; running off the
- * end returns a no-tool-call completion, which is how the loop is told to stop.
- */
 function scriptedProvider(script) {
   const requests = [];
   let i = 0;
@@ -83,7 +72,15 @@ const callTool = (id, name, input) => ({
   usage: { inputTokens: 5, outputTokens: 5 },
 });
 
-const argvFor = (ws, home, task, extra = []) => [...task.split(' '), '--workspace', ws, '--copilot-home', home, '--no-events', ...extra];
+/** Historical efficiency-fixture profile (benchmark). First-class autonomous needs --verify-cmd. */
+const argvFor = (ws, home, task, extra = []) => [
+  ...task.split(' '),
+  '--workspace', ws,
+  '--copilot-home', home,
+  '--no-events',
+  '--profile', 'benchmark',
+  ...extra,
+];
 
 // --- P5AC9: the loop completes a task -------------------------------------
 
@@ -102,6 +99,149 @@ test('P5AC9: the loop orients, acts through a tool, and stops when the model ask
   assert.equal(fs.readFileSync(path.join(ws, 'done.txt'), 'utf8').trim(), 'hello', 'the tool actually ran');
   assert.equal(result.text, 'wrote the file');
   assert.equal(result.usage.outputTokens, 10, 'usage accumulates across turns');
+});
+
+test('a tool timeout above exec\'s maximum clamps to the maximum instead of killing the run', async () => {
+  const { ws } = (() => {
+    const dir = tempDir('agent-timeout-clamp-');
+    return { ws: dir };
+  })();
+  const outcome = await dispatchToolCall(
+    { id: '1', name: 'bash', input: { script: 'echo ok', timeout: 7200 } },
+    { workspace: ws, copilotHome: null },
+  );
+  assert.equal(outcome.dispatched, true, 'asking for more than the maximum means the maximum, not a dead run');
+  assert.equal(outcome.timeoutSeconds, 3600);
+
+  // The operator's ceiling still applies, and still only ever lowers.
+  assert.equal(resolveToolTimeout({ requested: 7200, ceiling: 300 }), 300);
+  assert.equal(resolveToolTimeout({ requested: 7200 }), 3600);
+  assert.equal(resolveToolTimeout({ requested: 30 }), 30);
+});
+
+test('a length-truncated message has its tool calls refused, not dispatched', async () => {
+  const { ws, home } = scaffold('agent-truncated');
+  const provider = scriptedProvider([
+    {
+      text: '',
+      toolCalls: [
+        { id: 't1', name: 'write', input: { path: 'half.txt', content: 'the beginning of somethi' } },
+        { id: 't2', name: 'bash', input: { script: 'echo hi' } },
+      ],
+      blocks: [],
+      stopReason: 'length',
+      usage: { inputTokens: 5, outputTokens: 5 },
+    },
+    (request) => {
+      // The refusal reaches the model as per-call errors it can act on.
+      const results = request.messages.at(-1)?.toolResults ?? [];
+      assert.equal(results.length, 2, 'every call in the truncated message is answered');
+      assert.ok(results.every((r) => r.isError), 'all answered as errors');
+      assert.match(results[0].output, /token limit|truncated/i);
+      return say('re-issuing nothing, done');
+    },
+  ]);
+  const result = await agentResultOf(argvFor(ws, home, 'do a thing'), {}, { startProviderFn: provider.start });
+
+  assert.equal(result.stopReason, 'done');
+  assert.equal(fs.existsSync(path.join(ws, 'half.txt')), false, 'the truncated write must never touch the disk');
+  const truncatedTurn = result.turns[0];
+  assert.ok(truncatedTurn.tools.every((t) => t.dispatched === false), 'the journal says the calls were refused');
+  assert.match(truncatedTurn.tools[0].reason, /truncated/);
+});
+
+// Benchmark: text nudges lost to search incentives. Explore is hard-capped.
+test('search and read are refused after the explore streak', async () => {
+  const { ws, home } = scaffold('agent-explore-gate');
+  fs.writeFileSync(path.join(ws, 'a.txt'), 'seed\n');
+  const provider = scriptedProvider([
+    callTool('r1', 'read', { path: 'a.txt' }),
+    callTool('r2', 'read', { path: 'a.txt' }),
+    callTool('r3', 'read', { path: 'a.txt' }),
+    // 3 explore turns already → next explore tools are refused (tool-level).
+    callTool('s1', 'search', { query: 'anything' }),
+    callTool('r4', 'read', { path: 'a.txt' }),
+    callTool('b1', 'bash', { script: 'echo act' }),
+    say('done'),
+  ]);
+  const result = await agentResultOf(
+    argvFor(ws, home, 'poke around', ['--max-turns', '12']),
+    {},
+    { startProviderFn: provider.start },
+  );
+  assert.equal(result.stopReason, 'done');
+  const searchTurn = result.turns.find((t) => t.tools.some((x) => x.tool === 'search'));
+  assert.ok(searchTurn, 'search was attempted');
+  assert.equal(searchTurn.tools[0].dispatched, false, 'search after explore streak must be refused');
+  assert.match(searchTurn.tools[0].reason, /explore streak|search budget/);
+  const fourthRead = result.turns.find((t) => t.tools.some((x) => x.tool === 'read' && x.dispatched === false));
+  assert.ok(fourthRead, 'further read after the streak must also be refused');
+});
+
+test('a failed bash/exec tool result tells the model to edit next', async () => {
+  const { ws, home } = scaffold('agent-act-nudge');
+  const provider = scriptedProvider([
+    callTool('t1', 'exec', { argv: [process.execPath, '-e', 'process.exit(2)'] }),
+    (request) => {
+      const last = request.messages.at(-1);
+      assert.equal(last.role, 'user');
+      assert.match(last.toolResults[0].output, /command failed/i);
+      assert.match(last.toolResults[0].output, /edit/i);
+      return say('done');
+    },
+  ]);
+  const result = await agentResultOf(argvFor(ws, home, 'fix it'), {}, { startProviderFn: provider.start });
+  assert.equal(result.stopReason, 'done');
+});
+
+test('a timed-out completion is retried once with a short continue message', async () => {
+  const { ws, home } = scaffold('agent-timeout-retry');
+  let calls = 0;
+  const provider = {
+    start: () => ({
+      provider: 'scripted',
+      model: 'scripted-1',
+      alive: true,
+      logs: [],
+      async complete() {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error('plugin request complete timed out after 90000ms'), { code: 'E_TIMEOUT' });
+        return { text: 'recovered', toolCalls: [], blocks: [], usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+      close() {},
+    }),
+  };
+  const result = await agentResultOf(argvFor(ws, home, 'keep going'), {}, { startProviderFn: provider.start });
+  assert.equal(result.stopReason, 'done');
+  assert.equal(calls, 2, 'exactly one retry after timeout');
+});
+
+test('approaching the turn budget injects a budget check; steady action is not blocked', async () => {
+  const { ws, home } = scaffold('agent-budget-nudge');
+  const provider = scriptedProvider([
+    callTool('t1', 'bash', { script: 'echo one' }),
+    callTool('t2', 'bash', { script: 'echo two' }),
+    callTool('t3', 'bash', { script: 'echo three' }),
+    callTool('t4', 'bash', { script: 'echo four' }),
+    callTool('t5', 'bash', { script: 'echo five' }),
+    callTool('t6', 'bash', { script: 'echo six' }),
+    callTool('t7', 'bash', { script: 'echo seven' }),
+    callTool('t8', 'bash', { script: 'echo eight' }),
+    (request) => {
+      const texts = request.messages.filter((m) => typeof m.text === 'string').map((m) => m.text);
+      assert.ok(
+        texts.some((t) => /Budget check: 2 of 10 turns remain/.test(t)),
+        'budget pressure remains as a secondary signal',
+      );
+      return say('done');
+    },
+  ]);
+  const result = await agentResultOf(
+    argvFor(ws, home, 'do work', ['--max-turns', '10']),
+    {},
+    { startProviderFn: provider.start },
+  );
+  assert.equal(result.stopReason, 'done');
 });
 
 test('P5AC9: the tool result is fed back, so a non-zero exit continues the loop instead of ending it', async () => {
@@ -166,11 +306,7 @@ test('P5AC9: the tool call starts in the workspace (which is NOT confinement —
 });
 
 test('P5AC9: and the harness does NOT confine a model to the workspace — asserted so the claim cannot drift back', async () => {
-  // This test exists to keep a FALSE claim from returning. The previous version
-  // of the test above was named "so a model cannot run outside it" while
-  // asserting only the starting directory; Codex's final review caught the gap.
-  // `resolveExecCwd` validates where a command STARTS. Nothing stops it leaving.
-  const ws = tempDir('agent-escape-ws-');
+    const ws = tempDir('agent-escape-ws-');
   const outside = path.join(ws, '..', `escape-probe-${process.pid}`);
   const outcome = await dispatchToolCall(
     { id: 't1', name: 'bash', input: { script: `cd .. && printf x > ${JSON.stringify(path.basename(outside))}` } },
@@ -185,9 +321,7 @@ test('P5AC9: and the harness does NOT confine a model to the workspace — asser
 
 test('P5AC9: a refusal from the governed surface stops the loop rather than being re-tried forever', async () => {
   const { ws, home } = scaffold('agent-denied');
-  // `bash` disabled in the user scope: the harness refuses to dispatch at all,
-  // which is not something the model can work around by rephrasing.
-  fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
   fs.writeFileSync(path.join(home, 'harness', 'config.yaml'), '"exec.bash_enabled": false\n');
 
   const provider = scriptedProvider([callTool('t1', 'bash', { script: 'echo hi' }), say('unreachable')]);
@@ -202,8 +336,13 @@ test('P5AC9: a refusal from the governed surface stops the loop rather than bein
 // --- P5AC9: the stop conditions -------------------------------------------
 
 test('P5AC9: every stop reason maps to a distinct, named outcome', () => {
-  assert.deepEqual(Object.keys(STOP_REASONS).sort(), ['cancelled', 'done', 'provider-error', 'time-budget', 'tool-error', 'turn-budget']);
+  assert.deepEqual(Object.keys(STOP_REASONS).sort(), [
+    'cancelled', 'done', 'provider-error', 'time-budget', 'tool-error', 'turn-budget',
+    'verifier-failed', 'verifier-missing', 'verifier-pass',
+  ]);
   assert.equal(STOP_REASONS.done.status, 'ok');
+  assert.equal(STOP_REASONS['verifier-pass'].status, 'ok');
+  assert.equal(STOP_REASONS['verifier-missing'].status, 'failed');
   assert.equal(STOP_REASONS['time-budget'].status, 'timed-out');
   assert.equal(STOP_REASONS.cancelled.status, 'cancelled');
   assert.notEqual(STOP_REASONS.done.exit, STOP_REASONS['turn-budget'].exit,
@@ -314,17 +453,9 @@ test('P5AC10: `agent` is a registered execute-class command, so bin/harness.mjs 
 
 test('P5AC10: a real dispatch appears in `run list` as an agent run', () => {
   const { ws, home } = scaffold('agent-journal');
-  // AGENT MODE IS OFF BY DEFAULT, and this test dispatches for real — so it has
-  // to grant the authority the gate exists to withhold. Written into the
-  // fixture home rather than relaxed in the product: the whole point of the
-  // gate is that reaching a provider is opted into, and a test that needed it
-  // waived would be testing a harness nobody ships.
-  fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
   fs.writeFileSync(path.join(home, 'harness', 'config.yaml'), 'agent.enabled: true\n');
-  // No network is needed and none is relied on: the 1-second wall clock bounds
-  // the provider request, so this ends as `provider-error` or `time-budget`
-  // whether the host can reach the API or not. Either way the run is journaled.
-  const res = spawnSync(process.execPath, [
+    const res = spawnSync(process.execPath, [
     binPath, 'agent', 'a task', '--workspace', ws, '--copilot-home', home, '--max-seconds', '1', '--max-turns', '1',
   ], { cwd: packageRoot, encoding: 'utf8', env: { ...process.env, ANTHROPIC_API_KEY: 'not-a-real-key' } });
   assert.notEqual(res.status, EXIT.ok);
@@ -421,12 +552,35 @@ test('the loop builds no provider wire shape — every one of them lives in the 
   }
 });
 
-test('the declared tools are exactly the two governed execution surfaces', () => {
-  assert.deepEqual(AGENT_TOOLS.map((t) => t.name).sort(), ['bash', 'exec']);
+test('the declared tools are exactly the governed surfaces, and every one of them is a command', () => {
+  assert.deepEqual(
+    AGENT_TOOLS.map((t) => t.name).sort(),
+    ['apply', 'bash', 'edit', 'exec', 'read', 'search', 'todo', 'write'],
+  );
+  // Act tools lead; search is last (benchmark: search attractor).
+  assert.ok(AGENT_TOOLS.findIndex((t) => t.name === 'bash') < AGENT_TOOLS.findIndex((t) => t.name === 'search'));
+  assert.match(AGENT_TOOLS.find((t) => t.name === 'search').description, /Last resort/i);
+  assert.match(buildSystemPrompt({ persona: { name: 'engineer', text: null } }), /Reproduce|reproduce/i);
+  assert.equal(typeof exploreGate, 'function');
+  assert.ok(MAX_EXPLORE_STREAK >= 2);
+  assert.ok(MAX_SEARCH_PER_RUN >= 3);
   for (const tool of AGENT_TOOLS) {
     assert.ok(tool.description.length > 40, 'a tool the model must reason about needs its constraints described');
     assert.equal(tool.schema.type, 'object');
   }
+  const commandFor = {
+    bash: 'bash', exec: 'exec', read: 'get', search: 'search',
+    edit: 'edit', write: 'write', todo: 'todo', apply: 'apply',
+  };
+  for (const tool of AGENT_TOOLS) {
+    assert.ok(hasCommand(commandFor[tool.name]), `${tool.name} must dispatch to a registered command`);
+  }
+});
+
+test('undo is deliberately not a tool the model can call', () => {
+  assert.equal(AGENT_TOOLS.some((t) => t.name === 'undo'), false);
+  assert.ok(hasCommand('undo'), 'but it is still a command an operator can run');
+  assert.equal(getCommand('undo').surfaces.includes('agent'), false);
 });
 
 test('tool output handed back to the model is bounded', () => {
@@ -444,6 +598,7 @@ test('the system prompt survives a persona that is absent, empty, or enormous', 
   ]) {
     const system = buildSystemPrompt({ persona });
     assert.ok(system.includes('OUT OF SCOPE'), 'the profile section is never the part that gets dropped');
+    assert.ok(Buffer.byteLength(system, 'utf8') <= 2048 + 64, 'autonomous card stays short');
   }
 });
 
@@ -493,9 +648,7 @@ test('the operator’s --tool-timeout is a ceiling the model cannot raise', asyn
 test('a tool cannot run past the wall clock the operator set', async () => {
   const { ws, home } = scaffold('agent-wallclock');
   const provider = scriptedProvider([
-    // An hour-long sleep against a one-second run. The wall clock is only
-    // checked BETWEEN turns, so without cancellation this would sail past it.
-    callTool('t1', 'bash', { script: 'sleep 3600', timeout: 3600 }),
+        callTool('t1', 'bash', { script: 'sleep 3600', timeout: 3600 }),
     say('done'),
   ]);
   const started = Date.now();
@@ -510,15 +663,129 @@ test('a tool cannot run past the wall clock the operator set', async () => {
 });
 
 test('the loop never RAISES a timeout the operator lowered in their config', async () => {
-  // The bug the cancellation approach avoids: with no --tool-timeout there is
-  // no operator value to shorten, so shortening `--timeout` to fit the wall
-  // clock would have meant inventing one — and overriding a lower configured
-  // `exec.timeout_seconds` upward while claiming to lower it.
-  assert.equal(resolveToolTimeout({ requested: undefined, ceiling: null }), null,
+    assert.equal(resolveToolTimeout({ requested: undefined, ceiling: null }), null,
     'saying nothing is what lets `exec` apply the configured timeout');
   assert.equal(resolveToolTimeout({ requested: 3600, ceiling: 5 }), 5, 'the operator ceiling wins');
   assert.equal(resolveToolTimeout({ requested: 2, ceiling: 5 }), 2, 'and a shorter request is honored');
   assert.equal(resolveToolTimeout({ requested: undefined, ceiling: 5 }), 5);
   assert.equal(resolveToolTimeout({ requested: 0, ceiling: null }), null, 'a nonsense request is not a bound');
   assert.equal(resolveToolTimeout({ requested: -5, ceiling: 10 }), 10);
+});
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('`agent` is in the SIGINT bridge, so cancellation runs its cleanup', () => {
+  const source = fs.readFileSync(binPath, 'utf8');
+  const match = /\[([^\]]*)\]\.includes\(command\)/.exec(source);
+  assert.ok(match, 'the signal bridge should still be a declared list');
+  assert.match(match[1], /'agent'/,
+    'without it Ctrl-C skips the `finally` that closes the provider');
+});
+
+test('the wall clock stops a batch of tool calls partway through', async () => {
+  const { ws, home } = scaffold('agent-batch-deadline');
+  const calls = ['a', 'b', 'c'].map((id) => ({ id, name: 'bash', input: { script: 'sleep 2' } }));
+  const provider = scriptedProvider([
+    { text: '', toolCalls: calls, blocks: [], usage: { inputTokens: 1, outputTokens: 1 } },
+  ]);
+  const result = await agentResultOf(
+    argvFor(ws, home, 'a task', ['--max-seconds', '1']),
+    {},
+    { startProviderFn: provider.start },
+  );
+  assert.equal(result.stopReason, 'time-budget');
+  const dispatched = result.turns.flatMap((t) => t.tools).filter((t) => t.dispatched);
+  assert.equal(dispatched.length, 1,
+    'the first call consumed the budget; the other two must not still be spawned');
+});
+
+test('a completion that arrives after the deadline is time-budget, not done', async () => {
+  const { ws, home } = scaffold('agent-late-complete');
+  const provider = () => ({
+    provider: 'scripted', model: 's', alive: true, logs: [],
+    async complete() {
+      await new Promise((r) => setTimeout(r, 1200));
+      return { text: 'finished', toolCalls: [], blocks: [], usage: { inputTokens: 1, outputTokens: 1 } };
+    },
+    close() {},
+  });
+  const result = await agentResultOf(
+    argvFor(ws, home, 'a task', ['--max-seconds', '1']),
+    {},
+    { startProviderFn: provider },
+  );
+  assert.equal(result.stopReason, 'time-budget',
+    'a run that ran out of time must not report itself as finished');
+  assert.notEqual(result.exitCode, 0);
+});
+
+test('a provider failure after the deadline is a time budget, not a provider error', async () => {
+  const { ws, home } = scaffold('agent-late-provider-fail');
+  const provider = () => ({
+    provider: 'scripted', model: 's', alive: true, logs: [],
+    async complete() { await new Promise((r) => setTimeout(r, 1400)); throw new Error('gateway exploded'); },
+    close() {},
+  });
+  const result = await agentResultOf(
+    argvFor(ws, home, 'a task', ['--max-seconds', '1']),
+    {},
+    { startProviderFn: provider },
+  );
+  assert.equal(result.stopReason, 'time-budget',
+    'blaming the provider for the operator budget produces the wrong exit');
+});
+
+test('the run journal records the task by size and digest, never its words', () => {
+  const projected = agentJournalArgv([
+    'summarize', 'the', 'BLUEBIRD', 'acquisition',
+    '--provider', 'openrouter', '--max-turns', '5', '--dry-run',
+  ]);
+  const joined = projected.join(' ');
+  assert.equal(/BLUEBIRD/.test(joined), false,
+    'the journal must not store the task transcript');
+  assert.match(joined, /<task:\d+b:[0-9a-f]{12}>/, 'two runs still have to be tellable apart');
+  assert.match(joined, /--provider openrouter/, 'configuration is not conversation and stays readable');
+  assert.match(joined, /--max-turns 5/);
+  assert.match(joined, /--dry-run/);
+});
+
+test('the journal projection is wired to the registry entry', () => {
+  assert.equal(typeof getCommand('agent').journalArgv, 'function');
+});
+
+test('a boolean flag before the task does not eat its first word', () => {
+  assert.equal(taskFromArgv(['--dry-run', 'fix', 'the', 'bug']), 'fix the bug');
+  assert.equal(taskFromArgv(['--no-events', 'fix', 'the', 'bug']), 'fix the bug');
+  assert.equal(taskFromArgv(['--json', '--verbose', 'fix', 'it']), 'fix it');
+  assert.equal(taskFromArgv(['--provider', 'ollama', 'fix', 'it']), 'fix it');
+  assert.equal(taskFromArgv(['--max-turns', '3', 'fix', 'it']), 'fix it');
+});
+
+test('every declared value-taking agent flag is one the task parser knows about', () => {
+  const declared = [...GLOBAL_FLAGS, ...(getCommand('agent').args?.flags || [])]
+    .filter((f) => f.type !== 'boolean')
+    .map((f) => f.name);
+  const missing = declared.filter((name) => !AGENT_VALUE_FLAGS.includes(name));
+  assert.deepEqual(missing, [],
+    'a value-taking flag missing from the set silently eats the first word of the task');
+});
+
+test('nothing in AGENT_VALUE_FLAGS is actually a boolean that would skip a task word', () => {
+  const declared = new Map(
+    [...GLOBAL_FLAGS, ...(getCommand('agent').args?.flags || [])].map((f) => [f.name, f.type]),
+  );
+  const consumesAValue = (name) => ['SENTINEL', '7'].some((value) => {
+    try {
+      return JSON.stringify(parseFlags([name, value]) ?? {}).includes(value);
+    } catch {
+      return true;
+    }
+  });
+  const notValueTaking = AGENT_VALUE_FLAGS.filter((name) => {
+    if (name === '--output') return false;
+    if (declared.get(name) && declared.get(name) !== 'boolean') return false;
+    return !consumesAValue(name);
+  });
+  assert.deepEqual(notValueTaking, [],
+    'listing a boolean here makes the parser skip a word that belonged to the task');
 });

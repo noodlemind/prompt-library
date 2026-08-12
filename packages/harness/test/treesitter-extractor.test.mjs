@@ -17,11 +17,6 @@ import {
   DEFAULT_LOCK_PATH,
 } from '../lib/repo-map/treesitter-extractor.mjs';
 
-// One shared factory instance: init is the expensive part, extract is sync.
-// Roots are pinned to the harness package's OWN node_modules so the suite
-// never depends on what happens to live in a parent directory; when the
-// optional grammar packages are absent this resolves to the lexical tier and
-// the grammar-dependent tests below skip honestly.
 const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
 const grammars = extractor.tier === 'treesitter';
 const skipNote = 'optional tree-sitter grammars not installed — lexical absence mode';
@@ -80,9 +75,7 @@ test('lexical export detection: the DEFAULT tier reports a real module surface',
   const cjsExported = new Set(cjs.defs.filter((d) => d.exported).map((d) => d.name));
   assert.ok(cjsExported.has('run') && cjsExported.has('other'), JSON.stringify(cjs.defs));
 
-  // Python has no export keyword: __all__ wins when present, otherwise
-  // module-level non-underscore defs — the same rule the AST tier applies.
-  const withAll = lexicalV2('svc.py', '__all__ = ["public_one"]\ndef public_one():\n    pass\ndef also_public():\n    pass\n');
+    const withAll = lexicalV2('svc.py', '__all__ = ["public_one"]\ndef public_one():\n    pass\ndef also_public():\n    pass\n');
   const pyAll = new Map(withAll.defs.map((d) => [d.name, d.exported]));
   assert.equal(pyAll.get('public_one'), true);
   assert.equal(pyAll.get('also_public'), false, '__all__ is authoritative when present');
@@ -114,11 +107,7 @@ test('lexical references are stated named imports, never inferred call sites', (
 });
 
 test('lexicalV2 is linear in file size — the default tier must not rescan per name', () => {
-  // A crafted file: 20k long near-matching lines, then 512 declarations. The
-  // old shape ran one `lines.findIndex(l => l.includes(name))` PER NAME, so
-  // every declaration rescanned the whole prefix — ~1.3s here, on the DEFAULT
-  // tier, for one file of a full index. A single tokenizing pass is ~20ms.
-  const pad = `// ${'a'.repeat(200)}`;
+    const pad = `// ${'a'.repeat(200)}`;
   const lines = [];
   for (let i = 0; i < 20_000; i++) lines.push(pad);
   for (let i = 0; i < 512; i++) lines.push(`export const ${'a'.repeat(40)}b${i} = ${i};`);
@@ -268,10 +257,7 @@ test('integrity mismatch: corrupted grammar wasm is a LOUD lexical fallback, abs
   const jsDir = path.join(dir, lock.grammars.javascript.package);
   fs.mkdirSync(jsDir, { recursive: true });
   fs.writeFileSync(path.join(jsDir, lock.grammars.javascript.file), 'not the pinned wasm bytes');
-  // Runtime present and genuine when installed, else absent → absence mode.
-  // Resolve through the module resolver (not a hard-coded node_modules path)
-  // so hoisted installs still exercise the integrity assertions.
-  let runtimeSrc = null;
+    let runtimeSrc = null;
   try {
     runtimeSrc = createRequire(import.meta.url).resolve(`${lock.runtime.package}/${lock.runtime.file}`);
   } catch {
@@ -307,13 +293,7 @@ test('integrity mismatch: corrupted grammar wasm is a LOUD lexical fallback, abs
 
 test('runtime integrity mismatch disables the whole tier loudly', async (t) => {
   const lockForSkip = JSON.parse(fs.readFileSync(DEFAULT_LOCK_PATH, 'utf8'));
-  // The loader is resolved through Node module resolution (import.meta.resolve),
-  // NOT from grammarRoots — so with the optional dependency absent the tier is
-  // already lexical for a legitimate reason ("loader not installed") and records
-  // no integrity failure. Asserting the corrupt-runtime path there would break
-  // the optionalDependencies contract: the suite must pass with or without the
-  // grammars installed.
-  let loaderInstalled = true;
+    let loaderInstalled = true;
   try {
     loaderInstalled = Boolean(import.meta.resolve?.(lockForSkip.runtime.package));
   } catch {
@@ -340,10 +320,7 @@ test('the JS loader entry point is hash-pinned, not just the wasm', async (t) =>
   assert.match(lock.runtime.loader.sha256, /^[0-9a-f]{64}$/);
   assert.match(lock.runtime.loader.file, /\.(?:js|cjs|mjs)$/, 'the pinned loader is the JS entry the import executes');
 
-  // A tampered loader is the cheaper attack than a tampered wasm: it runs with
-  // full Node privileges. Point the factory at a forged entry point and the
-  // tier must refuse LOUDLY, never import it.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-loader-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-loader-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const forged = path.join(dir, lock.runtime.loader.file);
   fs.writeFileSync(forged, 'module.exports = { Parser: {}, Language: {} }; // not the pinned loader\n');

@@ -1,11 +1,5 @@
 import { EXIT } from './style.mjs';
 
-// A malformed flag value is caller misuse, not an internal fault, so it carries
-// the same structured shape as every other usage error the CLI raises
-// (registry.mjs#usageError, bin/harness.mjs's --output rejection): E_USAGE and
-// exit 2. Pre-fix this threw a bare Error, so bin/harness.mjs's top-level catch
-// fell back to E_UNEXPECTED/exit 1 — a typo in an argument was indistinguishable
-// on the machine lane from the harness crashing.
 function invalidFlag(name, value, hint) {
   throw Object.assign(new Error(`invalid ${name}: ${JSON.stringify(value)} — ${hint}`), {
     code: 'E_USAGE',
@@ -23,9 +17,7 @@ function parseMinScore(raw, flagName) {
 }
 
 function parsePositiveInt(raw, flagName) {
-  // The COMPLETE string must be an integer: parseInt('30days') === 30 would
-  // silently accept a malformed value (e.g. a wrong prune cutoff).
-  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+    if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
     invalidFlag(flagName, raw, 'must be an integer >= 1');
   }
   const n = parseInt(raw, 10);
@@ -49,12 +41,6 @@ function parseLayer(raw) {
   return raw;
 }
 
-/**
- * Fix-wave C1: flag-presence check that honors the literal-argument
- * boundary — true only when `name` appears as a token BEFORE any bare `--`.
- * The boundary-safe replacement for `argv.includes('--flag')`, which would
- * happily match a post-`--` literal.
- */
 export function hasFlag(argv, name) {
   for (const a of argv) {
     if (a === '--') return false;
@@ -64,14 +50,7 @@ export function hasFlag(argv, name) {
 }
 
 export function parseFlags(argv) {
-  // Fix-wave C1: everything at and after a bare `--` is free-text content,
-  // never a flag. Slice the boundary off BEFORE the parse loop so that (a)
-  // parsing stops at `--` and (b) NO value-flag can consume the literal `--`
-  // as its value. `parseFlags(['--workspace','--','--json'])` used to swallow
-  // `--` as the workspace value (via `scan[++i]`) AND then re-interpret the
-  // post-boundary `--json`; a mid-loop `break` alone could not prevent the
-  // value-flag branch from grabbing `scan[++i]` before the next iteration.
-  const boundary = argv.indexOf('--');
+    const boundary = argv.indexOf('--');
   const scan = boundary === -1 ? argv : argv.slice(0, boundary);
   const flags = {
     dryRun: false,
@@ -111,6 +90,7 @@ export function parseFlags(argv) {
     sync: false,
     global: false,
     check: false,
+    growth: false,
     insight: false,
     title: null,
     category: null,
@@ -165,27 +145,13 @@ export function parseFlags(argv) {
     else if (a === '--autonomy') flags.autonomy = scan[++i];
     else if (a.startsWith('--copilot-home=')) flags.copilotHome = a.split('=')[1];
     else if (a === '--copilot-home') flags.copilotHome = scan[++i];
-    // --target is the ONE separated-value flag in this loop that DEREFERENCES
-    // its value token (`.split(',')`) instead of just assigning it, so a
-    // missing value threw a TypeError from inside the parser — which
-    // bin/harness.mjs renders as E_UNEXPECTED/exit 1 instead of the usage
-    // error every other missing value produces. Reachable via `--target` as
-    // the last token AND via `install --target -- x`, where the boundary slice
-    // above legitimately truncates the value away. Guarded exactly like
-    // --since/--branch/--ids below; the sibling value flags either assign
-    // `undefined` harmlessly (flag treated as absent) or validate first
-    // (parsePhase/parseLayer/parseMinScore/parsePositiveInt all reject
-    // `undefined`), so none of them carry this hazard.
-    else if (a.startsWith('--target=')) {
+        else if (a.startsWith('--target=')) {
       const value = a.split('=')[1];
       if (!value) invalidFlag('--target', value, 'requires a comma-separated target list');
       flags.targets = new Set(value.split(',').map((t) => t.trim()));
     } else if (a === '--target') {
       const next = scan[++i];
-      // The empty string is rejected here exactly as `--target=` is above: the
-      // separated form used to accept it and seed a Set holding one empty
-      // target, so the two spellings of the same mistake behaved differently.
-      if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--target', next, 'requires a comma-separated target list');
+            if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--target', next, 'requires a comma-separated target list');
       flags.targets = new Set(next.split(',').map((t) => t.trim()));
     } else if (a.startsWith('--plan=')) flags.plan = a.split('=').slice(1).join('=');
     else if (a === '--plan') flags.plan = scan[++i];
@@ -195,24 +161,13 @@ export function parseFlags(argv) {
     else if (a === '--enforcement') flags.enforcement = scan[++i];
     else if (a.startsWith('--learnings=')) flags.learnings = a.split('=').slice(1).join('=');
     else if (a === '--learnings') flags.learnings = scan[++i];
-    // `--workspace` carries the same missing-value guard as `--since`/`--branch`
-    // above, and for a sharper reason: an unguarded `scan[++i]` returns
-    // undefined when the flag is last before the `--` boundary, which
-    // OVERWROTE the process.cwd() default with undefined. Workspace resolution
-    // then threw ERR_INVALID_ARG_TYPE deep in path.resolve — surfacing as
-    // E_UNEXPECTED/exit 1 instead of the structured E_USAGE/exit 2 that a
-    // malformed system-boundary argument owes the caller. Values keep every
-    // `=` after the first, so a path containing one survives intact.
-    else if (a.startsWith('--workspace=')) {
+        else if (a.startsWith('--workspace=')) {
       const value = a.split('=').slice(1).join('=');
       if (!value) invalidFlag('--workspace', value, 'requires a workspace path');
       flags.workspace = value;
     } else if (a === '--workspace') {
       const next = scan[++i];
-      // `--workspace ''` used to sail through and resolve to the current
-      // directory — the caller named a workspace, got a different one, and saw
-      // no error. Same rejection as `--workspace=` above.
-      if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--workspace', next, 'requires a workspace path');
+            if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--workspace', next, 'requires a workspace path');
       flags.workspace = next;
     }
     else if (a === '-c' || a === '--collection') flags.collection = scan[++i];
@@ -225,6 +180,8 @@ export function parseFlags(argv) {
     else if (a === '--path') flags.path = scan[++i];
     else if (a.startsWith('--lines=')) flags.lines = parsePositiveInt(a.split('=')[1], '--lines');
     else if (a === '--lines') flags.lines = parsePositiveInt(scan[++i], '--lines');
+    else if (a.startsWith('--offset=')) flags.offset = parsePositiveInt(a.split('=')[1], '--offset');
+    else if (a === '--offset') flags.offset = parsePositiveInt(scan[++i], '--offset');
     else if (a.startsWith('--max-bytes=')) flags.maxBytes = parsePositiveInt(a.split('=')[1], '--max-bytes');
     else if (a === '--max-bytes') flags.maxBytes = parsePositiveInt(scan[++i], '--max-bytes');
     else if (a.startsWith('--host=')) flags.host = a.split('=').slice(1).join('=');
@@ -232,6 +189,7 @@ export function parseFlags(argv) {
     else if (a.startsWith('--session=')) flags.session = a.split('=').slice(1).join('=');
     else if (a === '--session') flags.session = scan[++i];
     else if (a === '--insight') flags.insight = true;
+    else if (a === '--growth') flags.growth = true;
     else if (a.startsWith('--title=')) flags.title = a.split('=').slice(1).join('=');
     else if (a === '--title') flags.title = scan[++i];
     else if (a.startsWith('--category=')) flags.category = a.split('=').slice(1).join('=');
@@ -256,15 +214,7 @@ export function parseFlags(argv) {
     else if (a === '--to') flags.to = scan[++i];
     else if (a.startsWith('--why=')) flags.why = a.split('=').slice(1).join('=');
     else if (a === '--why') {
-      // A next token that looks like another flag (or a trailing --why with
-      // nothing after it — including a --why immediately before the `--`
-      // boundary, which `scan` has already truncated away) is a missing
-      // value, not an id — must not be silently swallowed as one (which would
-      // also skip that flag's own effect, since consuming it here advances
-      // past it). Left unset so the caller's own bare-`--why` usage check
-      // (cmdLearnings) catches this exactly like the already-handled trailing
-      // case.
-      const next = scan[i + 1];
+            const next = scan[i + 1];
       if (next !== undefined && !next.startsWith('--')) flags.why = scan[++i];
     }
     else if (a.startsWith('--since=')) {
@@ -279,11 +229,7 @@ export function parseFlags(argv) {
     else if (a === '--yes') flags.yes = true;
     else if (a.startsWith('--layer=')) flags.layer = parseLayer(a.split('=')[1]);
     else if (a === '--layer') flags.layer = parseLayer(scan[++i]);
-    // Same flag-shaped-value guard `--since` carries above: a separated form
-    // with a missing value used to swallow the NEXT flag as its argument
-    // (`--branch --ids x` set branch to "--ids" and dropped `--ids`' own
-    // effect), so a typo silently ran a DIFFERENT command than the one typed.
-    else if (a.startsWith('--branch=')) {
+        else if (a.startsWith('--branch=')) {
       const value = a.split('=').slice(1).join('=');
       if (!value) invalidFlag('--branch', value, 'requires a bucket key value');
       flags.branch = value;

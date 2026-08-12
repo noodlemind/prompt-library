@@ -1,45 +1,9 @@
-/**
- * The block — the Session Ledger's unit of everything.
- *
- * ONE IDEA HOLDS THE WHOLE SURFACE TOGETHER: a block is a record, not a
- * rendering. Each one stores command, status, exit code, duration and actor;
- * the CLI writes those same fields to the run journal, and this module is a
- * projection of them. Tint, fold, filter, mark and re-run are therefore views
- * over one structure — there is never a second source of truth for what
- * happened, which is what makes `!!` exact and what lets a session that ended
- * yesterday be read back today.
- *
- * WHAT PHASE 4B SHIPPED INSTEAD, and why this file exists: commands printed
- * with `console.log` while the composer was suspended, so output reached the
- * terminal as undifferentiated text. No tint, no stripe, no record line, no
- * tally — and, more importantly, nothing addressable. A transcript you cannot
- * point at cannot be re-run, marked, folded or resumed, and those are four of
- * the design's named affordances.
- *
- * FAILURE IS ENCODED FOUR TIMES, deliberately, because each channel dies in a
- * different terminal: the tint (truecolour and 256), the painted stripe (any
- * colour at all), the glyph (`✗` / `[x]`), and the word `failed` in the record
- * line (plain text, survives a screenshot and a screen reader). The design
- * called for two; the extra two cost nothing once the record exists.
- */
 import { displayWidth, padTo, wrapCells, clipTo } from './width.mjs';
 
-/** Blocks whose output runs longer than this fold to a summary line. Long
- * output is the normal case for `verify` and `bash`, and a ledger that scrolls
- * the previous six blocks off screen to show 400 lines of test output has
- * stopped being a ledger. */
 export const FOLD_THRESHOLD = 12;
 /** How much of a folded block still shows. Enough to see what it was. */
 export const FOLD_HEAD = 6;
 
-/**
- * status → [tint state, glyph state, the token the status WORD is painted in].
- *
- * The word is muted for `failed` and `cancelled` on purpose, following the
- * mock: those blocks already carry a red tint, a red stripe and a red glyph,
- * and a fourth red thing is not more legible, it is just louder. Colour goes
- * where attention is owed and nowhere else.
- */
 const STATUS = {
   user: ['user', null, 'muted'],
   running: ['running', 'active', 'info'],
@@ -47,6 +11,8 @@ const STATUS = {
   succeeded: ['ok', 'ok', 'ok'],
   failed: ['failed', 'error', 'muted'],
   blocked: ['failed', 'error', 'muted'],
+  /** Usage / bad argv — repairable; not a failed engineering task. */
+  usage: ['usage', 'warn', 'warn'],
   inconclusive: ['failed', 'warn', 'warn'],
   cancelled: ['cancelled', 'error', 'muted'],
   'timed-out': ['failed', 'warn', 'warn'],
@@ -63,15 +29,6 @@ export function formatDuration(ms) {
   return `${Math.floor(total / 60)}m${String(total % 60).padStart(2, '0')}s`;
 }
 
-/**
- * The actor as a WORD.
- *
- * The journal stores the actor in the contract's shape — `{kind:'user'}`,
- * `{kind:'ci'}`, `{kind:'host', host}` — and a record line that interpolates
- * that object prints `actor [object Object]`, which is exactly what the first
- * session against a real journal showed. `user` renders as `you` because the
- * record line is read by the person it names.
- */
 export function formatActor(actor) {
   if (!actor) return null;
   if (typeof actor === 'string') return actor;
@@ -98,14 +55,6 @@ export function newBlockId() {
   return `${Date.now().toString(36).slice(-4)}${counter.toString(36).padStart(2, '0')}`;
 }
 
-/**
- * A block record.
- *
- * `lines` are already-rendered output rows — the command's own ledger rows,
- * styled by `lib/style.mjs` before they got here. The block adds the frame
- * around them and never restyles their content, because a command owns how its
- * own output reads.
- */
 export function createBlock({
   id = newBlockId(),
   command = '',
@@ -122,9 +71,7 @@ export function createBlock({
   folded = null,
   cwd = null,
   kind = 'command',
-  // What was DISPATCHED, as distinct from `command`, which is what was typed.
-  // `!echo hi` is one string to read and another to replay.
-  argv = [],
+    argv = [],
 } = {}) {
   return {
     id, command, status, exit, startedAt, durationMs, actor, run,
@@ -132,32 +79,17 @@ export function createBlock({
   };
 }
 
-/**
- * The record line: the journal entry made visible.
- *
- * Fields are omitted rather than rendered as `unknown` or `—`. A row that says
- * `exit —` invites the reader to wonder what went wrong with the lookup; a row
- * that simply does not mention the exit code says the same thing without the
- * false alarm.
- */
 export function recordSegments(block) {
   const [, , wordToken] = statusOf(block.status);
   const segments = [{ token: wordToken, text: block.status }];
   if (Number.isInteger(block.exit)) segments.push({ token: 'faint', text: `exit ${block.exit}` });
   const dur = formatDuration(block.durationMs);
   if (dur) segments.push({ token: 'faint', text: dur });
-  // The actor is a bare word (`you`, `ci`, a host name) — the label `actor`
-  // said nothing the word does not, and no surveyed CLI spends the column.
-  const actor = formatActor(block.actor);
+    const actor = formatActor(block.actor);
   if (actor) segments.push({ token: 'faint', text: actor });
   const clock = formatClock(block.startedAt);
   if (clock) segments.push({ token: 'faint', text: clock });
-  // A SHORT, ADDRESSABLE id. The full run id is twenty characters of mostly
-  // timestamp — noise on every record line, and its time-ordered head is the
-  // part that collides. The LAST six characters are the random tail, unique by
-  // construction, and `!!`, block navigation and `run tree` all resolve them
-  // by unique suffix. The full id stays in `run list`, where ids are the point.
-  if (block.run) segments.push({ token: 'faint', text: `#${shortId(block.run)}` });
+    if (block.run) segments.push({ token: 'faint', text: `#${shortId(block.run)}` });
   return segments;
 }
 
@@ -171,26 +103,9 @@ export function shortId(run) {
 /** How much of a tail-bearing block's END still shows. See `foldState`. */
 export const FOLD_TAIL = 8;
 
-/**
- * How many output rows a block shows right now, and what the fold line says.
- *
- * FOLDING THE HEAD IS RIGHT UNTIL THE PAYLOAD IS AT THE END. For `verify` or
- * `search`, the first rows are the summary and folding the rest is exactly the
- * mercy the threshold exists for. For `agent`, the first rows are the persona
- * and the capabilities that did not run, and the ANSWER — the reason the
- * command was typed — is at the bottom. Folding from the head there hid the
- * answer behind `ctrl+o` and left three `not run` notices on screen, which read
- * as a loop that had failed. It had not; it had succeeded and been buried.
- *
- * So a block may declare `keepTail`, and then the fold takes the MIDDLE: the
- * head still says what ran, the tail still shows what came of it, and the
- * elision sits between them where it belongs.
- */
 export function foldState(block, { threshold = FOLD_THRESHOLD, head = FOLD_HEAD, tail = FOLD_TAIL } = {}) {
   const total = block.lines.length;
-  // An explicit `folded` beats the threshold in both directions: `ctrl+o` is an
-  // answer to the heuristic, not a request to re-run it.
-  const folded = block.folded === null ? total > threshold : block.folded;
+    const folded = block.folded === null ? total > threshold : block.folded;
   if (!folded || total <= head) return { folded: false, shown: total, hidden: 0, tailShown: 0 };
   if (!block.keepTail) return { folded: true, shown: head, hidden: total - head, tailShown: 0 };
   // Nothing is gained by eliding fewer rows than the notice announcing it.
@@ -198,18 +113,6 @@ export function foldState(block, { threshold = FOLD_THRESHOLD, head = FOLD_HEAD,
   return { folded: true, shown: head, hidden: total - head - tail, tailShown: tail };
 }
 
-/**
- * Render a block to terminal rows.
- *
- * `width` is the full terminal width: the tint has to run the whole way across
- * or it reads as a highlighted paragraph rather than as a block. Every row
- * therefore goes out padded, and every row closes its own background — see the
- * note in `style.mjs#tintRow` for why the reset cannot be hoisted.
- *
- * `selected` draws the navigation cursor. It replaces the stripe rather than
- * adding a second marker, because two markers in one gutter is how a gutter
- * stops being scannable.
- */
 export function renderBlock(block, {
   ui,
   width = 80,
@@ -222,9 +125,7 @@ export function renderBlock(block, {
     ? ui.paint('info', ui.unicode ? '┃' : '>')
     : ui.stripe(tintState);
   const gutter = `${stripeMark} `;
-  // Two cells: the stripe and one space. Painted text lies about its own
-  // length, so the budget is computed from the glyph, not from the string.
-  const inner = Math.max(8, width - 2);
+    const inner = Math.max(8, width - 2);
 
   const rows = [];
   const push = (content) => {
@@ -232,48 +133,21 @@ export function renderBlock(block, {
       rows.push(ui.tintRow(tintState, padTo(`${gutter}${piece}`, width)));
     }
   };
-  // A row whose content is already styled cannot be wrapped without cutting an
-  // escape sequence in half, so pre-styled output rows are clipped instead —
-  // and clipping is the right call for output anyway, since a wrapped ledger
-  // row loses the column alignment that makes it a ledger row.
-  const pushStyled = (content) => {
+    const pushStyled = (content) => {
     const visible = displayWidth(content);
-    // PROSE WRAPS; A LEDGER ROW CLIPS. The rule was "pre-styled output is
-    // clipped", justified because wrapping a `glyph key value · note` row
-    // destroys the column alignment that makes it readable — true, and it was
-    // applied to everything that arrives from a command. An agent's answer is a
-    // PARAGRAPH, and clipping a paragraph destroys the thing itself: `The plan
-    // path is \`docs/plans/2026-08-06-feat-harness-evo…` is not a shorter
-    // answer, it is a lost one.
-    //
-    // Carrying no escape sequence is what separates them: a ledger row is
-    // painted by `ui.line`, so it always has one, while text a model wrote is
-    // plain. That also happens to be the exact condition under which wrapping
-    // is safe — there is no escape to cut in half.
-    if (visible > inner && !content.includes('\x1b')) {
-      // The caller's indent is re-applied to every piece rather than wrapped
-      // with the text, so a continuation lines up under the line it continues
-      // instead of starting hard against the stripe.
-      const indent = /^\s*/.exec(content)[0];
+        if (visible > inner && !content.includes('\x1b')) {
+            const indent = /^\s*/.exec(content)[0];
       for (const piece of wrapCells(content.slice(indent.length), Math.max(8, inner - indent.length))) {
         rows.push(ui.tintRow(tintState, padTo(`${gutter}${indent}${piece}`, width)));
       }
       return;
     }
     const body = visible <= inner ? content : `${clipTo(ui.stripAnsi(content), inner - 1)}…`;
-    // MEASURE WHAT WAS PRODUCED, not what came in. The padding used to be
-    // computed from the ORIGINAL width, which is only the same number when
-    // nothing was clipped: `clipTo` stops before a wide character it cannot fit
-    // whole, so a clipped row could land a cell short, pad by zero, and leave
-    // the tint band ragged against its neighbours. One narrow row in a painted
-    // block reads as a rendering fault, because it is one.
-    const pad = ' '.repeat(Math.max(0, inner - displayWidth(body)));
+        const pad = ' '.repeat(Math.max(0, inner - displayWidth(body)));
     rows.push(ui.tintRow(tintState, `${gutter}${body}${pad}`));
   };
 
-  // 1 — the command, verbatim. The caret is the same one the composer draws, so
-  // a block reads as the echo of a line that was typed there.
-  if (block.command) {
+    if (block.command) {
     push(`${ui.paint('info', ui.unicode ? '❯' : '>')} ${block.command}`);
   }
 
@@ -286,15 +160,7 @@ export function renderBlock(block, {
     pushStyled(`  ${mark}${parts.join(ui.paint('muted', ' · '))}`);
   }
 
-  // 3 — output, folded past the threshold.
-  //
-  // A SHELL BLOCK'S OUTPUT HANGS OFF A CORNER (`└`), which is how Antigravity
-  // renders it and why its shell blocks read as one thing: the command is the
-  // statement, the output is subordinate to it, and the eye gets that from the
-  // shape before it reads a word. Harness commands keep the plain indent —
-  // their output is already ledger rows in the design's own grammar, and a
-  // corner would imply a nesting that is not there.
-  const state = foldState(block, fold);
+    const state = foldState(block, fold);
   const shell = block.command.startsWith('!') || block.argv?.[0] === 'bash';
   const corner = ui.unicode ? '└' : '\\';
   block.lines.slice(0, state.shown).forEach((line, i) => {
@@ -316,20 +182,10 @@ export function renderBlock(block, {
     pushStyled(`  ${ui.paint('info', `${ui.arrow} ${block.next}`)}`);
   }
 
-  // A glyph-only row would be redundant with the record line; the glyph belongs
-  // in the OUTPUT, which the commands already emit. Asserted here so the
-  // mapping stays exercised rather than quietly unused.
-  void glyphState;
+    void glyphState;
   return rows;
 }
 
-/**
- * The sticky header shown while a block is running.
- *
- * It is the one piece of chrome that appears mid-block, and it earns its place
- * by answering the two questions a person watching a long command has: what is
- * this, and how do I stop it.
- */
 export function runningHeader(block, { ui, width = 80, lineCount = 0 } = {}) {
   const label = block.command || 'running';
   const tail = `esc cancels${lineCount ? ` · ${lineCount} lines` : ''}`;

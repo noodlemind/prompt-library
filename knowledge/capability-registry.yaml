@@ -6,7 +6,7 @@ lifecycle_states: [candidate, experimental, active, deprecated, retired]
 engineer:
   entry_agent: engineer
   entry_skill: engineer
-  architecture: docs/architecture/engineer-harness.md
+  architecture: docs/adaptive-engineer-harness.md
   workflow: orient → establish intent → investigate → work → handle gaps → verify → review → compound → report
 
 capabilities:
@@ -277,5 +277,5 @@ growth:
   retirement: deprecate → warn and migrate → remove source → retain registry tombstone
 
 references:
-  architecture: docs/architecture/engineer-harness.md
+  architecture: docs/adaptive-engineer-harness.md
   harness_contract: .github/skills/references/harness-tool-contract.md

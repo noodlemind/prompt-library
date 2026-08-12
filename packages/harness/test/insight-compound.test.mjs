@@ -16,8 +16,6 @@ const run = (args, env = {}) =>
     encoding: 'utf8',
     env: { ...process.env, ...env },
   });
-// Async spawn so N captures run as genuinely concurrent OS processes (the
-// real filename race, not a same-process simulation).
 const runAsync = (args, env = {}) =>
   new Promise((resolve) => {
     const child = spawn(process.execPath, [binPath, ...args], { env: { ...process.env, ...env } });
@@ -51,11 +49,7 @@ test('runInsightCompound rolls back the just-written episode (no orphan) and rep
   const ws = tempDir('insight-idxfail-ws-');
   const copilotHome = tempDir('insight-idxfail-ch-');
   const home = tempDir('insight-idxfail-hh-');
-  // Force runIndexKnowledge to throw deterministically (root-safe): make the
-  // manifest path a DIRECTORY so its writeFileSync fails EISDIR. copilotHome
-  // has no knowledge/ subdir, so the manifest resolves to
-  // workspace/knowledge/manifest.yaml.
-  fs.mkdirSync(path.join(ws, 'knowledge', 'manifest.yaml'), { recursive: true });
+    fs.mkdirSync(path.join(ws, 'knowledge', 'manifest.yaml'), { recursive: true });
 
   const res = runInsightCompound({
     workspace: ws,
@@ -73,11 +67,6 @@ test('runInsightCompound rolls back the just-written episode (no orphan) and rep
   assert.deepEqual(md, [], 'the just-written episode must be deleted after an index-failure rollback');
 });
 
-// P2 (compound rollback verification): the rollback used to delete the
-// episode + restore snapshots while SWALLOWING every error, yet always
-// reported "episode rolled back" / path:null — so a rollback that left the
-// episode orphaned was indistinguishable from a clean one. Each postcondition
-// is now verified and any residue is named.
 test('P2: runInsightCompound reports PARTIAL recovery (not a false clean rollback) when the episode cannot be removed on rollback', () => {
   const ws = tempDir('insight-partial-ws-');
   const copilotHome = tempDir('insight-partial-ch-');
@@ -85,10 +74,7 @@ test('P2: runInsightCompound reports PARTIAL recovery (not a false clean rollbac
   // Force runIndexKnowledge to throw (manifest path is a directory → EISDIR).
   fs.mkdirSync(path.join(ws, 'knowledge', 'manifest.yaml'), { recursive: true });
 
-  // Make the episode un-removable during rollback: rmSync is a no-op for the
-  // insights episode path (a filesystem where the delete fails), pass-through
-  // for everything else.
-  const insightsMarker = path.join('docs', 'solutions', 'insights');
+    const insightsMarker = path.join('docs', 'solutions', 'insights');
   const origRm = fs.rmSync;
   fs.rmSync = (p, opts) => {
     if (String(p).includes(insightsMarker)) return; // pretend the delete failed
@@ -134,13 +120,7 @@ test('runInsightCompound --dry-run logs "would write" (never "wrote") and create
     log: (m) => logs.push(m),
   });
   assert.equal(res.pass, true);
-  // `res.path` is the POSIX-normalized contract form (`rel.split(path.sep)
-  // .join('/')`), but the log line renders the same path with the platform
-  // separator — on win32 `would write docs\solutions\...`, which never
-  // `includes` the forward-slash form. Compare on one spelling so the
-  // assertion is about the PATH, not the separator. On POSIX `path.sep` is
-  // '/', so this is a no-op there.
-  const toPosix = (p) => p.split(path.sep).join('/');
+    const toPosix = (p) => p.split(path.sep).join('/');
   const episodeLog = logs.find((m) => toPosix(m).includes(res.path));
   assert.ok(episodeLog, 'an episode-path log line is emitted under dry-run');
   assert.match(episodeLog, /would write/);
@@ -185,12 +165,6 @@ test('compound --insight reads body from --body-file and indexes the doc', () =>
   assert.match(manifest, /retry-storms-need-jitter/);
 });
 
-// P1#1: the episode filename was allocated check-then-write (existsSync loop,
-// THEN write), and episodes land in the WORKSPACE (docs/solutions), OUTSIDE
-// the store lock — so concurrent captures of the same title raced and silently
-// overwrote each other (repro: 16 commands, only 13 files, 3 paths reported by
-// multiple processes). The reservation now claims each suffix with an
-// exclusive create (O_EXCL), so two processes can never both win one name.
 test('P1#1: N concurrent same-title captures never overwrite — N distinct files and N distinct reported paths', async () => {
   const ws = tempDir('insight-race-ws-');
   const home = tempDir('insight-race-home-');
@@ -211,9 +185,6 @@ test('P1#1: N concurrent same-title captures never overwrite — N distinct file
   assert.equal(files.length, N, `all ${N} episode files must survive — no silent overwrite (got ${files.length})`);
 });
 
-// Deterministic proxy for the exclusive-create semantics: a file already
-// sitting at the suffix a capture would otherwise pick forces it to the NEXT
-// one — the reservation never overwrites an existing name.
 test('P1#1: a pre-existing file at the chosen suffix forces the next suffix (exclusive-create, never overwrite)', () => {
   const ws = tempDir('insight-excl-ws-');
   const home = tempDir('insight-excl-home-');
@@ -272,17 +243,13 @@ test('an embedded newline in the title cannot break the line-oriented frontmatte
   const out = JSON.parse(res.stdout);
   const doc = fs.readFileSync(path.join(ws, out.path), 'utf8');
 
-  // The embedded newline must be escaped, not literal: the frontmatter block
-  // stays exactly one line per key.
-  const fmBlock = doc.match(/^---\n([\s\S]*?)\n---/)[1];
+    const fmBlock = doc.match(/^---\n([\s\S]*?)\n---/)[1];
   const fmLines = fmBlock.split('\n');
   assert.equal(fmLines.length, 3, 'title/kind/date — no extra line injected');
   assert.ok(fmLines.every((l) => /^[\w-]+:/.test(l)), 'every frontmatter line is still a key: value line');
   assert.match(doc, /title: "Title line one\\nline two: fake-key"/);
 
-  // Round-trips cleanly through the same frontmatter parser consolidate uses
-  // to discover episodes — the escaped value is recovered intact.
-  const episodes = collectEpisodes({ workspace: ws, copilotHome: home });
+    const episodes = collectEpisodes({ workspace: ws, copilotHome: home });
   const episode = episodes.find((e) => e.path === out.path);
   assert.ok(episode, 'episode discoverable after round-trip');
   assert.equal(episode.title, 'Title line one\\nline two: fake-key');

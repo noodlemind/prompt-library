@@ -29,9 +29,9 @@ Deliver-mode internal skill chain:
                          open → planned → in-progress → review → done
 ```
 
-Harness architecture: `docs/architecture/engineer-harness.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
+Harness architecture: `docs/adaptive-engineer-harness.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
 
-Plan files in `docs/plans/` (product repos only) track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/architecture/engineer-harness.md`.
+Plan files in `docs/plans/` (product repos only) track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/adaptive-engineer-harness.md`.
 
 ## Directory Structure
 
@@ -47,10 +47,9 @@ Plan files in `docs/plans/` (product repos only) track state via YAML frontmatte
   mcp.json         — MCP server configuration
 knowledge/         — team-wide solutions + manifest (hydrated to ~/.copilot/knowledge/)
 docs/
-  architecture/    — canonical Engineer Harness architecture and primitive standard
+  adaptive-engineer-harness.md  — shared concept / practice doc
   plans/           — plan template; product repos use docs/plans/ for active work
-  brainstorms/     — brainstorm documents from /brainstorming skill
-  codebase-snapshot.md — generated codebase snapshot with architecture diagrams
+packages/harness/  — CLI package
 ```
 
 ## Conventions
@@ -92,7 +91,7 @@ Skills follow proven design patterns from Google ADK and Compound Engineering:
 
 ## Standardization Reference
 
-Read `docs/architecture/skill-driven-prompt-library.md` before adding or substantially changing agents, skills, instructions, checks, plan structure, or solution templates.
+Read `docs/adaptive-engineer-harness.md` before adding or substantially changing agents, skills, instructions, checks, plan structure, or solution templates.
 
 ## Accumulated Knowledge
 

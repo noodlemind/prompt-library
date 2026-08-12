@@ -5,25 +5,6 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { readFileNoFollow, writeFileContained, assertRealpathContained, realpathParentContained } from '../lib/fs-safe.mjs';
 
-/**
- * Canonicalize-after-acquire: proof that the symlink-ANCESTOR TOCTOU window
- * is closed for reads, writes, and delete/rename targets.
- *
- * The residual this closes: assertNoSymlinkAncestors is a SCAN-TIME ancestor
- * walk, and O_NOFOLLOW guards only the LEAF, so a local attacker could swap an
- * ancestor directory for a symlink pointing outside the root in the window
- * between the walk and the open/write/delete. Node has no portable openat, so
- * the fix VERIFIES AFTER ACQUIRING the handle: realpath (which follows every
- * symlink, including a swapped ancestor) must land inside the canonical root,
- * and the opened inode must match that canonical path.
- *
- * A pre-planted symlinked ancestor is a deterministic stand-in for "the swap
- * already happened": readFileNoFollow performs NO pre-open ancestor walk of
- * its own, so its ONLY ancestor defense is the post-acquire realpath verify —
- * which is exactly why calling it WITHOUT a root is a faithful fail-before
- * that leaks, and WITH a root refuses.
- */
-
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const SENTINEL = 'OUTSIDE_SECRET_SENTINEL must never be read through a swapped ancestor.\n';
 
@@ -31,22 +12,13 @@ test('read: a symlinked ANCESTOR redirecting outside the root refuses the read �
   const ws = tmp('toctou-read-ws-');
   const outside = tmp('toctou-read-outside-');
   fs.writeFileSync(path.join(outside, 'x.md'), SENTINEL, 'utf8');
-  // docs/solutions is a symlink pointing OUTSIDE the workspace — the ancestor
-  // an attacker swaps in. Its leaf (x.md) is a real file, so O_NOFOLLOW's
-  // leaf-only guard does NOT catch it; the kernel follows the symlinked
-  // ancestor on open.
-  fs.mkdirSync(path.join(ws, 'docs'), { recursive: true });
+    fs.mkdirSync(path.join(ws, 'docs'), { recursive: true });
   fs.symlinkSync(outside, path.join(ws, 'docs', 'solutions'));
   const full = path.join(ws, 'docs', 'solutions', 'x.md');
 
-  // FAIL-BEFORE: without a root only the O_NOFOLLOW leaf guard runs; the read
-  // follows the symlinked ancestor and the outside content leaks. This is the
-  // exact pre-fix behavior the containment verify closes.
-  assert.equal(readFileNoFollow(full), SENTINEL, 'no-root read leaks outside content (documents the window)');
+    assert.equal(readFileNoFollow(full), SENTINEL, 'no-root read leaks outside content (documents the window)');
 
-  // FAIL-AFTER: with the trusted root, realpath resolves through the symlinked
-  // ancestor to OUTSIDE the root → containment fails → null, no leak.
-  const refused = readFileNoFollow(full, { root: ws });
+    const refused = readFileNoFollow(full, { root: ws });
   assert.equal(refused, null, 'canonicalize-after-acquire refuses the ancestor-swap read');
 });
 
@@ -72,10 +44,7 @@ test('read: a legitimately deep all-real path (no symlinks) still reads — no f
 });
 
 test('read: a root reached through a symlink (e.g. symlinked temp dir) still reads its own files — canonical-vs-canonical, no false refusal', () => {
-  // Both root and file are resolved with realpath, so a root that is itself
-  // legitimately reached through a symlink is contained against its own
-  // canonical form rather than rejected.
-  const base = tmp('toctou-symroot-');
+    const base = tmp('toctou-symroot-');
   const realWs = path.join(base, 'real-ws');
   fs.mkdirSync(realWs, { recursive: true });
   const linkedWs = path.join(base, 'linked-ws');
@@ -107,14 +76,7 @@ test('write: writeFileContained refuses a symlinked ancestor redirecting outside
 });
 
 test('write: the POST-CREATE verify branch refuses, cleans up, and NEVER lands content — proven by observing the temp is still empty at verify time (content-never-lands)', (t) => {
-  // The symlinked-ANCESTOR write test above actually refuses at the SCAN-TIME
-  // assertNoSymlinkAncestors pre-walk, so it never reaches writeFileContained's
-  // post-create realpathParentContained branch — that branch only fires under
-  // the real ancestor-SWAP race (an ancestor turned into a symlink AFTER the
-  // pre-walk but BEFORE the create). We reproduce that race deterministically by
-  // forcing the parent's realpath to resolve OUTSIDE the root for the single
-  // verify call, while the create still lands a real, empty file inside the root.
-  const ws = tmp('toctou-postverify-ws-');
+    const ws = tmp('toctou-postverify-ws-');
   const outside = tmp('toctou-postverify-outside-');
   const rel = path.join('docs', 'real', 'ep.md');
   const full = path.join(ws, rel);
@@ -125,27 +87,15 @@ test('write: the POST-CREATE verify branch refuses, cleans up, and NEVER lands c
   const realRealpathNative = fs.realpathSync.native;
   let tmpSizeAtVerify = null; // temp file size observed at the instant of the verify
   let tmpsAtVerify = null;
-  // Mock ONLY the parent-resolution realpath call writeFileContained makes
-  // during the post-create verify; delegate everything else (including the
-  // root canonicalization) to the real implementation.
-  const interceptParent = (real) => (p, ...rest) => {
+    const interceptParent = (real) => (p, ...rest) => {
     if (path.resolve(p) === path.resolve(parentDir)) {
-      // The empty temp already exists here — capture its state, then force the
-      // containment check to see an escape. Do NOT throw: realpathParentContained
-      // swallows throws (returns false), which would hide an assertion failure.
-      // readdirSync/statSync are unmocked, so they observe the real filesystem.
-      tmpsAtVerify = fs.readdirSync(parentDir).filter((f) => f.startsWith('.tmp-'));
+            tmpsAtVerify = fs.readdirSync(parentDir).filter((f) => f.startsWith('.tmp-'));
       if (tmpsAtVerify.length === 1) tmpSizeAtVerify = fs.statSync(path.join(parentDir, tmpsAtVerify[0])).size;
       return outside; // parent "resolves" outside the root → containment fails
     }
     return real(p, ...rest);
   };
-  // BOTH spellings must be intercepted. lib/fs-safe.mjs canonicalizes through
-  // `fs.realpathSync.native` (it expands Windows 8.3 short names, which the JS
-  // walker leaves alone) and only falls back to `fs.realpathSync`. Mocking just
-  // the fallback silently stopped intercepting anything, so this branch — the
-  // post-create containment verify — passed without ever being exercised.
-  t.mock.method(fs, 'realpathSync', interceptParent(realRealpath));
+    t.mock.method(fs, 'realpathSync', interceptParent(realRealpath));
   fs.realpathSync.native = interceptParent(realRealpathNative);
   t.after(() => {
     fs.realpathSync.native = realRealpathNative;
@@ -156,9 +106,7 @@ test('write: the POST-CREATE verify branch refuses, cleans up, and NEVER lands c
   assert.equal(result, null, 'post-create verify failure refuses the write');
   assert.equal(tmpsAtVerify.length, 1, 'exactly one temp file existed before the verify ran');
   assert.equal(tmpSizeAtVerify, 0, 'the temp was still EMPTY at verify time — content never landed before containment passed');
-  // Cleanup: the refused temp is unlinked, the final file was never created,
-  // and no content byte exists anywhere on disk.
-  assert.equal(fs.readdirSync(parentDir).filter((f) => f.startsWith('.tmp-')).length, 0, 'the empty temp was cleaned up');
+    assert.equal(fs.readdirSync(parentDir).filter((f) => f.startsWith('.tmp-')).length, 0, 'the empty temp was cleaned up');
   assert.ok(!fs.existsSync(full), 'the final file was never published');
   for (const dir of [parentDir, outside]) {
     for (const f of fs.readdirSync(dir)) {
@@ -196,19 +144,11 @@ test('symmetry: realpathParentContained refuses a file whose parent resolves OUT
   const ws = tmp('rpc-ws-');
   const outside = tmp('rpc-outside-');
   fs.mkdirSync(path.join(ws, 'docs'), { recursive: true });
-  // docs/solutions is a symlink OUT of the workspace — the ancestor an attacker
-  // swaps in after a scan-time walk. A file created "under" it physically lands
-  // in `outside`, so its realpath-parent is outside ws. This is the same
-  // deterministic stand-in for "the swap already happened" the read/write tests
-  // above use: reserveEpisodePath's O_EXCL create + pre-create walk cannot see
-  // it, so the post-create realpath verify is the load-bearing guard.
-  fs.symlinkSync(outside, path.join(ws, 'docs', 'solutions'));
+    fs.symlinkSync(outside, path.join(ws, 'docs', 'solutions'));
   const escaped = path.join(ws, 'docs', 'solutions', 'ep.md');
   fs.writeFileSync(escaped, 'landed outside via the symlinked ancestor\n');
 
-  // FAIL-BEFORE (no post-create check): the exclusive create alone accepts this
-  // just-created file. PASS-AFTER: the shared containment verify refuses it.
-  assert.equal(realpathParentContained(ws, escaped), false, 'a parent resolving outside the root is refused');
+    assert.equal(realpathParentContained(ws, escaped), false, 'a parent resolving outside the root is refused');
   assert.ok(fs.existsSync(path.join(outside, 'ep.md')), 'precondition: the file really did land outside via the symlink');
 
   const inside = path.join(ws, 'docs', 'real', 'ep.md');
@@ -218,12 +158,7 @@ test('symmetry: realpathParentContained refuses a file whose parent resolves OUT
 });
 
 test('Windows posture: O_NOFOLLOW is feature-detected — POSIX takes the atomic leaf-open branch, win32 falls back to lstat+realpath+inode (inspection-verified only)', () => {
-  // On this CI host (darwin/linux) O_NOFOLLOW is a real flag, so the atomic
-  // leaf-open branch is exercised by every read test above. On win32 the flag
-  // is undefined and readFileNoFollow selects the lstat-leaf + realpath
-  // containment fallback, which shares the SAME containment guard; that branch
-  // is inspection-verified only (no Windows runner here).
-  if (process.platform === 'win32') {
+    if (process.platform === 'win32') {
     assert.equal(fs.constants.O_NOFOLLOW, undefined, 'win32 exposes no O_NOFOLLOW → fallback branch is active');
   } else {
     assert.equal(typeof fs.constants.O_NOFOLLOW, 'number', 'POSIX exposes O_NOFOLLOW → atomic branch is active');

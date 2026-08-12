@@ -1,14 +1,3 @@
-/**
- * AC10 — envelope. The command index is emitted through the versioned
- * envelope lane and is consumable without a terminal.
- *
- * "Without a terminal" is the load-bearing half: the palette's only rendering
- * is `lib/envelope.mjs`'s shape, so a TUI reads it in-process and a test —
- * or any other program — reads the same bytes off the CLI's `palette` branch
- * without a single styled row being painted. Both are asserted here against
- * lib/envelope.mjs's own conventions: `schema`/`command`/`status` first, then
- * summary scalars, then detail arrays.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -58,10 +47,7 @@ function listTree(root) {
 
 test('AC10: the index is emitted as a versioned envelope, summary scalars before detail', () => {
   const envelope = commandIndexEnvelope({ workspace: packageRoot });
-  // Key ORDER is the contract, not just key presence: one payload has to
-  // serve a one-line footer and an expanded view, so the scalars a footer
-  // needs must precede the arrays it would have to skip.
-  assert.deepEqual(Object.keys(envelope), [
+    assert.deepEqual(Object.keys(envelope), [
     'schema',
     'command',
     'status',
@@ -102,9 +88,7 @@ test('AC10: the envelope is pure data — JSON round-trips it losslessly', () =>
   const workspace = seedSkills(tempDir('cmdindex-json-'), ['consolidate']);
   const envelope = commandIndexEnvelope({ workspace });
   const serialized = JSON.stringify(envelope);
-  // No undefined, no functions, no cycles — a consumer that only ever sees
-  // the wire bytes gets exactly what an in-process reader gets.
-  assert.deepEqual(JSON.parse(serialized), envelope);
+    assert.deepEqual(JSON.parse(serialized), envelope);
   assert.equal(JSON.stringify(commandIndexEnvelope({ workspace })), serialized, 'byte-identical across calls');
   assert.deepEqual(envelope.collisions, ['consolidate']);
 });
@@ -130,20 +114,19 @@ test('AC10: the CLI palette branch emits parseable JSON on stdout and exits 0', 
   assert.equal(run.stderr, '', 'the palette lane writes nothing to stderr');
   const payload = JSON.parse(run.stdout);
 
-  // The process output must equal the in-process envelope for the same
-  // workspace — the TUI and any external program read the same index.
-  assert.deepEqual(payload, JSON.parse(JSON.stringify(commandIndexEnvelope({ workspace }))));
+    assert.deepEqual(payload, JSON.parse(JSON.stringify(commandIndexEnvelope({ workspace }))));
   assert.equal(payload.command, 'palette');
   assert.equal(payload.status, 'ok');
   assert.equal(payload.schema, ENVELOPE_SCHEMA_VERSION);
   assert.deepEqual(payload.collisions, ['consolidate', 'recall']);
   assert.ok(payload.rows.some((r) => r.id === 'skill:brainstorming'));
-  assert.ok(payload.rows.some((r) => r.id === 'verb:knowledge:promote'));
+  // Multi-verb families fold on the TUI palette into one sheet row.
+  const knowledge = payload.rows.find((r) => r.id === 'command:knowledge');
+  assert.ok(knowledge, 'knowledge stays on the palette');
+  assert.equal(knowledge.picker, 'verbs', 'its verbs open via the action sheet, not as top-level rows');
+  assert.equal(payload.rows.some((r) => r.id === 'verb:knowledge:promote'), false);
 
-  // Read path: emitting the index must not seed anything in the workspace —
-  // nor in the global harness home, which is where the knowledge store lives
-  // and where an accidental write would otherwise go unnoticed.
-  assert.deepEqual(fs.readdirSync(workspace), ['.github']);
+    assert.deepEqual(fs.readdirSync(workspace), ['.github']);
   assert.deepEqual(listTree(home), []);
 });
 

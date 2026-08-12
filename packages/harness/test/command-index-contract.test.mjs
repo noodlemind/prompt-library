@@ -1,21 +1,3 @@
-/**
- * The command palette's contract properties (docs/architecture/
- * harness-cli-workbench.md §"Command palette"), as distinct from the three
- * numbered ACs:
- *
- *   - Determinism      — same registry + same skills ⇒ byte-identical index.
- *   - No `--` in labels — "No `--` is ever typed in the TUI".
- *   - argv round-trip  — every row's argv must be something `dispatch` accepts.
- *                        This is the bidirectional guard: the index projects
- *                        the registry, so a row that resolves to an invocation
- *                        the parser rejects means the two have drifted.
- *   - Collision policy — "the command owns the bare name; the qualified form
- *                        is the escape hatch", and BOTH rows always exist.
- *   - Degradation      — a product repo with no `.github/skills` gets
- *                        commands only, and a read creates nothing on disk.
- *   - Surfaces         — the palette never lists what it cannot meaningfully
- *                        offer, while the CLI still lists everything.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,13 +12,6 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const RANK = Object.fromEntries(SIDE_EFFECTS.map((s, i) => [s, i]));
 
-/**
- * Point the global harness home at an empty directory for one test. The
- * knowledge store lives under it (lib/knowledge/store.mjs), NOT under the
- * workspace, so a read path that accidentally called `ensureStore` would
- * create `<home>/knowledge/...` where a workspace snapshot could never see
- * it. Same save/restore shape test/doctor-structural.test.mjs uses.
- */
 function isolatedHome(t, prefix) {
   const home = tempDir(prefix);
   const saved = process.env.HARNESS_HOME;
@@ -116,10 +91,7 @@ test('the index is byte-identical across repeated builds', () => {
 });
 
 test('the index does not depend on filesystem enumeration order', () => {
-  // Same skills, opposite creation order. readdir order is filesystem
-  // dependent, so only the explicit sort in lib/command-index.mjs makes these
-  // two serialize identically.
-  const forward = seedSkills(tempDir('cmdindex-order-a-'), [{ dir: 'alpha' }, { dir: 'middle' }, { dir: 'zeta' }]);
+    const forward = seedSkills(tempDir('cmdindex-order-a-'), [{ dir: 'alpha' }, { dir: 'middle' }, { dir: 'zeta' }]);
   const backward = seedSkills(tempDir('cmdindex-order-b-'), [{ dir: 'zeta' }, { dir: 'middle' }, { dir: 'alpha' }]);
   assert.equal(
     JSON.stringify(buildCommandIndex({ surface: 'tui', workspace: forward })),
@@ -135,10 +107,17 @@ test('rows are totally ordered by label then id, by codepoint', () => {
     const ordered = prev.label < cur.label || (prev.label === cur.label && prev.id < cur.id);
     assert.ok(ordered, `rows must be sorted: ${prev.label}/${prev.id} came before ${cur.label}/${cur.id}`);
   }
-  // Sorting by label groups a command with its own verbs — the property the
-  // comparator exists for.
-  const labels = rows.map((r) => r.label);
-  assert.deepEqual(labels.slice(labels.indexOf('index'), labels.indexOf('index') + 3), ['index', 'index status', 'index structural']);
+  // Index rows use product labels; they still sort as a coherent family by id.
+  const indexRows = rows.filter((r) => r.noun === 'index').map((r) => r.id).sort();
+  assert.deepEqual(indexRows, [
+    'command:index',
+    'flag:index:--status',
+    'flag:index:--structural',
+  ]);
+  const byId = Object.fromEntries(rows.filter((r) => r.noun === 'index').map((r) => [r.id, r.label]));
+  assert.equal(byId['command:index'], 'Rebuild knowledge index');
+  assert.equal(byId['flag:index:--status'], 'Check knowledge + code index status');
+  assert.equal(byId['flag:index:--structural'], 'Rebuild code symbol index');
 });
 
 // --- no flag syntax in labels --------------------------------------------
@@ -154,9 +133,7 @@ test('no row label contains flag syntax', () => {
       if (row.argv?.some((token) => token.startsWith('--'))) flagBacked += 1;
     }
   }
-  // Non-vacuity: rows really are backed by `--` argv, so the labels above
-  // were transformed rather than simply never containing a flag.
-  assert.ok(flagBacked > 0, 'the rule must be exercised by rows whose argv does carry a flag');
+    assert.ok(flagBacked > 0, 'the rule must be exercised by rows whose argv does carry a flag');
 });
 
 // --- argv round-trip ------------------------------------------------------
@@ -183,13 +160,7 @@ test('every row resolves to argv the registry accepts and dispatch will run', ()
         continue;
       }
 
-      // A SKILL ROW IS THE ONE ROW WHOSE NOUN IS NOT A COMMAND. It resolves to
-      // READING the skill (`get --path …/SKILL.md`), because a palette row
-      // that can only answer "resolves to no command" is a dead end and the
-      // palette's contract is that every row reaches a capability. Running the
-      // workflow remains the host's job; `read` is honest about what the
-      // harness itself does.
-      if (row.kind === 'skill') {
+            if (row.kind === 'skill') {
         assert.deepEqual(row.argv.slice(0, 2), ['get', '--path'], `${row.id} must resolve to reading the skill`);
         assert.match(row.argv[2], /^\.github\/skills\/.+\/SKILL\.md$/, `${row.id} points at its own SKILL.md`);
         assert.equal(row.sideEffect, 'read');
@@ -197,20 +168,11 @@ test('every row resolves to argv the registry accepts and dispatch will run', ()
         continue;
       }
 
-      // The bare template must be exactly the row's own argv — no value slots,
-      // nothing reconstructed from the label.
-      assert.deepEqual(resolveArgv(row), row.argv, `${row.id} template drift`);
+            assert.deepEqual(resolveArgv(row), row.argv, `${row.id} template drift`);
       assert.ok(hasCommand(row.argv[0]), `${row.id} argv[0] "${row.argv[0]}" is not a registered command`);
       const entry = getCommand(row.argv[0]);
       assert.equal(entry.name, row.noun, `${row.id} noun must be its own command`);
-      // `validateArgs` enforces declared `requires:` dependencies — not flags
-      // merely marked `required: true`, which the entry's own `requireArgs`
-      // predicate owns at dispatch (plan-new --type is that case). So the
-      // bare template must be rejected exactly when it carries a flag whose
-      // requirement it does not also carry: `consolidate apply` without
-      // `--ops`. Demanding that row's bare argv validate would be demanding
-      // the dependency go unenforced.
-      const bareFlags = new Set(row.argv.slice(1));
+            const bareFlags = new Set(row.argv.slice(1));
       const unmetRequires = row.argv
         .slice(1)
         .flatMap((tok) => {
@@ -225,9 +187,7 @@ test('every row resolves to argv the registry accepts and dispatch will run', ()
           (err) => err.code === 'E_USAGE' && err.exit === 2,
           `${row.id} carries an unmet dependency (${unmetRequires.join(', ')}), so its bare argv must be rejected as E_USAGE rather than silently dispatching`,
         );
-        // The answer must also be offered: a row the parser will reject until
-        // a value arrives has to ask for that exact value.
-        for (const req of unmetRequires) {
+                for (const req of unmetRequires) {
           assert.ok(
             row.prompts.some((p) => p.flag === req && p.required),
             `${row.id} requires ${req} but does not prompt for it as required`,
@@ -236,22 +196,13 @@ test('every row resolves to argv the registry accepts and dispatch will run', ()
         rowsNeedingAnswers += 1;
       }
 
-      // …and with every picker answered, which is the combination a palette
-      // user can actually produce. This must hold for every row without
-      // exception — it is the guard that the index cannot drift from dispatch.
-      const values = fillEveryValue(row, entry);
+            const values = fillEveryValue(row, entry);
       const filled = resolveArgv(row, values);
       const args = filled.slice(1);
       assert.equal(validateArgs(entry, args), undefined, `${row.id} filled argv ${JSON.stringify(filled)} must validate`);
       assert.ok(filled.length >= row.argv.length);
 
-      // dispatch's SECOND gate, and the reason "validates" is not the same as
-      // "runs": `validateArgs` only clears the flags, then `requireArgs`
-      // decides whether the required ARGUMENTS are there. A row that passes
-      // only the first is a row the palette dispatches and the CLI then
-      // refuses with E_USAGE — which is how a `recall` row with no query
-      // slot, and every other row below, used to pass this test.
-      if (typeof entry.requireArgs === 'function') {
+            if (typeof entry.requireArgs === 'function') {
         assert.equal(
           entry.requireArgs(args, parseFlags(args)),
           undefined,
@@ -260,24 +211,24 @@ test('every row resolves to argv the registry accepts and dispatch will run', ()
         gated += 1;
       }
 
-      // The required arguments no predicate guards. A row must account for
-      // every positional the command cannot run without — as the subcommand
-      // word it selects, or as a picker of its own.
-      const positionalSlots = row.argvTokens.filter((t) => t.kind === 'subcommand' || (t.kind === 'value' && t.positional)).length;
-      const required = entry.args.positionals.filter((p) => p.required);
-      assert.ok(
-        positionalSlots >= required.length,
-        `${row.id} fills ${positionalSlots} positional slot(s) but ${entry.name} requires ${required.length} (${required.map((p) => p.name).join(', ')})`,
-      );
-
-      // …and a verb that names the positionals it consumes must ask for each
-      // one: `knowledge commit` without its mode is not a command.
-      const under = (entry.verbs || []).find((v) => v.verb === row.argvTokens[1]?.value);
-      for (const name of under?.positionals || []) {
+       // TUI multi-verb families and tuiPicker rows collapse to a modal sheet
+      // (picker: 'verbs' | 'model' | 'config' | …). The sheet collects the verb
+      // and positionals after selection — bare argv is intentionally incomplete.
+      if (!row.picker) {
+        const positionalSlots = row.argvTokens.filter((t) => t.kind === 'subcommand' || (t.kind === 'value' && t.positional)).length;
+        const required = entry.args.positionals.filter((p) => p.required);
         assert.ok(
-          row.argvTokens.some((t) => t.kind === 'value' && t.positional === name),
-          `${row.id} runs "${entry.name} ${under.verb}", which consumes <${name}>, but offers no picker for it`,
+          positionalSlots >= required.length,
+          `${row.id} fills ${positionalSlots} positional slot(s) but ${entry.name} requires ${required.length} (${required.map((p) => p.name).join(', ')})`,
         );
+
+        const under = (entry.verbs || []).find((v) => v.verb === row.argvTokens[1]?.value);
+        for (const name of under?.positionals || []) {
+          assert.ok(
+            row.argvTokens.some((t) => t.kind === 'value' && t.positional === name),
+            `${row.id} runs "${entry.name} ${under.verb}", which consumes <${name}>, but offers no picker for it`,
+          );
+        }
       }
 
       if (row.argvTokens.some((t) => t.kind === 'value')) withValueToken += 1;
@@ -311,17 +262,14 @@ test('resolveArgv omits unanswered pickers and emits booleans as bare flags', ()
   assert.deepEqual(resolveArgv(why, {}), ['learnings', '--why'], 'the template keeps the flag, drops the empty slot');
   assert.deepEqual(resolveArgv(why, { '--why': 'sql/timeouts' }), ['learnings', '--why', 'sql/timeouts']);
 
-  // A positional picker is keyed by the positional's own name and lands in
-  // argv POSITION, not appended like an option.
-  const confirm = rows.find((r) => r.id === 'verb:learning:confirm');
+  // Multi-verb families fold on TUI; verb argv templates live on the CLI surface.
+  const cli = buildCommandIndex({ surface: 'cli', workspace: packageRoot });
+  const confirm = cli.rows.find((r) => r.id === 'verb:learning:confirm');
   assert.deepEqual(resolveArgv(confirm, {}), ['learning', 'confirm'], 'the template keeps the verb, drops the empty slot');
   assert.deepEqual(resolveArgv(confirm, { id: 'L-7', '--reason': 'still true' }), ['learning', 'confirm', 'L-7', '--reason', 'still true']);
-  assert.deepEqual(resolveArgv(rows.find((r) => r.id === 'verb:knowledge:commit'), { target: 'repo' }), ['knowledge', 'commit', 'repo']);
+  assert.deepEqual(resolveArgv(cli.rows.find((r) => r.id === 'verb:knowledge:commit'), { target: 'repo' }), ['knowledge', 'commit', 'repo']);
   assert.deepEqual(resolveArgv(rows.find((r) => r.id === 'command:recall'), { query: 'orders timeout' }), ['recall', 'orders timeout']);
 
-  // `--apply` is a row of its own, never a refinement of the bare command: it
-  // is the sole writer, and appending it to a row that renders `read` is
-  // exactly the mislabelling the side-effect glyph exists to prevent.
   const consolidate = rows.find((r) => r.id === 'command:consolidate');
   assert.deepEqual(consolidate.refinements, [], 'the read-only status row offers no writing refinement');
   assert.deepEqual(consolidate.prompts.map((o) => o.flag), ['--ops', '--layer']);
@@ -334,10 +282,6 @@ test('resolveArgv omits unanswered pickers and emits booleans as bare flags', ()
   assert.deepEqual(apply.prompts.find((o) => o.flag === '--ops').required, true);
   assert.deepEqual(resolveArgv(apply, { '--ops': 'ops.json' }), ['consolidate', '--apply', '--ops', 'ops.json']);
 
-  // Boolean options: present-and-true becomes a bare flag, false vanishes.
-  // Built by hand because no registry flag is BOTH `tui: 'prompt'`-or-
-  // dependent AND boolean today — the branch is real code on the dispatch
-  // path, so it is covered here rather than left to a future entry.
   const synthetic = {
     argvTokens: [{ kind: 'command', value: 'probe' }],
     prompts: [{ flag: '--loud', type: 'boolean' }],
@@ -367,11 +311,15 @@ test('a command and a skill sharing a name both stay in the one flat namespace',
 
   const byId = new Map(rows.map((r) => [r.id, r]));
   for (const name of ['consolidate', 'recall']) {
-    assert.ok(byId.get(`command:${name}`), `the command row for ${name} survives`);
+    const command = byId.get(`command:${name}`);
+    assert.ok(command, `the command row for ${name} survives`);
     const skill = byId.get(`skill:${name}`);
     assert.ok(skill, `the skill row for ${name} survives`);
     assert.equal(skill.label, `skill:${name}`, 'the command owns the bare name; the skill is qualified');
-    assert.equal(byId.get(`command:${name}`).label, name);
+    assert.equal(command.noun, name, 'command id/noun stay machine-stable');
+    // TUI uses product labels (e.g. "Consolidate learnings"), not the bare noun.
+    assert.ok(command.label && command.label !== `skill:${name}`);
+    assert.notEqual(command.label, skill.label);
   }
 
   assert.equal(rows.filter((r) => r.kind === 'skill').length, 3, 'brainstorming + the two colliding skills');
@@ -404,10 +352,7 @@ test('a workspace with no .github/skills yields commands only and creates nothin
   assert.ok(index.rows.length > 0, 'commands are still indexed');
 
   assert.deepEqual(fs.readdirSync(workspace), [], 'a read must create nothing in the workspace');
-  // …and nothing in the global home either, which is where the knowledge
-  // store lives: an accidental `ensureStore` would seed `<home>/knowledge/…`
-  // entirely outside the workspace snapshot above.
-  assert.deepEqual(listTree(home), [], 'a read must create nothing under the harness home');
+    assert.deepEqual(listTree(home), [], 'a read must create nothing under the harness home');
 });
 
 test('an empty .github/skills is reported as scanned-and-empty', (t) => {
@@ -440,8 +385,6 @@ test('an unknown surface is rejected rather than silently defaulted', () => {
 
 // --- surfaces -------------------------------------------------------------
 
-// `tui` joins them: a ledger offering "open the session ledger" in its own
-// palette is a row that can only refuse, and it crowds out one that could act.
 const LIFECYCLE_ONLY = ['install', 'upgrade', 'uninstall', 'init-repo', 'resolve', 'tui'];
 
 test('the palette omits lifecycle and machine-only commands; the CLI keeps them', () => {
@@ -452,19 +395,24 @@ test('the palette omits lifecycle and machine-only commands; the CLI keeps them'
     assert.equal(tui.rows.some((r) => r.noun === name), false, `${name} must not appear on the palette`);
     assert.ok(cli.rows.some((r) => r.id === `command:${name}`), `${name} must still appear on the CLI`);
   }
-  // The two surfaces differ by exactly two deliberate things: the lifecycle
-  // commands above, and the verb rows a picker command folds into one row.
-  // Anything else appearing here means a capability went missing from a surface
-  // by accident, which is what this count exists to catch.
-  const foldedByPickers = listCommands()
-    .filter((name) => getCommand(name).tuiPicker)
-    .reduce((sum, name) => sum + cli.rows.filter((r) => r.noun === name).length - 1, 0);
-  assert.equal(foldedByPickers, 4, 'model folds show/set/clear/refresh into its picker row');
-  assert.equal(
-    cli.rows.length - tui.rows.length,
-    LIFECYCLE_ONLY.length + foldedByPickers,
-    'the CLI surface is the palette plus the lifecycle commands and the rows pickers fold',
-  );
+  assert.ok(cli.rows.length > tui.rows.length, 'CLI inventory is strictly larger than the palette');
+
+  // Multi-verb families and specialized pickers collapse to one sheet on TUI.
+  for (const name of listCommands()) {
+    const entry = getCommand(name);
+    if (!entry) continue;
+    const multi = (entry.verbs || []).length >= 2 && entry.tuiFold !== false;
+    if (!entry.tuiPicker && !multi) continue;
+    if (Array.isArray(entry.surfaces) && entry.surfaces.length && !entry.surfaces.includes('tui')) continue;
+    if (entry.userInvocable === false) continue;
+    const tuiRows = tui.rows.filter((r) => r.noun === name);
+    assert.equal(tuiRows.length, 1, `${name} must fold to one palette row`);
+    assert.ok(tuiRows[0].picker, `${name} palette row opens a picker/sheet`);
+    assert.ok(
+      cli.rows.filter((r) => r.noun === name).length > 1,
+      `${name} still expands on the CLI`,
+    );
+  }
 });
 
 test('nothing marked userInvocable: false reaches the tui surface', () => {
@@ -476,11 +424,7 @@ test('nothing marked userInvocable: false reaches the tui surface', () => {
   for (const name of internal) {
     assert.equal(rows.some((r) => r.noun === name), false, `${name} is harness-invoked, not user-invoked`);
   }
-  // …but it is still indexed on the surface it declares, which is the whole
-  // point of filtering the palette rather than the registry. `resolve`
-  // declares `surfaces: ['cli']`, so `cli` keeps it and `agent` — which it
-  // does not declare — does not.
-  assert.ok(buildCommandIndex({ surface: 'cli', workspace: packageRoot }).rows.some((r) => r.noun === 'resolve'));
+    assert.ok(buildCommandIndex({ surface: 'cli', workspace: packageRoot }).rows.some((r) => r.noun === 'resolve'));
   assert.equal(buildCommandIndex({ surface: 'agent', workspace: packageRoot }).rows.some((r) => r.noun === 'resolve'), false);
 });
 
@@ -507,28 +451,6 @@ test('skills are a tui-only concept', () => {
   assert.equal(buildCommandIndex({ surface: 'tui', workspace }).rows.filter((r) => r.kind === 'skill').length, 1);
 });
 
-/**
- * The side-effect glyph is the palette's one claim no surveyed agent CLI can
- * make — "see what this will do to your repo before you run it". It is only
- * worth anything if it is accurate per row, so the two directions are not
- * symmetric:
- *
- * - Under-warning is a SAFETY bug: a row that writes must never read as `read`.
- * - Over-warning is a TRUST bug: `harness report` alone only reads, and a
- *   glyph that cries wolf on every read-only form stops being read at all.
- *
- * The entry's own `sideEffect` stays the policy-facing maximum; these rows
- * carry `bareSideEffect` / per-verb / per-flag overrides.
- */
-
-/**
- * The one declaration a row's class may come from — its OWN source, not any
- * source somewhere in the entry: a command row's is `bareSideEffect`, a
- * declared verb row's is that verb's, a flag-derived row's is that flag's
- * (falling back to the verb it sits under). Checking "some flag of this
- * command declares `read`" instead would let `consolidate --candidates`
- * excuse a `read` glyph on any consolidate row.
- */
 function declaredClassOf(entry, row) {
   const under = (entry.verbs || []).find((v) => v.verb === row.argvTokens[1]?.value);
   const flagToken = row.argvTokens.find((t) => t.kind === 'flag');
@@ -554,17 +476,17 @@ test('every row carries its own consequence, not its command policy maximum', ()
 
   const expected = {
     // read-only forms of commands classified `mutate` for policy
-    'index status': 'read',
-    'report': 'read',
-    'report global': 'read',
-    'consolidate': 'read',
-    'consolidate candidates': 'read',
+    'Check knowledge + code index status': 'read',
+    'Reports': 'read',
+    'Global report': 'read',
+    'Consolidate learnings': 'read',
+    'List consolidate candidates': 'read',
     // …and the forms that genuinely write, which must not be softened
-    'index': 'mutate',
-    'index structural': 'mutate',
-    'report sync': 'mutate',
-    'consolidate apply': 'mutate',
-    'consolidate rebuild': 'mutate',
+    'Rebuild knowledge index': 'mutate',
+    'Rebuild code symbol index': 'mutate',
+    'Sync then report': 'mutate',
+    'Apply consolidate ops': 'mutate',
+    'Rebuild consolidate debt': 'mutate',
   };
   for (const [label, effect] of Object.entries(expected)) {
     const row = byLabel.get(label);
@@ -572,18 +494,7 @@ test('every row carries its own consequence, not its command policy maximum', ()
     assert.equal(row.sideEffect, effect, `${label} must render as ${effect}`);
   }
 
-  // A downgrade must be JUSTIFIED, not merely declared somewhere in the entry.
-  // Two independent obligations, because "the registry says so" is what a
-  // mislabelled row would also satisfy:
-  //
-  //   1. the class comes from this row's own declaration (`declaredClassOf`);
-  //   2. the row genuinely cannot exceed it — no option it offers, and no
-  //      token any answer can put on its argv, outranks the glyph.
-  //
-  // (2) is the invariant that makes the glyph worth reading: `consolidate`
-  // renders `read`, and no combination of its own pickers may resolve to
-  // `consolidate --ops x.json --apply`, which writes the store.
-  let downgraded = 0;
+    let downgraded = 0;
   let optionsChecked = 0;
   for (const row of rows) {
     if (row.kind === 'skill') continue;

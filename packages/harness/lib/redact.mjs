@@ -1,81 +1,7 @@
-/**
- * Deterministic secret redaction.
- *
- * A pure, offline masking pass over text and JSON-shaped values — no
- * network, no model, no filesystem. This module produces masked
- * strings/structures AND owns the one shared emission boundary
- * (`redactedJson`, below) that every sink writing command output or
- * persisting an event routes through: lib/commands.mjs's `emitJson` and
- * every legacy `--json` serializer, lib/envelope.mjs's JSONL rows,
- * lib/events.mjs's events.jsonl append, lib/registry.mjs's envelope lanes,
- * and bin/harness.mjs's error envelope. Redaction is universal because it
- * happens at THIS boundary, not per-output-lane (fix-wave C2/C3).
- *
- * Two independent masking layers, both applied by `redactText`:
- *
- *   1. Env-derived: the VALUE of any environment variable whose NAME looks
- *      secret-shaped (`TOKEN`/`SECRET`/`KEY`/`PASSWORD`/`CREDENTIAL`/`AUTH`)
- *      is masked wherever it appears verbatim OR percent-encoded
- *      (`encodeURIComponent`) in text, keyed by that variable's name
- *      (`«redacted:env:GITHUB_TOKEN»`). This catches secrets the process
- *      actually holds, even when their shape doesn't match any known token
- *      pattern (an internal API key, a raw password) — including when that
- *      secret is embedded in a URL (a git remote, a webhook, a query
- *      string) and therefore percent-encoded.
- *   2. Pattern-derived: common credential SHAPES (GitHub tokens, AWS access
- *      keys, JWTs, PEM key blocks, bearer headers, key=value secrets, …) are
- *      masked wherever they appear, independent of the environment
- *      (`«redacted:jwt»`). This catches secrets pasted into text that the
- *      process never held as an env var (a leaked token in a log line).
- *
- * The mask format `«redacted:<kind>»` is fixed-width per kind, not a
- * function of the matched secret's length — a masked value can't be used to
- * infer how long the real secret was.
- *
- * This module composes with the existing `inertLine` data-boundary idiom
- * (see `lib/commands.mjs` / `lib/context-pack.mjs`) rather than replacing
- * it: `inertLine` neutralizes control characters so untrusted text can't
- * forge structure at a render boundary; `redactText`/`redactValue` mask
- * secret-shaped content so it never reaches that boundary in the first
- * place. Deliberately independent of both those files (and of
- * `lib/secret-scan.mjs`, the earlier best-effort screen used by knowledge
- * capture) — no imports from any of them, so this module can be wired in
- * wherever it's needed without pulling in unrelated subsystems.
- *
- * Regex-grade by design, same caveat as every credential screen in this
- * codebase: best-effort shape matching, not a cryptographic guarantee.
- *
- * Known limitations (encoding transforms): env-derived masking defeats the
- * raw value and its single-pass `encodeURIComponent` form only. It does NOT
- * detect a secret hidden behind any OTHER transform — base64/base64url- or
- * hex-encoding the whole value, double URL-encoding, case-folding, or a
- * secret split across chunks/lines (streamed output that breaks a token
- * mid-string across two `write()` calls, for instance) all pass through
- * unmasked. Pattern-derived masking has the same "single literal shape"
- * ceiling. None of this is a regression from a naive implementation — a
- * fully transform-proof screen would need semantic/entropy analysis, out of
- * scope for a deterministic, regex-grade module — but it is a real gap
- * worth knowing before treating this module's output as a hard guarantee.
- */
-
-// Env var NAME shape that reads as secret-carrying. Deliberately broad (no
-// word boundaries) per the accepted false-positive/false-negative trade —
-// substring matches like GIT_AUTHOR_NAME are intentionally caught by AUTH
-// here; the length >= 8 floor and the benign-suffix exclusion below are the
-// only carve-outs.
 const ENV_SECRET_NAME_RE = /(TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL|AUTH)/i;
 
-// Env var NAMEs that carry a secret-shaped word but hold a benign value — a
-// filesystem path or socket, not the secret itself. PUBLIC_KEY_PATH,
-// SSH_AUTH_SOCK, CREDENTIAL_FILE, TOKEN_DIR are all "where the secret lives",
-// not the secret. Suffix-anchored so this only excludes vars that legitimately
-// END in one of these words — GITHUB_TOKEN_PATH_OVERRIDE (mid-string) still
-// gets screened.
 const ENV_BENIGN_SUFFIX_RE = /_(PATH|FILE|DIR|SOCK)$/i;
 
-// Below this length an env "secret" is almost always a flag, short code, or
-// placeholder ("KEY=1", "AUTH=on") — masking it would be noise, not signal,
-// and risks clobbering unrelated short text that happens to contain it.
 const ENV_MIN_SECRET_LENGTH = 8;
 
 const MASK_PREFIX = '«redacted:';
@@ -85,74 +11,25 @@ function mask(kind) {
   return `${MASK_PREFIX}${kind}${MASK_SUFFIX}`;
 }
 
-/**
- * The exact `«redacted:<kind>»` marker string for a kind — the single source
- * of the mask format for callers that must emit a marker WITHOUT running a
- * value through the pattern pipeline. Used by lib/verify.mjs to mask a
- * structurally identified multi-line PEM block wholesale (once its BEGIN/END
- * delimiters are seen), instead of relying on redactText's single PEM pattern
- * whose body span is bounded and would let an oversized key slip past.
- */
 export function redactionMarker(kind) {
   return mask(kind);
 }
 
-// Conservative, kind-less fallback used only when the normal masking
-// pipeline itself throws (requirement: never throw, degrade to a mask
-// instead of crashing OR leaking the raw input).
 const FALLBACK_MASK = mask('error');
 
-/**
- * Common credential SHAPES, independent of environment. Each entry's `re`
- * does not need a `g` flag — normalizePattern adds one. `mask` is optional;
- * when present it receives the same (match, ...capturedGroups) arguments
- * `String.prototype.replace` would pass a replacer function and must return
- * the full replacement string (used by kv-secret/bearer-token to keep a
- * readable prefix instead of swallowing it). When absent, the ENTIRE match
- * is replaced by the fixed `«redacted:<kind>»` marker.
- *
- * Ordered most-specific-shape first, most-generic (kv-secret) last, so a
- * narrowly-shaped secret (a JWT, a GitHub token) is classified by its own
- * kind before the generic key=value sweep would otherwise claim it.
- *
- * Upper bounds on every quantifier are a deliberate perf/safety margin
- * (req #4 2 MiB / req #3 never-throw-on-hostile-input): they cap the work a
- * single failed match attempt can do, keeping every pattern's cost linear in
- * input size instead of letting a pathological input coax out worst-case
- * backtracking.
- */
 const DEFAULT_PATTERNS = [
   {
-    // GitHub personal access tokens (classic ghp_/gho_/ghu_/ghs_/ghr_ and the
-    // newer fine-grained github_pat_ prefix).
-    //
-    // P3D1 (Phase 1 debt): NO leading `\b`. A `\b` requires a non-word
-    // character before the match, so a token glued straight onto a preceding
-    // word — `prefixghp_…`, which is what string concatenation without a
-    // separator produces — did not match and streamed out in full. The prefixes
-    // here are distinctive enough that dropping the boundary costs no realistic
-    // false positive, and for a secret screen a false positive is a cosmetic
-    // cost while a false negative is the whole failure.
-    kind: 'github-token',
+        kind: 'github-token',
     re: /(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,255}\b|github_pat_[A-Za-z0-9_]{20,255}\b/,
   },
   {
-    // "sk-"-style secret API keys (OpenAI classic + "sk-proj-…" project keys).
-    //
-    // This one KEEPS its leading `\b`, unlike the prefixes above, and the
-    // asymmetry is deliberate: "sk-" occurs inside ordinary words — task-,
-    // risk-, disk- — so dropping the boundary would mask running prose like
-    // "task-oriented-refactoring-notes". Here a false positive corrupts
-    // legitimate output, which flips the trade the comment above describes.
-    kind: 'api-key',
+        kind: 'api-key',
     re: /\bsk-[A-Za-z0-9_-]{16,255}\b/,
   },
   {
     // Slack bot/user tokens.
     kind: 'slack-token',
-    // No leading `\b` — same P3D1 reasoning as the GitHub prefixes; "xox" plus
-    // a type letter and a dash does not occur in prose.
-    re: /xox[abprs]-[A-Za-z0-9-]{10,255}\b/,
+        re: /xox[abprs]-[A-Za-z0-9-]{10,255}\b/,
   },
   {
     kind: 'aws-access-key',
@@ -160,36 +37,19 @@ const DEFAULT_PATTERNS = [
     re: /AKIA[0-9A-Z]{16}\b/,
   },
   {
-    // Three-segment base64url JWT. No trailing \b: base64url's own `-`/`_`
-    // aren't \w characters, so a signature ending in one (a real,
-    // frequent case) would make a trailing \b fail and strand that
-    // character unmasked — the leading \b before "eyJ" is enough to keep
-    // this from matching inside an unrelated larger word.
-    kind: 'jwt',
+        kind: 'jwt',
     re: /\beyJ[A-Za-z0-9_-]{8,20000}\.[A-Za-z0-9_-]{8,20000}\.[A-Za-z0-9_-]{4,2000}/,
   },
   {
-    // PEM private key block, BEGIN..END inclusive, so the whole block
-    // (not just its header line) is masked. [^]{0,4096}? is a lazy,
-    // dot-matches-everything span bounded to a generous 4 KB — comfortably
-    // larger than a real RSA-4096/EC/OPENSSH key body — so a BEGIN with no
-    // matching END fails fast instead of scanning to the end of the input
-    // (a repeated-BEGIN-no-END input is otherwise O(occurrences × cap)).
-    kind: 'private-key',
+        kind: 'private-key',
     re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----[^]{0,4096}?-----END (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/,
   },
   {
-    // `Authorization: Bearer <token>` — the lookbehind matches only the
-    // token itself, so the readable "Bearer " prefix survives redaction.
-    kind: 'bearer-token',
+        kind: 'bearer-token',
     re: /(?<=\bBearer\s)[A-Za-z0-9._~+/=-]{8,255}/i,
   },
   {
-    // Generic `password=`/`token=` query- or kv-string values. Last (most
-    // generic) so a value that's ALSO one of the shapes above already got
-    // classified by its own kind first. The key name (password/token) and
-    // separator survive; only the value is masked.
-    kind: 'kv-secret',
+        kind: 'kv-secret',
     re: /\b(password|token)(\s*=\s*)[^\s&"']{1,500}/i,
     mask: (_match, key, sep) => `${key}${sep}${mask('kv-secret')}`,
   },
@@ -502,23 +362,6 @@ export function redactedJson(value, { pretty = false, redactor } = {}) {
   // match, destroying the escape and terminating the JSON string early.
   // Verified pre-fix leak: `redactedJson({message: 'no learning "token=…"
   // found'})` produced `{"message":"no learning \"token=«redacted:kv-secret»"
-  // found"}` — text `JSON.parse` throws on. The old comment here claimed
-  // "the result stays valid JSON"; that guarantee was false.
-  //
-  // Fixed by moving masking INTO serialization via a JSON.stringify
-  // REPLACER instead of a post-serialization text pass:
-  //   - A replacer is invoked with each (key, value) pair AFTER any
-  //     toJSON()/getter has already run for that value (per the JSON.stringify
-  //     spec: Get -> toJSON -> replacer), so it still closes the
-  //     serialize-time toJSON-bypass class the text pass was originally added
-  //     for (fix-wave P2, still covered by the tests below).
-  //   - Because the replacer returns a plain JS value and JSON.stringify does
-  //     its own string escaping AFTER the replacer returns, the escaping can
-  //     never be corrupted by whatever the replacer returns — the output is
-  //     always valid JSON, independent of what the masked text looks like.
-  //   - Byte-identical for secret-free data: `redactText` returns its input
-  //     unchanged when there is nothing to mask, so the replacer is then a
-  //     no-op identity function and JSON.stringify's output is unaffected.
-  const replacer = (_key, val) => (typeof val === 'string' ? active.redactText(val) : val);
+    const replacer = (_key, val) => (typeof val === 'string' ? active.redactText(val) : val);
   return pretty ? JSON.stringify(safe, replacer, 2) : JSON.stringify(safe, replacer);
 }

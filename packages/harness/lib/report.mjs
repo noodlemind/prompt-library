@@ -4,8 +4,6 @@ import { eventPath } from './events.mjs';
 import { measuredUsage, summarizeUsage } from './token-meter.mjs';
 import { createStyle, keyWidthFor } from './style.mjs';
 
-// A report reads more history than the bounded `events` view, but is still
-// capped so a runaway log cannot blow up memory or output.
 const REPORT_EVENT_CAP = 2000;
 
 // Static budget caps (mirrors the enforced values in prompt-library-contracts).
@@ -68,10 +66,6 @@ function topSessions(events, limit = 3) {
   return [...bySession.values()].sort((a, b) => b.tokens - a.tokens).slice(0, limit);
 }
 
-/** Budget breaches over the authoritative prompt-library artifacts.
- * Scans the FIRST root that actually has artifacts (workspace `.github` when
- * present, else the hydrated `~/.copilot`) — never both, so a clean workspace
- * is not judged against a stale global install. */
 export function budgetBreaches({ workspace, copilotHome }) {
   const roots = [
     { agents: path.join(workspace, '.github', 'agents'), skills: path.join(workspace, '.github', 'skills') },
@@ -151,37 +145,12 @@ export function trendRegression(events) {
   };
 }
 
-/** Knowledge-layer SLOs: cited/surfaced utilization and consolidation engagement.
- * Surfaced = learning ids `orient` injected into a pack; cited = learning ids
- * `verify --learnings` reports as actually applied. Engagement pairs human
- * `remember`/`learning` actions against applied `consolidate` decisions.
- *
- * `utilization` is unique-id based (definition stability: does citation ever
- * happen for a given learning at all). `utilizationWeighted` counts raw
- * occurrences instead — the same learning surfaced 25 times and cited once
- * scores 1.0 unique but 0.04 weighted — so repeated surfacing without
- * citation (noise) is visible even when every distinct id was cited once.
- * `citedOccurrences` excludes only citations of an id `orient` never
- * surfaced at all (noise, not utilization) — it does NOT cap citations of an
- * id that WAS surfaced at that id's own surfaced count, so repeatedly citing
- * an already-surfaced learning is deliberate reuse signal and can still push
- * `utilizationWeighted` past 1.0 (100%); that is expected, not a bug. */
 export function knowledgeSlos(events) {
   const surfaced = new Set(); const cited = new Set();
   let surfacedOccurrences = 0;
-  // Raw per-occurrence citations, filtered against `surfaced` only once the
-  // full set is known (below) — a citation for an id `orient` never surfaced
-  // is noise, not utilization, so it must not inflate the weighted rate.
-  const citedIdOccurrences = [];
+    const citedIdOccurrences = [];
   let consolidations = 0; let humanActions = 0;
-  // Layer attribution (branch-local vs golden): orient events record
-  // learningLayers only when a branch-bucket learning surfaced. Current shape
-  // is per-occurrence entries [{id, layer}] — the protected-shadow overlay
-  // can surface golden AND branch entries with the SAME id, so an id can
-  // legitimately belong to both layer sets; an id-keyed map would drop one
-  // side. Legacy id-keyed maps from older event files are still read.
-  // Absent everywhere → no split is reported.
-  const layersById = new Map(); // id -> Set of layers the id surfaced from
+    const layersById = new Map(); // id -> Set of layers the id surfaced from
   let anyLayerInfo = false;
   const recordLayer = (id, layer) => {
     if (!layersById.has(id)) layersById.set(id, new Set());
@@ -210,13 +179,7 @@ export function knowledgeSlos(events) {
   }
   const citedSurfaced = [...cited].filter((id) => surfaced.has(id)).length;
   const citedOccurrences = citedIdOccurrences.filter((id) => surfaced.has(id)).length;
-  // Per-layer split (blueprint Phase 2, report/SLO layer split): unique-id
-  // based, attributed to EVERY layer an id surfaced from (default golden), so
-  // a protected-shadow pair counts under both layers rather than losing one.
-  // Sums can therefore exceed the unique `surfaced` total by the number of
-  // dual-layer ids. Only present once any layer info exists, so pre-bucket
-  // reports are unchanged.
-  let layers;
+    let layers;
   if (anyLayerInfo) {
     layers = { golden: { surfaced: 0, cited: 0 }, branch: { surfaced: 0, cited: 0 } };
     for (const id of surfaced) {
@@ -236,14 +199,6 @@ export function knowledgeSlos(events) {
     ...(layers ? { layers } : {}) };
 }
 
-/** Injected-token ledger: the COST side of the knowledge layer's accounting.
- * `injectedTokens` is a rough chars/4 estimate (same heuristic used
- * elsewhere in this file) over every `orient` event's `learningsBytes` —
- * bytes of the "## Learnings (memory)" pack section that orient actually
- * attempted to inject. This is spend, not savings: whether an injected
- * learning ever changed an agent's behavior for the better is unmeasured,
- * so there is no "tokens saved" figure here or anywhere in this module —
- * see the knowledge-layer honesty contract. */
 export function knowledgeTokenLedger(events) {
   let bytes = 0;
   let orientsWithLearnings = 0;
@@ -645,9 +600,7 @@ export function renderReport(report, ui = createStyle()) {
         : 'run some harness commands, then report',
       keyWidth,
     }));
-    // An empty report must be self-diagnosing: say exactly where telemetry
-    // was expected, what exists there, and which knob fixes each gap.
-    const sessionStateDir = !partialOnly && report.copilotHome ? path.join(report.copilotHome, 'session-state') : null;
+        const sessionStateDir = !partialOnly && report.copilotHome ? path.join(report.copilotHome, 'session-state') : null;
     const vscodeUsage = report.copilotHome ? path.join(report.copilotHome, 'host-usage', 'vscode.jsonl') : null;
     const countSessions = (dir) => {
       try {

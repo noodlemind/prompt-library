@@ -1,7 +1,3 @@
-// Deterministic tokenizer shared by indexing and querying. Because the same
-// function runs on both sides, every normalization here improves recall
-// symmetrically and reduces sensitivity to how a query happens to be phrased.
-
 const STOPWORDS = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'are', 'was',
   'has', 'have', 'not', 'but', 'you', 'your', 'our', 'can', 'will', 'need',
@@ -34,10 +30,7 @@ function stem(word) {
 }
 
 export function tokenize(s) {
-  // Preserve identifier separators through the initial pass so camel/snake/kebab
-  // survive to identifierParts; then split, expand each identifier into whole +
-  // parts, drop stopwords/short tokens, and stem.
-  const raw = String(s ?? '')
+    const raw = String(s ?? '')
     .replace(/[^A-Za-z0-9_\s-]/g, ' ')
     .split(/\s+/)
     .filter(Boolean);
@@ -46,9 +39,7 @@ export function tokenize(s) {
   for (const token of raw) {
     const lower = token.toLowerCase();
     const parts = identifierParts(token);
-    // Emit the whole compound (kebab/snake collapsed to one) so "system-override"
-    // still matches literal usages, AND its parts so phrasing/format variants hit.
-    if (lower.length > 2 && !STOPWORDS.has(lower)) out.add(stem(lower));
+        if (lower.length > 2 && !STOPWORDS.has(lower)) out.add(stem(lower));
     if (parts.length > 1) {
       for (const part of parts) {
         if (part.length > 2 && !STOPWORDS.has(part)) out.add(stem(part));

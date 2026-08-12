@@ -24,12 +24,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// verifyAdmittedEpisodeKinds (apply.mjs) requires every fix-kind (or
-// kind-omitted) episode an ADD/STRENGTHEN/SUPERSEDE/MERGE op offers to
-// disk-verify: the path must resolve inside the workspace, the file must
-// exist, and its CURRENT content must hash to the asserted sha256. This
-// helper writes a real file and returns its real sha256, so seeded fixtures
-// never assert fabricated evidence.
 function writeRealEpisode(ws, rel, content) {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -102,9 +96,7 @@ test('rankLearnings honors an optional include predicate, applied after status/s
   assert.ok(!filtered.some((r) => r.id === autoId), 'include predicate must exclude the filtered id');
   assert.ok(filtered.some((r) => r.id === humanId), 'include predicate must not affect other ids');
 
-  // Default (no include) never filters anything beyond the existing
-  // status/stale rules — additive, opt-in only.
-  const noPredicate = rankLearnings({
+    const noPredicate = rankLearnings({
     workspace: c.ws, query: 'adding NOT NULL columns to hot tables', limit: 10, home: c.harnessHome, include: undefined,
   });
   assert.deepEqual(noPredicate.map((r) => r.id).sort(), unfiltered.map((r) => r.id).sort());

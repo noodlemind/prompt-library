@@ -9,14 +9,6 @@ import { collectEpisodes } from '../lib/knowledge/consolidate.mjs';
 import { purgeEpisode, mirrorLearnings } from '../lib/knowledge/admin.mjs';
 import { ensureStore, storeDir, listLearnings, readLedger, writeStoreConfig } from '../lib/knowledge/store.mjs';
 
-/**
- * Hardening batch B: filesystem and provenance safety. Covers the
- * symlink-following episode reads (P1-2), symlinked mirror destinations
- * (P1-3), symlinked purge ancestors (P1-4), and the global purge namespace
- * gap (P2) an external security review reproduced against the knowledge
- * layer's filesystem surfaces.
- */
-
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ctx = () => ({ ws: tempDir('kfs-ws-'), home: tempDir('kfs-home-'), harnessHome: tempDir('kfs-hh-') });
 
@@ -45,9 +37,7 @@ test('P1-2: a symlinked episode file under docs/solutions never appears in colle
   const catDir = path.join(c.ws, 'docs', 'solutions', 'perf');
   fs.mkdirSync(catDir, { recursive: true });
   fs.symlinkSync(secretFile, path.join(catDir, 'evil.md'));
-  // A genuine sibling episode proves the scan still works normally
-  // alongside the rejected symlink.
-  writeRealEpisode(c.ws, 'docs/solutions/perf/legit.md', '---\ntitle: "legit"\n---\n\nlegit fix body.\n');
+    writeRealEpisode(c.ws, 'docs/solutions/perf/legit.md', '---\ntitle: "legit"\n---\n\nlegit fix body.\n');
 
   const episodes = collectEpisodes({ workspace: c.ws, copilotHome: null });
   assert.ok(episodes.some((e) => e.path === 'docs/solutions/perf/legit.md'), 'the real sibling episode is still collected');
@@ -70,9 +60,7 @@ test('P1-2: an op citing a symlinked episode path never verifies as evidence —
   const rel = 'docs/solutions/perf/evil.md';
   fs.symlinkSync(secretFile, path.join(c.ws, rel));
 
-  // The attacker knows the target's content and precomputes its real sha256
-  // — even so, the read must never follow the symlink to confirm the match.
-  const sha256 = crypto.createHash('sha256').update(secretText).digest('hex');
+    const sha256 = crypto.createHash('sha256').update(secretText).digest('hex');
   const op = {
     op: 'ADD',
     domain: 'sql',
@@ -97,9 +85,7 @@ test('P1-3: mirrorLearnings refuses to write through a symlinked domain director
   const outsideDir = tempDir('kfs-mirror-outside-');
   const mirrorRoot = path.join(c.ws, 'docs', 'knowledge', 'learnings');
   fs.mkdirSync(mirrorRoot, { recursive: true });
-  // Pre-plant the domain directory itself as a symlink pointing outside the
-  // workspace, BEFORE any mirror write ever runs.
-  fs.symlinkSync(outsideDir, path.join(mirrorRoot, 'sql'));
+    fs.symlinkSync(outsideDir, path.join(mirrorRoot, 'sql'));
 
   writeStoreConfig(c.ws, { home: c.harnessHome, commit: 'repo' });
 
@@ -134,10 +120,7 @@ test('P1-4: purge refuses through a symlinked docs/solutions directory — exit 
   const outsideFile = path.join(outsideDir, 'x.md');
   fs.writeFileSync(outsideFile, 'must survive a blocked purge\n', 'utf8');
 
-  // docs/solutions itself is a symlink pointing outside the workspace — a
-  // lexical-only containment check (resolve + startsWith) would incorrectly
-  // treat 'docs/solutions/x.md' as workspace-contained.
-  fs.mkdirSync(path.join(c.ws, 'docs'), { recursive: true });
+    fs.mkdirSync(path.join(c.ws, 'docs'), { recursive: true });
   fs.symlinkSync(outsideDir, path.join(c.ws, 'docs', 'solutions'));
 
   const res = purgeEpisode({ workspace: c.ws, target: 'docs/solutions/x.md', home: c.harnessHome });

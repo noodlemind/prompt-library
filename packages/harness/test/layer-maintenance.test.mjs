@@ -116,16 +116,12 @@ test('purge keeps the governance record while the id survives in ANY layer, drop
   appendGovernance(dir, { id: 'sql/dual', action: 'dispute', reason: 'r', to: null, at: new Date().toISOString() });
   commitFixture(dir);
 
-  // Purging ep removes only the bucket copy — the golden twin survives, so
-  // the governance record must survive with it.
-  const first = purgeEpisode({ workspace: ws, target: ep.rel, copilotHome: tempDir('lmaint-ch2-'), home });
+    const first = purgeEpisode({ workspace: ws, target: ep.rel, copilotHome: tempDir('lmaint-ch2-'), home });
   assert.equal(first.pass, true, first.blockedReason);
   assert.deepEqual(first.removed.learnings, ['sql/dual']);
   assert.ok(readGovernance(dir).has('sql/dual'), 'governance survives while the golden twin exists');
 
-  // Purging the golden twin's own evidence removes the last copy — now the
-  // governance record goes too.
-  const second = purgeEpisode({ workspace: ws, target: goldenEp.rel, copilotHome: tempDir('lmaint-ch3-'), home });
+    const second = purgeEpisode({ workspace: ws, target: goldenEp.rel, copilotHome: tempDir('lmaint-ch3-'), home });
   assert.equal(second.pass, true, second.blockedReason);
   assert.ok(!readGovernance(dir).has('sql/dual'), 'governance dropped once no layer holds the id');
 });

@@ -73,16 +73,7 @@ test('knowledgeSlos is null-safe with no surfaced learnings or consolidations', 
 });
 
 test('knowledgeSlos separates cited-but-never-surfaced ids from the surfaced intersection', () => {
-  // "z" is cited (verify --learnings reported it applied) but was never
-  // surfaced by orient — the displayed fraction must use the intersection,
-  // not the raw cited count, or it will contradict the percent shown. The
-  // weighted occurrence count applies the same intersection: a citation for
-  // an id that was NEVER surfaced is noise, not utilization, and must be
-  // excluded — here that happens to land exactly at 1.0, but the exclusion
-  // itself is what's asserted, not a general cap (see the repeat-citation
-  // test below, where a citation of an ALREADY-surfaced id legitimately
-  // pushes utilizationWeighted past 1.0).
-  const events = [
+    const events = [
     { type: 'orient', learnings: ['a'] },
     { type: 'verify', learnings: ['a', 'z'] },
   ];
@@ -96,10 +87,6 @@ test('knowledgeSlos separates cited-but-never-surfaced ids from the surfaced int
   assert.equal(slos.utilizationWeighted, 1);
 });
 
-// Rider (M4 review): only NEVER-surfaced citations are excluded from
-// citedOccurrences — repeatedly citing an id that WAS surfaced (just fewer
-// times) is deliberate reuse signal, not noise, so utilizationWeighted can
-// legitimately exceed 1.0 (100%) here. This is intended, not a regression.
 test('knowledgeSlos lets repeat citation of an already-surfaced id push utilizationWeighted past 100%', () => {
   const events = [
     { type: 'orient', learnings: ['a'] },

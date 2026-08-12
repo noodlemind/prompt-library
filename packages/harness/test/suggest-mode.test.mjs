@@ -9,15 +9,6 @@ import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { storeDir, listLearnings, readLedger, KNOWLEDGE_MODES } from '../lib/knowledge/store.mjs';
 
-/**
- * `suggest` mode (M3 task 3): approve-before-write. Matrix under test:
- * orient injects (yes), debt hint (yes), insight capture (yes, unaffected —
- * only the write paths below change), `remember` (yes, no --yes needed —
- * the human IS the approver), `consolidate --apply` (only with --yes),
- * `consolidate --rebuild` (already demands --yes, so suggest is a no-op
- * change there beyond widening the mode gate).
- */
-
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -38,12 +29,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// verifyAdmittedEpisodeKinds (apply.mjs) requires every fix-kind (or
-// kind-omitted) episode an ADD/STRENGTHEN/SUPERSEDE/MERGE op offers to
-// disk-verify: the path must resolve inside the workspace, the file must
-// exist, and its CURRENT content must hash to the asserted sha256. This
-// helper writes a real file and returns its real sha256, so fixtures never
-// assert fabricated evidence for evidence expected to be admitted.
 function writeRealEpisode(ws, rel, content) {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -52,11 +37,6 @@ function writeRealEpisode(ws, rel, content) {
   return { path: rel, sha256: crypto.createHash('sha256').update(text).digest('hex') };
 }
 
-// Deliberately fabricated (unlike writeRealEpisode above): every remaining
-// use of EP() targets a mode gate (E_MODE) that applyOps checks BEFORE it
-// ever parses the ops file, let alone reaches per-op evidence verification —
-// the episode is never read, so real evidence would add nothing and a
-// fabricated one proves the mode gate short-circuits ahead of it.
 const EP = (over = {}) => ({
   path: 'docs/solutions/perf/x.md',
   sha256: 'a'.repeat(64),
@@ -166,9 +146,7 @@ test('suggest mode: consolidate --apply without --yes rejects E_MODE, writes not
   assert.match(parsed.rejected[0].reason, /re-run apply with --yes/);
   assert.match(res.stdout + res.stderr, /re-run apply with --yes/);
 
-  // Nothing written: no learnings materialized, no ledger entries at all
-  // (the mode gate is not a content failure — it must never record a strike).
-  assert.deepEqual(fs.existsSync(dir) ? listLearnings(dir) : [], []);
+    assert.deepEqual(fs.existsSync(dir) ? listLearnings(dir) : [], []);
   assert.equal(fs.existsSync(dir) ? readLedger(dir).length : 0, 0);
 });
 

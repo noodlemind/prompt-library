@@ -5,23 +5,10 @@ import { rankLearnings, retrievalExclusion } from './retrieve.mjs';
 import { loadLayeredLearnings } from './overlay.mjs';
 import { tokenize } from '../tokenize.mjs';
 
-/**
- * Deterministic retrieval PROXY for the knowledge layer — hit rate, false-surface
- * rate, and injected-token cost per ranking arm on a temporally held-out split.
- * This is NOT the model-graded net-benefit number (design §12, deferred): a
- * lexical-overlap "hit" only proves a relevant learning was surfaced, never that
- * it changed an agent's behavior for the better. Never publish a benefit claim
- * from this command — see the honesty contract in the knowledge-layer design.
- */
-
 export const MIN_SCORE = 0.15;
 const BYTES_PER_TOKEN = 4;
 const RECOMMENDATION_BYTE_CEILING = 1024; // half the 2KB pack (design §7)
 
-// A small, fixed set of queries about topics that never appear in this
-// repo's corpus — used to measure how often an arm surfaces noise on a
-// completely unrelated question. Mirrored (not imported, packages/harness
-// ships standalone) in evals/fixtures/knowledge-negative-queries.json.
 export const DEFAULT_NEGATIVE_QUERIES = [
   'kubernetes ingress tls rotation',
   'graphql federation gateway caching',
@@ -69,11 +56,6 @@ function round3(n) {
   return Number(n.toFixed(3));
 }
 
-/**
- * Evaluate the four retrieval arms (none / frontmatter / wholeIndex / bm25) on a
- * temporal train/held-out split of this workspace's consolidated episodes.
- * Read-only: never creates the store — a missing store is a clean blocked exit.
- */
 export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = [] } = {}) {
   const dir = storeDir(workspace, { home });
   if (!fs.existsSync(dir)) {
@@ -87,31 +69,18 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
     return { pass: false, exitCode: 2, blockedReason: 'need ≥4 dated episodes for a split' };
   }
 
-  // cutoff = median date (upper median for an even split, so 6 dated episodes
-  // split 4 train / 2 held-out); held-out is strictly after the cutoff.
-  const cutoffIdx = Math.floor(dated.length / 2);
+    const cutoffIdx = Math.floor(dated.length / 2);
   const cutoff = dated[cutoffIdx].date;
   const train = dated.filter((e) => e.date <= cutoff);
   const heldOut = dated.filter((e) => e.date > cutoff);
 
-  // Share the PRODUCTION candidate set (loadLayeredLearnings, overlay.mjs —
-  // the same golden ∪ branch-bucket overlay retrieve.mjs's rankLearnings
-  // loads through) AND the production eligibility gate (retrievalExclusion),
-  // so the eval measures only learnings a real orient could actually surface.
-  const learnings = loadLayeredLearnings({ workspace, home }).learnings;
-  // Share the PRODUCTION retrieval eligibility gate (retrievalExclusion,
-  // retrieve.mjs) so the eval measures only learnings a real orient could
-  // actually surface — excluding promoted/superseded/retired/disputed AND
-  // stale-anchor-excluded ids. A local active-set that omitted promoted_to and
-  // stale exclusions could otherwise score hits on content users never receive.
-  const staleExcluded = readStaleExclusions(dir).excluded;
+    const learnings = loadLayeredLearnings({ workspace, home }).learnings;
+    const staleExcluded = readStaleExclusions(dir).excluded;
   const active = learnings.filter((l) => !retrievalExclusion(l, staleExcluded));
   const ledger = readLedger(dir);
   const bySha = new Map(episodes.map((e) => [`${e.path}@${e.sha256}`, e]));
 
-  // Ground truth (relevance proxy, not human-verified): per learning, the set
-  // of categories among its ledger-linked episodes dated on/before the cutoff.
-  const learningCategories = new Map();
+    const learningCategories = new Map();
   for (const entry of ledger) {
     if (!entry.learning) continue;
     const ep = bySha.get(`${entry.path}@${entry.sha256}`);
@@ -120,14 +89,7 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
     learningCategories.get(entry.learning).add(ep.category);
   }
 
-  // Pre-cutoff learning set (temporal contamination guard): a learning is
-  // eligible for ranking/counting in this eval only if EVERY episode it is
-  // linked to (via its own frontmatter episodes list) is dated on/before the
-  // cutoff. A learning with any post-cutoff or undatable link was derived
-  // from information that would not have existed yet at eval time, so it
-  // must never be surfaced, counted as ground truth, or billed for tokens —
-  // otherwise the eval leaks held-out (future) knowledge back into itself.
-  const episodesByPath = new Map(episodes.map((e) => [e.path, e]));
+    const episodesByPath = new Map(episodes.map((e) => [e.path, e]));
   function isPreCutoff(learning) {
     const links = learning.fm.episodes || [];
     if (!links.length) return false;
@@ -168,12 +130,7 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
     injectedTokens: Math.ceil(fmTotalBytes / BYTES_PER_TOKEN),
   };
 
-  // --- wholeIndex: every pre-cutoff active learning's trigger line injected,
-  // unconditionally. A relevant learning in the pre-cutoff set is, by
-  // construction, always included — the arm's real cost is the token bill,
-  // not ranking. Post-cutoff-derived learnings are excluded from both the
-  // hit determination and the byte bill (temporal contamination guard).
-  const wiTotalBytes = preCutoffActive.reduce((n, l) => n + Buffer.byteLength(l.fm.trigger || '', 'utf8'), 0);
+    const wiTotalBytes = preCutoffActive.reduce((n, l) => n + Buffer.byteLength(l.fm.trigger || '', 'utf8'), 0);
   const wholeIndex = {
     hitRate: scorable.length ? 1 : 0,
     falseSurfaceRate: round3(
@@ -187,12 +144,7 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
     injectedTokens: Math.ceil(wiTotalBytes / BYTES_PER_TOKEN),
   };
 
-  // --- bm25: rankLearnings top-3, the store's real retrieval path. One
-  // ranking call per held-out query (not two) — reused for both the hit-rate
-  // and injected-token-cost passes. `include: preCutoffOnly` keeps
-  // post-cutoff-derived learnings out of the results entirely, so they can
-  // never be surfaced or billed for tokens.
-  const scorableSet = new Set(scorable);
+    const scorableSet = new Set(scorable);
   let bmHits = 0;
   let bmTotalBytes = 0;
   for (const ho of heldOut) {

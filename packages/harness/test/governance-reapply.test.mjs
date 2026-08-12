@@ -10,16 +10,6 @@ import { storeDir, listLearnings, readGovernance } from '../lib/knowledge/store.
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { rankLearnings } from '../lib/knowledge/retrieve.mjs';
 
-/**
- * Milestone 4 Task 2: governance reapplication. Task 1 (governance.test.mjs)
- * proved the ledger records and survives every wipe path — this file proves
- * the OTHER half: a `consolidate --apply` that regenerates a previously
- * governed id honors the standing retire/dispute/promote decision instead of
- * silently reverting to whatever the fresh op claims, and `consolidate
- * --candidates` warns the skill about governed ids before it wastes an op on
- * one.
- */
-
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -31,8 +21,6 @@ const run = ({ ws, home, harnessHome }, args) =>
     env: { ...process.env, HARNESS_HOME: harnessHome },
   });
 
-// Same CLI invocation as `run`, minus --json — used only where the assertion
-// is on the human-readable ui.line render (the apply note text).
 const runText = ({ ws, home, harnessHome }, args) =>
   spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
     encoding: 'utf8',
@@ -45,13 +33,6 @@ function writeOps(dir, ops) {
   return p;
 }
 
-// Writes a REAL file into the test workspace and returns an episode object
-// whose sha256 is the genuine hash of that exact content —
-// verifyAdmittedEpisodeKinds (lib/knowledge/apply.mjs) now disk-verifies
-// every fix/insight-kind episode an admitted op offers, so a fabricated
-// sha256 pointing at a file that was never written is rejected with
-// E_SCHEMA before any governance-reapplication scenario in this file is
-// ever reached.
 function realEpisode(ws, over = {}) {
   const rel = over.path || 'docs/solutions/perf/x.md';
   const full = path.join(ws, rel);
@@ -76,9 +57,6 @@ const ADD = (ws, over = {}) => ({
   ...over,
 });
 
-// A REAL episode file with genuine `kind: human-teaching` frontmatter —
-// verifyHumanTeachingEpisode (apply.mjs) requires disk proof, not just an
-// op's own assertion.
 function writeRealEpisode(ws, rel, kind = 'human-teaching') {
   const full = path.join(ws, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -123,24 +101,13 @@ test('(a) an ADD regenerating a previously retired id reapplies retire: governed
   assert.ok(!ranked.some((r) => r.id === id), 'retired id excluded from rankLearnings');
 });
 
-// (a-recency) M4 whole-milestone review, item 1 (critical): the re-teach
-// override must never fire on evidence STALER than the governance decision
-// it would overturn. Reproduces the exact flow the review found: a
-// human-taught learning is retired, `--rebuild --yes` wipes the corpus, and
-// the candidates packet re-offers the SAME (pre-retire, now-stale) teaching
-// episode with kind human-teaching — by design, nothing purges it. A
-// consolidation skill copying that kind verbatim into a fresh ADD must NOT
-// resurrect the learning past the retire, and must NOT fabricate a `confirm`
-// record implying the human re-affirmed something they never saw.
 test('(a-recency) an ADD built from a STALE (pre-retire) teaching episode still reapplies the retire, appends no confirm, and stays out of ranking', () => {
   const c = ctx();
   const slug = 'a-recency-scenario';
   const id = `sql/${slug}`;
   const dir = storeDir(c.ws, { home: c.harnessHome });
 
-  // writeRealEpisode's fixed `date: 2026-07-01` — genuinely human-taught,
-  // disk-verified, but older than the retire's governance record `at`.
-  const ep = writeRealEpisode(c.ws, `docs/solutions/teachings/${slug}.md`);
+    const ep = writeRealEpisode(c.ws, `docs/solutions/teachings/${slug}.md`);
   const seedOp = ADD(c.ws, { slug, episodes: [{ ...ep, kind: 'human-teaching', plan: null }] });
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [seedOp])]).status, 0);
 
@@ -225,14 +192,6 @@ test('(b) an ADD regenerating a previously promoted id reapplies promote: promot
   assert.match(supRes.stdout + supRes.stderr, /promoted/);
 });
 
-// (b-hardening) M4 whole-milestone review, item 4 (defense in depth):
-// governance reapplication must never trust a promote record's `to` field
-// verbatim at REPLAY time — `lifecycle.mjs`'s own promote command validates
-// containment at RECORD time, but governance.jsonl is a plain file outside
-// applyOps' own write path (a hand edit to it isn't absorbed/scanned the way
-// a learning file is), so a poisoned or tampered entry must be re-validated
-// on the way back in. A violation must skip the reapply for that id, never
-// throw and never write the unsafe path into the regenerated file.
 test('(b-hardening) a hand-poisoned promote record with an escaping `to` is re-validated at reapply: regenerated file lands WITHOUT promoted_to, no crash', () => {
   const c = ctx();
   const slug = 'poisoned-promote-target';
@@ -241,9 +200,7 @@ test('(b-hardening) a hand-poisoned promote record with an escaping `to` is re-v
 
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
 
-  // Hand-poison governance.jsonl directly — bypassing `learning promote`'s
-  // own containment check, the same way a direct file edit could.
-  fs.appendFileSync(
+    fs.appendFileSync(
     path.join(dir, 'governance.jsonl'),
     `${JSON.stringify({ id, action: 'promote', reason: 'poisoned', to: '../../../etc/passwd', at: '2026-07-01' })}\n`
   );
@@ -261,15 +218,6 @@ test('(b-hardening) a hand-poisoned promote record with an escaping `to` is re-v
   assert.equal(learning.fm.promoted_to, undefined, 'no promoted_to written from the escaping governance record');
 });
 
-// (b-sticky) P2 hardening: promote is sticky in readGovernance's latest-per-id
-// replay — a LATER non-promote record for an already-promoted id (here, a
-// confirm hand-appended directly to governance.jsonl, the shape a
-// pre-terminal-guard ledger or a direct hand edit could carry; lifecycle.mjs
-// itself now refuses to append one via the CLI) must never override the
-// standing promote record. Without this, readGovernance's plain
-// latest-entry-wins replay would resolve to the stray confirm, and rebuild
-// would regenerate the learning WITHOUT promoted_to — silently erasing a
-// promotion the ledger itself still recorded.
 test('(b-sticky) a stray post-promote confirm record hand-appended to governance.jsonl never overrides promote on replay: promoted_to still reapplies after rebuild', () => {
   const c = ctx();
   const slug = 'sticky-promote-target';
@@ -280,10 +228,7 @@ test('(b-sticky) a stray post-promote confirm record hand-appended to governance
   assert.equal(run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [ADD(c.ws, { slug })])]).status, 0);
   assert.equal(run(c, ['learning', 'promote', id, '--to', to]).status, 0);
 
-  // Hand-append a confirm record AFTER the promote — bypassing
-  // lifecycle.mjs's own terminal guard entirely (a direct governance.jsonl
-  // edit, or a ledger written before that guard existed).
-  fs.appendFileSync(
+    fs.appendFileSync(
     path.join(dir, 'governance.jsonl'),
     `${JSON.stringify({ id, action: 'confirm', reason: 'stray post-promote confirm', to: null, at: '2026-07-02T00:00:00.000Z' })}\n`
   );
@@ -303,8 +248,6 @@ test('(b-sticky) a stray post-promote confirm record hand-appended to governance
   assert.equal(learning.fm.promoted_to, to, 'promoted_to must survive despite the stray confirm record');
 });
 
-// (c) human re-teach override: retire, rebuild, then remember the same
-// trigger/domain lands ACTIVE source: human, and governance records confirm.
 test('(c) remember re-teaching a previously retired trigger/domain overrides the retire and records a confirm', () => {
   const c = ctx();
   const trigger = 'adding NOT NULL columns to hot tables';
@@ -352,8 +295,6 @@ test('(d) consolidate --candidates --json lists a retired id under governed', ()
   assert.deepEqual(packet.governed, [{ id, action: 'retire' }]);
 });
 
-// (e) a mid-mutation throw on a run that would re-govern rolls back cleanly —
-// no partial governance state, no partial file state.
 test('(e) a mid-mutation throw during a re-teach override rolls back the governance confirm append and the regenerated file, leaving no partial state', () => {
   const c = ctx();
   const domain = 'sql';
@@ -379,13 +320,7 @@ test('(e) a mid-mutation throw during a re-teach override rolls back the governa
     episodes: [{ ...ep, kind: 'human-teaching', plan: null }],
   };
 
-  // Poison: replace the already-committed, tracked episode ledger with a
-  // directory so appendLedger — which runs AFTER governance reapplication in
-  // the mutation phase — throws mid-transaction. By the time it throws, the
-  // re-teach override has already appended a `confirm` governance entry;
-  // this proves that append is inside the SAME rollback window as everything
-  // else, not a side effect that survives a failed run.
-  const ledgerPath = path.join(dir, 'consolidated.jsonl');
+    const ledgerPath = path.join(dir, 'consolidated.jsonl');
   fs.rmSync(ledgerPath, { force: true });
   fs.mkdirSync(ledgerPath);
 
@@ -403,12 +338,6 @@ test('(e) a mid-mutation throw during a re-teach override rolls back the governa
   assert.equal(listLearnings(dir).length, 0, 'the regenerated learning file was rolled back, never landed');
 });
 
-// Task 3 (Milestone 4): a remembered teaching episode's kind must survive
-// through collectEpisodes' candidates packet as 'human-teaching' (previously
-// flattened to 'fix') so a rebuild-regenerated ADD that copies the packet's
-// kind field verbatim re-derives full human authority via
-// verifyHumanTeachingEpisode, closing the re-derivability gap for hand-taught
-// claims.
 test('a remember -> rebuild --yes -> ADD built from the candidates packet (kind copied verbatim) regenerates source: human, status: active', () => {
   const c = ctx();
   const domain = 'sql';

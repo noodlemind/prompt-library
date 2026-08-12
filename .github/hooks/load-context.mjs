@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * SessionStart hook — inject active plan + harness context pointers.
- * Input: JSON on stdin (Copilot CLI hook payload). Output: JSON context injection.
- */
 import fs from 'fs';
 import path from 'path';
 import { resolveHookWorkspace } from './lib/tool-payload.mjs';

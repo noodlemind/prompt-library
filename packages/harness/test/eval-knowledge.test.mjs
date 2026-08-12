@@ -35,11 +35,6 @@ function writeOps(ws, ops) {
   return p;
 }
 
-/**
- * 4 train + 2 held-out episodes across two categories, one learning
- * (auth) with a ledger-linked train episode — the other category (billing)
- * gets no learning, so its held-out episode is unscorable.
- */
 function seedSplitFixture() {
   const ws = tempDir('evalk-ws-');
   const home = tempDir('evalk-home-');
@@ -121,14 +116,6 @@ test('evalKnowledge splits 4 train / 2 held-out, scores bm25 a clean hit, and st
   assert.ok(['whole-index', 'bm25-top3'].includes(result.recommendation));
 });
 
-/**
- * Temporal contamination guard: a learning derived ONLY from a held-out
- * (post-cutoff) episode must never be surfaced or billed by any arm, even
- * when its trigger is engineered to dominate a held-out query's ranking.
- * 4 train episodes (same category, dated on/before the cutoff) + 2 held-out
- * episodes (post-cutoff); one clean learning linked only to a train episode,
- * one "leak" learning linked only to a held-out episode.
- */
 function seedContaminationFixture() {
   const ws = tempDir('evalk-leak-ws-');
   const home = tempDir('evalk-leak-home-');
@@ -147,11 +134,7 @@ function seedContaminationFixture() {
   ensureStore(ws, { home });
   const cleanTrigger = 'auth token refresh race condition';
   const cleanBody = 'Retry the token refresh exactly once behind a per-session lock.';
-  // The leak trigger/body are engineered to overlap heavily with the
-  // auth-5 held-out query and are padded (within the learning byte cap) so,
-  // if it leaked into an arm's results, it would dominate that arm's
-  // injected-token bill.
-  const leakTrigger = `auth token refresh regression leak marker ${'padding '.repeat(60)}`.trim();
+    const leakTrigger = `auth token refresh regression leak marker ${'padding '.repeat(60)}`.trim();
   const leakBody = 'This must never surface.';
 
   const opsPath = writeOps(ws, [
@@ -186,20 +169,13 @@ test('evalKnowledge never surfaces or bills a learning linked only to a held-out
   assert.equal(result.split.train, 4);
   assert.equal(result.split.heldOut, 2);
 
-  // The clean, pre-cutoff learning still surfaces normally — the fix must
-  // not collaterally suppress legitimate ranking.
-  assert.equal(result.arms.bm25.hitRate, 1);
+    assert.equal(result.arms.bm25.hitRate, 1);
   assert.equal(result.arms.wholeIndex.hitRate, 1);
 
-  // wholeIndex bills only the pre-cutoff learning's trigger bytes — the
-  // leak learning's (much larger) trigger must contribute nothing.
-  const expectedWholeIndexTokens = Math.ceil(Buffer.byteLength(cleanTrigger, 'utf8') / 4);
+    const expectedWholeIndexTokens = Math.ceil(Buffer.byteLength(cleanTrigger, 'utf8') / 4);
   assert.equal(result.arms.wholeIndex.injectedTokens, expectedWholeIndexTokens);
 
-  // bm25's per-query byte bill stays small — if the leak learning (padded
-  // to hundreds of bytes) had surfaced for even one held-out query, this
-  // would blow well past a small bound.
-  assert.ok(
+    assert.ok(
     result.arms.bm25.injectedTokens < 60,
     `expected bm25 injectedTokens to reflect only the clean learning, got ${result.arms.bm25.injectedTokens}`
   );
@@ -217,9 +193,7 @@ test('evalKnowledge excludes a promoted learning from its arms (shares the produ
   writeEpisode(ws, 'auth', 'auth-6', { title: 'Auth billing rotation issue', tags: ['auth', 'rotation'], date: '2026-03-02' });
 
   const cleanTrigger = 'auth token refresh race condition';
-  // The promoted learning's trigger is padded (within the byte cap) so, if it
-  // were counted, it would visibly dominate wholeIndex's token bill.
-  const promotedTrigger = `auth token cookie session ${'padding '.repeat(50)}`.trim();
+    const promotedTrigger = `auth token cookie session ${'padding '.repeat(50)}`.trim();
 
   const { dir } = ensureStore(ws, { home });
   const opsPath = writeOps(ws, [
@@ -228,9 +202,7 @@ test('evalKnowledge excludes a promoted learning from its arms (shares the produ
   ]);
   assert.equal(applyOps({ workspace: ws, opsPath, home }).exitCode, 0);
 
-  // Record the second learning as promoted — production rankLearnings excludes
-  // it, so the eval (sharing retrievalExclusion) must exclude it too.
-  const promotedFile = path.join(dir, 'learnings', 'auth', 'cookie-promoted.md');
+    const promotedFile = path.join(dir, 'learnings', 'auth', 'cookie-promoted.md');
   const before = fs.readFileSync(promotedFile, 'utf8');
   fs.writeFileSync(promotedFile, before.replace(/^---\n/, '---\npromoted_to: auth/cookie-primitive\n'), 'utf8');
 
@@ -269,11 +241,7 @@ test('bm25 arm reports a nonzero falseSurfaceRate when a negative query genuinel
   const applied = applyOps({ workspace: ws, opsPath, home });
   assert.equal(applied.exitCode, 0, JSON.stringify(applied.rejected));
 
-  // Crafted to score well above MIN_SCORE (0.15): every token overlaps the
-  // learning's own trigger, so this "unrelated topic" negative query is in
-  // fact a genuine (if contrived) trigger match — the real scoring branch,
-  // not a synthetic override.
-  const negativeQuery = 'database connection pool exhaustion timeout';
+    const negativeQuery = 'database connection pool exhaustion timeout';
   const result = evalKnowledge({ workspace: ws, copilotHome: ws, home, negativeQueries: [negativeQuery] });
 
   assert.equal(result.pass, true);
@@ -320,14 +288,7 @@ test('harness eval-knowledge CLI renders per-arm lines and a recommendation, and
   assert.equal(out.pass, true);
   assert.ok(out.arms.bm25.hitRate >= 0.5);
   assert.ok(['whole-index', 'bm25-top3'].includes(out.recommendation));
-  // P1.6: eval-knowledge is now dispatched through the shared command
-  // registry, which brackets every registered command's dispatch with
-  // command.start/command.result telemetry (uniform CLI observability) —
-  // so events.jsonl now exists. `cmdEvalKnowledge`'s own business logic is
-  // still exactly as read-only as before: it never calls writeEvent for a
-  // dedicated 'eval-knowledge'-type lifecycle event, which is what this
-  // assertion actually protects against.
-  if (fs.existsSync(path.join(ws, '.harness', 'events.jsonl'))) {
+    if (fs.existsSync(path.join(ws, '.harness', 'events.jsonl'))) {
     const types = fs
       .readFileSync(path.join(ws, '.harness', 'events.jsonl'), 'utf8')
       .trim()

@@ -1,15 +1,3 @@
-/**
- * P5AC1 — bundles ride the existing hydration pipeline.
- *
- * This is the criterion that was previously marked NOT DELIVERED: the manifest,
- * precedence and integrity layers all existed and nothing placed a single file.
- * A bundle whose contributions never arrive is a governance layer governing
- * nothing.
- *
- * The properties worth pinning are placement, WITHDRAWAL (the half a parallel
- * pipeline always gets wrong), and the two refusals — a bundle may not replace
- * what the package ships, and an unapproved bundle contributes nothing at all.
- */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -103,11 +91,6 @@ test('P5AC1: disabling a bundle withdraws its files without deleting the bundle'
     'withdrawing contributions is not the same as uninstalling');
 });
 
-/**
- * A bundle replacing `skills/engineer/SKILL.md` would let an installed
- * extension silently redefine the harness's own behavior — a different and much
- * larger permission than "add a skill".
- */
 test('P5AC1: a bundle may not replace a path the package ships', () => {
   const home = installedHome();
   harness(['resources', 'add', bundleDir('overreach', { contributes: { skills: ['engineer/SKILL.md'] } })], home);

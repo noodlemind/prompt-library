@@ -7,26 +7,6 @@ import { readSession } from '../session.mjs';
 import { assertRealpathContained, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 import { writeStoreFile, storeFileState } from './store-io.mjs';
 
-/**
- * Layer-aware WRITE routing (blueprint P4, normative routing table):
- *
- *   | Git context            | Destination                              |
- *   |------------------------|------------------------------------------|
- *   | Feature branch         | branch bucket (`branches/<key>/`)        |
- *   | Default branch         | golden                                   |
- *   | Detached HEAD          | `branches/detached-<shortsha>/` (never   |
- *   |                        | promotable — derived from the key shape) |
- *   | `--layer golden`       | golden (explicit override, logged —      |
- *   |                        | HUMAN-GATED at admission, see apply.mjs) |
- *   | Non-git workspace      | golden (no branch concept exists)        |
- *
- * The layer is derived from git context AT WRITE TIME — the branch recorded
- * at orient is advisory only; when the two disagree the routing result
- * carries a warning the caller logs. Default-branch resolution follows
- * git-context.mjs's normative order (store config.json `defaultBranch` →
- * `origin/HEAD` → unresolved); when the default is UNRESOLVABLE on a real
- * branch, routing fails closed TO BRANCH-LOCAL — never golden.
- */
 export function resolveWriteLayer({ workspace, home, layerOverride = null, log = () => {} } = {}) {
   const context = deriveGitContext({ workspace, home });
   const defaultBranch = resolveDefaultBranch(workspace, { home });
@@ -54,16 +34,12 @@ export function resolveWriteLayer({ workspace, home, layerOverride = null, log =
     return { layer: 'branch', bucketKey: context.branchKey, context, defaultBranch, detached: true, branchWarning };
   }
   if (!context.branch) {
-    // Non-git workspace (or unborn detached state with no commit): no branch
-    // concept exists, so the pre-layer behavior — golden — stands.
-    return { layer: 'golden', bucketKey: null, context, defaultBranch, branchWarning };
+        return { layer: 'golden', bucketKey: null, context, defaultBranch, branchWarning };
   }
   if (defaultBranch && context.branch === defaultBranch.name) {
     return { layer: 'golden', bucketKey: null, context, defaultBranch, branchWarning };
   }
-  // Feature branch — or a real branch with an UNRESOLVABLE default, which
-  // fails closed to branch-local (never golden).
-  return {
+    return {
     layer: 'branch',
     bucketKey: context.branchKey,
     context,
@@ -73,23 +49,10 @@ export function resolveWriteLayer({ workspace, home, layerOverride = null, log =
   };
 }
 
-/**
- * Create (or refresh the cache of) a branch bucket inside an already-locked
- * store transaction. meta.json is a CACHE, never authority — promotability is
- * derived from the key shape at decision time (`detached-*` never
- * promotable); the recorded flag is display convenience only.
- */
 export function ensureBucket(dir, { key, branch = null, baseSha = null }) {
   const bucketDir = bucketDirFor(dir, key);
   fs.mkdirSync(path.join(bucketDir, 'learnings'), { recursive: true });
-  // Every bucket file goes through the choke point (R1), and `storeFileState`
-  // — never `fs.existsSync`, which FOLLOWS a symlink — decides whether one is
-  // already there: a planted link at a bucket's ledger/index/meta read as
-  // "already fine" and was then written through by the next writer.
-  // Same rule as ensureStore's seed: create only what is absent or a
-  // quarantinable plant; never replace a real file or something that is not a
-  // file at all.
-  const seed = (file, content) => {
+    const seed = (file, content) => {
     const state = storeFileState(file);
     if (state !== 'absent' && state !== 'symlink') return;
     if (!writeStoreFile(file, content)) {
@@ -137,26 +100,13 @@ export function branchExists(workspace, branch) {
   if (refs === null) return null;
   return refs.some((r) => {
     if (r === `refs/heads/${branch}`) return true;
-    // A remote ref must be exactly `refs/remotes/<remote>/<branch>` — one
-    // remote-name segment, then the FULL branch name. A bare endsWith
-    // over-matches: refs/remotes/origin/release/main is not branch 'main'.
-    if (!r.startsWith('refs/remotes/')) return false;
+        if (!r.startsWith('refs/remotes/')) return false;
     const rest = r.slice('refs/remotes/'.length);
     const slash = rest.indexOf('/');
     return slash !== -1 && rest.slice(slash + 1) === branch;
   });
 }
 
-/**
- * Best-effort branch-rename auto-migration (blueprint P7), run inside the
- * write transaction when routing targets a bucket that does not exist yet:
- * when exactly ONE existing bucket names a branch that no longer exists
- * locally or on any remote AND its recorded base is an ancestor of the
- * current HEAD, that bucket is renamed to the new key and its meta cache
- * rewritten. Anything ambiguous (zero or several candidates, unverifiable
- * git state, detached buckets) is left untouched — the orphan surfaces via
- * `knowledge status` and doctor K5 for manual prune or migrate.
- */
 export function migrateRenamedBucket(dir, { workspace, context }) {
   if (!context?.branchKey || !context.branch) return null;
   if (fs.existsSync(bucketDirFor(dir, context.branchKey))) return null;
@@ -171,27 +121,14 @@ export function migrateRenamedBucket(dir, { workspace, context }) {
   }
   if (candidates.length !== 1) return null;
   const [source] = candidates;
-  // Defense in depth (fs-safe.mjs): a rename moves a whole directory tree, and
-  // both endpoints are derived from `branches/` — a hand-editable tree — and
-  // from a branch name. Refuse unless both keys are plain bucket names, the
-  // source's REAL path still sits inside the store, and no symlinked component
-  // stands on the destination path.
-  if (!isSafeBucketKey(source.key) || !isSafeBucketKey(context.branchKey)) return null;
+    if (!isSafeBucketKey(source.key) || !isSafeBucketKey(context.branchKey)) return null;
   const containedSource = assertRealpathContained(dir, path.join('branches', source.key));
   if (!containedSource) return null;
   const target = assertNoSymlinkAncestors(dir, path.join('branches', context.branchKey));
   if (!target) return null;
   try {
-    // Rewrite the meta cache in the SOURCE dir first, THEN rename: if the
-    // meta write throws, the bucket has not moved yet, so nothing is left
-    // migrated-but-unrecorded with a stale meta.branch. (Meta is a cache,
-    // never authority — a failed rename leaving updated meta under the old
-    // key is the recoverable orphan `knowledge status`/doctor K5 surface.)
-    const meta = source.meta || {};
-    // A refused meta write must STOP the migration: the rename below would
-    // otherwise move the bucket with a stale `meta.branch`, which is exactly
-    // the migrated-but-unrecorded state the write-then-rename order avoids.
-    if (!writeStoreFile(path.join(source.dir, 'meta.json'), JSON.stringify({ ...meta, branch: context.branch, branchKey: context.branchKey }) + '\n')) {
+        const meta = source.meta || {};
+        if (!writeStoreFile(path.join(source.dir, 'meta.json'), JSON.stringify({ ...meta, branch: context.branch, branchKey: context.branchKey }) + '\n')) {
       return null;
     }
     fs.renameSync(containedSource, target);
@@ -201,22 +138,6 @@ export function migrateRenamedBucket(dir, { workspace, context }) {
   }
 }
 
-/**
- * Per-layer episode eligibility (blueprint P4 + §5a rebuild routing), applied
- * to consolidation candidacy once a store HAS buckets:
- *
- *  - GOLDEN lane: only episodes whose `branch:` provenance names the
- *    resolved default branch are eligible. An episode naming an unpromoted
- *    non-default branch is skipped (merged evidence never becomes a golden
- *    claim without the explicit promotion step), and an episode WITHOUT
- *    provenance routes to branch-local review — never silently golden.
- *  - BRANCH lane: episodes from the CURRENT branch plus provenance-less
- *    episodes (the branch-local review destination) are eligible; episodes
- *    naming a DIFFERENT branch are that branch's business.
- *
- * A store with no buckets predates the layer model: everything stays
- * eligible, preserving pre-layer behavior byte-for-byte.
- */
 export function episodeEligibleForLayer(episodeBranch, { layer, currentBranch, defaultBranchName, storeHasBuckets }) {
   if (!storeHasBuckets) return true;
   if (layer === 'golden') {

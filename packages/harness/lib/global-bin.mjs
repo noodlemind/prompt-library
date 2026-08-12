@@ -6,8 +6,6 @@ import { spawnSync } from 'child_process';
 const PATH_MARKER = '# @dev-kit/harness global bin';
 const PATH_EXPORT = 'export PATH="$HOME/.copilot/bin:$PATH"';
 
-// One fix hint for every generated standalone script (shim, workspace runner),
-// interpolated at generation time so the two surfaces cannot drift.
 export const INSTALL_FIX_HINT =
   'harness install  (npx @dev-kit/harness install | npm install -g @dev-kit/harness | local: node packages/harness/bin/harness.mjs install)';
 

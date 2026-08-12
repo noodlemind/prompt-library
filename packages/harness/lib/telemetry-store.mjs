@@ -5,8 +5,6 @@ import { eventPath } from './events.mjs';
 import { harnessGlobalHome } from './paths.mjs';
 import { createRedactor, redactedJson } from './redact.mjs';
 
-// Reuses the existing event-log artifact type (JSONL of the same event shape),
-// only relocated to a global home — no new persistent artifact type.
 const MAX_STORE_BYTES = 5 * 1024 * 1024; // per-project cap; oldest lines rotated out
 const KEEP_LINES_ON_ROTATE = 5000;
 
@@ -42,16 +40,6 @@ function readJsonl(file) {
     .filter(Boolean);
 }
 
-// Fix-wave P1 (report --sync repersists secrets): every write into the GLOBAL
-// telemetry store is a persistence boundary and must route through the shared
-// redactor, not a bare `JSON.stringify`. Local events.jsonl rows are already
-// redacted at write time (events.mjs, C3), but a global-store copy must never
-// depend on that upstream pass — a row hand-written into a workspace log, or a
-// project slug derived from a credential-bearing git remote, must still be
-// masked here before it lands in `~/.harness`. `redactedJson` applies the
-// structural walk AND the final serialize-time text pass, so a `toJSON` on a
-// row can't smuggle a raw secret past this boundary either. Byte-identical for
-// secret-free rows.
 function rotateIfNeeded(file, redactor) {
   try {
     if (fs.existsSync(file) && fs.statSync(file).size > MAX_STORE_BYTES) {

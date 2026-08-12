@@ -29,47 +29,21 @@ export const EVENT_TYPES = new Set([
   'learning',
   'knowledge',
   'session_end',
-  // Formerly silently dropped (harness-tool-contract.md footnote): these four
-  // commands always CALLED writeEvent, but their types were absent from this
-  // allow-list, so the writes no-opped. Allow-listed as Phase 1 hygiene
-  // (harness evolution blueprint P6) — the call sites in commands.mjs are
-  // unchanged; the events simply record now.
-  'init_repo',
+    'init_repo',
   'recall',
   'validate_plan',
   'index',
-  // P1.5 (lib/event-registry.mjs) — the central event registry's dispatch-
-  // pipeline vocabulary: command.start/command.result bracket a registered
-  // command's execution through the NEW envelope/agent output lanes;
-  // agent_lane is lib/agent-lane.mjs's existing (unmodified)
-  // `recordAgentLaneBytes` metering record.
-  'command.start',
+    'command.start',
   'command.result',
   'agent_lane',
-  // Phase 3 — the execution audit. This allow-list is CLOSED: `writeEvent`
-  // silently returns null for an unlisted type, so an audit event added without
-  // a line here would record nothing while every call site looked correct. That
-  // failure is invisible by construction, which is exactly the wrong property
-  // for the record of what the harness was asked to execute.
-  //
-  // `exec` and `bash` are separate types rather than one with a flag: they are
-  // separately policy-gated, and an auditor filtering for shell invocations
-  // should not have to trust a boolean inside a payload to find them.
-  'exec',
+    'exec',
   'bash',
-  // Trust changes (P3AC6). Granting or withdrawing a project's authority is a
-  // security decision, and a security decision with no record is one nobody can
-  // review after the fact.
-  'trust',
-  // One turn of the headless loop (P5AC10). Separate from `exec`/`bash`, which
-  // record what each tool DID: this records what the agent decided, and the two
-  // correlate through the run id. It carries no transcript — see the note in
-  // lib/agent-loop.mjs for why a durable record of a conversation is the wrong
-  // place to be generous.
-  'agent.turn',
-  // Retention writes this when it removes entries — a journal that silently
-  // shrinks is worse than one that admits it.
-  'journal.pruned',
+    'edit',
+  'write',
+  'undo',
+    'trust',
+    'agent.turn',
+    'journal.pruned',
 ]);
 
 function shouldSkipEvents(flags = {}) {
@@ -93,9 +67,7 @@ function safeChecks(checks) {
     id: check.id,
     pass: Boolean(check.pass),
     severity: check.severity || (check.pass ? 'ok' : 'fail'),
-    // Retain the raw status so consumers can tell a skipped check (neutral)
-    // from a failed one — `pass: false` alone conflates the two.
-    ...(check.status ? { status: check.status } : {}),
+        ...(check.status ? { status: check.status } : {}),
   }));
 }
 
@@ -106,22 +78,11 @@ export function eventPath(workspace) {
 export function writeEvent(workspace, flags, payload) {
   if (shouldSkipEvents(flags)) return null;
   if (!EVENT_TYPES.has(payload.type)) return null;
-  // A refusal from ensureHarnessDir means `.harness` is a symlink; writing
-  // anyway is exactly the escape it just declined. Returning null here is the
-  // same "no event was written" answer `--no-events` produces, which every
-  // caller already handles.
-  if (ensureHarnessDir(workspace, false) === null) return null;
+    if (ensureHarnessDir(workspace, false) === null) return null;
 
   const checks = safeChecks(payload.checks);
   const session = readSession(workspace);
-  // P4aAC6: every event carries the run it belongs to and the actor that drove
-  // it, whether or not the writer went through the event registry. The ~20
-  // legacy call sites in lib/commands.mjs supplied neither, so `run show` and
-  // `run tree` saw the lifecycle pair and none of the domain events that say
-  // what the command actually did. A payload that supplies its own values still
-  // wins — the registry stamps both explicitly and knows more than the ambient
-  // default.
-  const ambient = currentRunContext();
+    const ambient = currentRunContext();
   const event = {
     version: 2,
     id: eventId(),
@@ -141,16 +102,7 @@ export function writeEvent(workspace, flags, payload) {
   if (payload.blockedReason) event.blockedReason = payload.blockedReason;
   if (payload.usage) event.usage = payload.usage;
   for (const field of [
-    // Minor fix: `exitCode` used to be unconditionally stamped `?? 0` above
-    // — a `command.start`/`agent_lane` ('pending') event, which fires
-    // BEFORE the command has run at all, therefore falsely persisted
-    // `exitCode: 0` (a real, misleadingly-successful-looking value) instead
-    // of simply having no exit code yet. Moved into this same
-    // only-when-supplied loop as every other optional field — every
-    // caller that HAS a real exit code (command.result and every legacy
-    // writeEvent(workspace, flags, {...}) call site in lib/commands.mjs)
-    // already passes it explicitly, so this is a no-op for them.
-    'exitCode',
+        'exitCode',
     'tool',
     'mutation',
     'targets',
@@ -161,30 +113,15 @@ export function writeEvent(workspace, flags, payload) {
     'success',
     'learnings',
     'learningsBytes',
-    // Harness evolution P6: per-occurrence layer attribution written by
-    // cmdOrient when a branch-bucket learning surfaced (lib/report.mjs's
-    // knowledgeSlos reads it back for the golden/branch split).
-    'learningLayers',
-    // P1.5 (lib/event-registry.mjs) additions — additive only, never read
-    // by any pre-existing event type/call site.
-    'actor',
-    // Phase 4a: the run this event belongs to. Without it `events.jsonl` is a
-    // flat stream in which a command and the work it spawned cannot be told
-    // apart from unrelated commands that ran nearby.
-    'run',
+        'learningLayers',
+        'actor',
+        'run',
     'execution',
     'flags',
     'status',
     'bytes',
-    // Phase 3 — the execution descriptor on `exec`/`bash` audit events: what
-    // was asked to run and under what policy (argv, cwd, timeout, the child's
-    // environment allowlist). One namespaced field rather than six loose keys,
-    // so an execution record's fields stay distinguishable from the generic
-    // event envelope's. The OUTCOME scalars stay top-level (`status`,
-    // `exitCode`, `durationMs`, `result`) where every other event already puts
-    // them, so `harness events --failures` and the summaries keep working
-    // without knowing this field exists.
-    'exec',
+        'exec',
+        'file',
     'removed',
     'reason',
     // The trust-change descriptor: which project, and which way it moved.
@@ -193,23 +130,10 @@ export function writeEvent(workspace, flags, payload) {
     if (payload[field] !== undefined) event[field] = payload[field];
   }
 
-  // Fix-wave C3: redact the FULLY ASSEMBLED event — including the
-  // host/actor/session metadata this function stamps AFTER the event
-  // registry's payload-only redaction (lib/event-registry.mjs), and
-  // including object keys (lib/redact.mjs walks those too) — immediately
-  // before the append. Verified pre-fix leak: `HARNESS_HOST=token=<secret>`
-  // landed verbatim in events.jsonl via the `host` field above. This makes
-  // the event registry's own redaction a defense-in-depth layer rather than
-  // the only screen, and it covers every legacy writeEvent call site in
-  // lib/commands.mjs that never went through the registry at all. The
-  // redacted event is also what gets RETURNED, so no caller can re-emit the
-  // unredacted original. Byte-identical for secret-free events.
-  const safeEvent = createRedactor().redactValue(event);
+    const safeEvent = createRedactor().redactValue(event);
   const file = eventPath(workspace);
   appendGuarded(file, JSON.stringify(safeEvent) + '\n');
-  // P4aAC7: bound the file itself, not just what a read returns. Gated to once
-  // per process and to files that have actually grown — see lib/retention.mjs.
-  pruneJournalFile(file, {
+    pruneJournalFile(file, {
     retentionDays: retentionDaysFor(workspace, flags),
     markerFor: ({ removed, cutoff }) => ({
       version: 2,
@@ -219,10 +143,7 @@ export function writeEvent(workspace, flags, payload) {
       command: 'journal.pruned',
       result: 'pass',
       checks: [],
-      // P2-9: a maintenance action is still an action. Without these, the one
-      // event that explains a gap in the history is the one `run show` cannot
-      // join to the run that caused it.
-      ...(ambient.run ? { run: ambient.run } : {}),
+            ...(ambient.run ? { run: ambient.run } : {}),
       ...(ambient.actor ? { actor: ambient.actor } : {}),
       removed,
       reason: `older than ${cutoff}`,
@@ -249,22 +170,14 @@ export function readEvents(workspace, options = 20) {
     .filter(Boolean);
   const filtered = events.filter((event) => {
     if (config.session && event.session !== config.session) return false;
-    // P4aAC7 (Phase 1 deferral): `cancelled` and `timed-out` map to the legacy
-    // `warn` result, so filtering on `result === 'fail'` alone hid exactly the
-    // runs an operator asking for failures wants most — the ones that were
-    // interrupted or ran out of time. The unified `status` is consulted
-    // alongside the legacy vocabulary rather than replacing it, so every
-    // pre-existing event still filters the way it always did.
-    if (config.failures
+        if (config.failures
       && event.result !== 'fail'
       && event.decision !== 'block'
       && !event.blockedReason
       && !FAILURE_STATUSES.has(event.status)) return false;
     return true;
   });
-  // Always bounded: a non-positive or missing limit clamps to the default, and
-  // no request may exceed EVENTS_MAX_LIMIT, so there is no full-history dump.
-  const requested = Number.isFinite(config.limit) && config.limit > 0 ? config.limit : EVENTS_DEFAULT_LIMIT;
+    const requested = Number.isFinite(config.limit) && config.limit > 0 ? config.limit : EVENTS_DEFAULT_LIMIT;
   const cap = Math.min(requested, EVENTS_MAX_LIMIT);
   const result = filtered.slice(-cap);
   result.totalMatched = filtered.length;

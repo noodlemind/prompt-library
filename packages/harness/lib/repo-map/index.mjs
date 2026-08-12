@@ -8,24 +8,11 @@ import { readStructuralIndexIfCurrent } from './structural-index.mjs';
 
 const DEFAULT_MAX_TOKENS = 1000;
 
-/**
- * Build a budgeted lexical repo map. Deterministic: no model, no network.
- * Files are ranked by import-degree (how many files reference them) plus symbol
- * density, and — when a query is given — boosted by normalized-token overlap
- * with the path and symbols, so orientation is code-relevant to the task.
- */
 export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract, title = 'Repo Map', preferStructural = true } = {}) {
   const { files, total } = trackedSourceFiles(workspace);
   if (!files.length) return { files: [], body: '', tokens: 0, empty: true };
 
-  // Structural preference (blueprint P3): when the prebuilt structural index
-  // exists AND its generation sha matches the current HEAD, its per-file
-  // symbol/import tables feed the ranking directly — no per-file reads, and
-  // symbol precision comes from the AST tier that built the index. Absent or
-  // stale index → the unchanged lexical path, byte-identical output. This
-  // stays a SYNCHRONOUS read of prebuilt files; parsing itself only ever
-  // happens inside `harness index --structural`.
-  let structural = null;
+    let structural = null;
   if (preferStructural) {
     try {
       structural = readStructuralIndexIfCurrent(workspace);
@@ -41,9 +28,7 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
     info.set(rel, { rel, symbols, imports, importedBy: 0 });
   }
 
-  // Approximate import-degree: a file is "imported by" another whose import
-  // targets end with this file's module name (basename without extension).
-  const byStem = new Map();
+    const byStem = new Map();
   for (const rel of files) {
     const stem = path.basename(rel).replace(/\.\w+$/, '');
     if (!byStem.has(stem)) byStem.set(stem, []);

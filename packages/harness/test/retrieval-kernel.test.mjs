@@ -1,8 +1,3 @@
-/**
- * P2.1 — the retrieval kernel's two load-bearing properties: a total ordering
- * that makes the same query byte-identical across runs (P2AC3), and partial
- * source failure that is reported rather than swallowed.
- */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
@@ -25,9 +20,6 @@ test('createRetrievalResult rejects a result that cannot be identified', () => {
   assert.throws(() => createRetrievalResult({ source: 'code', id: 'a', score: NaN }), /finite number/);
 });
 
-// Redaction is a DATA-boundary discipline: it belongs in the result builder,
-// before any lane sees the record. A render-boundary-only screen missed the raw
-// --json emit and the path/id fields entirely in Phase 1.
 test('createRetrievalResult redacts free-text fields but leaves code-set tokens alone', () => {
   const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
   const out = createRetrievalResult({
@@ -50,8 +42,6 @@ test('createRetrievalResult redacts free-text fields but leaves code-set tokens 
   assert.equal(out.generation, 'gen-1');
 });
 
-// `scope` already means 'global'|'product' on every recall result. The corpus
-// axis had to be a separate field or it would have overloaded a shape AC9 pins.
 test('source and scope are independent axes', () => {
   const out = r('knowledge', 'a', 1, { scope: 'global' });
   assert.equal(out.source, 'knowledge', 'source is the corpus');
@@ -108,17 +98,12 @@ test('federate dedupes on (source, id) and leaves distinct sources sharing an id
   });
   assert.equal(out.results.filter((x) => x.source === 'code').length, 1, 'a repeated (source,id) collapses');
   assert.equal(out.results.length, 2, 'the same id in a different corpus is a different entity');
-  // The identity is a contract, not a display string: it must separate the two
-  // parts with something no id can contain, so a crafted id cannot forge the
-  // key of a different (source, id) pair.
-  const [a, b] = [r('code', 'x y'), r('code', 'x')];
+    const [a, b] = [r('code', 'x y'), r('code', 'x')];
   assert.notEqual(resultIdentity(a), resultIdentity(b));
   assert.ok(resultIdentity(a).startsWith('code'));
   assert.ok(resultIdentity(a).endsWith('x y'));
 });
 
-// A silently missing corpus is indistinguishable from one with no matches, and
-// the two mean opposite things to the caller.
 test('federate reports a failed source instead of dropping it', () => {
   const out = federate({
     sources: [
@@ -181,8 +166,6 @@ test('a malformed cursor is a usage error, never a silent restart from the top',
   assert.equal(decodeCursor(null), null, 'no cursor is not an error');
 });
 
-// A row can disappear between pages. Restarting from the top would silently
-// re-serve rows the caller already consumed.
 test('a cursor pointing past every remaining row yields an empty page, not a restart', () => {
   const cursor = encodeCursor({ score: 0, source: 'plans', id: 'zzz', generations: {} });
   const out = federate({ sources: [{ source: 'code', results: [r('code', 'a', 1)] }], cursor });
