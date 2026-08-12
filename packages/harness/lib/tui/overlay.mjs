@@ -1,4 +1,5 @@
 import { displayWidth, clipTo, padTo } from './width.mjs';
+import { containsFlagSyntax } from './palette.mjs';
 
 /** Rows shown at once. An overlay taller than a glance is a list, and a list is
  * what the palette exists instead of. */
@@ -82,17 +83,27 @@ export function createOverlay({
     offset = Math.max(0, Math.min(offset, Math.max(0, items.length - page)));
   };
 
-  const move = (delta) => {
-    if (!items.length) return false;
-        const step = delta === 0 ? 1 : Math.sign(delta);
-    let next = (index + delta + items.length) % items.length;
-    for (let guard = 0; guard < items.length && items[next]?.section; guard += 1) {
-      next = (next + step + items.length) % items.length;
+  /** Never land on a section heading — it is chrome, not a choice. */
+  const landOnChoice = (from = 0, step = 1) => {
+    if (!items.length) { index = 0; offset = 0; return; }
+    const n = items.length;
+    let next = ((from % n) + n) % n;
+    const dir = step === 0 ? 1 : Math.sign(step);
+    for (let guard = 0; guard < n && items[next]?.section; guard += 1) {
+      next = (next + dir + n) % n;
     }
     index = next;
     clamp();
+  };
+
+  const move = (delta) => {
+    if (!items.length) return false;
+    const step = delta === 0 ? 1 : Math.sign(delta);
+    landOnChoice(index + delta, step);
     return true;
   };
+
+  landOnChoice(0, 1);
 
   return {
     kind,
@@ -103,7 +114,7 @@ export function createOverlay({
     get selected() { return items[index] ?? null; },
     get visible() { return items.slice(offset, offset + page); },
     get offset() { return offset; },
-    setRows(next) { items = [...next]; index = 0; offset = 0; },
+    setRows(next) { items = [...next]; landOnChoice(0, 1); },
     setQuery(next) { text = String(next ?? ''); },
     setFooter(next) { footer = next; },
     get footerText() { return footer; },
@@ -116,10 +127,15 @@ export function createOverlay({
       if (name === 'down' || (ctrl && name === 'n')) return { intent: null, changed: move(1) };
       if (name === 'pageup') return { intent: null, changed: move(-page) };
       if (name === 'pagedown') return { intent: null, changed: move(page) };
-      if (name === 'home') { index = 0; clamp(); return { intent: null, changed: true }; }
-      if (name === 'end') { index = Math.max(0, items.length - 1); clamp(); return { intent: null, changed: true }; }
+      if (name === 'home') { landOnChoice(0, 1); return { intent: null, changed: true }; }
+      if (name === 'end') { landOnChoice(Math.max(0, items.length - 1), -1); return { intent: null, changed: true }; }
       if (name === 'return' || name === 'enter' || name === 'tab') {
-        return items.length ? { intent: 'choose', row: items[index], changed: true } : { intent: null, changed: false };
+        if (!items.length) return { intent: null, changed: false };
+        if (items[index]?.section) {
+          landOnChoice(index + 1, 1);
+          return { intent: null, changed: true };
+        }
+        return { intent: 'choose', row: items[index], changed: true };
       }
       if (actions) {
                 if (name === 'backspace') return { intent: 'close', changed: true };
@@ -155,8 +171,21 @@ function effectFloor(row, ui) {
   return row?.sideEffect ? displayWidth(ui.stripAnsi(row.sideEffect)) + 1 : 0;
 }
 
-export function renderOverlay(overlay, { ui, width = 80, maxWidth = 110 } = {}) {
-    const box = Math.max(40, Math.min(width - 4, maxWidth));
+/**
+ * Modal / action-sheet width. Matches the composer and palette: nearly the full
+ * terminal, not a fixed 110-cell postage stamp on a wide window. `maxWidth`
+ * remains for tests and rare tight surfaces; product callers leave it unset.
+ */
+export function overlayBoxWidth(width = 80, maxWidth = null) {
+  const cols = Math.max(24, Number(width) || 80);
+  // 1-cell side margin keeps the border off the edge without shrinking a lot.
+  const room = Math.max(20, cols - 2);
+  if (maxWidth == null || maxWidth === Infinity) return room;
+  return Math.max(20, Math.min(room, maxWidth));
+}
+
+export function renderOverlay(overlay, { ui, width = 80, maxWidth = null } = {}) {
+  const box = overlayBoxWidth(width, maxWidth);
   const inner = box - 2;
   const b = ui.unicode
     ? { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' }
@@ -270,8 +299,13 @@ export function renderPaletteRows(overlay, { ui, width = 80 } = {}) {
   if (!rows.length) {
     return [ui.tintRow('panel', padTo(`  ${ui.paint('muted', 'nothing matches')}`, width))];
   }
-    const labelOf = (r) => (r.signature ? `${r.label} ${r.signature}` : String(r.label ?? ''));
-  const labelW = Math.min(38, Math.max(...rows.map((r) => displayWidth(labelOf(r)))));
+    // Noun left, human signature muted — never concatenate flags onto the name.
+    const labelOf = (r) => {
+      const sig = r.signature && !containsFlagSyntax(r.signature) ? String(r.signature).trim() : '';
+      if (!sig) return String(r.label ?? '');
+      return `${r.label}  ${sig}`;
+    };
+  const labelW = Math.min(36, Math.max(12, ...rows.map((r) => displayWidth(labelOf(r)))));
   const out = [];
   for (const [i, row] of rows.entries()) {
     const chosen = overlay.offset + i === overlay.index;
@@ -286,14 +320,16 @@ export function renderPaletteRows(overlay, { ui, width = 80 } = {}) {
       ? ui.paint(row.sideEffect === 'read' ? 'ok' : row.sideEffect === 'mutate' ? 'warn' : 'error', row.sideEffect)
       : '';
     const effectW = row.sideEffect ? row.sideEffect.length + 1 : 0;
-        const plainLabel = clipTo(labelOf(row), labelW);
+    const plainLabel = clipTo(labelOf(row), labelW);
     const pad = ' '.repeat(Math.max(0, labelW - displayWidth(plainLabel)));
     let labelOut;
     if (disabled) {
       labelOut = ui.paint('muted', plainLabel) + pad;
     } else if (row.signature && plainLabel.startsWith(row.label)) {
-      const tail = plainLabel.slice(String(row.label).length);
-      labelOut = `${row.label}${ui.paint('muted', tail)}${pad}`;
+      // Keep an explicit gap so "write" + "path · content" never becomes "write--path".
+      const rawTail = plainLabel.slice(String(row.label).length).replace(/^\s*/, '');
+      const tail = rawTail ? `  ${rawTail}` : '';
+      labelOut = `${ui.paint('info', row.label)}${ui.paint('muted', tail)}${pad}`;
     } else {
       labelOut = plainLabel + pad;
     }

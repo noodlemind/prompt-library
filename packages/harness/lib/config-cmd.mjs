@@ -36,9 +36,48 @@ function readValueFlag(argv, name) {
   return next === undefined || next.startsWith('--') ? '' : next;
 }
 
+/**
+ * Normalize set-style positionals so humans can type frontier-style sugar:
+ *   set agent.enabled false
+ *   set agent.enabled=false
+ *   set agent.enabled = false
+ * Without collapsing unrelated positionals (get still takes one key only).
+ */
+export function normalizeConfigPositionals(positionals, { verb }) {
+  const out = [...positionals];
+  if (verb !== 'set' && out[0] !== 'set') return out;
+
+  // After verb: ["set", "agent.enabled=false"] or ["set", "agent.enabled", "=", "false"]
+  const verbIdx = out[0] === 'set' ? 0 : -1;
+  const start = verbIdx === 0 ? 1 : 0;
+  if (out.length <= start) return out;
+
+  const head = out[start];
+  if (typeof head === 'string' && head.includes('=') && !head.startsWith('=')) {
+    const eq = head.indexOf('=');
+    const key = head.slice(0, eq);
+    const value = head.slice(eq + 1);
+    if (key) {
+      const rest = out.slice(start + 1);
+      return verbIdx === 0 ? ['set', key, value, ...rest] : [key, value, ...rest];
+    }
+  }
+
+  // ["set", "agent.enabled", "=", "false"] or ["set", "agent.enabled", "="]
+  if (out[start + 1] === '=') {
+    const key = out[start];
+    const value = out[start + 2] ?? null;
+    const rest = out.slice(start + 3);
+    if (verbIdx === 0) return value === null ? ['set', key] : ['set', key, value, ...rest];
+    return value === null ? [key] : [key, value, ...rest];
+  }
+
+  return out;
+}
+
 function context(argv) {
   const flags = parseFlags(argv);
-  const positionals = [];
+  const rawPositionals = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--') break;
@@ -46,9 +85,12 @@ function context(argv) {
       if (!a.includes('=') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i += 1;
       continue;
     }
-    positionals.push(a);
-    if (positionals.length === 3) break;
+    rawPositionals.push(a);
+    // Allow one extra token for the `key = value` sugar before collapsing.
+    if (rawPositionals.length === 5) break;
   }
+  const verb = rawPositionals[0] ?? null;
+  const positionals = normalizeConfigPositionals(rawPositionals, { verb });
   return {
     flags,
     scope: readValueFlag(argv, '--scope'),
@@ -115,28 +157,49 @@ export async function configResultOf(argv, ctx = {}) {
   }
 
   // `set`.
-  if (value === null) throw usageError(`config set requires a value`, `harness config set ${key} <value> --scope user|project`);
-  const scope = rawScope || null;
-  if (!scope) {
-        throw usageError('config set requires --scope', `--scope ${SCOPES.join(' or --scope ')}`);
+  if (value === null || value === '') {
+    throw usageError(
+      `config set requires a value`,
+      `config set ${key} <value>   (scope defaults to user; use --scope project for the repo)`,
+    );
   }
-  if (!SCOPES.includes(scope)) throw usageError(`unknown scope: ${scope}`, `--scope ${SCOPES.join(' or --scope ')}`);
+  // Default scope is user — matches frontier TUIs (Claude/Codex settings land
+  // in user scope unless project is explicit). Project still requires --scope.
+  const scopeDefaulted = !rawScope;
+  const scope = rawScope || 'user';
+  if (!SCOPES.includes(scope)) {
+    throw usageError(
+      `unknown scope: ${scope}`,
+      `--scope ${SCOPES.join(' or --scope ')}  (not session)`,
+    );
+  }
 
   const written = setConfigValue({ scope, key, value, copilotHome, workspace });
-    const trustedAfter = isProjectTrusted({ workspace, copilotHome });
+  const trustedAfter = isProjectTrusted({ workspace, copilotHome });
   const after = resolveConfig({ copilotHome, workspace, projectTrusted: trustedAfter });
   return {
     schema: 1,
     verb,
     key,
     scope,
+    scopeDefaulted,
     written: written.value,
     file: written.file,
-        value: after.values[key],
+    value: after.values[key],
     ...after.provenance[key],
-    effectiveChanged: after.values[key] === written.value,
-        ...(scope === 'project' && !trustedAfter ? { trustNowStale: true } : {}),
+    effectiveChanged: configValuesEqual(after.values[key], written.value),
+    ...(scope === 'project' && !trustedAfter ? { trustNowStale: true } : {}),
   };
+}
+
+/** Scalar === ; arrays compare by joined form so list keys do not false-warn. */
+function configValuesEqual(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const as = Array.isArray(a) ? a.map(String).join(',') : String(a ?? '');
+    const bs = Array.isArray(b) ? b.map(String).join(',') : String(b ?? '');
+    return as === bs;
+  }
+  return a === b;
 }
 
 function renderShow(result) {
@@ -171,16 +234,29 @@ export async function cmdConfig(argv, ctx = {}) {
     const keyWidth = keyWidthFor([result.key, 'source']);
     console.log(ui.line({ key: result.key, value: Array.isArray(result.value) ? result.value.join(',') : String(result.value), note: [result.source, result.note].filter(Boolean).join(' · '), keyWidth }));
   } else {
-    const keyWidth = keyWidthFor(['set', 'file', 'effective']);
-    console.log(ui.line({ state: 'ok', key: 'set', value: `${result.key} = ${Array.isArray(result.written) ? result.written.join(',') : String(result.written)}`, note: result.scope, keyWidth }));
-    console.log(ui.line({ key: 'file', value: result.file, keyWidth }));
+    // Compact product lines — avoid a sparse 4-row key dump that fills a wide
+    // tinted block with empty columns on the session ledger.
+    const written = Array.isArray(result.written) ? result.written.join(',') : String(result.written);
+    const effective = Array.isArray(result.value) ? result.value.join(',') : String(result.value);
+    const scopeNote = result.scopeDefaulted ? `${result.scope} (default)` : result.scope;
+    const keyWidth = keyWidthFor(['set', 'file']);
     console.log(ui.line({
-      state: result.effectiveChanged ? 'ok' : 'warn',
-      key: 'effective',
-      value: Array.isArray(result.value) ? result.value.join(',') : String(result.value),
-      note: [result.source, result.note].filter(Boolean).join(' · '),
+      state: 'ok',
+      key: 'set',
+      value: `${result.key} = ${written}`,
+      note: scopeNote,
       keyWidth,
     }));
+    console.log(ui.line({ key: 'file', value: result.file, keyWidth }));
+    if (!result.effectiveChanged) {
+      console.log(ui.line({
+        state: 'warn',
+        key: 'effective',
+        value: effective,
+        note: [result.source, result.note, 'not effective'].filter(Boolean).join(' · '),
+        keyWidth: keyWidthFor(['set', 'file', 'effective']),
+      }));
+    }
   }
 
   // One rule, shared with the lane path through the registry's `exitOf`.

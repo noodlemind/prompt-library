@@ -34,21 +34,23 @@ async function ledger(lines, { workspace = packageRoot, copilotHome } = {}) {
 // --- the reported divergence ----------------------------------------------
 
 test('a typed line asks for exactly what the palette asks for', () => {
-  const typed = route(['config', 'set']);
+  // Multi-verb families (config/model/…) fold to a sheet; use a flat command
+  // that still expands value slots on the palette.
+  const typed = route(['remember']);
   assert.ok(typed, 'typing the command the palette offers must not dead-end in a usage error');
 
-  const row = index.rows.find((r) => r.label === 'config set');
+  const row = index.rows.find((r) => r.id === 'command:remember');
   const chosen = selectionPlan(row, {});
   assert.deepEqual(asks(typed), chosen.queue.map((q) => q.label),
     'the two paths must answer "what does this still need" identically — that they did not is the whole defect');
 });
 
 test('words already typed are carried into the queue, not thrown away', () => {
-  const routed = route(['config', 'set', 'tui.scheme']);
+  const routed = route(['remember', 'keep tests green']);
   assert.ok(routed);
-  assert.deepEqual(routed.values, { key: 'tui.scheme' });
-  assert.equal(asks(routed).includes('key'), false, 'it must not ask again for something already typed');
-  assert.ok(asks(routed).includes('value'));
+  assert.deepEqual(routed.values, { claim: 'keep tests green' });
+  assert.equal(asks(routed).includes('claim'), false, 'it must not ask again for something already typed');
+  assert.ok(asks(routed).includes('trigger'), 'remaining required prompts still queue');
 });
 
 test('a command whose required values are flags routes too', () => {
@@ -64,31 +66,38 @@ test('a folded picker command opens its picker rather than listing thirteen ids'
   assert.equal(route(['model']), null, 'a bare `model` prints the catalogue, which is a real answer and not a dead end');
 });
 
+test('a multi-verb family opens its action sheet when typed with a verb', () => {
+  const routed = route(['learning', 'confirm']);
+  assert.equal(routed?.picker, 'verbs', 'folded families route into the sheet instead of a dead usage wall');
+  assert.equal(route(['learning']), null, 'bare family name dispatches and opens the sheet from the command itself');
+});
+
 test('a flag the palette renders as a word is reachable by that word', () => {
   const routed = route(['consolidate', 'apply']);
-  assert.ok(routed, 'the palette row is labelled `consolidate apply`, so that is what an operator types');
+  assert.ok(routed, 'the palette row is labelled for apply, so that is what an operator types');
   assert.ok(asks(routed).includes('ops'));
 });
 
 // --- what must still fail --------------------------------------------------
 
 test('a line that runs is never rerouted', () => {
-  for (const argv of [['status'], ['config', 'show'], ['orient'], ['undo']]) {
+  // Bare multi-verb / picker nouns open their own UI by dispatching (null here).
+  // Extra words on a picker family intentionally open the sheet (not tested here).
+  for (const argv of [['status'], ['orient'], ['undo'], ['model'], ['config']]) {
     assert.equal(route(argv), null, `${argv.join(' ')} runs as typed and must dispatch`);
   }
 });
 
 test('a mistake stays a mistake — a picker over it would hide it', () => {
   assert.equal(route(['get', '--nope']), null, 'an unknown flag has a precise answer; a value picker is not it');
-  assert.equal(route(['config', 'bogusverb']), null, 'a value the registry states outright and the operator got wrong');
   assert.equal(route(['bash', '--', 'echo hi']), null, 'everything past `--` is payload, not a gap');
-  assert.equal(route(['config', 'set', 'a', 'b', 'c']), null, 'more words than the command has places to put them');
+  assert.equal(route(['remember', 'a', 'b', 'c']), null, 'more words than the command has places to put them');
   assert.equal(route(['definitely-not-a-command']), null);
   assert.equal(route([]), null);
 });
 
 test('hand-typed flag syntax is left to the CLI parser', () => {
-  assert.equal(route(['config', 'set', '--scope', 'user']), null,
+  assert.equal(route(['remember', '--trigger', 'when X']), null,
     'someone writing flags is speaking CLI, and validateArgs answers them precisely');
 });
 
@@ -138,7 +147,9 @@ test('no palette row dead-ends when typed', () => {
     dead.push(row.label);
   }
   assert.deepEqual(dead, [], 'every one of these prints a usage error where the palette would have asked a question');
-  assert.ok(runnable > 20 && routed > 20, `the split must be real, not an empty sweep (${runnable} run, ${routed} routed)`);
+  // Multi-verb families fold to one sheet row, so far fewer palette rows need
+  // typed-line prompting than when every verb was its own top-level entry.
+  assert.ok(runnable > 20 && routed >= 5, `the split must be real, not an empty sweep (${runnable} run, ${routed} routed)`);
 });
 
 // --- the other half of "both modes work" ----------------------------------

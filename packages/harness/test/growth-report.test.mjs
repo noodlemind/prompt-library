@@ -3,19 +3,14 @@
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { buildGrowthReport, GROWTH_REPORT_SCHEMA } from '../lib/growth-report.mjs';
 import { AGENT_ADDON_DISCLAIMER, BENCHMARK_PROFILE } from '../lib/agent-loop.mjs';
 import { CONFIG_SCHEMA } from '../lib/config.mjs';
 import { agentResultOf } from '../lib/agent-cmd.mjs';
-
-const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
-const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
+import { tempDir, binPath, packageRoot } from './helpers/index.mjs';
 
 test('BENCHMARK_PROFILE is labeled test-only (AC4)', () => {
   assert.equal(BENCHMARK_PROFILE.id, 'benchmark');
@@ -121,7 +116,10 @@ test('agent dry-run carries optional-addon disclaimer (AC11)', async () => {
   assert.equal(result.runtime, 'optional-addon');
   assert.equal(result.disclaimer, AGENT_ADDON_DISCLAIMER);
   assert.match(result.disclaimer, /not full Adaptive Engineering/i);
-  assert.equal(result.profile.testOnly, true);
+  // Default profile is first-class autonomous (not the benchmark fixture).
+  assert.equal(result.profile.id, 'autonomous');
+  assert.equal(result.profile.testOnly, false);
+  assert.equal(BENCHMARK_PROFILE.testOnly, true);
 });
 
 test('agent disabled by default denies without provider (AC10)', async () => {

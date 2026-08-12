@@ -42,8 +42,10 @@ import {
   cmdEdit, editResultOf, cmdWrite, writeResultOf, cmdUndo, undoResultOf,
   exitFor as editExitFor, literalFlag,
 } from './edit-cmd.mjs';
+import { cmdTodo, todoResultOf, todoExitFor, TODO_VERBS } from './todo-cmd.mjs';
+import { cmdApply, applyResultOf, applyExitFor } from './apply-cmd.mjs';
 import { cmdAgent, agentResultOf, agentExitFor, agentJournalArgv, taskFromArgv } from './agent-cmd.mjs';
-import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TURNS, DEFAULT_PERSONA } from './agent-loop.mjs';
+import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TURNS, DEFAULT_PERSONA, DEFAULT_PROFILE_ID } from './agent-loop.mjs';
 import { DEFAULT_PROVIDER, PROVIDERS } from './provider.mjs';
 import { GET_DEFAULT_LINES, GET_DEFAULT_MAX_BYTES } from './get-cmd.mjs';
 import {
@@ -64,6 +66,7 @@ import { renderAgentLane, recordAgentLaneBytes } from './agent-lane.mjs';
 import { EVENT_TYPE, summarizeArgFlags } from './event-registry.mjs';
 import { createRedactor, redactedJson } from './redact.mjs';
 import { cmdModel, modelResultOf, MODEL_VERBS } from './model-cmd.mjs';
+import { cmdInspect, inspectResultOf, inspectExitFor, INSPECT_VERBS } from './inspect-cmd.mjs';
 
 const REGISTRY = new Map();
 
@@ -638,6 +641,37 @@ registerCommand({
   resultOf: statusResultOf,
 });
 
+registerCommand({
+  name: 'inspect',
+  summary: 'effective config, permissions, and workspace provenance',
+  group: 'engineer loop',
+  sideEffect: 'read',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  usage: `<${INSPECT_VERBS.join('|')}> [key]`,
+  verbs: INSPECT_VERBS.map((verb) => ({
+    verb,
+    summary: verb === 'config'
+      ? 'effective config values with source and scope'
+      : verb === 'permissions'
+        ? 'trust, agent, bash, and network posture'
+        : verb === 'workspace'
+          ? 'workspace and copilot-home paths'
+          : 'tool-class gates (bash, agent)',
+    positionals: verb === 'config' ? ['key'] : [],
+  })),
+  args: {
+    positionals: [
+      { name: 'verb', description: INSPECT_VERBS.join('|'), required: false, default: 'config' },
+      { name: 'key', description: 'optional config key for inspect config', required: false, default: null, choices: 'config-key' },
+    ],
+    flags: [],
+  },
+  handler: cmdInspect,
+  resultOf: inspectResultOf,
+  exitOf: inspectExitFor,
+});
+
 // --- setup ------------------------------------------------------------
 
 const INSTALL_FLAGS = [
@@ -708,14 +742,23 @@ registerCommand({
 
 registerCommand({
   name: 'index',
-  summary: 'rebuild knowledge index · --status reports drift · --structural builds the code symbol index',
+  summary: 'rebuild knowledge BM25 index · --status (knowledge + code) · --structural for code symbols',
   group: 'workspace',
   sideEffect: 'mutate',
     usage: '[--status] [--structural [--since <ref>]]',
   args: {
     positionals: [],
     flags: [
-            { name: '--status', type: 'boolean', description: 'read-only freshness report vs HEAD (never rebuilds)', required: false, default: false, tui: 'verb', sideEffect: 'read' },
+            {
+        name: '--status',
+        type: 'boolean',
+        description:
+          'read-only: knowledge BM25 freshness and code-symbol index status (never rebuilds)',
+        required: false,
+        default: false,
+        tui: 'verb',
+        sideEffect: 'read',
+      },
             {
         name: '--structural',
         type: 'boolean',
@@ -946,6 +989,57 @@ registerCommand({
 });
 
 registerCommand({
+  name: 'todo',
+  summary: 'durable worklist for long-horizon tasks (list/add/complete/clear)',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<list|add|complete|clear> [--text <item>] [--id <id>]',
+  verbs: [
+    { verb: 'list', summary: 'show open and completed items', sideEffect: 'read' },
+    { verb: 'add', summary: 'append a work item' },
+    { verb: 'complete', summary: 'mark an item done' },
+    { verb: 'clear', summary: 'remove all items' },
+  ],
+  args: {
+    positionals: [
+      { name: 'verb', description: TODO_VERBS.join('|'), required: false, default: 'list' },
+    ],
+    flags: [
+      // Mutate flags are only offered on mutating verb rows (not on list / bare read paths).
+      { name: '--text', type: 'string', valueName: 'item', description: 'work item text for add', required: false, default: null, tui: 'prompt', valueIsLiteral: true, verbs: ['add'] },
+      { name: '--id', type: 'string', valueName: 'id', description: 'item id for complete', required: false, default: null, tui: 'prompt', verbs: ['complete'] },
+    ],
+  },
+  handler: cmdTodo,
+  resultOf: todoResultOf,
+  exitOf: todoExitFor,
+});
+
+registerCommand({
+  name: 'apply',
+  summary: 'all-or-nothing multi-file CAS apply on the single write path',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '[--spec <file>] [--changes <json>]',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--spec', type: 'string', valueName: 'file', description: 'workspace-relative JSON file: array of changes', required: false, default: null, tui: 'prompt' },
+      { name: '--changes', type: 'string', valueName: 'json', description: 'inline JSON array of {path,old,new} or {path,content,expect?}', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
+    ],
+  },
+  handler: cmdApply,
+  resultOf: applyResultOf,
+  exitOf: applyExitFor,
+});
+
+registerCommand({
   name: 'exec',
   summary: 'run an argv directly — never through a shell — with a confined cwd and an allowlisted environment',
   group: 'engineer loop',
@@ -1038,10 +1132,12 @@ registerCommand({
     sideEffect: 'execute',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-  usage: '<task...> [--agent <persona>] [--provider <id>] [--model <id>] [--max-turns <n>] [--max-seconds <s>] [--tool-timeout <s>] [--dry-run]',
+  usage: '<task...> [--profile <name>] [--verify-cmd <argv>] [--agent <persona>] [--provider <id>] [--model <id>] [--max-turns <n>] [--max-seconds <s>] [--tool-timeout <s>] [--dry-run]',
   args: {
         positionals: [{ name: 'task...', description: 'what to do, in words', required: true, default: null }],
     flags: [
+      { name: '--profile', type: 'string', valueName: 'name', description: `deliver | autonomous | bench | benchmark (default ${DEFAULT_PROFILE_ID})`, required: false, default: DEFAULT_PROFILE_ID, tui: 'prompt' },
+      { name: '--verify-cmd', type: 'string', valueName: 'argv', description: 'task verifier argv for autonomous success (e.g. "node ./verify.mjs"); green is terminal success', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
       { name: '--agent', type: 'string', valueName: 'persona', description: `which hydrated persona to run as (default ${DEFAULT_PERSONA})`, required: false, default: DEFAULT_PERSONA, tui: 'prompt' },
       { name: '--provider', type: 'string', valueName: 'id', description: `which provider answers the model call: ${Object.keys(PROVIDERS).join('|')} (default ${DEFAULT_PROVIDER})`, required: false, default: DEFAULT_PROVIDER, tui: 'prompt' },
       { name: '--model', type: 'string', valueName: 'id', description: "the model to call; the provider's default when omitted", required: false, default: null, tui: 'prompt' },
@@ -1155,10 +1251,12 @@ registerCommand({
   name: 'config',
   summary: 'show, read, or change harness configuration across the user and project scopes',
   group: 'engineer loop',
-    sideEffect: 'mutate',
+  // Ledger: one Settings modal (keys + values), not config set/get/show rows.
+  tuiPicker: 'config',
+  sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-    usage: '<show|get|set|validate> [key] [value] [--scope <scope>]',
+  usage: '<show|get|set|validate> [key] [value] [--scope <scope>]',
   verbs: [
     { verb: 'show', summary: 'every key, its effective value, and which scope supplied it', sideEffect: 'read' },
     { verb: 'get', summary: 'one key: its effective value and provenance', sideEffect: 'read', positionals: ['key'] },

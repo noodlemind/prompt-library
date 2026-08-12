@@ -1,0 +1,7 @@
+{
+  "id": "add-function",
+  "prompt": "Add and export a function double(n) in src/math.mjs that returns 2*n. verify.mjs must exit 0. Do not change verify.mjs.",
+  "verifyCmd": ["node", "verify.mjs"],
+  "maxTurns": 15,
+  "maxSeconds": 300
+}

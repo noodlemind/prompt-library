@@ -107,8 +107,17 @@ test('rows are totally ordered by label then id, by codepoint', () => {
     const ordered = prev.label < cur.label || (prev.label === cur.label && prev.id < cur.id);
     assert.ok(ordered, `rows must be sorted: ${prev.label}/${prev.id} came before ${cur.label}/${cur.id}`);
   }
-    const labels = rows.map((r) => r.label);
-  assert.deepEqual(labels.slice(labels.indexOf('index'), labels.indexOf('index') + 3), ['index', 'index status', 'index structural']);
+  // Index rows use product labels; they still sort as a coherent family by id.
+  const indexRows = rows.filter((r) => r.noun === 'index').map((r) => r.id).sort();
+  assert.deepEqual(indexRows, [
+    'command:index',
+    'flag:index:--status',
+    'flag:index:--structural',
+  ]);
+  const byId = Object.fromEntries(rows.filter((r) => r.noun === 'index').map((r) => [r.id, r.label]));
+  assert.equal(byId['command:index'], 'Rebuild knowledge index');
+  assert.equal(byId['flag:index:--status'], 'Check knowledge + code index status');
+  assert.equal(byId['flag:index:--structural'], 'Rebuild code symbol index');
 });
 
 // --- no flag syntax in labels --------------------------------------------
@@ -202,19 +211,24 @@ test('every row resolves to argv the registry accepts and dispatch will run', ()
         gated += 1;
       }
 
-            const positionalSlots = row.argvTokens.filter((t) => t.kind === 'subcommand' || (t.kind === 'value' && t.positional)).length;
-      const required = entry.args.positionals.filter((p) => p.required);
-      assert.ok(
-        positionalSlots >= required.length,
-        `${row.id} fills ${positionalSlots} positional slot(s) but ${entry.name} requires ${required.length} (${required.map((p) => p.name).join(', ')})`,
-      );
-
-            const under = (entry.verbs || []).find((v) => v.verb === row.argvTokens[1]?.value);
-      for (const name of under?.positionals || []) {
+       // TUI multi-verb families and tuiPicker rows collapse to a modal sheet
+      // (picker: 'verbs' | 'model' | 'config' | …). The sheet collects the verb
+      // and positionals after selection — bare argv is intentionally incomplete.
+      if (!row.picker) {
+        const positionalSlots = row.argvTokens.filter((t) => t.kind === 'subcommand' || (t.kind === 'value' && t.positional)).length;
+        const required = entry.args.positionals.filter((p) => p.required);
         assert.ok(
-          row.argvTokens.some((t) => t.kind === 'value' && t.positional === name),
-          `${row.id} runs "${entry.name} ${under.verb}", which consumes <${name}>, but offers no picker for it`,
+          positionalSlots >= required.length,
+          `${row.id} fills ${positionalSlots} positional slot(s) but ${entry.name} requires ${required.length} (${required.map((p) => p.name).join(', ')})`,
         );
+
+        const under = (entry.verbs || []).find((v) => v.verb === row.argvTokens[1]?.value);
+        for (const name of under?.positionals || []) {
+          assert.ok(
+            row.argvTokens.some((t) => t.kind === 'value' && t.positional === name),
+            `${row.id} runs "${entry.name} ${under.verb}", which consumes <${name}>, but offers no picker for it`,
+          );
+        }
       }
 
       if (row.argvTokens.some((t) => t.kind === 'value')) withValueToken += 1;
@@ -248,13 +262,15 @@ test('resolveArgv omits unanswered pickers and emits booleans as bare flags', ()
   assert.deepEqual(resolveArgv(why, {}), ['learnings', '--why'], 'the template keeps the flag, drops the empty slot');
   assert.deepEqual(resolveArgv(why, { '--why': 'sql/timeouts' }), ['learnings', '--why', 'sql/timeouts']);
 
-    const confirm = rows.find((r) => r.id === 'verb:learning:confirm');
+  // Multi-verb families fold on TUI; verb argv templates live on the CLI surface.
+  const cli = buildCommandIndex({ surface: 'cli', workspace: packageRoot });
+  const confirm = cli.rows.find((r) => r.id === 'verb:learning:confirm');
   assert.deepEqual(resolveArgv(confirm, {}), ['learning', 'confirm'], 'the template keeps the verb, drops the empty slot');
   assert.deepEqual(resolveArgv(confirm, { id: 'L-7', '--reason': 'still true' }), ['learning', 'confirm', 'L-7', '--reason', 'still true']);
-  assert.deepEqual(resolveArgv(rows.find((r) => r.id === 'verb:knowledge:commit'), { target: 'repo' }), ['knowledge', 'commit', 'repo']);
+  assert.deepEqual(resolveArgv(cli.rows.find((r) => r.id === 'verb:knowledge:commit'), { target: 'repo' }), ['knowledge', 'commit', 'repo']);
   assert.deepEqual(resolveArgv(rows.find((r) => r.id === 'command:recall'), { query: 'orders timeout' }), ['recall', 'orders timeout']);
 
-    const consolidate = rows.find((r) => r.id === 'command:consolidate');
+  const consolidate = rows.find((r) => r.id === 'command:consolidate');
   assert.deepEqual(consolidate.refinements, [], 'the read-only status row offers no writing refinement');
   assert.deepEqual(consolidate.prompts.map((o) => o.flag), ['--ops', '--layer']);
   assert.deepEqual(
@@ -266,7 +282,7 @@ test('resolveArgv omits unanswered pickers and emits booleans as bare flags', ()
   assert.deepEqual(apply.prompts.find((o) => o.flag === '--ops').required, true);
   assert.deepEqual(resolveArgv(apply, { '--ops': 'ops.json' }), ['consolidate', '--apply', '--ops', 'ops.json']);
 
-    const synthetic = {
+  const synthetic = {
     argvTokens: [{ kind: 'command', value: 'probe' }],
     prompts: [{ flag: '--loud', type: 'boolean' }],
     refinements: [{ flag: '--tag', type: 'string' }],
@@ -295,11 +311,15 @@ test('a command and a skill sharing a name both stay in the one flat namespace',
 
   const byId = new Map(rows.map((r) => [r.id, r]));
   for (const name of ['consolidate', 'recall']) {
-    assert.ok(byId.get(`command:${name}`), `the command row for ${name} survives`);
+    const command = byId.get(`command:${name}`);
+    assert.ok(command, `the command row for ${name} survives`);
     const skill = byId.get(`skill:${name}`);
     assert.ok(skill, `the skill row for ${name} survives`);
     assert.equal(skill.label, `skill:${name}`, 'the command owns the bare name; the skill is qualified');
-    assert.equal(byId.get(`command:${name}`).label, name);
+    assert.equal(command.noun, name, 'command id/noun stay machine-stable');
+    // TUI uses product labels (e.g. "Consolidate learnings"), not the bare noun.
+    assert.ok(command.label && command.label !== `skill:${name}`);
+    assert.notEqual(command.label, skill.label);
   }
 
   assert.equal(rows.filter((r) => r.kind === 'skill').length, 3, 'brainstorming + the two colliding skills');
@@ -375,15 +395,24 @@ test('the palette omits lifecycle and machine-only commands; the CLI keeps them'
     assert.equal(tui.rows.some((r) => r.noun === name), false, `${name} must not appear on the palette`);
     assert.ok(cli.rows.some((r) => r.id === `command:${name}`), `${name} must still appear on the CLI`);
   }
-    const foldedByPickers = listCommands()
-    .filter((name) => getCommand(name).tuiPicker)
-    .reduce((sum, name) => sum + cli.rows.filter((r) => r.noun === name).length - 1, 0);
-  assert.equal(foldedByPickers, 4, 'model folds show/set/clear/refresh into its picker row');
-  assert.equal(
-    cli.rows.length - tui.rows.length,
-    LIFECYCLE_ONLY.length + foldedByPickers,
-    'the CLI surface is the palette plus the lifecycle commands and the rows pickers fold',
-  );
+  assert.ok(cli.rows.length > tui.rows.length, 'CLI inventory is strictly larger than the palette');
+
+  // Multi-verb families and specialized pickers collapse to one sheet on TUI.
+  for (const name of listCommands()) {
+    const entry = getCommand(name);
+    if (!entry) continue;
+    const multi = (entry.verbs || []).length >= 2 && entry.tuiFold !== false;
+    if (!entry.tuiPicker && !multi) continue;
+    if (Array.isArray(entry.surfaces) && entry.surfaces.length && !entry.surfaces.includes('tui')) continue;
+    if (entry.userInvocable === false) continue;
+    const tuiRows = tui.rows.filter((r) => r.noun === name);
+    assert.equal(tuiRows.length, 1, `${name} must fold to one palette row`);
+    assert.ok(tuiRows[0].picker, `${name} palette row opens a picker/sheet`);
+    assert.ok(
+      cli.rows.filter((r) => r.noun === name).length > 1,
+      `${name} still expands on the CLI`,
+    );
+  }
 });
 
 test('nothing marked userInvocable: false reaches the tui surface', () => {
@@ -447,17 +476,17 @@ test('every row carries its own consequence, not its command policy maximum', ()
 
   const expected = {
     // read-only forms of commands classified `mutate` for policy
-    'index status': 'read',
-    'report': 'read',
-    'report global': 'read',
-    'consolidate': 'read',
-    'consolidate candidates': 'read',
+    'Check knowledge + code index status': 'read',
+    'Reports': 'read',
+    'Global report': 'read',
+    'Consolidate learnings': 'read',
+    'List consolidate candidates': 'read',
     // …and the forms that genuinely write, which must not be softened
-    'index': 'mutate',
-    'index structural': 'mutate',
-    'report sync': 'mutate',
-    'consolidate apply': 'mutate',
-    'consolidate rebuild': 'mutate',
+    'Rebuild knowledge index': 'mutate',
+    'Rebuild code symbol index': 'mutate',
+    'Sync then report': 'mutate',
+    'Apply consolidate ops': 'mutate',
+    'Rebuild consolidate debt': 'mutate',
   };
   for (const [label, effect] of Object.entries(expected)) {
     const row = byLabel.get(label);

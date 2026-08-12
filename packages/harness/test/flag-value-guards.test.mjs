@@ -3,6 +3,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { parseFlags } from '../lib/flags.mjs';
+import { VALUE_FLAGS, positionalsOf, verbOf } from '../lib/positionals.mjs';
+import { GLOBAL_FLAGS, getCommand, listCommands } from '../lib/registry.mjs';
 
 const binPath = path.resolve(import.meta.dirname, '..', 'bin', 'harness.mjs');
 
@@ -54,4 +56,67 @@ test('CLI: `install --target` names the flag instead of reporting an undefined-p
   assert.notEqual(result.status, 0);
   const body = JSON.parse(result.stderr.trim());
   assert.match(body.error.message, /invalid --target/, 'pre-fix: "Cannot read properties of undefined (reading \'split\')"');
+});
+
+// --- registry / positionals contracts (folded from review souvenirs) ------
+
+test('the value-flag set covers every non-boolean flag the registry declares', () => {
+  const declared = new Set();
+  for (const f of GLOBAL_FLAGS) if (f.type !== 'boolean') { declared.add(f.name); (f.aliases || []).forEach((a) => declared.add(a)); }
+  for (const n of listCommands()) {
+    for (const f of getCommand(n).args?.flags || []) {
+      if (f.type !== 'boolean') { declared.add(f.name); (f.aliases || []).forEach((a) => declared.add(a)); }
+    }
+  }
+  const missing = [...declared].filter((n) => !VALUE_FLAGS.has(n));
+  assert.deepEqual(missing, [], 'a value flag missing from the set means its value is read as a positional');
+});
+
+test('the value-flag set covers every flag parseFlags reads a value for', () => {
+  const consumes = (name) => ['SENTINEL', '7'].some((v) => {
+    try { return JSON.stringify(parseFlags([name, v]) ?? {}).includes(v); } catch { return true; }
+  });
+  const candidates = ['--target', '--since', '--until', '--ids', '--branch', '--why', '--query', '--plan', '--host', '--limit', '--collection'];
+  const missing = candidates.filter((n) => consumes(n) && !VALUE_FLAGS.has(n));
+  assert.deepEqual(missing, []);
+});
+
+test('a boolean flag never consumes the token after it', () => {
+  assert.deepEqual(positionalsOf(['--json', 'list']), ['list']);
+  assert.deepEqual(positionalsOf(['--verbose', 'run', 'slow']), ['run', 'slow']);
+  assert.deepEqual(positionalsOf(['-v', 'list']), ['list'], 'short flags too — `-v` does not start with `--`');
+  assert.deepEqual(positionalsOf(['--no-events', 'approve']), ['approve']);
+  assert.deepEqual(positionalsOf(['--status', 'succeeded', 'list']), ['list']);
+  assert.deepEqual(positionalsOf(['--limit=5', 'list']), ['list']);
+  assert.deepEqual(positionalsOf(['show', 'abc', '--', '--json']), ['show', 'abc'], 'nothing after `--` belongs to us');
+});
+
+test('verbOf matches a known verb wherever it appears, rather than guessing by position', () => {
+  assert.equal(verbOf(['--json', 'approve'], ['status', 'approve', 'revoke'], { fallback: 'status' }), 'approve');
+  assert.equal(verbOf(['--verbose', 'revoke'], ['status', 'approve', 'revoke'], { fallback: 'status' }), 'revoke');
+  assert.equal(verbOf([], ['status', 'approve'], { fallback: 'status' }), 'status');
+  assert.equal(verbOf(['frobnicate'], ['status'], { fallback: 'status' }), 'frobnicate');
+});
+
+test('an invalid verb is not skipped in favour of a later valid one', () => {
+  assert.equal(verbOf(['frobnicate', 'approve'], ['status', 'approve', 'revoke'], { fallback: 'status' }), 'frobnicate',
+    'a typo must not become a security mutation');
+  assert.equal(verbOf(['--json', 'approve'], ['status', 'approve', 'revoke'], { fallback: 'status' }), 'approve');
+});
+
+test('a value flag cannot swallow the `--` boundary', () => {
+  assert.deepEqual(positionalsOf(['--status', '--', 'resume', 'abc']), [],
+    '`--` must not be read as a flag value');
+  assert.deepEqual(positionalsOf(['--status', 'ok', 'list']), ['list'], 'a real value is still consumed');
+});
+
+test('every declared flag name is a single flag, not a comma-joined string', () => {
+  const bad = [];
+  for (const n of listCommands()) {
+    for (const f of getCommand(n).args?.flags || []) {
+      if (/[,\s]/.test(f.name)) bad.push(`${n}: ${JSON.stringify(f.name)}`);
+    }
+  }
+  assert.deepEqual(bad, [],
+    'a name like "-c, --collection" registers one flag with a comma in it');
 });

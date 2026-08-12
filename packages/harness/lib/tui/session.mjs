@@ -44,8 +44,25 @@ const SESSION_WORDS = Object.freeze({
   help: 'help',
   '?': 'help',
   clear: 'clear',
-    results: 'results',
+  results: 'results',
   hits: 'results',
+});
+
+/** Product verbs that compile to registry argv (host-first TUX). */
+const AGENT_MODE_WORDS = Object.freeze({
+  'agent on': { kind: 'agent-mode-set', enabled: true },
+  'agent off': { kind: 'agent-mode-set', enabled: false },
+  '/agent on': { kind: 'agent-mode-set', enabled: true },
+  '/agent off': { kind: 'agent-mode-set', enabled: false },
+});
+
+const HOST_MODE_WORDS = Object.freeze({
+  'mode commands': { kind: 'host-mode-set', mode: 'commands' },
+  'mode assist': { kind: 'host-mode-set', mode: 'assist' },
+  'mode plan': { kind: 'host-mode-set', mode: 'plan' },
+  '/mode commands': { kind: 'host-mode-set', mode: 'commands' },
+  '/mode assist': { kind: 'host-mode-set', mode: 'assist' },
+  '/mode plan': { kind: 'host-mode-set', mode: 'plan' },
 });
 
 /** `replay` and `replay <id>` — re-run a block by name rather than by sigil. */
@@ -55,7 +72,53 @@ export function interpretLine(rawLine) {
   const line = stripControl(rawLine).trim();
   if (!line) return { kind: 'empty' };
 
-    const sessionKey = line.startsWith('/') ? line.slice(1).trim() : line;
+  const lower = line.toLowerCase();
+  const agentVerb = AGENT_MODE_WORDS[lower];
+  if (agentVerb) return { ...agentVerb };
+  const modeVerb = HOST_MODE_WORDS[lower];
+  if (modeVerb) return { ...modeVerb };
+
+  // Gate menu (Grok-style approve / comment / quit)
+  if (lower === 'gate menu' || lower === '/gate' || lower === 'gate actions') {
+    return { kind: 'gate-menu' };
+  }
+
+  // Inspect product verbs
+  const inspectMatch = lower.match(/^\/?inspect(?:\s+(config|permissions|workspace|tools))?(?:\s+(\S+))?$/);
+  if (inspectMatch) {
+    return {
+      kind: 'inspect',
+      verb: inspectMatch[1] || 'config',
+      key: inspectMatch[2] || null,
+    };
+  }
+
+  // Session recovery via run journal
+  if (lower === 'runs' || lower === '/runs' || lower === 'run list' || lower === '/resume') {
+    return { kind: 'runs-list' };
+  }
+  const resumeMatch = lower.match(/^(?:\/?resume|run resume)\s+(\S+)$/);
+  if (resumeMatch) return { kind: 'runs-resume', id: resumeMatch[1] };
+
+  // Demo question checkpoint: question "prompt" | a | b | c
+  if (lower.startsWith('question ') || lower.startsWith('/question ')) {
+    const body = line.replace(/^\/?question\s+/i, '');
+    const parts = body.split('|').map((p) => p.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      return {
+        kind: 'ask-question',
+        prompt: parts[0],
+        choices: parts.slice(1),
+      };
+    }
+    return {
+      kind: 'ask-question',
+      prompt: body || 'Choose an option',
+      choices: ['yes', 'no', 'skip'],
+    };
+  }
+
+  const sessionKey = line.startsWith('/') ? line.slice(1).trim() : line;
   if (Object.hasOwn(SESSION_WORDS, sessionKey) && !sessionKey.includes(' ')) {
     return { kind: SESSION_WORDS[sessionKey] };
   }
@@ -88,7 +151,28 @@ export function interpretLine(rawLine) {
     };
   }
   if (line.startsWith('!')) {
-    return { kind: 'shell', script: line.slice(1).trim() };
+    const script = line.slice(1).trim();
+    // Bare `!` enters bash mode in the composer; that path is handled by input.
+    // `!cmd` runs one governed script.
+    if (!script) return { kind: 'bash-enter' };
+    return { kind: 'shell', script };
+  }
+
+  // Bare product verbs — friendlier than kernel usage walls.
+  if (lower === 'bash') return { kind: 'bash-enter' };
+  if (lower === 'tree' || lower === 'tree workspace') {
+    return { kind: 'command', argv: ['tree', 'workspace'] };
+  }
+  if (lower === 'tree knowledge') {
+    return { kind: 'command', argv: ['tree', 'knowledge'] };
+  }
+  // `tree src` / `tree lib/foo` → workspace tree scoped to that path
+  if (lower.startsWith('tree ')) {
+    const rest = line.slice(5).trim();
+    if (rest === 'workspace' || rest === 'knowledge') {
+      return { kind: 'command', argv: ['tree', rest] };
+    }
+    if (rest) return { kind: 'command', argv: ['tree', 'workspace', rest] };
   }
 
   if (line.startsWith('/')) {

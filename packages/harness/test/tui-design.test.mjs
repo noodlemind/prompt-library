@@ -175,29 +175,26 @@ test('DESIGN: the header is a two-line identity block printed once', () => {
   assert.equal(rows[2], '');
 });
 
-test('DESIGN: the hint row carries what you can act on now, and nothing else', () => {
-    const row = renderHint({ ui, width: 120, mode: 'deliver', gate: 'pass', shell: 'allowed', rerun: 'verify' });
-  assert.match(row, /deliver/, 'the mode');
+test('DESIGN: the hint row carries keys only — mode lives on the rule and footer', () => {
+  const row = renderHint({ ui, width: 120, mode: 'assist', gate: 'pass', shell: 'allowed', agent: true });
   assert.match(row, /↵ run/, 'what Enter does');
-  assert.match(row, /shift\+tab mode/, 'the gate that decides what a bare line means');
-  assert.match(row, /\? keys/, 'and where every other key is listed');
+  assert.match(row, /shift\+tab mode/, 'cycles host mode');
+  assert.match(row, /\? keys/, 'where every other key is listed');
+  assert.match(row, /\/ palette/, 'palette is first-class');
 
-  // The four that moved out, each to somewhere it reads better.
-  assert.doesNotMatch(row, /shell allowed/, 'a standing policy fact belongs in `?`, not under the cursor');
-  assert.doesNotMatch(row, /replay re-runs/, 'restated a block already on screen — and read as a fragment');
-  assert.doesNotMatch(row, /ctrl\+d/, 'listed by `?`');
-  assert.doesNotMatch(row, /interrupt/, 'the live region announces `esc cancels` while something is actually running');
-  assert.doesNotMatch(row, /gate/,
-    'the gate was stated three times; its textual home is the footer and its ambient home is the hairline tint');
+  // Mode/agent are not restated under the cursor (they sit on the rule label).
+  assert.doesNotMatch(row, /agent on/, 'agent status is footer/rule, not the hint');
+  assert.doesNotMatch(row, /assist/, 'mode is the right-hand rule label');
+  assert.doesNotMatch(row, /shell allowed/, 'policy fact belongs in `?`');
+  assert.doesNotMatch(row, /gate/, 'gate lives in the footer');
 
-  // Four items, not seven. The count is the point.
+  // Four key clusters, not a crowded posture strip.
   assert.equal(row.split('·').length, 4);
 });
 
-test('DESIGN: the hint drops keys before it drops posture — posture is what changes', () => {
+test('DESIGN: the hint drops keys when the row is narrow', () => {
   const narrow = renderHint({ ui, width: 26, shell: 'denied' });
-  assert.match(narrow, /deliver/);
-  assert.doesNotMatch(narrow, /run/, 'the keys are learned once; the posture changes under you');
+  assert.match(narrow, /run|mode|keys|palette/);
   assert.ok(displayWidth(narrow) <= 26);
 });
 
@@ -723,12 +720,15 @@ test('FIELD: the chrome takes the width the terminal actually has', async () => 
   session.close();
 });
 
-test('FIELD: the palette scales with the terminal instead of cramming into 72 columns', () => {
+test('FIELD: overlays track terminal width the way the composer does', () => {
   const overlay = createOverlay({ rows: [{ label: 'index status', summary: 'x', sideEffect: 'read' }] });
   const wide = renderOverlay(overlay, { ui, width: 200 });
-  assert.equal(displayWidth(wide[0]), 110, 'on a wide terminal the box takes a readable measure');
+  assert.equal(displayWidth(wide[0]), 198, 'on a wide terminal the modal fills the window, not a 110-cell stamp');
   const narrow = renderOverlay(overlay, { ui, width: 50 });
-  assert.equal(displayWidth(narrow[0]), 46, 'on a narrow one it takes everything but a margin');
+  assert.equal(displayWidth(narrow[0]), 48, 'on a narrow one it takes everything but a 1-cell margin');
+  // Explicit cap still works for tests / tight sheets.
+  const capped = renderOverlay(overlay, { ui, width: 200, maxWidth: 80 });
+  assert.equal(displayWidth(capped[0]), 80);
 });
 
 test('FIELD: exit is discoverable — a palette row and a key in the hint row', async () => {
@@ -846,7 +846,8 @@ test('REVIEW-2: palette rows are two aligned columns, description left-aligned',
 
 test('REVIEW-7: the empty composer carries a placeholder that vanishes on typing', () => {
   const composer = createComposer({ width: 80 });
-  assert.match(composer.render()[1], /run a command · \/ for the palette/, 'Codex and Grok both seat one here');
+  assert.match(composer.render()[1], /ask or run a command · \/ palette/, 'Codex and Grok both seat one here');
+  assert.match(composer.render()[1], /· ask/, 'leading middot keeps the caret off the first letter');
   composer.handleKey('s', { name: 's' });
   assert.doesNotMatch(composer.render()[1], /run a command/, 'and it is never part of the value');
   assert.equal(composer.value, 's');
@@ -925,7 +926,7 @@ test('FIELD: a value question is asked at the composer, where the answer is type
   assert.equal(askAt, ruleAt + 1, 'and the question is the very next row — the input row itself');
 
   session.setPrompt(null);
-  assert.ok(output.lines.some((l) => /run a command · \/ for the palette/.test(l)),
+  assert.ok(output.lines.some((l) => /ask or run a command · \/ palette|run a command · \/ palette/.test(l)),
     'clearing the prompt restores the ordinary placeholder');
   session.close();
 });
@@ -1050,8 +1051,7 @@ test('FIELD: arrow keys skip section headings — a heading is not a choice', ()
       { label: 'llama', provider: 'groq', model: 'llama' },
     ],
   });
-  // Opens on a heading; the first move must land on a selectable row.
-  overlay.handleKey(null, { name: 'down' });
+  // Opens on the first selectable row, never a section heading.
   assert.equal(overlay.selected.label, 'gpt-4o');
   overlay.handleKey(null, { name: 'down' });
   assert.equal(overlay.selected.label, 'llama', 'the second heading is stepped over, not landed on');
@@ -1110,15 +1110,24 @@ test('BLOCK: every painted row is exactly the terminal width, whatever it holds'
 // ── "values come from pickers" — the contract, finally implemented ────────
 
 test('VALUES: a slot the registry can enumerate is never left to be typed', async () => {
-    const { buildCommandIndex } = await import('../lib/command-index.mjs');
-  const { selectionPlan } = await import('../lib/tui/palette.mjs');
-  const rows = buildCommandIndex({ workspace: process.cwd() }).rows;
-    const config = selectionPlan(rows.find((r) => r.label === 'config set')).queue;
-  assert.deepEqual(config.map((q) => q.key), ['key', 'value', '--scope']);
-  for (const q of config) assert.ok(q.choices, `${q.key} must say where its answers come from`);
+  const { buildCommandIndex } = await import('../lib/command-index.mjs');
+  const { resolveSelection } = await import('../lib/tui/palette.mjs');
+  const { configSettingsRows } = await import('../lib/tui/modals.mjs');
+  // Settings is a modal, not config set/get/show rows on the main palette.
+  const tui = buildCommandIndex({ surface: 'tui', workspace: process.cwd() }).rows;
+  assert.ok(tui.some((r) => r.picker === 'config' && r.label === 'Settings'));
+  const { tempDir } = await import('./helpers/index.mjs');
+  const ws = tempDir('cfg-modal-');
+  const home = tempDir('cfg-modal-home-');
+  assert.ok(configSettingsRows({ workspace: ws, copilotHome: home }).some((r) => r.configKey === 'agent.enabled'));
 
-    const cli = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
-  const modelSet = cli.find((r) => r.label === 'model set');
+  const cli = buildCommandIndex({ surface: 'cli', workspace: process.cwd() }).rows;
+  const setRow = cli.find((r) => r.id === 'verb:config:set');
+  const resolved = resolveSelection(setRow, { key: 'agent.enabled', value: 'false' });
+  assert.ok(resolved.argv, resolved.invalid);
+  assert.ok(resolved.argv.includes('--scope') && resolved.argv.includes('user'));
+
+  const modelSet = cli.find((r) => r.id === 'verb:model:set' || r.label === 'model set');
   const slots = modelSet.argvTokens.filter((t) => t.kind === 'value');
   assert.deepEqual(slots.map((t) => t.positional), ['provider', 'model']);
   for (const slot of slots) assert.ok(slot.choices, `${slot.positional} must say where its answers come from`);

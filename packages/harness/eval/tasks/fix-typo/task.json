@@ -1,0 +1,7 @@
+{
+  "id": "fix-typo",
+  "prompt": "The function greets users but has a typo in the return string. Fix src/greet.mjs so that verify.mjs exits 0. Do not change verify.mjs.",
+  "verifyCmd": ["node", "verify.mjs"],
+  "maxTurns": 15,
+  "maxSeconds": 300
+}

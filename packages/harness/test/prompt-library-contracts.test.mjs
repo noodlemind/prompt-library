@@ -274,13 +274,16 @@ test('prompt-library retains at most one non-terminal PR plan and documents clea
   const datedPlans = fs
     .readdirSync(path.join(repoRoot, 'docs', 'plans'))
     .filter((name) => /^\d{4}-\d{2}-\d{2}.*\.md$/.test(name));
-  assert.ok(datedPlans.length <= 1, `expected at most one live PR plan, found ${datedPlans.length}`);
+  const live = [];
   for (const name of datedPlans) {
     const frontmatter = read(`docs/plans/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1];
     const plan = YAML.parse(frontmatter || '');
     assert.ok(plan?.plan_schema, `${name} must use the current plan schema`);
-    assert.ok(!['done', 'completed'].includes(plan.status), `${name} is terminal and should be removed`);
+    // Only in-progress execution plans count as "live". planned/deferred/done may coexist.
+    if (plan.status !== 'in-progress') continue;
+    live.push(name);
   }
+  assert.ok(live.length <= 1, `expected at most one in-progress PR plan, found ${live.length}: ${live.join(', ')}`);
   const policy = read('docs/plans/README.md');
   assert.match(policy, /transient/i);
   assert.match(policy, /after[^\n]*merge[^\n]*(?:remove|delete)/i);

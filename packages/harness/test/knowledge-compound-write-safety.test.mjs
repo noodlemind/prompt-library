@@ -8,7 +8,7 @@ import { runRemember } from '../lib/knowledge/remember.mjs';
 
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
-test('probe C: runInsightCompound (compound --insight) refuses to write through a symlinked docs/solutions directory, and reports a clear blocked result', () => {
+test('runInsightCompound (compound --insight) refuses to write through a symlinked docs/solutions directory, and reports a clear blocked result', () => {
   const ws = tempDir('probeC-ws-');
   const copilotHome = tempDir('probeC-ch-');
   const outside = tempDir('probeC-outside-');
@@ -33,7 +33,7 @@ test('probe C: runInsightCompound (compound --insight) refuses to write through 
   assert.ok(fs.lstatSync(path.join(ws, 'docs', 'solutions')).isSymbolicLink(), 'the symlink itself is untouched');
 });
 
-test('probe C: runInsightCompound still writes normally when docs/solutions is a plain directory (no false-positive refusal)', () => {
+test('runInsightCompound still writes normally when docs/solutions is a plain directory (no false-positive refusal)', () => {
   const ws = tempDir('probeC-ok-ws-');
   const copilotHome = tempDir('probeC-ok-ch-');
 
@@ -51,7 +51,7 @@ test('probe C: runInsightCompound still writes normally when docs/solutions is a
   assert.ok(fs.existsSync(path.join(ws, result.path)), 'the episode file was actually written');
 });
 
-test('probe C (remember): harness remember refuses to write its episode through a symlinked docs/solutions directory, and surfaces the same blocked reason', () => {
+test('harness remember refuses to write its episode through a symlinked docs/solutions directory, and surfaces the same blocked reason', () => {
   const ws = tempDir('probeC-remember-ws-');
   const copilotHome = tempDir('probeC-remember-ch-');
   const harnessHome = tempDir('probeC-remember-hh-');

@@ -9,6 +9,7 @@ import { agentResultOf } from '../lib/agent-cmd.mjs';
 import { PROVIDERS, providerEnv, resolveBaseUrl, startProvider } from '../lib/provider.mjs';
 import { AGENT_TOOLS } from '../lib/agent-loop.mjs';
 
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
 
 async function stubServer(reply) {
@@ -240,6 +241,7 @@ test('the loop completes a task end to end against a server that actually answer
     const result = await agentResultOf([
       'write', 'the', 'file',
       '--workspace', ws, '--copilot-home', home, '--no-events',
+      '--profile', 'benchmark',
       '--provider', 'ollama', '--model', 'stub-1',
     ], {}, {
       startProviderFn: () => startProvider({
@@ -272,7 +274,8 @@ test('the system prompt travels as a system message in this format, without the 
   const stub = await stubServer(() => [200, openAiText('done')]);
   try {
     await agentResultOf([
-      'a', 'task', '--workspace', ws, '--copilot-home', home, '--no-events', '--provider', 'ollama',
+      'a', 'task', '--workspace', ws, '--copilot-home', home, '--no-events',
+      '--profile', 'benchmark', '--provider', 'ollama',
     ], {}, {
       startProviderFn: () => startProvider({ provider: 'ollama', parentEnv: { PATH: process.env.PATH, OLLAMA_BASE_URL: stub.base } }),
     });
@@ -402,4 +405,34 @@ test('the shared adapter does not attach a stdin listener when merely imported',
   await import('../lib/providers/openai-compatible.mjs');
   assert.equal(process.stdin.listenerCount('data'), before,
     'the stdin loop attaches only when the file IS the adapter process');
+});
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('the provider root is decoded, so an install under a path with a space works', () => {
+  const encoded = 'file:///Users/Jane%20Doe/harness/lib/provider.mjs';
+  assert.equal(path.dirname(new URL(encoded).pathname), '/Users/Jane%20Doe/harness/lib',
+    'this is the value the old code used');
+  assert.equal(path.dirname(fileURLToPath(encoded)), '/Users/Jane Doe/harness/lib');
+
+  const source = fs.readFileSync(path.join(packageRoot, 'lib', 'provider.mjs'), 'utf8');
+  assert.equal(/new URL\(import\.meta\.url\)\.pathname/.test(source), false,
+    'provider path resolution must percent-decode so spaces work');
+});
+
+test('a base URL may not embed credentials', async () => {
+  const { PROVIDERS, resolveBaseUrl } = await import('../lib/provider.mjs');
+  assert.throws(
+    () => resolveBaseUrl(PROVIDERS.openai, { parentEnv: { OPENAI_BASE_URL: 'https://user:pass@gateway.example.com/v1' } }),
+    (e) => e.code === 'E_USAGE' && /credentials/.test(e.message),
+  );
+});
+
+test('the adapter scrubs its own credential out of anything it sends back', () => {
+  for (const file of ['providers/openai-compatible.mjs', 'providers/anthropic.mjs']) {
+    const src = fs.readFileSync(path.join(packageRoot, 'lib', file), 'utf8');
+    assert.match(src, /function scrubCredential/, `${file} must scrub`);
+    assert.match(src, /const safe = scrubCredential\(message,/,
+      `${file} must scrub at the single emit choke point`);
+  }
 });

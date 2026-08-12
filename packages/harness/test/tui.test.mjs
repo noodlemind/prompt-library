@@ -506,3 +506,38 @@ test('a refused command journals no run — while an accepted one does', async (
   assert.ok(!starts.some((r) => r.command === 'definitely-not-a-command'),
     'a command refused before dispatch never reaches the journal');
 });
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('a running command can still be cancelled from the keyboard', async () => {
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 60 });
+  const interrupts = [];
+  const ui = { paint: (_t, s2) => s2, unicode: true, arrow: '->', glyph: () => '', stripe: () => '|', tintRow: (_st, r) => r, stripAnsi: (t) => t, line: () => '' };
+  const session = createInput({ input, output, ui, onInterrupt: () => interrupts.push('abort') });
+
+  input.emit('keypress', '\u0003', { name: 'c', ctrl: true });
+  assert.deepEqual(interrupts, ['abort'], 'Ctrl-C during a command must reach the abort controller');
+  input.emit('keypress', null, { name: 'escape' });
+  assert.equal(interrupts.length, 2, 'and so must Esc');
+
+  const pending = session.next();
+  input.emit('keypress', null, { name: 'escape' });
+  const event = await pending;
+  assert.equal(event.intent, 'escape');
+  assert.equal(interrupts.length, 2, 'an idle Esc is not an interrupt');
+  session.close();
+});
+
+test('input close is idempotent and removes the resize listener', async () => {
+  const { createInput } = await import('../lib/tui/input.mjs');
+  const { PassThrough } = await import('node:stream');
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 60 });
+  const session = createInput({ input, output, ui: { paint: (_t, s) => s, unicode: true, arrow: '->' }, label: 'x' });
+  session.close();
+  session.close();
+  assert.equal(output.listenerCount('resize'), 0, 'an anonymous listener must not stay attached');
+});

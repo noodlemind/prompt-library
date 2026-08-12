@@ -1,3 +1,7 @@
+/**
+ * Verify severity policy, advisory collection, and payload sanitization.
+ * Folded from verify-severity-hardening.
+ */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -178,7 +182,7 @@ async function withHome(home, fn) {
   }
 }
 
-test('E: a policy downgrading a gating check to advisory is rejected by name', () => {
+test('a policy downgrading a gating check to advisory is rejected by name', () => {
   for (const id of ['scope', 'criteria-evidence', 'plan-schema', 'plan-readiness', 'required-reviews', 'hard-gaps', 'critical-findings', 'workspace-stability']) {
     const ws = policyWorkspace(`version: 2\nenforcement: enforce\nchecks:\n  ${id}:\n    severity: advisory\n`);
     assert.throws(
@@ -189,7 +193,7 @@ test('E: a policy downgrading a gating check to advisory is rejected by name', (
   }
 });
 
-test('E: a gating check may still be downgraded to warn, and a project-defined named check may be advisory', () => {
+test('a gating check may still be downgraded to warn, and a project-defined named check may be advisory', () => {
   const warned = policyWorkspace('version: 2\nenforcement: enforce\nchecks:\n  scope:\n    severity: warn\n');
   assert.equal(loadPolicy(warned).checkSeverities.scope, 'warn');
 
@@ -197,7 +201,7 @@ test('E: a gating check may still be downgraded to warn, and a project-defined n
   assert.equal(loadPolicy(named).checkSeverities['team-lint'], 'advisory');
 });
 
-test('E: the advisory-by-default structural check stays downgradable, and v1 policies load unchanged', () => {
+test('the advisory-by-default structural check stays downgradable, and v1 policies load unchanged', () => {
   const structural = policyWorkspace(`version: 2\nenforcement: enforce\nchecks:\n  ${STRUCTURAL_CHECK_ID}:\n    severity: advisory\n`);
   assert.equal(loadPolicy(structural).checkSeverities[STRUCTURAL_CHECK_ID], 'advisory');
   assert.equal(
@@ -226,7 +230,7 @@ test('E: the advisory-by-default structural check stays downgradable, and v1 pol
   assert.throws(() => loadPolicy(v1Gating), /cannot be advisory/);
 });
 
-test('E: every built-in check verify.mjs pushes is either non-downgradable or advisory by default', () => {
+test('every built-in check verify.mjs pushes is either non-downgradable or advisory by default', () => {
   const src = fs.readFileSync(path.join(packageRoot, 'lib', 'verify.mjs'), 'utf8');
     const ids = new Set([...src.matchAll(/resultCheck\(\s*'([a-z-]+)'/g)].map((m) => m[1]));
   assert.ok(ids.size >= 10, `expected to find the built-in check ids in verify.mjs, found ${[...ids].join(', ')}`);
@@ -239,7 +243,7 @@ test('E: every built-in check verify.mjs pushes is either non-downgradable or ad
   }
 });
 
-test('E: a failed plan-required check cannot be downgraded to advisory — the run does not pass', async () => {
+test('a failed plan-required check cannot be downgraded to advisory — the run does not pass', async () => {
   const { workspace, home, plan } = verifiableWorkspace({
         required: ['unit-tests', 'team-lint'],
     criteria: { AC1: ['unit-tests'] },
@@ -272,7 +276,7 @@ test('E: a failed plan-required check cannot be downgraded to advisory — the r
   assert.equal(evidence.checks.find((check) => check.id === 'team-lint').severity, 'enforce');
 });
 
-test('E: a check mapped under verification.criteria is protected the same way', async () => {
+test('a check mapped under verification.criteria is protected the same way', async () => {
   const { workspace, home, plan } = verifiableWorkspace({
     required: ['unit-tests', 'team-lint'],
     criteria: { AC1: ['unit-tests', 'team-lint'] },
@@ -289,7 +293,7 @@ test('E: a check mapped under verification.criteria is protected the same way', 
   assert.equal(result.outcome, 'failed');
 });
 
-test('E: a project-defined check the plan does NOT gate on stays freely downgradable, and warn still degrades', async () => {
+test('a project-defined check the plan does NOT gate on stays freely downgradable, and warn still degrades', async () => {
     const advisory = verifiableWorkspace({
     required: ['unit-tests'],
     criteria: { AC1: ['unit-tests'] },
@@ -359,7 +363,7 @@ for (const [surface, sanitize] of [
   });
 }
 
-test('G: plan-derived details and openTasks are sanitized like every other list payload', () => {
+test('plan-derived details and openTasks are sanitized like every other list payload', () => {
   const payload = sanitizeCheckPayload({
     id: 'plan-schema',
     status: 'failed',
@@ -375,7 +379,7 @@ test('G: plan-derived details and openTasks are sanitized like every other list 
   assert.equal(payload.details[0].pass, false, 'well-formed structural fields pass through intact');
 });
 
-test('G: the canonical payload also sanitizes informational notes and keeps structural fields intact', () => {
+test('the canonical payload also sanitizes informational notes and keeps structural fields intact', () => {
   const check = sanitizeCheckPayload(hostileCheck());
   assert.ok(!JSON.stringify(check.informational).includes(AWS_KEY), 'informational notes are redacted');
   assert.ok(!JSON.stringify(check.informational).includes(CTRL_IN_JSON), 'and flattened');
@@ -383,7 +387,7 @@ test('G: the canonical payload also sanitizes informational notes and keeps stru
   assert.equal(check.severity, 'advisory', 'severity is a code-set token, untouched');
 });
 
-test('G: the shipped payload bounds the number of findings and the size of every nested list', () => {
+test('the shipped payload bounds the number of findings and the size of every nested list', () => {
   const check = {
     id: STRUCTURAL_CHECK_ID,
     status: 'failed',
@@ -402,7 +406,7 @@ test('G: the shipped payload bounds the number of findings and the size of every
 });
 
 // End to end: the guarantee is only worth anything on the artifact that ships.
-test('G: hostile check text never reaches the on-disk evidence artifact or the --json result', async () => {
+test('hostile check text never reaches the on-disk evidence artifact or the --json result', async () => {
   const { workspace, home, plan } = verifiableWorkspace({
         extraFrontmatter: [
       'structural_expectations:',
@@ -447,7 +451,7 @@ test('G: hostile check text never reaches the on-disk evidence artifact or the -
   assert.ok(!onDisk.includes(CTRL_IN_JSON), 'the evidence artifact carries no raw control characters');
 });
 
-test('G: a passing or skipped advisory check contributes nothing, and non-advisory checks are never collected', () => {
+test('a passing or skipped advisory check contributes nothing, and non-advisory checks are never collected', () => {
   assert.deepEqual(
     collectAdvisoryFailures([
       { id: STRUCTURAL_CHECK_ID, status: 'passed', severity: 'advisory', message: 'ok' },

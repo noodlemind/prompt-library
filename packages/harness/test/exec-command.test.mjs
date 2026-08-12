@@ -201,3 +201,54 @@ test('both commands declare the execute side-effect class and carry all three la
     assert.equal(typeof entry.exitOf, 'function', `${name} must map its native non-zero outcome onto an exit code`);
   }
 });
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('--dry-run describes the execution instead of performing it', () => {
+  const ws = tempDir('exec-dry-');
+  const marker = path.join(ws, 'RAN');
+  const res = run(['exec', '--dry-run', '--no-events', '--', process.execPath, '-e', `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "x")`], ws);
+  assert.equal(res.status, EXIT.ok, res.stderr);
+  assert.equal(fs.existsSync(marker), false, 'a flag meaning "show me what you would do" must not do it');
+});
+
+test('an execute-class command fails closed on a configuration it could not read', () => {
+  const ws = tempDir('exec-badcfg-ws-');
+  const home = tempDir('exec-badcfg-home-');
+  fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'harness', 'config.yaml'), 'version: 1\nexec.bash_enabled: definitely-not-false\n');
+
+  const res = spawnSync(process.execPath, [
+    binPath, 'bash', '--no-events', '--workspace', ws, '--copilot-home', home, '--', 'echo BAD_CONFIG_STILL_RAN',
+  ], { cwd: packageRoot, encoding: 'utf8' });
+  assert.equal(res.status, EXIT.needsApproval);
+  assert.equal((res.stdout + res.stderr).includes('BAD_CONFIG_STILL_RAN'), false,
+    'the dropped key can be the gate itself');
+});
+
+test('a malformed single-value flag is a usage error, not a silent default', () => {
+  const ws = tempDir('exec-malformed-');
+  const cases = [
+    ['exec', '--timeout=', '--no-events', '--', process.execPath, '-e', '0'],
+    ['exec', '--cwd', '--timeout=1', '--no-events', '--', process.execPath, '-e', '0'],
+    ['exec', '--timeout', '11', '--timeout', '22', '--no-events', '--', process.execPath, '-e', '0'],
+    ['exec', '--timeout', '11', '--timeout=22', '--no-events', '--', process.execPath, '-e', '0'],
+  ];
+  for (const argv of cases) {
+    const res = run(argv, ws);
+    assert.equal(res.status, EXIT.usage, `${argv.join(' ')} must be refused, not run under a value nobody chose`);
+  }
+  assert.equal(run(['exec', '--timeout', '30', '--no-events', '--', process.execPath, '-e', '0'], ws).status, EXIT.ok,
+    'a well-formed flag still works');
+});
+
+test('bash takes exactly one script argument', () => {
+  const ws = tempDir('bash-one-script-');
+  const multi = run(['bash', '--no-events', '--', 'printf', '[%s]', 'a b'], ws);
+  assert.equal(multi.status, EXIT.usage, 'joining tokens changes quoting and misdescribes the audit');
+
+  const single = run(['bash', '--no-events', '--', 'echo one; echo two'], ws);
+  assert.equal(single.status, EXIT.ok, single.stderr);
+  assert.match(single.stdout, /one/);
+  assert.match(single.stdout, /two/);
+});

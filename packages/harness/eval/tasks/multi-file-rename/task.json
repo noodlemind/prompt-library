@@ -1,0 +1,7 @@
+{
+  "id": "multi-file-rename",
+  "prompt": "Rename the export `oldName` to `newName` in src/a.mjs and update the import/usage in src/b.mjs. verify.mjs must exit 0. Do not change verify.mjs.",
+  "verifyCmd": ["node", "verify.mjs"],
+  "maxTurns": 20,
+  "maxSeconds": 300
+}

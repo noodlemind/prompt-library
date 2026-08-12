@@ -1,114 +1,103 @@
 # Adaptive Engineer Harness
 
-**One idea:** treat AI coding like a real engineer — modes of work, a locked plan before mutation, verification before “done,” and memory that compounds — not like a chat that keeps typing until the budget dies.
+**One idea:** treat AI coding like a real engineer — mode before action, a locked plan before mutation, verification before “done,” and memory that compounds — not a chat that types until the budget dies.
 
-This is the only conceptual document for the system. Implementation lives in code and skills; this page is for shared understanding.
+This is the shared practice model. Implementation lives in code and skills.
 
-## Product model (canonical)
+## Product model
 
-| Layer | Role | LLM calls from harness? |
-|-------|------|-------------------------|
-| **Host-first** — `@engineer` | Canonical Adaptive Engineer (modes, lifecycle, judgment) | Host-owned; not the harness kernel |
-| **Kernel-always** — `harness` CLI | Deterministic control plane (orient, gate, edit/exec, verify, compound, knowledge, report) | **Never** on the host path |
-| **Agent-optional** — `harness agent` | Minimal headless add-on when the user opts in (`agent.enabled`, default off) | Yes, opt-in only |
-| **Benchmark-test-only** | Efficiency/regression fixture for the add-on (`BENCHMARK_PROFILE`) | Test-only — **not** product lifecycle |
+| Layer | Role | LLM? |
+|-------|------|------|
+| **Host-first** — `@engineer` | Modes, lifecycle, judgment | Host-owned |
+| **Kernel-always** — `harness` | Orient, gate, edit/exec, verify, compound, knowledge, report | **Never** on the host path |
+| **Agent-optional** — `harness agent` | Headless loop on the **same** registry (`agent.enabled`, default off) | Opt-in only |
+| **Benchmark-test-only** | `--profile benchmark` / `BENCHMARK_PROFILE` | Test-only |
 
-Correct invariant: **the kernel never initiates LLM calls.** The optional agent process may, only when enabled. Full Adaptive Engineering is **host `@engineer` + kernel gate → verify → compound → consolidate/promote** — not the headless add-on loop.
+**Invariant:** the kernel never initiates LLM calls. Full Adaptive Engineering is **host `@engineer` + gate → verify → compound → consolidate/promote**.
 
-### Host growth loop (after every Deliver verify)
+### Dual tracks, one kernel
+
+| Track | When | Outer loop |
+|-------|------|------------|
+| **Deliver** | Real product work | Orient → plan → **gate** → work → **verify** → review → **compound** → growth |
+| **Autonomous** (`bench`) | Evals, long-horizon unattended | Short card → tools → **task verifier** → stop |
+
+Shared tools: `edit` / `write` / `apply` / `get` / `search` / `bash` / `exec` / `todo` (registry only).  
+Not shared: plan lock, product `verify --plan`, compound, full persona ceremony.
+
+**Invariants over liturgy.** Deliver *must* keep: mode before mutation, locked plan before recognized edits, passed verify before done, compound after proof. The nine-step sequence is the **product** lifecycle for accountable teams — **not** a claim it is the only agent architecture (ReAct, plan-and-execute, SWE-agent ACI, etc. all ship elsewhere).
+
+### Growth loop (after Deliver verify)
 
 ```text
 harness verify --plan <path> [--learnings id1,id2]
-harness compound --plan <path>     # no title/body: uses passed evidence + plan
-harness report --growth            # session-end growth report
+harness compound --plan <path>
+harness report --growth
 ```
 
-Verified `compound` does not re-ask for structure the evidence already implies. If compound cannot run (no plan, stale evidence, knowledge mode off on insight path), the event carries `blockedReason` / `compoundStatus: skipped` for the growth report — never silent success.
+**AE scoreboard:** verify→compound rate, recall→cite, promote yield, quarantine health.  
+**Autonomous scoreboard (separate):** pass, steps, tokens, duration — not mixed into growth as primary success.
 
-Primary effectiveness metrics (not turn counts): verify-pass→compound rate, recall→cite linkage, verify→compound latency when timestamps exist, promotion-eligible yield, quarantine health. Turn/search caps are **secondary** and apply only to the optional agent / benchmark fixtures.
+### Session Ledger (`harness tui`)
+
+Interactive projection of the kernel — not a second Engineer.
+
+| Input | Meaning |
+|-------|---------|
+| bare line | Kernel command (or agent when mode is assist/plan) |
+| `/` | Palette over the same registry |
+| `!` | Governed shell |
+| Shift+Tab | Mode: commands → assist → plan |
+| `agent on` / `off` | → `config set agent.enabled` (user scope default) |
+
+Usage mistakes (exit 2) show as ledger **usage**, not a failed verify. Details: [packages/harness/README.md](../packages/harness/README.md).
 
 ---
 
 ## Why it exists
 
-Most AI coding tools are **model-first**: a strong model, a big prompt, and tools. They fail the same ways humans fail under pressure: they wander, they rewrite large files from a partial view, they skip the failing test, and they leave no durable learning.
-
-The Adaptive Engineer Harness is **workflow-first**:
-
-| Style | What it optimizes | Failure mode |
-|--------|-------------------|--------------|
-| Model-first chat | Fluency and speed | Drift, ceremony, no proof |
+| Style | Optimizes | Fails by |
+|-------|-----------|----------|
+| Model-first chat | Fluency | Drift, no proof |
 | Spec-driven | Spec completeness | Spec without enforcement |
-| Loop-driven | Tool call cycles | Infinite explore without act |
-| **Adaptive Engineer Harness** | Accountable delivery under gates | (designed to make the above hard) |
-
-It sits beside Spec Driven Development, Loop-driven agents, and Memory Engineering as a **named practice**: *how a team wants AI to ship software*, not which model to buy.
+| Loop-driven | Tool cycles | Explore without act |
+| **This practice** | Accountable delivery under gates | (designed to block the above) |
 
 ---
 
-## The shape of the system
+## Shape
 
 ```text
-                    Developer intent
-                           │
-                           ▼
-                    ┌──────────────┐
-                    │  @engineer   │  sole accountable entry
-                    └──────┬───────┘
-           Answer │ Investigate │ Deliver │ Review
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-         skills       locked plan    specialists
-       (on demand)   + harness CLI   (bounded)
-                           │
-                     gate → work → verify
-                           │
-                     compound learning
+Developer intent → @engineer (Answer | Investigate | Deliver | Review)
+                         │
+            skills · locked plan · specialists
+                         │
+                  gate → work → verify → compound
 ```
 
-Three rules:
+1. **One owner** — `@engineer` owns the outcome.  
+2. **Read is light; write is gated** — Answer/Investigate stay read-only.  
+3. **Proof before claim** — “Done” means fresh passed verification.
 
-1. **One owner** — `@engineer` owns the outcome. Skills and subagents help; they do not become alternate runtimes.
-2. **Read is light; write is gated** — Answer and Investigate stay read-only. Deliver crosses an explicit plan gate and verification boundary.
-3. **Proof before claim** — “Done” means fresh passed verification, not a confident paragraph.
+### Task modes
 
----
+| Mode | Contract |
+|------|----------|
+| **Answer** | Ceremony-free; no plan |
+| **Investigate** | Evidence only; may offer Capture / Plan-and-Fix / Leave-in-chat |
+| **Deliver** | Full lifecycle with plan, gate, verify, compound |
+| **Review** | Independent `/code-review`; no implementation ownership |
 
-## Task modes
+Any requested mutation enters **Deliver** before the first edit.
 
-Before acting, the Engineer classifies the request:
+### Deliver lifecycle
 
-| Mode | When | Contract |
-|------|------|----------|
-| **Answer** | Quick question | Ceremony-free reply; minimum reads; no plan |
-| **Investigate** | Diagnose / research | Evidence only; no edits; may offer Capture / Plan-and-Fix / Leave-in-chat |
-| **Deliver** | Any requested change | Full lifecycle: plan → gate → work → verify → review → compound → report |
-| **Review** | Assess completed work | Independent `/code-review`; no implementation ownership |
+1. Orient · 2. Establish intent (locked plan) · 3. Investigate · 4. Work (after gate) ·  
+5. Handle gaps · 6. Verify · 7. Review · 8. Compound · 9. Report  
 
-Answer and Investigate must **transition to Deliver** before the first requested mutation.
+Hooks/CI enforce plan lock and evidence independently of prompt compliance.
 
----
-
-## Delivery lifecycle (Deliver mode)
-
-Normative steps live on the Engineer agent. Conceptually:
-
-1. **Orient** — repo map, recall, context pack  
-2. **Establish intent** — locked plan (`plan_lock`) with acceptance criteria and named checks  
-3. **Investigate** — enough evidence to act  
-4. **Work** — bounded edits and tools under policy  
-5. **Handle gaps** — capability proposals only with human approval  
-6. **Verify** — `harness verify` with named checks  
-7. **Review** — confidence-scored review when risk warrants  
-8. **Compound** — durable learning after *passed* verify  
-9. **Report** — outcome, evidence, residual risk  
-
-Low-risk work still uses the plan schema, often as a short one-phase plan. There is no “just ship it” side door that skips gates.
-
-### Plan as contract (schema v1)
-
-A plan is a **local context pack**, not a shell script dump. Locked plans carry:
+Plans use `plan_schema: 1` with `plan_lock`, named checks, and review state. Commands live in trusted `.github/harness/checks.yaml` — not shell strings in the plan. Policy uses **exemptions** and **waivers** as arrays, not free-form narrative exceptions.
 
 ```yaml
 plan_schema: 1
@@ -126,38 +115,32 @@ reviews:
   critical_open: []
 ```
 
-Enforcement is independent of prompt compliance: hooks and CI can refuse mutation without a locked plan and refuse “complete” without passed evidence. Policy uses **exemptions** and **waivers** as arrays, not free-form narrative exceptions.
-
 ---
 
 ## Skill-first primitives
 
-This library is a **source of truth for how the team works**, hydrated globally into Copilot — not a plugin and not files dumped into every product repo.
+Hydrated globally into Copilot — not dumped into every product repo.
 
-| Primitive | Role | Create when |
-|-----------|------|-------------|
-| **Skill** | Reusable procedure (primary contract) | The team repeats a workflow |
-| **Agent** | Isolated judgment / tools / accountability | Separate review or research role is real |
-| **Instruction** | File-pattern conventions | Language/framework standards should auto-apply |
-| **Check** | Named verification or review criterion | A rule must be enforceable or reviewable |
-| **Plan** | Per-issue state + evidence ledger | Work needs continuity across sessions |
-| **Solution / learning** | Durable team memory | A fix reveals a reusable pattern |
+| Primitive | Create when |
+|-----------|-------------|
+| **Skill** | The team repeats a workflow |
+| **Agent** | Separate judgment, isolation, or authority is real |
+| **Instruction** | File-pattern conventions should auto-apply |
+| **Check** | A rule must be enforceable or reviewable |
+| **Plan** | Work needs continuity across sessions |
+| **Solution / learning** | A fix reveals a reusable pattern |
 
-**Default to a skill.** Create an agent only when judgment, isolation, or evaluation standards truly differ. Prompt wrappers are retired: select `@engineer` from the agent menu.
-
-Progressive disclosure: frontmatter (discover) → body (activate) → references (execute).
+**Default to a skill.** Prompt wrappers are retired.
 
 ---
 
-## Memory engineering (three tiers)
+## Memory (three tiers)
 
-Memory is tiered so *what happened*, *what we believe*, and *how we behave* never collapse into one editable blob.
-
-| Tier | Name | Where | Who writes | Role |
-|------|------|-------|------------|------|
-| T1 | Episodic | `knowledge/solutions/`, plans, activity | compound / remember | Immutable ground truth |
-| T2 | Semantic (learnings) | `~/.harness/knowledge/<repo-id>/` | `harness consolidate --apply` only | Condensed claims; regenerable from T1 + governance |
-| T3 | Behavioral | `.github/` skills / instructions / checks | create-primitive + human PR | Knowledge become default behavior |
+| Tier | What | Writer |
+|------|------|--------|
+| T1 Episodic | Solutions, plans, activity | compound / remember |
+| T2 Semantic | Condensed learnings (`~/.harness/knowledge/<repo-id>/`) | `consolidate --apply` only |
+| T3 Behavioral | Skills / instructions / checks | human PR |
 
 ```mermaid
 stateDiagram-v2
@@ -172,27 +155,26 @@ stateDiagram-v2
     retired --> [*] : excluded from retrieval
 ```
 
-**Promote** is a human authority step (learning → primitive candidate). Governance (`governance.jsonl`) records retire / dispute / confirm / **promote** and is reapplied on rebuild so human decisions survive regeneration.
-
-Trust gradient: episodes stay local or in the product repo; learnings are not pushed by default; shared behavior only ships through human review.
+**Promote** is human authority (learning → primitive). Governance (`governance.jsonl`) survives rebuild. Learnings are not pushed by default.
 
 ---
 
-## The agent loop (headless CLI)
+## Optional headless agent
 
-`harness agent` is an optional headless turn loop for the same delivery idea without an editor host.
+Prefer `@engineer` for real delivery. When opted in:
 
-Benchmark lesson: **tool incentives beat text nudges.**
+| Profile | Ceremony | Stop |
+|---------|----------|------|
+| `autonomous` (default) | No plan/gate/compound | `--verify-cmd` green |
+| `deliver` | Product-minded prompt | Host/hooks still own gates |
+| `benchmark` | Test fixture only | Model-done for efficiency tests |
 
-| Pressure | Design |
-|----------|--------|
-| Reproduce first | Prefer `bash`/`exec` when the task names a test |
-| Search attractor | Search is last resort; hard caps per run and explore streak |
-| Context blow-up | Bounded tool results, clipped persona/orientation |
-| Destructive rewrite | Write refuses large→small replacement; prefer `edit` |
-| Truncation | Token-limited completions never run partial tool args |
+```bash
+harness config set agent.enabled true --scope user   # default remains false
+harness agent "fix the test" --profile autonomous --verify-cmd "node ./verify.mjs"
+```
 
-Master switch: `agent.enabled` (default off). Provider allowlist: `agent.providers`. Credentials are **guide-only** (env / editor login) — the harness does not store API keys.
+Tools are registry commands only; `undo` is operator-only. Full reference: [agent-loop.md](./agent-loop.md). Internal eval skeleton: `packages/harness/eval/`.
 
 ---
 
@@ -200,65 +182,49 @@ Master switch: `agent.enabled` (default off). Provider allowlist: `agent.provide
 
 | Mode | Meaning |
 |------|---------|
-| **Standalone** | Global hydrate; product repo uses `@engineer` without forking the library |
-| **Degraded** | Missing index, knowledge, or persona — still works, reports limits |
-| **Governed** | Locked plan + hooks/CI + passed verify required for completion claims |
+| **Standalone** | Global hydrate; product repo uses `@engineer` |
+| **Degraded** | Missing index/knowledge — still works, reports limits |
+| **Governed** | Locked plan + hooks/CI + passed verify for completion claims |
 
-Capability grows from **verified reuse**, not from loading every skill up front. Missing capability becomes a proposal (`/ensure-capability` → `/create-primitive`), never silent invention.
-
-Promotion requires **trigger eval**, **outcome eval**, and recorded **promotion evidence**. Lifecycle states for capabilities:
-
-`candidate` → `experimental` → `active` → `deprecated` → `retired`
-
-Retired capability names stay as tombstones so overlap cannot resurrect a second runtime.
+Missing capability → proposal (`/ensure-capability` → `/create-primitive`), never silent invention. Promotion requires **trigger eval**, **outcome eval**, and recorded promotion evidence. Capability states: `candidate` → `experimental` → `active` → `deprecated` → `retired` (tombstones prevent overlap from resurrecting a second runtime).
 
 **Bounded delegation:** specialists and coordinators run in isolated context; the Engineer reconciles evidence and residual risk.
 
 ---
 
-## What you install
+## Install
 
 ```bash
-# from published package (org registry) or local monorepo
 npm install -g @dev-kit/harness@latest   # or: npm install -g ./packages/harness
-harness install                          # hydrate agents/skills/knowledge for Copilot
+harness install
 ```
 
-In a **product** repo (not this library):
-
-1. Open Copilot Chat → select **`@engineer`**
-2. For delivery work, expect a plan under `docs/plans/` and verification evidence
-3. Optional CLI: `harness doctor`, `harness orient`, `harness gate`, `harness verify`
-
-Primary hosts: GitHub Copilot in VS Code and IntelliJ. Product repos do **not** receive prompt-library source trees; they receive global hydration plus optional local plans and private solutions.
+In a **product** repo: select `@engineer`; expect plans under `docs/plans/` for Deliver work; optional `harness doctor` / `orient` / `gate` / `verify`.
 
 ---
 
-## How this relates to other named practices
+## Related practices
 
-| Practice | Overlap | Difference |
-|----------|---------|------------|
-| **Spec-driven** | Plans and acceptance criteria | Spec is enforced by gate/verify, not only prose |
-| **Loop-driven** | Tool turns | Loop is governed, context-capped, and not the whole product |
-| **Memory engineering** | Episodic → semantic → behavioral | Explicit writers, governance, promote path |
-| **Graph / codebase maps** | Orientation and retrieval | Map feeds the Engineer; it does not replace accountability |
+| Practice | Difference here |
+|----------|-----------------|
+| Spec-driven | Spec enforced by gate/verify, not prose alone |
+| Loop-driven | Loop is governed and secondary to accountability |
+| Memory engineering | Explicit writers, governance, promote path |
 
-If you only remember one sentence:
-
-> **The Adaptive Engineer Harness makes AI coding accountable: mode before action, plan before mutation, verify before done, compound after proof.**
+> **Accountable AI coding: mode before action, plan before mutation, verify before done, compound after proof.**
 
 ---
 
-## Where the rest lives
+## Where things live
 
 | Need | Location |
 |------|----------|
-| This concept | `docs/adaptive-engineer-harness.md` (this file) |
-| Repo entry + install | `README.md` |
-| Engineer runtime checklist | `.github/agents/engineer.agent.md` |
-| CLI semantics | `.github/skills/references/harness-tool-contract.md` |
-| Skills / agents / knowledge | `.github/`, `knowledge/` |
-| Product issue plans | `docs/plans/` in **product** repos |
-| Harness package usage | `packages/harness/README.md` |
-
-Older architecture essays, install novels, and phase drafts were removed so this practice can be shared the same way other engineering concepts are shared: **one clear model, then the code.**
+| This model | `docs/adaptive-engineer-harness.md` |
+| Optional agent | `docs/agent-loop.md` |
+| Repo install | `README.md` |
+| CLI / TUI | `packages/harness/README.md` |
+| Engineer checklist | `.github/agents/engineer.agent.md` |
+| Tool contract | `.github/skills/references/harness-tool-contract.md` |
+| Skills / agents | `.github/` |
+| Team knowledge | `knowledge/` |
+| Product plans | `docs/plans/` in **product** repos |

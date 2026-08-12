@@ -95,6 +95,9 @@ function optionRow(entry, def) {
     type: def.type || 'string',
     valueName: def.type === 'boolean' ? null : def.valueName || 'value',
     required: Boolean(def.required),
+    // Soft defaults on the ledger: scope defaults to user in config-cmd.
+    requiredInTui: def.name === '--scope' ? false : Boolean(def.required),
+    tui: def.tui || null,
     sideEffect: SIDE_EFFECTS.includes(def.sideEffect) ? def.sideEffect : entry.sideEffect,
     description: def.description || '',
     choices: normalizeChoices(def.choices),
@@ -147,90 +150,303 @@ function orphanRefinementsFor(entry, rowFlags) {
     .map((def) => optionRow(entry, def));
 }
 
-function commandRow(entry, prompts, refinements) {
-    const argvTokens = [
+/**
+ * Product-facing labels for the Session Ledger palette.
+ * Keep argv/noun/verb machine-accurate; only the human label and note fold.
+ * Rule: a stranger should know what the row does without reading registry prose.
+ */
+const TUI_VERB_LABELS = Object.freeze({
+  'config:show': 'Show all settings',
+  'config:get': 'Get one setting',
+  'config:set': 'Change a setting',
+  'config:validate': 'Validate config files',
+  'checks:list': 'List checks',
+  'checks:show': 'Show a check',
+  'checks:run': 'Run a check',
+  'trust:status': 'Trust status',
+  'trust:approve': 'Trust this project',
+  'trust:revoke': 'Revoke project trust',
+  'run:list': 'List past runs',
+  'run:show': 'Show a run',
+  'run:tree': 'Run event tree',
+  'run:resume': 'Can this run resume?',
+  'todo:list': 'List todos',
+  'todo:add': 'Add a todo',
+  'todo:complete': 'Complete a todo',
+  'todo:clear': 'Clear todos',
+  'undo:list': 'List undos',
+  'model:show': 'Show model',
+  'model:set': 'Set model',
+  'model:clear': 'Clear model',
+  'model:refresh': 'Refresh models',
+  'inspect:config': 'Why is this setting this value?',
+  'inspect:permissions': 'What is allowed here?',
+  'inspect:workspace': 'Where is this workspace?',
+  'inspect:tools': 'Which tools are on?',
+  'tree:workspace': 'Browse project files',
+  'tree:knowledge': 'Browse knowledge store',
+  'learnings:why': 'Why was this learned?',
+  'index:status': 'Check knowledge + code index status',
+  'index:structural': 'Rebuild code symbol index',
+  'orient:explain': 'Explain orient ranking',
+  'compound:insight': 'Save an insight (no evidence)',
+  'consolidate:apply': 'Apply consolidate ops',
+  'consolidate:candidates': 'List consolidate candidates',
+  'consolidate:rebuild': 'Rebuild consolidate debt',
+  'events:failures': 'Failed events only',
+  'events:summary': 'Events summary',
+  'report:growth': 'Growth report',
+  'report:global': 'Global report',
+  'report:sync': 'Sync then report',
+  'knowledge:on': 'Knowledge on (full)',
+  'knowledge:off': 'Knowledge off',
+  'knowledge:suggest': 'Knowledge suggest mode',
+  'knowledge:freeze': 'Knowledge freeze',
+  'knowledge:status': 'Knowledge status',
+  'learning:confirm': 'Confirm a learning',
+  'learning:retire': 'Retire a learning',
+  'learning:dispute': 'Dispute a learning',
+  'learning:promote': 'Promote a learning',
+});
+
+const TUI_COMMAND_LABELS = Object.freeze({
+  search: 'Search',
+  orient: 'Gather context',
+  gate: 'Pre-edit gate',
+  verify: 'Verify plan checks',
+  compound: 'Save a learning',
+  write: 'Write a file',
+  edit: 'Edit a file',
+  bash: 'Shell',
+  exec: 'Run a program',
+  agent: 'Agent task',
+  status: 'Harness status',
+  doctor: 'Health check',
+  tui: 'Session ledger',
+  help: 'Help',
+  recall: 'Search team knowledge',
+  get: 'Open a document',
+  report: 'Reports',
+  index: 'Rebuild knowledge index',
+  tree: 'Browse files & knowledge',
+  learnings: 'Browse learnings',
+  knowledge: 'Knowledge layer',
+  learning: 'Manage a learning',
+  lookup: 'Open by id',
+  remember: 'Teach the harness',
+  consolidate: 'Consolidate learnings',
+  events: 'Session events',
+  apply: 'Apply multi-file patch',
+  'plan-new': 'New plan',
+  'validate-plan': 'Validate plan',
+  'eval-knowledge': 'Eval knowledge retrieval',
+  undo: 'Undo list',
+  resources: 'Skills & agents',
+  todo: 'Todos',
+  run: 'Past runs',
+  checks: 'Checks',
+  trust: 'Project trust',
+  model: 'Model',
+  config: 'Settings',
+  inspect: 'Inspect',
+});
+
+/** One-line product notes — shown in the palette instead of registry man-page text. */
+const TUI_NOTES = Object.freeze({
+  search: 'find code, plans, or knowledge by text',
+  orient: 'pack plans + learnings for a task',
+  gate: 'block edits until the plan is ready',
+  verify: 'run named checks and keep evidence',
+  compound: 'turn a passed run into a reusable learning',
+  write: 'create or replace a file with proof of content',
+  edit: 'replace one unique string in a file',
+  bash: 'run a shell command (gated separately from exec)',
+  exec: 'run a program without a shell',
+  agent: 'optional model loop — host still owns mutations',
+  status: 'version, home, and what is installed',
+  doctor: 'is install, hooks, and knowledge healthy?',
+  recall: 'search team solutions and learnings',
+  get: 'read a bounded doc excerpt',
+  report: 'token or growth reports from events',
+  index: 'rebuild knowledge BM25 index (use index structural for code symbols)',
+  tree: 'directory tree of the repo or knowledge store',
+  learnings: 'list what the harness has learned',
+  knowledge: 'turn the knowledge layer on/off or purge',
+  learning: 'confirm, retire, dispute, or promote one item',
+  lookup: 'open a plan, learning, or run by exact id',
+  remember: 'teach a durable claim for later recall',
+  consolidate: 'merge episode debt into learnings',
+  events: 'telemetry for this session',
+  apply: 'all-or-nothing multi-file write',
+  'plan-new': 'scaffold a plan under docs/plans',
+  'validate-plan': 'check plan readiness',
+  undo: 'show reversible edits',
+  resources: 'local skills and agents on disk',
+  todo: 'long-horizon worklist',
+  run: 'history of harness runs',
+  checks: 'named checks from the trusted config',
+  trust: 'let this project change harness config',
+  model: 'provider and model for the optional agent',
+  config: 'settings — values and where they came from',
+  inspect: 'effective config, permissions, tools',
+  'tree:workspace': 'files under this workspace',
+  'tree:knowledge': 'knowledge store as a tree',
+  'learnings:why': 'full provenance for one learning id',
+});
+
+/** Empty-palette order: intents people reach for first (product, not A–Z). */
+export const TUI_COMMON_NOUNS = Object.freeze([
+  'search',
+  'config',
+  'model',
+  'bash',
+  'run',
+  'inspect',
+  'agent',
+  'tree',
+  'learnings',
+  'recall',
+  'remember',
+  'gate',
+  'verify',
+  'doctor',
+  'status',
+]);
+
+function tuiLabel(noun, verb = null) {
+  if (verb) {
+    const key = `${noun}:${verb}`;
+    if (TUI_VERB_LABELS[key]) return TUI_VERB_LABELS[key];
+    // lookup kinds, knowledge verbs — short product pair, not "noun · raw"
+    const verbLabel = String(verb).replace(/-/g, ' ');
+    const head = TUI_COMMAND_LABELS[noun] || noun;
+    return `${head} · ${verbLabel}`;
+  }
+  return TUI_COMMAND_LABELS[noun] || noun;
+}
+
+function tuiNote(noun, verb = null, fallback = '') {
+  if (verb) {
+    const key = `${noun}:${verb}`;
+    if (TUI_NOTES[key]) return TUI_NOTES[key];
+  }
+  if (TUI_NOTES[noun]) return TUI_NOTES[noun];
+  // Strip flag soup and CLI jargon from registry summaries when used as note.
+  const plain = String(fallback || '')
+    .replace(/\s*·\s*--\S+/g, '')
+    .replace(/--\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return plain;
+}
+
+function withProductCopy(row, entry, { surface, verb = null } = {}) {
+  if (surface !== 'tui') return row;
+  return {
+    ...row,
+    label: tuiLabel(entry.name, verb),
+    note: tuiNote(entry.name, verb, entry.summary),
+    // Keep summary for machine/debug; palette prefers note.
+    summary: tuiNote(entry.name, verb, entry.summary) || entry.summary || '',
+  };
+}
+
+function commandRow(entry, prompts, refinements, { surface = 'cli' } = {}) {
+  const argvTokens = [
     { kind: 'command', value: entry.name },
     ...positionalsOf(entry).filter((p) => p.required).map(positionalToken),
   ];
-  return {
+  const row = {
     id: `command:${entry.name}`,
     kind: 'command',
     noun: entry.name,
     verb: null,
-    label: entry.name,
+    label: surface === 'tui' ? tuiLabel(entry.name) : entry.name,
     summary: entry.summary || '',
-        sideEffect: SIDE_EFFECTS.includes(entry.bareSideEffect) ? entry.bareSideEffect : entry.sideEffect,
+    sideEffect: SIDE_EFFECTS.includes(entry.bareSideEffect) ? entry.bareSideEffect : entry.sideEffect,
     group: entry.group || 'general',
     argv: [entry.name],
     argvTokens,
     prompts,
     refinements,
   };
+  return withProductCopy(row, entry, { surface });
 }
 
 /** A verb declared on the entry itself — a bare subcommand word on argv
  * (`knowledge promote` → `['knowledge','promote']`), followed by the value
  * slots for the positionals that verb consumes (`learning confirm <id>`). */
-function declaredVerbRow(entry, declared) {
+function declaredVerbRow(entry, declared, { surface = 'cli' } = {}) {
   const argvTokens = [
     { kind: 'command', value: entry.name },
     { kind: 'subcommand', value: declared.verb },
     ...positionalTokensForVerb(entry, declared),
   ];
-  return {
+  const row = {
     id: `verb:${entry.name}:${declared.verb}`,
     kind: 'verb',
     noun: entry.name,
     verb: declared.verb,
-    label: `${entry.name} ${declared.verb}`,
+    label: surface === 'tui' ? tuiLabel(entry.name, declared.verb) : `${entry.name} ${declared.verb}`,
     summary: declared.summary || entry.summary || '',
-        sideEffect: SIDE_EFFECTS.includes(declared.sideEffect) ? declared.sideEffect : entry.sideEffect,
+    sideEffect: SIDE_EFFECTS.includes(declared.sideEffect) ? declared.sideEffect : entry.sideEffect,
     group: entry.group || 'general',
-        argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
+    argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
     argvTokens,
-    prompts: promptsFor(entry, declared.verb),
+    // Soft defaults: do not force cli-only or defaultable flags into the palette.
+    prompts: promptsFor(entry, declared.verb).filter((p) => p.tui !== 'cli-only'),
     refinements: [],
   };
+  return withProductCopy(row, entry, { surface, verb: declared.verb });
 }
 
-function flagVerbRow(entry, def, under) {
+function flagVerbRow(entry, def, under, { surface = 'cli' } = {}) {
   const verb = verbNameForFlag(def);
   const argvTokens = [{ kind: 'command', value: entry.name }];
   if (under) {
     argvTokens.push({ kind: 'subcommand', value: under.verb });
-        argvTokens.push(...positionalTokensForVerb(entry, under));
+    argvTokens.push(...positionalTokensForVerb(entry, under));
   }
   argvTokens.push({ kind: 'flag', value: def.name });
   const value = valueTokenFor(def);
   if (value) argvTokens.push(value);
   const qualified = under ? `${under.verb} ${verb}` : verb;
-  return {
+  const row = {
     id: under ? `flag:${entry.name}:${under.verb}:${def.name}` : `flag:${entry.name}:${def.name}`,
     kind: 'verb',
     noun: entry.name,
     verb: qualified,
-    label: `${entry.name} ${qualified}`,
+    label: surface === 'tui' ? tuiLabel(entry.name, qualified) : `${entry.name} ${qualified}`,
     summary: def.description || entry.summary || '',
-        sideEffect: SIDE_EFFECTS.includes(def.sideEffect)
+    sideEffect: SIDE_EFFECTS.includes(def.sideEffect)
       ? def.sideEffect
       : under && SIDE_EFFECTS.includes(under.sideEffect)
         ? under.sideEffect
         : entry.sideEffect,
     group: entry.group || 'general',
-        argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
+    argv: argvTokens.filter((t) => t.kind !== 'value').map((t) => t.value),
     argvTokens,
     prompts: promptsForFlagVerb(entry, def, under ? under.verb : null),
     refinements: refinementsFor(entry, def.name),
   };
+  return withProductCopy(row, entry, { surface, verb: qualified });
 }
 
 function pickerRow(entry) {
-  return {
+  return modalFamilyRow(entry, entry.tuiPicker);
+}
+
+/**
+ * Family modal row — one palette entry opens a settings/action sheet.
+ * Avoids dumping CLI verbs (config set/get/show, checks list/run, …) into `/`.
+ */
+function modalFamilyRow(entry, picker) {
+  const row = {
     id: `command:${entry.name}`,
     kind: 'command',
     noun: entry.name,
     verb: null,
-    label: entry.name,
+    label: tuiLabel(entry.name),
     summary: entry.summary || '',
     sideEffect: SIDE_EFFECTS.includes(entry.bareSideEffect) ? entry.bareSideEffect : entry.sideEffect,
     group: entry.group || 'general',
@@ -238,25 +454,80 @@ function pickerRow(entry) {
     argvTokens: [{ kind: 'command', value: entry.name }],
     prompts: [],
     refinements: [],
-    /** The surface opens this picker instead of dispatching. */
-    picker: entry.tuiPicker,
+    picker,
   };
+  return withProductCopy(row, entry, { surface: 'tui' });
 }
 
-/** Every row one registry entry contributes: itself, its declared verbs, and
- * its `tui: 'verb'` flags (one row per verb a scoped flag applies to). */
+/**
+ * Empty-query product order: common intents first, then everything else.
+ * Typing still uses rankRows; this only shapes the first glance.
+ */
+export function orderPaletteRows(rows, { query = '' } = {}) {
+  const q = String(query ?? '').trim();
+  if (q) return rows;
+  const commonRank = new Map(TUI_COMMON_NOUNS.map((n, i) => [n, i]));
+  const common = [];
+  const more = [];
+  for (const row of rows) {
+    if (row.session) {
+      more.push(row);
+      continue;
+    }
+    const rank = commonRank.get(row.noun);
+    if (rank !== undefined && (row.kind === 'command' || row.picker)) {
+      common.push({ row, rank });
+    } else {
+      more.push(row);
+    }
+  }
+  common.sort((a, b) => a.rank - b.rank || String(a.row.label).localeCompare(String(b.row.label)));
+  const out = [];
+  if (common.length) {
+    out.push({ section: true, label: 'common', note: 'what you usually need', ready: true });
+    for (const { row } of common) out.push(row);
+  }
+  if (more.length) {
+    out.push({ section: true, label: 'more', note: 'everything else · type to filter', ready: true });
+    out.push(...more);
+  }
+  return out.length ? out : rows;
+}
+
+/**
+ * Every row one registry entry contributes.
+ *
+ * **CLI surface:** parent command + every verb (full machine inventory).
+ * **TUI surface:** multi-verb families collapse to one modal entry (Settings,
+ * Checks, Runs, …). Explicit `tuiPicker` (model, config) uses a specialized sheet.
+ * Single-action commands stay one human-labeled row.
+ */
 function rowsForEntry(entry, surface) {
-  if (entry.tuiPicker && surface === 'tui') return [pickerRow(entry)];
   const declaredVerbs = entry.verbs || [];
+  // Specialized modals (settings keys, model catalog).
+  if (surface === 'tui' && entry.tuiPicker) {
+    return [modalFamilyRow(entry, entry.tuiPicker)];
+  }
+  // Generic action sheet for any multi-verb family (industry pattern).
+  if (surface === 'tui' && declaredVerbs.length >= 2 && entry.tuiFold !== false) {
+    return [modalFamilyRow(entry, 'verbs')];
+  }
+
   const byVerb = new Map(declaredVerbs.map((v) => [v.verb, v]));
   const verbFlags = flagsOf(entry).filter((def) => isVerbFlag(entry, def));
   const rowFlags = new Set(verbFlags.map((def) => def.name));
-  const rows = [commandRow(entry, promptsFor(entry, null), orphanRefinementsFor(entry, rowFlags))];
-  for (const declared of declaredVerbs) rows.push(declaredVerbRow(entry, declared));
+  const opts = { surface };
+  const rows = [];
+
+  const foldParent = surface === 'tui' && declaredVerbs.length > 0;
+  if (!foldParent) {
+    rows.push(commandRow(entry, promptsFor(entry, null), orphanRefinementsFor(entry, rowFlags), opts));
+  }
+  for (const declared of declaredVerbs) rows.push(declaredVerbRow(entry, declared, opts));
   for (const def of verbFlags) {
-        const scoped = verbScope(def).map((v) => byVerb.get(v)).filter(Boolean);
-    if (!scoped.length) rows.push(flagVerbRow(entry, def, null));
-    else for (const under of scoped) rows.push(flagVerbRow(entry, def, under));
+    const scoped = verbScope(def).map((v) => byVerb.get(v)).filter(Boolean);
+    if (!scoped.length) rows.push(flagVerbRow(entry, def, null, opts));
+    else for (const under of scoped) rows.push(flagVerbRow(entry, def, under, opts));
   }
   return rows;
 }
