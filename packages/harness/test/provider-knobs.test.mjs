@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import {
-  DEFAULT_PROVIDER, PROVIDERS, providerEnv, providerReadiness, resolveDefaultModel,
+  DEFAULT_PROVIDER, PROVIDERS, providerEnv, providerReadiness, resolveCopilotClient, resolveDefaultModel,
 } from '../lib/provider.mjs';
 import {
   AGENT_LIMITS, CONFIG_SCHEMA, coerceValue, loadConfigFile, resolveConfig, setConfigValue, unsetConfigValue,
@@ -15,7 +15,7 @@ import {
 import { writeModelCache } from '../lib/model-cache.mjs';
 import { planAgent } from '../lib/agent-cmd.mjs';
 import { getCommand } from '../lib/registry.mjs';
-import { copilotConfigDir, findEditorOauthToken } from '../lib/copilot-credential.mjs';
+import { copilotConfigDir, copilotConfigDirs, findEditorOauthToken } from '../lib/copilot-credential.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -247,6 +247,44 @@ test('the seam and the adapter read the SAME editor-credential scan', () => {
   fs.mkdirSync(path.join(xdg, 'github-copilot'), { recursive: true });
   fs.writeFileSync(path.join(xdg, 'github-copilot', 'hosts.json'), JSON.stringify({ 'github.com': { oauth_token: 'gho_xdg' } }));
   assert.equal(findEditorOauthToken({ HOME: home, XDG_CONFIG_HOME: xdg }), 'gho_xdg', 'XDG wins when set');
+});
+
+test('Windows Copilot credentials prefer LOCALAPPDATA and cross the provider seam', () => {
+  const localAppData = tempDir('knobs-windows-local-');
+  const userProfile = tempDir('knobs-windows-user-');
+  const dir = path.join(localAppData, 'github-copilot');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'hosts.json'),
+    JSON.stringify({ 'github.com': { oauth_token: 'gho_windows' } }),
+  );
+
+  const parentEnv = { PATH: process.env.PATH, LOCALAPPDATA: localAppData, USERPROFILE: userProfile };
+  assert.equal(copilotConfigDir(parentEnv), dir);
+  assert.equal(copilotConfigDirs(parentEnv)[0], dir);
+  assert.equal(findEditorOauthToken(parentEnv), 'gho_windows');
+  assert.equal(providerReadiness({ parentEnv }).find((provider) => provider.id === 'github-copilot')?.how, 'editor credential found');
+
+  const childEnv = providerEnv(PROVIDERS['github-copilot'], { parentEnv });
+  assert.equal(childEnv.LOCALAPPDATA, localAppData);
+  assert.equal(childEnv.USERPROFILE, userProfile);
+});
+
+test('Windows VS Code client discovery checks both per-user and machine installs', () => {
+  const localAppData = tempDir('knobs-windows-code-user-');
+  const programFiles = tempDir('knobs-windows-code-machine-');
+  const userManifest = path.join(localAppData, 'Programs', 'Microsoft VS Code', 'resources', 'app', 'package.json');
+  const machineManifest = path.join(programFiles, 'Microsoft VS Code', 'resources', 'app', 'package.json');
+  fs.mkdirSync(path.dirname(userManifest), { recursive: true });
+  fs.mkdirSync(path.dirname(machineManifest), { recursive: true });
+  fs.writeFileSync(userManifest, JSON.stringify({ version: '1.110.0' }));
+  fs.writeFileSync(machineManifest, JSON.stringify({ version: '1.112.0' }));
+
+  const client = resolveCopilotClient({
+    parentEnv: { LOCALAPPDATA: localAppData, PROGRAMFILES: programFiles, USERPROFILE: tempDir('knobs-win-profile-') },
+  });
+  assert.equal(client.editorVersion, '1.112.0');
+  assert.equal(client.source, 'installed');
 });
 
 // --- the proxy machinery, in the adapter that owns the socket ---------------

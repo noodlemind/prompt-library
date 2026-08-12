@@ -25,6 +25,7 @@ import { usageFields } from './token-meter.mjs';
 import { installHarnessBin } from './install-harness-bin.mjs';
 import { resolveHarnessBin, agentHarnessCommand, writeHarnessRunner, RUNNER_VERSION } from './resolve-harness-bin.mjs';
 import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
+import { installVSCodeBridge, uninstallVSCodeBridge } from './install-vscode-bridge.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy } from './policy.mjs';
 import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
@@ -127,7 +128,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
   const retired = loadRetired(pkgRoot);
   const logger = (m) => log(flags, m);
 
-  const allStats = { vscode: null, intellij: null };
+  const allStats = { vscode: null, intellij: null, vscodeBridge: null };
 
   if (flags.targets.has('vscode') || flags.targets.has('cli')) {
     applyRetired(copilotHome, retired, previousLock, flags, logger);
@@ -144,6 +145,13 @@ export async function cmdInstallOrUpgrade(command, argv) {
     const binStats = installHarnessBin(pkgRoot, copilotHome, flags, logger);
     allStats.harnessBin = binStats;
     allStats.globalShim = installGlobalHarnessShim(copilotHome, flags, logger);
+    if (flags.targets.has('vscode')) {
+      allStats.vscodeBridge = installVSCodeBridge({
+        packageRoot: pkgRoot,
+        dryRun: flags.dryRun,
+        log: logger,
+      });
+    }
     if (flags.configurePath) {
       allStats.pathConfig = configureShellPath(copilotHome, flags, logger);
     }
@@ -174,6 +182,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
   if (allStats.globalShim?.path) {
     files.add('bin/harness');
   }
+  const vscodeBridge = allStats.vscodeBridge || previousLock?.vscodeBridge || null;
 
   const lock = {
     package: '@dev-kit/harness',
@@ -183,6 +192,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
     targets: [...flags.targets],
     files: [...files].sort(),
     retiredApplied: retired,
+    ...(vscodeBridge ? { vscodeBridge } : {}),
   };
 
   if (!flags.dryRun) {
@@ -198,6 +208,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
           copilotHome,
           dryRun: flags.dryRun,
           vscode: allStats.vscode,
+          vscodeBridge: allStats.vscodeBridge,
           intellij: allStats.intellij,
           runner: allStats.runner ?? null,
         },
@@ -206,7 +217,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
     );
   } else {
     console.log('');
-    const keyWidth = keyWidthFor([command, 'vscode/cli', 'intellij', 'global cli']);
+    const keyWidth = keyWidthFor([command, 'vscode/cli', 'VS Code bridge', 'intellij', 'global cli']);
     console.log(
       ui.line({ state: 'ok', key: command, value: version, note: copilotHome, keyWidth })
     );
@@ -225,6 +236,16 @@ export async function cmdInstallOrUpgrade(command, argv) {
         ui.line({
           key: 'intellij',
           value: `+${allStats.intellij.created} ~${allStats.intellij.updated} =${allStats.intellij.unchanged}`,
+          keyWidth,
+        })
+      );
+    }
+    if (allStats.vscodeBridge) {
+      console.log(
+        ui.line({
+          key: 'VS Code bridge',
+          value: `${allStats.vscodeBridge.id}@${allStats.vscodeBridge.version}`,
+          note: 'reload VS Code to activate',
           keyWidth,
         })
       );
@@ -1814,6 +1835,9 @@ export async function cmdUninstall(argv) {
       continue;
     }
     fs.rmSync(dest, { recursive: true, force: true });
+    removed++;
+  }
+  if (uninstallVSCodeBridge(lock.vscodeBridge, { dryRun: flags.dryRun, log: (message) => log(flags, message) })) {
     removed++;
   }
   if (!flags.dryRun) {

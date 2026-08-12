@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { MAX_COMPLETION_LINE_BYTES, startPlugin } from './plugin-host.mjs';
 import { readModelCache } from './model-cache.mjs';
 import { findEditorOauthToken } from './copilot-credential.mjs';
+import { bridgeStatePath, readEditorBridgeState } from './vscode-lm-bridge.mjs';
 
 export const PROVIDER_TIMEOUT_MS = 300_000;
 
@@ -137,7 +138,7 @@ export const PROVIDERS = Object.freeze({
     baseUrl: 'https://api.githubcopilot.com',
     adapter: 'providers/github-copilot.mjs',
     defaultModel: 'gpt-4.1',
-    passEnv: ['XDG_CONFIG_HOME'],
+    passEnv: ['XDG_CONFIG_HOME', 'USERPROFILE', 'LOCALAPPDATA'],
   },
 });
 
@@ -161,8 +162,8 @@ export const PROVIDER_MODELS = Object.freeze({
   lmstudio: ['qwen/qwen3-8b'],
 });
 
-export function modelCatalog({ parentEnv = process.env, cache = {}, enabledIds = null } = {}) {
-  return providerReadiness({ parentEnv, enabledIds }).map((provider) => {
+export function modelCatalog({ parentEnv = process.env, cache = {}, enabledIds = null, copilotHome = null } = {}) {
+  return providerReadiness({ parentEnv, enabledIds, copilotHome }).map((provider) => {
     const cached = cache?.[provider.id];
     if (cached?.models?.length) {
             const models = cached.models.includes(AUTO_MODEL) ? cached.models : [AUTO_MODEL, ...cached.models];
@@ -256,11 +257,17 @@ export function resolveCopilotClient({ parentEnv = process.env, cache = null } =
 
   let editor = null;
   let editorSource = null;
-  const home = parentEnv.HOME || os.homedir();
+  const home = parentEnv.HOME || parentEnv.USERPROFILE || os.homedir();
+    const windowsLike = process.platform === 'win32'
+    || Boolean(parentEnv.LOCALAPPDATA || parentEnv.PROGRAMFILES || parentEnv.ProgramFiles || parentEnv['PROGRAMFILES(X86)'] || parentEnv['ProgramFiles(x86)']);
     const appManifests = [
-    '/Applications/Visual Studio Code.app/Contents/Resources/app/package.json',
+    !windowsLike && process.platform === 'darwin' ? '/Applications/Visual Studio Code.app/Contents/Resources/app/package.json' : null,
     parentEnv.LOCALAPPDATA ? path.join(parentEnv.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'resources', 'app', 'package.json') : null,
-    '/usr/share/code/resources/app/package.json',
+    parentEnv.PROGRAMFILES ? path.join(parentEnv.PROGRAMFILES, 'Microsoft VS Code', 'resources', 'app', 'package.json') : null,
+    parentEnv.ProgramFiles ? path.join(parentEnv.ProgramFiles, 'Microsoft VS Code', 'resources', 'app', 'package.json') : null,
+    parentEnv['PROGRAMFILES(X86)'] ? path.join(parentEnv['PROGRAMFILES(X86)'], 'Microsoft VS Code', 'resources', 'app', 'package.json') : null,
+    parentEnv['ProgramFiles(x86)'] ? path.join(parentEnv['ProgramFiles(x86)'], 'Microsoft VS Code', 'resources', 'app', 'package.json') : null,
+    !windowsLike && process.platform !== 'darwin' ? '/usr/share/code/resources/app/package.json' : null,
   ].filter(Boolean);
   for (const manifest of appManifests) {
     try {
@@ -288,7 +295,7 @@ export function resolveCopilotClient({ parentEnv = process.env, cache = null } =
   return { editorVersion: editor, pluginVersion: plugin, source: editorSource ?? 'installed' };
 }
 
-export function providerEnv(provider, { parentEnv = process.env, copilotClient = null } = {}) {
+export function providerEnv(provider, { parentEnv = process.env, copilotClient = null, copilotHome = null } = {}) {
   const env = {};
   for (const name of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'SYSTEMROOT', 'NODE_EXTRA_CA_CERTS']) {
     if (parentEnv[name] !== undefined) env[name] = parentEnv[name];
@@ -321,6 +328,7 @@ export function providerEnv(provider, { parentEnv = process.env, copilotClient =
   }
 
   if (provider.id === 'github-copilot') {
+    env.HARNESS_COPILOT_BRIDGE_STATE = bridgeStatePath(copilotHome, parentEnv);
         const client = copilotClient ?? resolveCopilotClient({ parentEnv });
     if (client?.editorVersion) env.HARNESS_COPILOT_EDITOR_VERSION = client.editorVersion;
     if (client?.pluginVersion) env.HARNESS_COPILOT_PLUGIN_VERSION = client.pluginVersion;
@@ -371,7 +379,7 @@ export function resolveProvider(id) {
 /** How an operator connects this provider — guide-only, never stores a key. */
 export function connectHint(provider) {
   if (provider.id === 'github-copilot') {
-    return 'sign in to GitHub Copilot in VS Code Chat, or export GITHUB_COPILOT_TOKEN / GH_TOKEN';
+    return 'reload VS Code after harness install and sign in to Copilot Chat, or export GITHUB_COPILOT_TOKEN / GH_TOKEN';
   }
   if (provider.keyRequired === false) {
     return `ensure the local server is running (default ${provider.baseUrl})`;
@@ -393,7 +401,7 @@ export function normalizeEnabledProviders(list) {
 }
 
 /** Credential presence only — never the value. Optional `enabledIds` filters the menu. */
-export function providerReadiness({ parentEnv = process.env, enabledIds = null } = {}) {
+export function providerReadiness({ parentEnv = process.env, enabledIds = null, copilotHome = null } = {}) {
   const allow = enabledIds == null ? null : new Set(normalizeEnabledProviders(enabledIds));
   return Object.values(PROVIDERS)
     .filter((provider) => !allow || allow.has(provider.id))
@@ -403,14 +411,15 @@ export function providerReadiness({ parentEnv = process.env, enabledIds = null }
       const connect = connectHint(provider);
 
       if (provider.id === 'github-copilot') {
+        const viaBridge = Boolean(readEditorBridgeState({ copilotHome, parentEnv }));
         const viaEnv = hasKey || Boolean(parentEnv.GH_TOKEN || parentEnv.GITHUB_TOKEN);
         const viaEditor = Boolean(findEditorOauthToken(parentEnv));
-        const ready = viaEnv || viaEditor;
+        const ready = viaBridge || viaEnv || viaEditor;
         return {
           id: provider.id,
           defaultModel: provider.defaultModel,
           ready,
-          how: viaEnv ? 'token in the environment' : viaEditor ? 'editor credential found' : null,
+          how: viaBridge ? 'VS Code language model bridge' : viaEnv ? 'token in the environment' : viaEditor ? 'editor credential found' : null,
           reason: ready ? null : connect,
           connect,
         };
@@ -463,6 +472,7 @@ export function startProvider({
     requested: ['network'],
     env: providerEnv(provider, {
       parentEnv,
+      copilotHome,
       copilotClient: provider.id === 'github-copilot'
         ? resolveCopilotClient({ parentEnv, cache: copilotHome ? readModelCacheSafe(copilotHome) : null })
         : null,
@@ -557,9 +567,9 @@ export async function fetchModels({
     if (!models.length) {
       throw Object.assign(new Error(`${providerId} returned no models`), { code: 'E_TARGET', exit: 1 });
     }
-        let client = null;
+        let client = result?.client && typeof result.client === 'object' ? result.client : null;
     if (providerId === 'github-copilot') {
-      client = await fetchLatestVsCodeVersion().catch(() => null);
+      client = client || await fetchLatestVsCodeVersion().catch(() => null);
     }
     return {
       provider: providerId,
@@ -567,6 +577,7 @@ export async function fetchModels({
       labels,
       fetchedAt: new Date().toISOString(),
       ...(result?.probed ? { probed: result.probed } : {}),
+      ...(result?.source ? { source: result.source } : {}),
       ...(client ? { client } : {}),
     };
   } finally {

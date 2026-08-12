@@ -385,7 +385,7 @@ test('an unknown surface is rejected rather than silently defaulted', () => {
 
 // --- surfaces -------------------------------------------------------------
 
-const LIFECYCLE_ONLY = ['install', 'upgrade', 'uninstall', 'init-repo', 'resolve', 'tui'];
+const LIFECYCLE_ONLY = ['install', 'upgrade', 'uninstall', 'resolve', 'tui'];
 
 test('the palette omits lifecycle and machine-only commands; the CLI keeps them', () => {
   const tui = buildCommandIndex({ surface: 'tui', workspace: packageRoot });
@@ -396,6 +396,11 @@ test('the palette omits lifecycle and machine-only commands; the CLI keeps them'
     assert.ok(cli.rows.some((r) => r.id === `command:${name}`), `${name} must still appear on the CLI`);
   }
   assert.ok(cli.rows.length > tui.rows.length, 'CLI inventory is strictly larger than the palette');
+
+  const init = tui.rows.find((r) => r.id === 'command:init-repo');
+  assert.ok(init, 'repo initialization is a product action, so the TUI must expose it');
+  assert.equal(init.label, 'Initialize this repo');
+  assert.deepEqual(init.argv, ['init-repo']);
 
   // Multi-verb families and specialized pickers collapse to one sheet on TUI.
   for (const name of listCommands()) {

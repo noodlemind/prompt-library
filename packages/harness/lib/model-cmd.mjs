@@ -44,7 +44,7 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
   const { values, provenance, agentEnabled, enabledProviders } = loadAgentConfig({ workspace, copilotHome });
   const cache = readModelCache(copilotHome);
   const activeId = values['agent.provider'] || DEFAULT_PROVIDER;
-  const readiness = providerReadiness({ parentEnv, enabledIds: enabledProviders });
+  const readiness = providerReadiness({ parentEnv, enabledIds: enabledProviders, copilotHome });
   const byId = new Map(readiness.map((r) => [r.id, r]));
   const active = byId.get(activeId) ?? null;
   const activeEnabled = enabledProviders.includes(activeId);
@@ -70,7 +70,7 @@ export function modelStatus({ workspace, copilotHome, parentEnv = process.env } 
 
 export function modelPickerRows({ workspace, copilotHome, parentEnv = process.env } = {}) {
   const status = modelStatus({ workspace, copilotHome, parentEnv });
-  const catalog = modelCatalog({ parentEnv, cache: status.cache, enabledIds: status.enabledProviders });
+  const catalog = modelCatalog({ parentEnv, cache: status.cache, enabledIds: status.enabledProviders, copilotHome });
   const ready = catalog.filter((p) => p.ready);
   const unready = catalog.filter((p) => !p.ready);
 
@@ -240,7 +240,7 @@ export async function cmdModel(argv, ctx = {}) {
         hint: `config set agent.providers ${[...status.enabledProviders, target].join(',')} --scope user`,
       });
     }
-    const readiness = providerReadiness({ enabledIds: status.enabledProviders }).find((p) => p.id === target);
+    const readiness = providerReadiness({ enabledIds: status.enabledProviders, copilotHome }).find((p) => p.id === target);
     if (!readiness?.ready) {
       throw Object.assign(new Error(`${target} is not connected`), {
         code: 'E_DENIED',

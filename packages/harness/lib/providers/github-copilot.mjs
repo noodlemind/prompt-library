@@ -11,6 +11,7 @@ import {
   httpRequest,
 } from './openai-compatible.mjs';
 import { findEditorOauthToken } from '../copilot-credential.mjs';
+import { readEditorBridgeState, requestEditorBridge } from '../vscode-lm-bridge.mjs';
 
 const PROVIDER_ID = 'github-copilot';
 const DEFAULT_BASE_URL = 'https://api.githubcopilot.com';
@@ -55,6 +56,24 @@ function findOauthToken() {
   return process.env.HARNESS_COPILOT_OAUTH || findEditorOauthToken(process.env);
 }
 
+async function editorRequest(method, params, { onDelta = null } = {}) {
+  const state = readEditorBridgeState({ statePath: process.env.HARNESS_COPILOT_BRIDGE_STATE });
+  if (!state) return null;
+  try {
+    return await requestEditorBridge(method, params, {
+      state,
+      onChunk: onDelta,
+      timeoutMs: Number(process.env.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS) || 300_000,
+    });
+  } catch (error) {
+    // A closed editor can leave a short-lived state file. Only transport
+    // unavailability falls back; consent, quota, and model errors remain the
+    // editor's authoritative answer.
+    if (error?.code === 'E_EDITOR_BRIDGE_UNAVAILABLE') return null;
+    throw error;
+  }
+}
+
 let cached = null; // { bearer, expiresAtMs, endpoint }
 
 /** A bearer for the Copilot API, minted or cached. */
@@ -72,7 +91,8 @@ async function bearerToken() {
   if (!oauth) {
     throw new Error(
       'no GitHub Copilot credential found — sign in to Copilot in an editor '
-      + '(which writes ~/.config/github-copilot/), or export a GitHub token in '
+      + '(and reload VS Code so the Harness bridge starts), or use the legacy '
+      + '~/.config/github-copilot / %LOCALAPPDATA%\\github-copilot credential, or export a GitHub token in '
       + 'the standard variable, or set the provider key variable to a Copilot bearer',
     );
   }
@@ -167,6 +187,11 @@ async function handle(message) {
   if (message.type !== 'request') return;
   if (message.method === 'models') {
         try {
+      const editor = await editorRequest('models', message.params || {});
+      if (editor) {
+        send({ type: 'result', id: message.id, result: editor });
+        return;
+      }
       const bearer = await bearerToken();
       const res = await httpRequest(`${apiBaseUrl()}/models`, {
         method: 'GET',
@@ -246,6 +271,13 @@ async function handle(message) {
     return;
   }
   try {
+    const editor = await editorRequest('complete', message.params || {}, {
+      onDelta: (text) => send({ type: 'chunk', id: message.id, text }),
+    });
+    if (editor) {
+      send({ type: 'result', id: message.id, result: editor });
+      return;
+    }
     const response = await callModel(message.params || {}, {
       onDelta: (text) => send({ type: 'chunk', id: message.id, text }),
     });

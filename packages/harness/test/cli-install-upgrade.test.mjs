@@ -15,6 +15,7 @@ import { ensureHarnessDir } from '../lib/session.mjs';
 import { installGlobalHarnessShim, globalHarnessShimPath, INSTALL_FIX_HINT } from '../lib/global-bin.mjs';
 import { harnessRunnerSource, RUNNER_VERSION, writeHarnessRunner } from '../lib/resolve-harness-bin.mjs';
 import { installHarnessBin } from '../lib/install-harness-bin.mjs';
+import { ensureFirstRunInstall } from '../lib/tui-cmd.mjs';
 import { recordSkillUsage } from '../lib/telemetry.mjs';
 import { mergeVSCodeSettings, parseVSCodeSettings } from '../lib/vscode-settings.mjs';
 import { runDoctor } from '../lib/doctor.mjs';
@@ -182,6 +183,75 @@ test('install creates global harness shim', () => {
   assert.equal(JSON.parse(validate.stdout).pass, true);
 });
 
+test('TUI launch installs or version-upgrades once with VS Code configuration enabled', async () => {
+  const copilotHome = tempDir('first-tui-home-');
+  const workspace = tempDir('first-tui-workspace-');
+  const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
+  const calls = [];
+  const install = async (command, argv) => {
+    calls.push({ command, argv });
+    fs.writeFileSync(
+      path.join(copilotHome, '.harness-lock.json'),
+      JSON.stringify({ package: '@dev-kit/harness', version: packageVersion, files: ['skills'] }),
+    );
+    return 0;
+  };
+
+  assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), true);
+  assert.deepEqual(calls.map((c) => c.command), ['install']);
+  assert.ok(calls[0].argv.includes('--configure-vscode'));
+  assert.deepEqual(calls[0].argv.slice(calls[0].argv.indexOf('--target'), calls[0].argv.indexOf('--target') + 2), [
+    '--target',
+    'vscode,cli',
+  ]);
+
+  assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), false);
+  assert.equal(calls.length, 1, 'an existing install lock suppresses repeat hydration');
+
+  fs.writeFileSync(
+    path.join(copilotHome, '.harness-lock.json'),
+    JSON.stringify({ package: '@dev-kit/harness', version: '0.0.1', files: ['skills'] }),
+  );
+  assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), true);
+  assert.deepEqual(calls.map((c) => c.command), ['install', 'upgrade']);
+  assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), false);
+  assert.equal(calls.length, 2, 'the upgraded lock suppresses another upgrade');
+
+  fs.writeFileSync(
+    path.join(copilotHome, '.harness-lock.json'),
+    JSON.stringify({ package: '@dev-kit/harness', version: '99.0.0', files: ['skills'] }),
+  );
+  assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), false);
+  assert.equal(calls.length, 2, 'running an older CLI never auto-downgrades a newer hydrated install');
+});
+
+test('install tracks the VS Code bridge across a CLI-only upgrade and uninstall removes it safely', () => {
+  const copilotHome = tempDir('bridge-install-home-');
+  const workspace = tempDir('bridge-install-workspace-');
+  const extensionsDir = tempDir('bridge-install-extensions-');
+  const env = { HARNESS_VSCODE_EXTENSIONS_DIR: extensionsDir };
+
+  const installed = runHarness([
+    'install', '--workspace', workspace, '--copilot-home', copilotHome, '--target', 'vscode,cli', '--json',
+  ], { env });
+  assert.equal(installed.status, 0, installed.stderr);
+  const lockPath = path.join(copilotHome, '.harness-lock.json');
+  const firstLock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  assert.equal(firstLock.vscodeBridge.id, 'dev-kit.harness-copilot-bridge');
+  assert.ok(fs.existsSync(firstLock.vscodeBridge.path));
+
+  const upgraded = runHarness([
+    'upgrade', '--workspace', workspace, '--copilot-home', copilotHome, '--target', 'cli', '--json',
+  ], { env });
+  assert.equal(upgraded.status, 0, upgraded.stderr);
+  const upgradedLock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  assert.deepEqual(upgradedLock.vscodeBridge, firstLock.vscodeBridge, 'a targeted upgrade must not orphan an installed extension');
+
+  const uninstalled = runHarness(['uninstall', '--copilot-home', copilotHome], { env });
+  assert.equal(uninstalled.status, 0, uninstalled.stderr);
+  assert.equal(fs.existsSync(firstLock.vscodeBridge.path), false);
+});
+
 test('global harness shim embeds INSTALL_FIX_HINT via JSON.stringify, keeping the generated shim syntactically valid', () => {
   const copilotHome = tempDir('shim-quoting-home-');
   installGlobalHarnessShim(copilotHome, { dryRun: false, verbose: false }, () => {});
@@ -290,13 +360,13 @@ test('upgrade refreshes a stale workspace runner, and creates none where there i
   const runnerPath = path.join(workspace, '.harness', 'run.mjs');
 
   // No runner: upgrade must not conjure one (upgrade runs from anywhere).
-  assert.equal(runHarness(['upgrade', '--workspace', workspace, '--copilot-home', copilotHome]).status, 0);
+  assert.equal(runHarness(['upgrade', '--workspace', workspace, '--copilot-home', copilotHome, '--target', 'cli']).status, 0);
   assert.equal(fs.existsSync(runnerPath), false, 'upgrade outside an initialized workspace creates nothing');
 
   // A runner stamped by an older harness is rewritten.
   fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
   fs.writeFileSync(runnerPath, harnessRunnerSource().replace(`@harness-runner-version ${RUNNER_VERSION}`, '@harness-runner-version 1'));
-  const res = runHarness(['upgrade', '--workspace', workspace, '--copilot-home', copilotHome]);
+  const res = runHarness(['upgrade', '--workspace', workspace, '--copilot-home', copilotHome, '--target', 'cli']);
   assert.equal(res.status, 0, res.stderr);
   assert.match(fs.readFileSync(runnerPath, 'utf8'), new RegExp(`@harness-runner-version ${RUNNER_VERSION}\\b`),
     'a runner from an older harness is brought up to the installed version');
@@ -329,7 +399,7 @@ test('doctor H9 detects a harness installed but never hydrated by upgrade', () =
     return JSON.parse(res.stdout).checks.find((c) => c.id === 'H9');
   };
 
-  assert.equal(runHarness(['upgrade', '--workspace', workspace, '--copilot-home', copilotHome]).status, 0);
+  assert.equal(runHarness(['upgrade', '--workspace', workspace, '--copilot-home', copilotHome, '--target', 'cli']).status, 0);
   assert.equal(h9().pass, true, 'a freshly upgraded home is current');
 
   const lockPath = path.join(copilotHome, '.harness-lock.json');
