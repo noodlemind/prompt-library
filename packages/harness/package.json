@@ -16,6 +16,7 @@
     "lib",
     "config",
     "assets",
+    "vscode-extension",
     "retired.json",
     "README.md"
   ],

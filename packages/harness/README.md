@@ -15,9 +15,15 @@ npm install -g @dev-kit/harness@latest
 # local monorepo:
 npm install -g ./packages/harness
 
-harness install --configure-vscode
+harness tui                    # first launch hydrates VS Code + CLI automatically
 harness doctor --host vscode
 ```
+
+`harness tui` runs the global hydration when no install lock exists and runs it
+once more after npm installs a newer package version. Same-version launches do
+nothing. Hydration also installs the Harness Copilot Bridge; reload VS Code
+after installation or upgrade. `harness install --configure-vscode` and
+`harness upgrade` remain available for explicit/non-TUI setup.
 
 `prepare`/`prepack` build `assets/` so installs match published tarballs.
 
@@ -56,7 +62,7 @@ Same registry tools; autonomous does **not** require plans or compound. See [doc
 
 | Command | Purpose |
 |---------|---------|
-| `install` / `upgrade` | Hydrate `~/.copilot/`; upgrade retires lock paths |
+| `install` / `upgrade` | Hydrate `~/.copilot/` and install the VS Code bridge; upgrade retires lock paths |
 | `doctor` | Health; `--host vscode` runs hook probes |
 | `status` / `uninstall` | Version/lock; remove tracked files only |
 | `init-repo` | Plan/session paths + checks/policy stubs |
@@ -68,6 +74,7 @@ Projection of the kernel — not a second Engineer.
 ```text
 / palette   ! shell   ? help   shift+tab  commands→assist→plan
 tree · learnings · agent on|off · config set · gate menu · runs
+initialize this repo (`init-repo`) from the palette
 ```
 
 ### Deliver path (`@engineer`)
@@ -95,6 +102,14 @@ harness agent "task" --dry-run --json
 ```
 
 Profiles: `autonomous` (default) · `deliver` · `benchmark` (fixture). **Not** the Adaptive Engineering product runtime — host `@engineer` + kernel remain that.
+
+For the `github-copilot` provider, model discovery and completions prefer the
+signed-in editor through `vscode.lm`. This keeps Copilot authentication, proxy,
+and enterprise CA handling inside VS Code. Reload the editor after installing
+or upgrading, sign in to GitHub Copilot Chat, then run
+`harness model refresh github-copilot`. If no editor bridge is running, the provider retains the
+token/API path as a fallback for headless use. An editor permission, quota, or
+model error is returned as-is and never bypassed through that fallback.
 
 ### Knowledge
 

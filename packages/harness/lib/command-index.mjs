@@ -222,6 +222,7 @@ const TUI_COMMAND_LABELS = Object.freeze({
   agent: 'Agent task',
   status: 'Harness status',
   doctor: 'Health check',
+  'init-repo': 'Initialize this repo',
   tui: 'Session ledger',
   help: 'Help',
   recall: 'Search team knowledge',
@@ -265,6 +266,7 @@ const TUI_NOTES = Object.freeze({
   agent: 'optional model loop — host still owns mutations',
   status: 'version, home, and what is installed',
   doctor: 'is install, hooks, and knowledge healthy?',
+  'init-repo': 'create the repo-local harness files and indexes',
   recall: 'search team solutions and learnings',
   get: 'read a bounded doc excerpt',
   report: 'token or growth reports from events',
@@ -309,6 +311,7 @@ export const TUI_COMMON_NOUNS = Object.freeze([
   'remember',
   'gate',
   'verify',
+  'init-repo',
   'doctor',
   'status',
 ]);

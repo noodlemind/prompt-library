@@ -3,7 +3,7 @@ import path from 'path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const COPY_DIRS = ['bin', 'lib', 'config', 'assets'];
+const COPY_DIRS = ['bin', 'lib', 'config', 'assets', 'vscode-extension'];
 const COPY_FILES = ['package.json', 'retired.json'];
 
 /**

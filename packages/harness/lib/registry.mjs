@@ -735,7 +735,7 @@ registerCommand({
   summary: 'seed the .harness workspace in a product repo',
   group: 'workspace',
   sideEffect: 'mutate',
-    surfaces: ['cli'],
+    surfaces: ['cli', 'tui'],
   args: { positionals: [], flags: [] },
   handler: cmdInitRepo,
 });

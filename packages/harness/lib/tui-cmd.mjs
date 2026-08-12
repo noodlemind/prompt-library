@@ -20,6 +20,7 @@ import { deriveGitContext } from './git-context.mjs';
 import { readSession } from './session.mjs';
 import { resolveConfig } from './config.mjs';
 import { resolveCopilotHome } from './paths.mjs';
+import { readLock } from './lock.mjs';
 import { isProjectTrusted } from './trust.mjs';
 import { readJournal, foldRuns, runStatusFromReported } from './run-journal.mjs';
 import { modelPickerRows, modelStatus } from './model-cmd.mjs';
@@ -1333,11 +1334,69 @@ function readVersion() {
   }
 }
 
+export async function ensureFirstRunInstall({
+  copilotHome,
+  workspace,
+  install = null,
+  packageVersion = null,
+  verbose = false,
+  dryRun = false,
+} = {}) {
+  if (process.env.HARNESS_SKIP_FIRST_RUN_INSTALL === '1') return false;
+  const lock = readLock(copilotHome);
+  const currentVersion = packageVersion || readVersion();
+  if (lock && !isNewerPackageVersion(currentVersion, lock.version)) return false;
+  const command = lock ? 'upgrade' : 'install';
+  const runInstall = install || (await import('./commands.mjs')).cmdInstallOrUpgrade;
+  const args = [
+    '--copilot-home', copilotHome,
+    '--workspace', workspace,
+    '--target', 'vscode,cli',
+    '--configure-vscode',
+    ...(verbose ? ['--verbose'] : []),
+    ...(dryRun ? ['--dry-run'] : []),
+  ];
+  const exit = await runInstall(command, args);
+  if (exit !== 0) {
+    throw Object.assign(new Error(`automatic harness ${command} failed with exit ${exit}`), { code: 'E_INSTALL', exit });
+  }
+  return true;
+}
+
+function isNewerPackageVersion(current, installed) {
+  if (!current) return false;
+  if (!installed) return true;
+  if (current === installed) return false;
+  const parse = (value) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/.exec(String(value));
+    return match ? { core: match.slice(1, 4).map(Number), prerelease: match[4] || null } : null;
+  };
+  const next = parse(current);
+  const prior = parse(installed);
+  if (!next) return false;
+  if (!prior) return true;
+  for (let index = 0; index < 3; index += 1) {
+    if (next.core[index] !== prior.core[index]) return next.core[index] > prior.core[index];
+  }
+  if (next.prerelease === prior.prerelease) return false;
+  if (!next.prerelease) return true;
+  if (!prior.prerelease) return false;
+  return next.prerelease.localeCompare(prior.prerelease, 'en', { numeric: true }) > 0;
+}
+
 export async function cmdTui(argv, ctx = {}) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   if (flags.json) {
     throw usageError('tui has no JSON output', 'the ledger is a terminal surface; use the CLI for machine-readable output');
   }
-  return runLedger({ workspace, copilotHome: flags.copilotHome || null, argv });
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  await ensureFirstRunInstall({
+    copilotHome,
+    workspace,
+    install: ctx.install || null,
+    verbose: flags.verbose,
+    dryRun: flags.dryRun,
+  });
+  return runLedger({ workspace, copilotHome, argv });
 }

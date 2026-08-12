@@ -1,0 +1,26 @@
+{
+  "name": "harness-copilot-bridge",
+  "displayName": "Harness Copilot Bridge",
+  "description": "Routes Harness model discovery and requests through the signed-in VS Code language model API.",
+  "version": "0.1.0",
+  "publisher": "dev-kit",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.cjs",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  }
+}
