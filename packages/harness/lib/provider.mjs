@@ -229,7 +229,11 @@ export const PROVIDERS = Object.freeze({
     baseUrlVar: 'GITHUB_COPILOT_BASE_URL',
     baseUrl: 'https://api.githubcopilot.com',
     adapter: 'providers/github-copilot.mjs',
-    defaultModel: 'gpt-4o',
+    // The strongest code model the harness path can reach on a measured
+    // account — both 4o and 4.1 answer a live probe, and 4o produced the two
+    // benchmark failures (a fragment write that destroyed a module, and a
+    // repair spiral that never converged) that 4.1 exists to do better on.
+    defaultModel: 'gpt-4.1',
     // The adapter needs the config dir where editors store the OAuth grant;
     // the token variables themselves are NORMALIZED in providerEnv below, so
     // the adapter never has to name them (P5AC7: only this file names keys).
@@ -331,7 +335,18 @@ export function modelCatalog({ parentEnv = process.env, cache = {} } = {}) {
  * already on disk was the guess this function exists to retire.
  */
 export function resolveDefaultModel(providerId, cache = {}) {
-  return cache?.[providerId]?.models?.[0] ?? PROVIDERS[providerId]?.defaultModel ?? null;
+  const models = cache?.[providerId]?.models ?? [];
+  const preferred = PROVIDERS[providerId]?.defaultModel ?? null;
+  // THE STATIC DEFAULT IS A QUALITY CHOICE; THE CATALOGUE IS A CALLABILITY
+  // FACT. The fetched list is sorted for a picker — preferred-first, then
+  // ALPHABETICAL — so its first entry is an accident of spelling:
+  // `copilot-search-a`, a search utility, led the verified list, and `[0]`
+  // quietly made it what `auto` meant. The declared default wins whenever the
+  // catalogue confirms it is callable (or no catalogue exists to ask); the
+  // first catalogue entry is only the answer when the preferred model is one
+  // this account genuinely cannot call.
+  if (preferred && (!models.length || models.includes(preferred))) return preferred;
+  return models[0] ?? preferred ?? null;
 }
 
 /** Loopback is the one place a plaintext base URL is not a mistake. */

@@ -29,6 +29,8 @@
  * result, same rule as every adapter: this process is the only one that holds
  * them, so it is the only one that can reliably take them back out.
  */
+import http from 'node:http';
+import https from 'node:https';
 import {
   toWireMessages,
   toWireTools,

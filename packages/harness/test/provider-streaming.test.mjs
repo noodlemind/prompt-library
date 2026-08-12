@@ -160,6 +160,43 @@ test('streamCompletion consumes SSE, surfaces deltas, and returns the assembled 
   }
 });
 
+// The Copilot adapter's completion path, driven end to end through a spawned
+// adapter process against a local SSE stub. This exact path once shipped a
+// ReferenceError (`https is not defined`) that the whole suite missed — no
+// test exercised a copilot completion off-live — and the first real call died
+// on turn one. A pre-minted bearer skips the exchange; the base-URL override
+// points the adapter at the stub.
+test('the copilot adapter completes against a stub, streaming end to end', async () => {
+  const { startProvider } = await import('../lib/provider.mjs');
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'copilot says hi' } }] })}\n\n`);
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const handle = startProvider({
+    provider: 'github-copilot',
+    parentEnv: {
+      PATH: process.env.PATH,
+      // Not OAuth-shaped, so the seam hands it over as a pre-minted bearer
+      // and no exchange happens.
+      GITHUB_COPILOT_TOKEN: 'stub-bearer-token',
+      GITHUB_COPILOT_BASE_URL: base,
+    },
+  });
+  try {
+    const result = await handle.complete({ messages: [{ role: 'user', text: 'hi' }] }, { timeout: 15_000 });
+    assert.equal(result.text, 'copilot says hi');
+    assert.equal(result.stopReason, 'stop');
+  } finally {
+    handle.close();
+    await new Promise((r) => server.close(r));
+  }
+});
+
 test('a server that ignores stream:true and answers plain JSON is still accepted', async () => {
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });

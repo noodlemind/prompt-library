@@ -207,16 +207,14 @@ export const AGENT_TOOLS = Object.freeze([
     description:
       'Write a file in full. Creating a NEW file needs nothing else. Replacing an EXISTING file requires '
       + '`expect` — the sha256 `read` reported — which proves you are replacing the content you actually saw; '
-      + 'without it the write is refused. Use `edit` for a change to part of a file. A write that would replace '
-      + 'an existing file with MUCH SMALLER content is refused unless `allow_shrink` is true — never rewrite a '
-      + 'file you have not read to its last line.',
+      + 'without it the write is refused. `content` must be the COMPLETE file: a write that would replace an '
+      + 'existing file with much smaller content is refused. Use `edit` for a change to part of a file.',
     schema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'file path relative to the workspace root' },
         content: { type: 'string', description: 'the complete contents of the file' },
         expect: { type: 'string', description: 'sha256 of the content being replaced; required when the file exists' },
-        allow_shrink: { type: 'boolean', description: 'confirm that replacing this file with much smaller content is intended' },
       },
       required: ['path', 'content'],
     },
@@ -505,9 +503,14 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
       if (typeof input.content !== 'string') {
         return { dispatched: false, reason: 'write requires `content` — the complete contents of the file', fatal: false };
       }
+      // DELIBERATELY NO shrink escape on this lane. The CLI's --allow-shrink
+      // exists for an operator who states a legitimate rewrite; a model that
+      // voluntarily elided 95% of a module would set any flag its refusal
+      // told it about, so the model's only doors are `edit` and writing the
+      // complete file. Claude Code's Write and Codex's apply_patch draw the
+      // same line — elision is unrepresentable, not discouraged.
       argv = [...base, '--path', rel, '--content', input.content];
       if (typeof input.expect === 'string' && input.expect) argv.push('--expect', input.expect);
-      if (input.allow_shrink === true) argv.push('--allow-shrink');
       run = writeResultOf;
     }
   }

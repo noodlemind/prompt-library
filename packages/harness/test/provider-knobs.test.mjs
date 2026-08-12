@@ -107,16 +107,31 @@ test('an unset or auto model resolves through the fetched catalogue before the s
   assert.equal(planAgent(base).model, PROVIDERS[DEFAULT_PROVIDER].defaultModel,
     'a provider nobody has asked still answers from the table — the last resort works');
 
+  // The static default is a QUALITY choice; the catalogue is a CALLABILITY
+  // fact. The fetched list is sorted for a picker — alphabetical within a
+  // preference tier — so `[0]` is an accident of spelling: on the measured
+  // account it made `auto` mean `copilot-search-a`, a search utility. The
+  // declared default wins whenever the catalogue confirms this account can
+  // call it; the catalogue's own first entry answers only when it cannot.
   writeModelCache(home, {
     provider: DEFAULT_PROVIDER,
     models: ['claude-sonnet-5', 'gpt-4.1'],
     labels: {},
     fetchedAt: new Date().toISOString(),
   });
-  assert.equal(planAgent(base).model, 'claude-sonnet-5',
-    'answering auto with a hardcoded id while holding the account’s real catalogue was the guess to retire');
-  assert.equal(planAgent([...base, '--model', 'auto']).model, 'claude-sonnet-5', 'typed auto resolves the same way');
+  assert.equal(planAgent(base).model, 'gpt-4.1',
+    'the declared default, confirmed callable by the catalogue, beats whatever sorts first');
+  assert.equal(planAgent([...base, '--model', 'auto']).model, 'gpt-4.1', 'typed auto resolves the same way');
   assert.equal(planAgent([...base, '--model', 'gpt-4.1']).model, 'gpt-4.1', 'an explicit model is never second-guessed');
+
+  writeModelCache(home, {
+    provider: DEFAULT_PROVIDER,
+    models: ['claude-sonnet-5'],
+    labels: {},
+    fetchedAt: new Date().toISOString(),
+  });
+  assert.equal(planAgent(base).model, 'claude-sonnet-5',
+    'a default this account cannot call yields to the catalogue — the original point of resolving through it');
 
   assert.equal(resolveDefaultModel('openai', {}), PROVIDERS.openai.defaultModel, 'no cache entry, table answer');
   assert.equal(resolveDefaultModel('telepathy', {}), null, 'an unknown provider has no default to offer');

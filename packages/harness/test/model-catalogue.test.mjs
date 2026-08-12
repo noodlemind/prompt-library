@@ -117,7 +117,7 @@ test('auto is resolved to the provider default, never sent as a model id', () =>
       return fakeChild();
     },
   });
-  assert.equal(handle.model, 'gpt-4o', 'auto means the provider chooses, and it chose its default');
+  assert.equal(handle.model, 'gpt-4.1', 'auto means the provider chooses, and it chose its default');
   assert.notEqual(handle.model, 'auto', 'the literal word must not survive into a request');
   handle.close();
 });
