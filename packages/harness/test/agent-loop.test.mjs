@@ -23,9 +23,12 @@ import { hasCommand } from '../lib/registry.mjs';
 import {
   AGENT_TOOLS,
   BENCHMARK_PROFILE,
+  MAX_EXPLORE_STREAK,
+  MAX_SEARCH_PER_RUN,
   STOP_REASONS,
   buildSystemPrompt,
   dispatchToolCall,
+  exploreGate,
   renderToolResult,
   resolvePersona,
   resolveToolTimeout,
@@ -164,56 +167,56 @@ test('a length-truncated message has its tool calls refused, not dispatched', as
   assert.match(truncatedTurn.tools[0].reason, /truncated/);
 });
 
-// The other half of the benchmark failure: 15 consecutive explore turns with
-// no pressure to converge, because nothing ever told the model the budget
-// existed. Both nudges are deterministic messages in the transcript, so they
-// are visible to the model AND to anyone reading the run afterwards.
-test('six explore-only turns draw a stall nudge; approaching the turn budget draws a budget nudge', async () => {
-  const { ws, home } = scaffold('agent-nudges');
+// Benchmark: text nudges lost to search incentives. Explore is hard-capped.
+test('search is refused after the explore streak and after the per-run search budget', async () => {
+  const { ws, home } = scaffold('agent-explore-gate');
   fs.writeFileSync(path.join(ws, 'a.txt'), 'seed\n');
-  const reads = Array.from({ length: 6 }, (_, i) => callTool(`r${i}`, 'read', { path: 'a.txt' }));
   const provider = scriptedProvider([
-    ...reads,
-    (request) => {
-      const texts = request.messages.filter((m) => typeof m.text === 'string').map((m) => m.text);
-      assert.ok(
-        texts.some((t) => /6 consecutive turns reading and searching/.test(t)),
-        'after six explore-only turns the transcript must say so',
-      );
-      assert.ok(
-        texts.some((t) => /prefer `edit` over rewriting a file with `write`/.test(t)),
-        'and steer toward the surgical tool',
-      );
-      return callTool('b1', 'bash', { script: 'echo acting' });
-    },
-    callTool('b2', 'bash', { script: 'echo more' }),
-    (request) => {
-      // Turn 9 of 10: eight turns are spent, two remain — the threshold.
-      const texts = request.messages.filter((m) => typeof m.text === 'string').map((m) => m.text);
-      assert.ok(
-        texts.some((t) => /Budget check: 2 of 10 turns remain/.test(t)),
-        'the model is told the budget before it is spent, not in the stop reason after',
-      );
-      return say('done');
-    },
+    callTool('r1', 'read', { path: 'a.txt' }),
+    callTool('r2', 'read', { path: 'a.txt' }),
+    callTool('r3', 'read', { path: 'a.txt' }),
+    // 3 explore turns already → next search is refused (tool-level, not a nudge).
+    callTool('s1', 'search', { query: 'anything' }),
+    callTool('b1', 'bash', { script: 'echo act' }),
+    say('done'),
   ]);
-  const result = await agentResultOf(argvFor(ws, home, 'poke around', ['--max-turns', '10']), {}, { startProviderFn: provider.start });
+  const result = await agentResultOf(
+    argvFor(ws, home, 'poke around', ['--max-turns', '12']),
+    {},
+    { startProviderFn: provider.start },
+  );
   assert.equal(result.stopReason, 'done');
+  const searchTurn = result.turns.find((t) => t.tools.some((x) => x.tool === 'search'));
+  assert.ok(searchTurn, 'search was attempted');
+  assert.equal(searchTurn.tools[0].dispatched, false, 'search after explore streak must be refused');
+  assert.match(searchTurn.tools[0].reason, /explore streak|search budget/);
 });
 
-test('a run that acts steadily is never nudged', async () => {
-  const { ws, home } = scaffold('agent-no-nudge');
+test('approaching the turn budget injects a budget check; steady action is not blocked', async () => {
+  const { ws, home } = scaffold('agent-budget-nudge');
   const provider = scriptedProvider([
     callTool('t1', 'bash', { script: 'echo one' }),
     callTool('t2', 'bash', { script: 'echo two' }),
+    callTool('t3', 'bash', { script: 'echo three' }),
+    callTool('t4', 'bash', { script: 'echo four' }),
+    callTool('t5', 'bash', { script: 'echo five' }),
+    callTool('t6', 'bash', { script: 'echo six' }),
+    callTool('t7', 'bash', { script: 'echo seven' }),
+    callTool('t8', 'bash', { script: 'echo eight' }),
     (request) => {
       const texts = request.messages.filter((m) => typeof m.text === 'string').map((m) => m.text);
-      assert.equal(texts.some((t) => /consecutive turns reading|Budget check/.test(t)), false,
-        'nudges are for measured pathologies, not background noise');
+      assert.ok(
+        texts.some((t) => /Budget check: 2 of 10 turns remain/.test(t)),
+        'budget pressure remains as a secondary signal',
+      );
       return say('done');
     },
   ]);
-  const result = await agentResultOf(argvFor(ws, home, 'do work', ['--max-turns', '30']), {}, { startProviderFn: provider.start });
+  const result = await agentResultOf(
+    argvFor(ws, home, 'do work', ['--max-turns', '10']),
+    {},
+    { startProviderFn: provider.start },
+  );
   assert.equal(result.stopReason, 'done');
 });
 
@@ -536,6 +539,13 @@ test('the loop builds no provider wire shape — every one of them lives in the 
 
 test('the declared tools are exactly the governed surfaces, and every one of them is a command', () => {
   assert.deepEqual(AGENT_TOOLS.map((t) => t.name).sort(), ['bash', 'edit', 'exec', 'read', 'search', 'write']);
+  // Act tools lead; search is last (benchmark: search attractor).
+  assert.ok(AGENT_TOOLS.findIndex((t) => t.name === 'bash') < AGENT_TOOLS.findIndex((t) => t.name === 'search'));
+  assert.match(AGENT_TOOLS.find((t) => t.name === 'search').description, /Last resort/i);
+  assert.match(buildSystemPrompt({ persona: { name: 'engineer', text: null } }), /Reproduce first/);
+  assert.equal(typeof exploreGate, 'function');
+  assert.ok(MAX_EXPLORE_STREAK >= 2);
+  assert.ok(MAX_SEARCH_PER_RUN >= 3);
   for (const tool of AGENT_TOOLS) {
     assert.ok(tool.description.length > 40, 'a tool the model must reason about needs its constraints described');
     assert.equal(tool.schema.type, 'object');

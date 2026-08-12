@@ -1,49 +1,11 @@
 /**
- * The turn loop (P5AC9, P5AC10) — orient, ask a model what to do, do it under
- * `controls`, journal the turn, repeat until a stated stop condition.
+ * Headless turn loop: complete → dispatch tools under controls → journal → stop.
  *
- * This is the fifth of an agent the harness was missing. The other four were
- * already here: orientation (`orient`, the context pack, the repo map),
- * retrieval, governed execution (`exec`/`bash` behind the env allowlist, the
- * confined cwd, and the network control), and durable runs (the journal). What
- * was absent was the part that decides what to do next, because nothing in the
- * harness called a model. It does now, out of process — see `lib/provider.mjs`.
- *
- * IT ADDS NO SECOND EXECUTION PATH. A tool call is dispatched through the same
- * `execResultOf`/`bashResultOf` an operator's `harness exec` goes through, so a
- * model's command gets the same environment allowlist, the same starting
- * directory, the same timeout and the same audit record as one a person typed.
- * Reimplementing execution here would mean the one caller that cannot be
- * reasoned with got the untested copy.
- *
- * WHAT THAT IS NOT, stated plainly because an earlier version of this comment
- * said "confined" and a test claimed "a model cannot run outside the workspace"
- * (Codex final review). Neither was true. `resolveExecCwd` validates the
- * STARTING directory; nothing stops `cd ..`, an absolute path, or a detached
- * child that outlives the process-group kill. A model's tool call therefore has
- * exactly the authority the operator running the harness has — no more, and no
- * less — and that is the honest boundary.
- *
- * Real filesystem confinement needs a sandbox or container with the workspace
- * as the only writable mount. That is deliberately out of scope: "privileged
- * sandbox topology" is a named Non-Goal inherited from the agent-loop spec. The
- * consequence is that `harness agent` should be run where you would be willing
- * to run a shell script you have not read — which is what pointing a model at a
- * repository amounts to.
- *
- * IT IS PROVIDER-NEUTRAL. The loop speaks `{system, messages, tools}` and reads
- * back `{text, toolCalls, blocks}`; every wire shape belongs to the adapter.
- * An assistant turn is echoed back VERBATIM as opaque `blocks` — the loop does
- * not interpret them, so a provider whose content model differs does not need
- * this file changed.
- *
- * THE TRANSCRIPT IS NOT JOURNALED. Each turn records what it DID — which tools
- * ran, with what outcome, how long, how many tokens — and not what was said.
- * A conversation is the most likely place for a credential a person pasted or a
- * file the model read aloud to appear, and the journal is durable. The turn
- * record answers "what did this agent do", which is the question a run journal
- * exists for; the transcript answers "what did it think", which is a debugging
- * concern and belongs in the stream the operator is watching.
+ * Design constraints from the live benchmark (CLI+engineer wins; this loop lost):
+ * - Tool incentives beat text nudges. Explore (search/read) is hard-capped.
+ * - Reproduce-first: system prompt and tool order push run-the-test before search.
+ * - Context is budgeted: small tool results, short persona, compact old explores.
+ * - No second execution path: tools map to the same command result functions as the CLI.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -58,44 +20,27 @@ import { searchResultOf } from './retrieval/search-cmd.mjs';
 
 export const AGENT_SCHEMA = 1;
 
-/** What one rendered tool result may hand the model — see renderToolResult. */
-export const TOOL_RESULT_MAX_BYTES = 16_000;
+/** Per-tool result ceiling shown to the model (context blow-up guard). */
+export const TOOL_RESULT_MAX_BYTES = 8_000;
+export const READ_DEFAULT_LINES = 240;
+export const READ_MAX_BYTES = TOOL_RESULT_MAX_BYTES + 2_000;
+export const SEARCH_ROWS = 8;
+/** Persona text beyond this is truncated — full engineer.md is not a runtime prompt. */
+export const PERSONA_MAX_BYTES = 3_500;
+/** Orientation pack ceiling in the system prompt. */
+export const ORIENTATION_MAX_BYTES = 6_000;
 
-/**
- * The window the `read` tool asks for.
- *
- * `renderToolResult` bounds what actually reaches the model at
- * TOOL_RESULT_MAX_BYTES, so asking `get` for a little more than that costs
- * nothing and means the truncation happens in ONE place with one notice
- * attached, rather than twice with the inner one silent. DERIVED, not
- * re-spelled: the two numbers are one decision, and when they were separate
- * literals nothing but a comment kept "a little more" true. The line count is
- * high enough that most source files arrive whole; `offset` exists for the
- * ones that do not.
- */
-export const READ_DEFAULT_LINES = 800;
-export const READ_MAX_BYTES = TOOL_RESULT_MAX_BYTES + 4_000;
+/** After this many consecutive explore-only turns, further search is refused. */
+export const MAX_EXPLORE_STREAK = 3;
+/** Hard search calls per run (search attractor guard). */
+export const MAX_SEARCH_PER_RUN = 5;
+/** Keep full tool results for this many recent turns; older explores are stubbed. */
+export const TRANSCRIPT_FULL_TURNS = 6;
+
 export const DEFAULT_PERSONA = 'engineer';
-/**
- * The budgets, whose values live in the CONFIG SCHEMA — `agent.max_turns` and
- * `agent.max_seconds` are operator configuration now, and a default the config
- * surface shows must be the same number this loop falls back to. Re-exported
- * under the old names because the registry and the command surface already
- * read them here.
- */
 export const DEFAULT_MAX_TURNS = CONFIG_SCHEMA['agent.max_turns'].default;
 export const DEFAULT_MAX_SECONDS = CONFIG_SCHEMA['agent.max_seconds'].default;
 
-/**
- * Why the loop stopped, and what each means for the run.
- *
- * Every terminal state is named rather than inferred from an exit code, because
- * "the model finished" and "we ran out of turns" are the same exit code away
- * from each other and mean opposite things about the result. The status is the
- * harness's own vocabulary (`ok|failed|cancelled|timed-out`), so a turn loop
- * appears in `run list` alongside every other command without a private
- * outcome language.
- */
 export const STOP_REASONS = Object.freeze({
   done: { status: 'ok', exit: EXIT.ok, summary: 'the model finished and asked for nothing more' },
   'turn-budget': { status: 'failed', exit: 1, summary: 'the turn budget was reached before the model finished' },
@@ -105,22 +50,6 @@ export const STOP_REASONS = Object.freeze({
   cancelled: { status: 'cancelled', exit: EXIT.cancelled, summary: 'the run was cancelled' },
 });
 
-/**
- * The benchmark profile — what this loop does, and what it deliberately does
- * not.
- *
- * `engineer.agent.md` describes a nine-step lifecycle that presumes a
- * persistent product repository: `gate` wants a locked plan under `docs/plans/`,
- * `verify` wants named checks, `compound` wants a knowledge store that outlives
- * the container, and one step wants a human reviewer. A bare container has none
- * of those. Dropping them is honest; SYNTHESIZING them is not — a plan file
- * written to satisfy `gate` would measure ceremony rather than capability, and
- * would make the harness look governed in a run where nothing was governed.
- *
- * The drops are data so they can be reported. A reader of a finished run should
- * be able to see which parts of the lifecycle did not happen without knowing
- * this file exists.
- */
 export const BENCHMARK_PROFILE = Object.freeze({
   id: 'benchmark',
   keeps: Object.freeze(['orient', 'retrieval', 'governed-exec', 'journal']),
@@ -132,67 +61,47 @@ export const BENCHMARK_PROFILE = Object.freeze({
   ]),
 });
 
+const EXPLORE_TOOLS = new Set(['search', 'read']);
+const ACT_TOOLS = new Set(['edit', 'write', 'bash', 'exec']);
+
 /**
- * The tools the model may call.
- *
- * Every one of them is a HARNESS COMMAND, mapped onto an argv by
- * `dispatchToolCall` below. That is the invariant this list exists to keep: a
- * tool inherits the audit event, the run journal, the environment allowlist and
- * the side-effect class of the command it maps to, and no capability reaches
- * the model that an operator cannot also reach from the CLI.
- *
- * An earlier version of this file carried only `bash` and `exec`, and refused a
- * `read_file`/`write_file` pair on the grounds that harness-native file tools
- * would create a second write path `controls` never sees. THE REASONING WAS
- * RIGHT AND THE CONCLUSION WAS WRONG: the answer was not to withhold file
- * tools, it was to make them commands. `read`, `edit` and `write` below are
- * `harness get`, `harness edit` and `harness write` — the same code an operator
- * runs, so there is still exactly one write path and `controls` still sees it.
- *
- * What the two-tool version cost is not theoretical. Every file change had to
- * be expressed as shell escaping, and a live run given a one-line documentation
- * edit emitted malformed shell six times running and wrote nothing.
+ * Tools available to the model. Order and copy are load-bearing:
+ * act tools first; search last and demoted (benchmark: search attractor).
  */
 export const AGENT_TOOLS = Object.freeze([
   Object.freeze({
-    name: 'search',
+    name: 'bash',
     description:
-      'Find where something is in this workspace — ranked across code, plans and knowledge. '
-      + 'Returns `path:line` locations with a snippet of each. USE THIS BEFORE `read` whenever you do not already '
-      + 'know the exact path: reading a guessed filename fails, and guessing repeatedly is how a run exhausts its turns. '
-      + 'A location it returns is a path `read` accepts verbatim.',
+      'Run one shell script (e.g. the failing test command). Prefer this FIRST when the task names a test or command. '
+      + 'Deny-all environment; cwd starts at the workspace root; process group killed at timeout.',
     schema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'what to look for, in words — not a regex or a glob' },
+        script: { type: 'string', description: 'the script to run' },
+        timeout: { type: 'number', description: 'seconds before the process tree is terminated' },
       },
-      required: ['query'],
+      required: ['script'],
     },
   }),
   Object.freeze({
-    name: 'read',
+    name: 'exec',
     description:
-      'Read a file from the workspace. The reply states which line range you were shown and how many lines the file has, '
-      + 'so if the range does not cover the end, call read again with `offset` set past it — do not assume you have seen the file. '
-      + 'It also returns the sha256 of the WHOLE file, which is what `write` wants in `expect` when replacing an existing file. '
-      + 'Prefer this over `cat` — it cannot be broken by quoting.',
+      'Run one program without a shell. Prefer over bash when no shell features are needed. '
+      + 'Use for the named test runner when argv is known.',
     schema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'file path relative to the workspace root' },
-        offset: { type: 'number', description: 'first line to return, 1-indexed (default 1)' },
-        lines: { type: 'number', description: `maximum lines to return (default ${READ_DEFAULT_LINES})` },
+        argv: { type: 'array', items: { type: 'string' }, description: 'program and arguments' },
+        timeout: { type: 'number', description: 'seconds before the process tree is terminated' },
       },
-      required: ['path'],
+      required: ['argv'],
     },
   }),
   Object.freeze({
     name: 'edit',
     description:
-      'Replace one exact piece of text in an existing file. `old` must appear EXACTLY ONCE in the file — '
-      + 'if it appears zero times or more than once the edit is refused and nothing changes, so extend `old` '
-      + 'with surrounding lines until it is unique. Match byte-exactly, including indentation. '
-      + 'This is the tool for changing a file; do not use `bash` with sed or a redirect.',
+      'Replace one exact piece of text in an existing file. `old` must appear EXACTLY ONCE. '
+      + 'Prefer edit over write for any partial change.',
     schema: {
       type: 'object',
       properties: {
@@ -206,10 +115,8 @@ export const AGENT_TOOLS = Object.freeze([
   Object.freeze({
     name: 'write',
     description:
-      'Write a file in full. Creating a NEW file needs nothing else. Replacing an EXISTING file requires '
-      + '`expect` — the sha256 `read` reported — which proves you are replacing the content you actually saw; '
-      + 'without it the write is refused. `content` must be the COMPLETE file: a write that would replace an '
-      + 'existing file with much smaller content is refused. Use `edit` for a change to part of a file.',
+      'Write a file in full. New files need only path+content. Existing files need `expect` (sha256 from read). '
+      + 'Replacing an existing file with much smaller content is refused. Prefer edit for partial changes.',
     schema: {
       type: 'object',
       properties: {
@@ -221,50 +128,37 @@ export const AGENT_TOOLS = Object.freeze([
     },
   }),
   Object.freeze({
-    name: 'bash',
+    name: 'read',
     description:
-      'Run one shell script. The whole script is a single argument; use `;` or `&&` to sequence. '
-      + 'The environment is deny-all except an explicit allowlist, the working directory starts at the workspace root, '
-      + 'and the process group is terminated at the timeout. Returns exit code, status, and combined output.',
+      'Read a known path. Use after you know which file failed (from a test run or the task). '
+      + 'Do not search when the path is already known. Returns a line window, total lines, and whole-file sha256.',
     schema: {
       type: 'object',
       properties: {
-        script: { type: 'string', description: 'the script to run' },
-        timeout: { type: 'number', description: 'seconds before the process tree is terminated' },
+        path: { type: 'string', description: 'file path relative to the workspace root' },
+        offset: { type: 'number', description: 'first line to return, 1-indexed (default 1)' },
+        lines: { type: 'number', description: `maximum lines to return (default ${READ_DEFAULT_LINES})` },
       },
-      required: ['script'],
+      required: ['path'],
     },
   }),
   Object.freeze({
-    name: 'exec',
+    name: 'search',
     description:
-      'Run one program directly, never through a shell — no word splitting, no globbing, no command substitution. '
-      + 'Prefer this over `bash` whenever a shell is not genuinely needed. Same allowlist, starting directory, and timeout.',
+      'Last resort: find a path when the task and test output do not name one. '
+      + 'Do not search as a first step. Limited per run; repeated search without acting is refused.',
     schema: {
       type: 'object',
       properties: {
-        argv: { type: 'array', items: { type: 'string' }, description: 'program and arguments' },
-        timeout: { type: 'number', description: 'seconds before the process tree is terminated' },
+        query: { type: 'string', description: 'what to look for, in words — not a regex or a glob' },
       },
-      required: ['argv'],
+      required: ['query'],
     },
   }),
 ]);
 
 const TOOL_NAMES = new Set(AGENT_TOOLS.map((t) => t.name));
 
-/**
- * Flags that consume the token after them.
- *
- * F14 (Codex phase-5 review): `taskFromArgv` assumed every `--flag` took a
- * value, so `harness agent --dry-run fix the bug` ate `fix` and ran the task
- * "the bug" — silently, which is the worst way to get a task wrong.
- *
- * Declared here rather than in `lib/registry.mjs` only because the registry
- * imports this module; `test/codex-phase5-findings.test.mjs` asserts this set
- * matches the registry's own `type: 'string'` declarations exactly, so the two
- * cannot drift. The registry stays the source of truth for what a flag IS.
- */
 export const AGENT_VALUE_FLAGS = Object.freeze([
   '--agent', '--provider', '--model', '--max-turns', '--max-seconds', '--tool-timeout',
   '--workspace', '--copilot-home', '--output', '--plan', '--host', '--limit', '--query',
@@ -274,18 +168,12 @@ function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
 }
 
-/**
- * The persona, resolved from wherever the harness hydrated it.
- *
- * `~/.copilot/agents/<name>.agent.md` is where `install` puts it and where every
- * host already looks, so the loop reads the same file the editor would rather
- * than shipping a second copy that can drift from it.
- *
- * A missing persona DEGRADES rather than fails. A bare container that never ran
- * `harness install` still has a task to attempt, and refusing it would report a
- * hydration problem as an agent failure. What it must not do is pretend: the
- * result says which persona was used and whether it came from a file.
- */
+function clipBytes(text, maxBytes) {
+  if (typeof text !== 'string') return text;
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  return `${Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8')}\n…truncated`;
+}
+
 export function resolvePersona(copilotHome, name = DEFAULT_PERSONA) {
   if (!/^[a-z0-9][a-z0-9-]*$/i.test(name)) {
     throw usageError(`invalid persona name: ${name}`, 'persona names are the agent file stems, e.g. engineer');
@@ -299,153 +187,144 @@ export function resolvePersona(copilotHome, name = DEFAULT_PERSONA) {
   }
 }
 
-/**
- * The system prompt: who the model is, what it can reach, and what is out of
- * scope here and why.
- *
- * The last part is the one worth defending. Handing `engineer.agent.md` to a
- * model in a bare container without saying which of its nine steps are
- * impossible produces an agent that spends turns looking for `docs/plans/` and
- * reports being blocked. Naming the dropped steps and their missing
- * preconditions is both more honest and strictly more useful than silence.
- */
 export function buildSystemPrompt({ persona, profile = BENCHMARK_PROFILE, orientation = null }) {
   const parts = [];
   if (persona.text) {
-    parts.push(persona.text.trim());
+    parts.push(clipBytes(persona.text.trim(), PERSONA_MAX_BYTES));
   } else {
     parts.push(
       `You are the ${persona.name} agent running headless under the harness CLI. `
       + 'Work carefully and verify what you change.',
     );
   }
-  parts.push(
-    [
-      `## Runtime profile: ${profile.id}`,
-      '',
-      'You are running headless, with no editor host and no human to ask. '
-      + `This profile keeps ${profile.keeps.join(', ')}.`,
-      '',
-      'These lifecycle steps are OUT OF SCOPE for this run because their preconditions are absent. '
-      + 'Do not attempt them and do not create the artifacts they would need:',
-      ...profile.drops.map((d) => `- ${d.step} — needs ${d.precondition}`),
-      '',
-      'Act by calling the tools. Every command runs with a deny-all environment, a working directory confined '
-      + 'to the workspace, and a timeout; a non-zero exit is information to work with, not a reason to stop. '
-      + 'When the task is complete, reply with a short summary and call no tool — that is how you finish.',
-    ].join('\n'),
-  );
-  if (orientation) parts.push(`## Orientation\n\n${orientation}`);
+  parts.push([
+    `## Runtime: ${profile.id}`,
+    '',
+    'Headless run — no human mid-loop. Act with tools; finish with a short summary and no tool call.',
+    '',
+    '### Workflow (required order)',
+    '1. **Reproduce first** — if the task names a test or command, run it with `bash`/`exec` before searching.',
+    '2. **Read only what failed** — open the path named by the test failure or task; do not browse.',
+    '3. **Edit surgically** — prefer `edit` over `write`. Never invent a smaller rewrite of a large file.',
+    '4. **Re-run the same command** — prove the fix; then stop.',
+    '',
+    '### Hard limits',
+    `- Search is a last resort and is limited to ${MAX_SEARCH_PER_RUN} calls per run.`,
+    `- After ${MAX_EXPLORE_STREAK} consecutive read/search turns without bash/exec/edit/write, further search is refused.`,
+    '- Do not create plans, docs, or ceremony artifacts unless the task asks for them.',
+    '',
+    `OUT OF SCOPE for this run: ${profile.drops.map((d) => `${d.step} (needs ${d.precondition})`).join('; ')}.`,
+  ].join('\n'));
+  if (orientation) {
+    parts.push(`## Orientation\n\n${clipBytes(orientation, ORIENTATION_MAX_BYTES)}`);
+  }
   return parts.join('\n\n');
 }
 
-/**
- * Orientation, degraded cleanly.
- *
- * `orient` writes `.harness/context-pack.md`, which is the harness's actual
- * product here — the ranked repo map, matched plans, and recalled learnings a
- * model would otherwise have to discover by reading the tree. In a container
- * with no git repo and no index, `runOrient` may return nothing useful, and that
- * is a legitimate outcome rather than an error: a four-file task has nothing to
- * orient over. The loop reports what it got and continues.
- */
 export async function orientForTask({ workspace, copilotHome, task, runOrientFn, dryRun = false }) {
   try {
-    // `dryRun` has to reach `runOrient` or orientation writes the context pack
-    // and the session on a run whose whole promise is that it writes nothing.
-    // It was being handed no flag at all.
     const result = runOrientFn({ workspace, copilotHome, flags: { workspace, limit: 3, dryRun }, query: task });
-    if (!result) return { available: false, materialized: false, reason: 'orientation refused (.harness is not a real directory)', pack: null };
-    // Under a dry run the pack was computed but not persisted, so there is
-    // nothing to read. That is NOT the same as being unable to orient, and
-    // reporting it as unavailable would tell the operator their container is
-    // broken when it is fine.
+    if (!result) {
+      return { available: false, materialized: false, reason: 'orientation refused (.harness is not a real directory)', pack: null };
+    }
     if (dryRun) {
-      return { available: true, materialized: false, reason: null, pack: null, contextPack: result.contextPack, repoMap: result.repoMap ?? null };
+      return {
+        available: true,
+        materialized: false,
+        reason: null,
+        pack: null,
+        contextPack: result.contextPack,
+        repoMap: result.repoMap ?? null,
+      };
     }
     const packPath = path.join(workspace, result.contextPack || '');
     const pack = fs.readFileSync(packPath, 'utf8');
-    return { available: true, materialized: true, reason: null, pack, contextPack: result.contextPack, repoMap: result.repoMap ?? null };
+    return {
+      available: true,
+      materialized: true,
+      reason: null,
+      pack: clipBytes(pack, ORIENTATION_MAX_BYTES),
+      contextPack: result.contextPack,
+      repoMap: result.repoMap ?? null,
+    };
   } catch (error) {
-    // Orientation is context, not correctness. A container without a repo, an
-    // index, or a knowledge store still has a task to attempt, and reporting
-    // "no orientation" beats refusing to start.
     return { available: false, materialized: false, reason: error.message, pack: null };
   }
 }
 
-
-/**
- * How long one tool may run, from the bounds the OPERATOR set.
- *
- * The model may ASK for a timeout — a long build genuinely needs one — but
- * `--tool-timeout` is a control the operator set, so it is a CEILING and never
- * a default beneath it. The first version took the model's value whenever it
- * supplied one, which meant an operator who capped tools at 5 seconds got 3600
- * the moment the model asked for it.
- *
- * `null` means "say nothing", and that is load-bearing: `exec` then applies the
- * configured `exec.timeout_seconds`. Returning a computed number in that case
- * would let the loop RAISE a timeout the operator lowered in their config,
- * which is the opposite of what a ceiling is for. The wall clock is enforced
- * separately, by cancellation — see `dispatchToolCall`.
- */
 export function resolveToolTimeout({ requested, ceiling = null }) {
   const bounds = [];
   if (Number.isFinite(requested) && requested > 0) bounds.push(Math.floor(requested));
   if (Number.isFinite(ceiling)) bounds.push(Math.floor(ceiling));
   if (!bounds.length) return null;
-  // Clamped into exec's own legal range at BOTH ends. The floor was always
-  // here; the ceiling was not, so a model asking for a timeout above exec's
-  // hard maximum had its legal-in-spirit request forwarded verbatim into
-  // `--timeout`, exec's validator refused it, and an exec refusal is fatal to
-  // the run — a model's first bash call killed a parity benchmark in two
-  // seconds. The model may ask for less time than the maximum; asking for
-  // more just means the maximum. The operator's `--tool-timeout` ceiling
-  // still applies through `bounds`, and can only lower this further.
   return Math.min(TIMEOUT_MAX_SECONDS, Math.max(1, Math.min(...bounds)));
 }
 
-/**
- * The signal that stops a tool at the wall clock.
- *
- * Enforcing `--max-seconds` by shortening `--timeout` looked simpler and was
- * wrong: with no `--tool-timeout` there is no operator value to shorten, so the
- * loop would have had to invent one — and any number it invented would override
- * a lower `exec.timeout_seconds` the operator had configured, raising a limit
- * while claiming to lower one.
- *
- * Cancellation has neither problem. It bounds the tool by the deadline no matter
- * what `exec` was configured to allow, it cannot raise anything, and the run
- * already speaks `cancelled` as a first-class status, so the tool reports the
- * truth about why it stopped.
- */
 function deadlineSignal(remainingSeconds, existing) {
   if (!Number.isFinite(remainingSeconds)) return existing ?? undefined;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(0, remainingSeconds * 1000));
-  // The process must not be held open by a timer whose only job is to fire on a
-  // deadline the run may well beat.
   timer.unref?.();
   const signal = existing ? AbortSignal.any([existing, controller.signal]) : controller.signal;
   return { signal, done: () => clearTimeout(timer) };
 }
 
+export function exploreStreakOf(turns) {
+  let streak = 0;
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    const tools = turns[i].tools;
+    if (tools.length && tools.every((t) => EXPLORE_TOOLS.has(t.tool))) streak += 1;
+    else break;
+  }
+  return streak;
+}
+
+export function searchCountOf(turns) {
+  let n = 0;
+  for (const turn of turns) {
+    for (const t of turn.tools) {
+      if (t.tool === 'search' && t.dispatched) n += 1;
+    }
+  }
+  return n;
+}
+
 /**
- * Dispatch one tool call through the governed surface.
- *
- * The distinction that matters is between a tool that RAN and failed, and a
- * tool that could not be dispatched at all. The first is ordinary — a compile
- * error, a failing test — and is handed back to the model, which is the whole
- * point of a loop. The second means the harness refused: a denied shell, a cwd
- * outside the workspace, a configuration that would not parse. That is not
- * something the model can work around by trying again, and continuing would
- * burn the budget re-asking a question already answered no.
+ * Tool-level explore gate (benchmark: text nudges lost to search incentives).
+ * Returns a refusal reason or null if the call may run.
  */
-export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {}, timeoutSeconds = null, remainingSeconds = null }) {
+export function exploreGate(call, { turns }) {
+  if (call.name === 'search') {
+    if (searchCountOf(turns) >= MAX_SEARCH_PER_RUN) {
+      return `search budget exhausted (${MAX_SEARCH_PER_RUN} per run) — run the test or edit a known path`;
+    }
+    if (exploreStreakOf(turns) >= MAX_EXPLORE_STREAK) {
+      return `explore streak is ${MAX_EXPLORE_STREAK}+ turns of read/search only — use bash/exec to reproduce or edit/write to act`;
+    }
+  }
+  if (call.name === 'read' && exploreStreakOf(turns) >= MAX_EXPLORE_STREAK + 2) {
+    return 'too many consecutive explore turns without acting — run a test (bash/exec) or make an edit';
+  }
+  return null;
+}
+
+export async function dispatchToolCall(call, {
+  workspace,
+  copilotHome,
+  ctx = {},
+  timeoutSeconds = null,
+  remainingSeconds = null,
+  turns = [],
+} = {}) {
   if (!TOOL_NAMES.has(call.name)) {
     return { dispatched: false, reason: `unknown tool: ${call.name}`, fatal: false };
   }
+
+  const blocked = exploreGate(call, { turns });
+  if (blocked) {
+    return { dispatched: false, reason: blocked, fatal: false };
+  }
+
   const input = call.input && typeof call.input === 'object' ? call.input : {};
   const base = ['--workspace', workspace];
   if (copilotHome) base.push('--copilot-home', copilotHome);
@@ -453,15 +332,8 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
   let argv;
   let run;
   let timeout = null;
-  // Whether a THROWN error ends the run. For the execution tools it does: a
-  // denied shell, an unparseable configuration, a cwd outside the workspace are
-  // the harness saying no, and it will keep saying no. The file tools are the
-  // opposite — they answer an expected refusal (no such file, no unique match,
-  // a stale digest) with a `failed` RESULT, so anything they throw is a
-  // malformed call, which the model can fix on the next turn. Ending a run
-  // because a model guessed a filename wrong wastes the budget on a correctable
-  // mistake.
   let fatalOnThrow = true;
+
   if (call.name === 'bash' || call.name === 'exec') {
     timeout = resolveToolTimeout({ requested: input.timeout, ceiling: timeoutSeconds });
     const execBase = timeout === null ? base : [...base, '--timeout', String(timeout)];
@@ -488,12 +360,6 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
     const rel = typeof input.path === 'string' ? input.path.trim() : '';
     if (!rel) return { dispatched: false, reason: `${call.name} requires a \`path\` relative to the workspace root`, fatal: false };
     if (call.name === 'read') {
-      // `get`'s own defaults — 40 lines, 2048 bytes — are sized for a knowledge
-      // store excerpt, and the byte cap clamps them to about twenty lines of
-      // prose. A model given those read the top of a 782-line document six
-      // times running, never reached the part it was asked to change, and spent
-      // the whole turn budget doing it. The window a MODEL needs is the file,
-      // bounded by what it can be shown at once.
       argv = [...base, '--path', rel, '--max-bytes', String(READ_MAX_BYTES)];
       const lines = Number.isFinite(input.lines) && input.lines > 0 ? Math.floor(input.lines) : READ_DEFAULT_LINES;
       argv.push('--lines', String(lines));
@@ -512,12 +378,7 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
       if (typeof input.content !== 'string') {
         return { dispatched: false, reason: 'write requires `content` — the complete contents of the file', fatal: false };
       }
-      // DELIBERATELY NO shrink escape on this lane. The CLI's --allow-shrink
-      // exists for an operator who states a legitimate rewrite; a model that
-      // voluntarily elided 95% of a module would set any flag its refusal
-      // told it about, so the model's only doors are `edit` and writing the
-      // complete file. Claude Code's Write and Codex's apply_patch draw the
-      // same line — elision is unrepresentable, not discouraged.
+      // No allow_shrink on the agent lane — elision must be unrepresentable.
       argv = [...base, '--path', rel, '--content', input.content];
       if (typeof input.expect === 'string' && input.expect) argv.push('--expect', input.expect);
       run = writeResultOf;
@@ -530,34 +391,25 @@ export async function dispatchToolCall(call, { workspace, copilotHome, ctx = {},
     const result = await run(argv, runCtx);
     return { dispatched: true, result, timeoutSeconds: timeout };
   } catch (error) {
-    // A refusal from the governed surface — denied, misconfigured, or confined
-    // — is fatal to the loop. See the note above.
-    return { dispatched: false, reason: error.message, hint: error.hint ?? null, fatal: fatalOnThrow, code: error.code ?? null };
+    return {
+      dispatched: false,
+      reason: error.message,
+      hint: error.hint ?? null,
+      fatal: fatalOnThrow,
+      code: error.code ?? null,
+    };
   } finally {
     bound?.done?.();
   }
 }
 
-/** How many hits the model is shown. `search` ranks, so the tail of a
- * sixty-hit answer is noise that costs context; fifteen is enough to contain
- * the right file and short enough to read. */
-const SEARCH_ROWS = 15;
-
-/**
- * `harness search`, rendered as locations a `read` call can use verbatim.
- *
- * The ranked envelope carries scores, cursors and generation hashes, none of
- * which a model can act on. What it needs is `path:line` and enough of the line
- * to tell one hit from another — so that is what it gets, in the order the
- * ranker put them.
- */
 async function searchToolResultOf(argv, ctx = {}) {
   const result = await searchResultOf(argv, ctx);
   const hits = (result.results || []).slice(0, SEARCH_ROWS);
-  const lines = hits.map((r) => `${r.location || r.id}  ${String(r.snippet || '').replace(/\s+/g, ' ').slice(0, 120)}`);
+  const lines = hits.map((r) => `${r.location || r.id}  ${String(r.snippet || '').replace(/\s+/g, ' ').slice(0, 100)}`);
   const header = hits.length
     ? `${result.total} match${result.total === 1 ? '' : 'es'}${result.total > hits.length ? `, showing ${hits.length}` : ''}`
-    : 'no matches — try different words';
+    : 'no matches — try different words, or run the failing test for a path';
   return {
     schema: 1,
     mode: 'search',
@@ -568,25 +420,11 @@ async function searchToolResultOf(argv, ctx = {}) {
   };
 }
 
-/**
- * `harness get`, normalized into the outcome shape every other tool returns.
- *
- * `get`'s own result is the retrieval envelope (`docid`, `excerpt`, `sha256`),
- * which predates this loop and is depended on by the CLI and the json lane, so
- * it is adapted HERE rather than changed there. The adaptation is presentation
- * only: the same command runs, and the excerpt handed to the model is the same
- * excerpt an operator would see.
- */
 async function readResultOf(argv, ctx = {}) {
   const result = await getResultOf(argv, ctx);
   const from = result.offset ?? 1;
   const to = from + (result.lines ?? 0) - 1;
   const total = result.totalLines ?? result.lines ?? 0;
-  // The header says WHERE this window sits, not merely that it was truncated.
-  // "truncated" alone is what a model reads as "that is the file" — it has no
-  // way to know it saw twenty lines of eight hundred, and no reason to ask for
-  // the rest. Naming the range and the total is what turns a second read into
-  // an obvious next move.
   const header = total > to || from > 1
     ? `${result.path} — lines ${from}-${to} of ${total}. Call read again with \`offset\` to see more.`
     : `${result.path} — ${total} lines, complete.`;
@@ -607,17 +445,11 @@ async function readResultOf(argv, ctx = {}) {
   };
 }
 
-/** What the model is shown after a tool runs: the outcome scalars and the
- * output, already redacted by the streamer inside `exec`. */
 export function renderToolResult(result, { maxBytes = TOOL_RESULT_MAX_BYTES } = {}) {
   const lines = [`status: ${result.status}`, `exit: ${result.exitCode ?? 'null'}`];
   if (result.signal) lines.push(`signal: ${result.signal}`);
   const body = (result.output || []).map((row) => (row.line !== undefined ? row.line : '…output truncated')).join('\n');
-  let text = `${lines.join('\n')}\n\n${body}`;
-  if (Buffer.byteLength(text, 'utf8') > maxBytes) {
-    text = `${Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8')}\n…truncated`;
-  }
-  return text;
+  return clipBytes(`${lines.join('\n')}\n\n${body}`, maxBytes);
 }
 
 function normalizeCalls(completion) {
@@ -625,14 +457,30 @@ function normalizeCalls(completion) {
   return calls.filter((c) => c && typeof c.name === 'string' && typeof c.id === 'string');
 }
 
-/**
- * Run the loop.
- *
- * `startProviderFn` is injected rather than imported so the loop is testable
- * without a network or a key — the same seam `spawnFn` gives the runner. It is
- * the ONLY way a completion enters this function, which is also what keeps the
- * "core never consumes a model" boundary a single reviewable line.
- */
+/** Stub old explore tool results so the transcript cannot grow without bound. */
+export function compactMessages(messages, { keepTurns = TRANSCRIPT_FULL_TURNS } = {}) {
+  const toolUserIndexes = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i]?.role === 'user' && Array.isArray(messages[i].toolResults)) toolUserIndexes.push(i);
+  }
+  if (toolUserIndexes.length <= keepTurns) return messages;
+  const dropBefore = toolUserIndexes[toolUserIndexes.length - keepTurns];
+  return messages.map((m, i) => {
+    if (i >= dropBefore || m.role !== 'user' || !Array.isArray(m.toolResults)) return m;
+    const onlyExplore = m.toolResults.every((r) => /^(status: ok|search budget|explore streak|too many consecutive)/.test(String(r.output || ''))
+      || String(r.output || '').includes('match')
+      || String(r.output || '').includes('sha256:'));
+    if (!onlyExplore) return m;
+    return {
+      ...m,
+      toolResults: m.toolResults.map((r) => ({
+        ...r,
+        output: r.isError ? r.output : '[earlier explore result omitted to save context]',
+      })),
+    };
+  });
+}
+
 export async function runAgentLoop({
   task,
   workspace,
@@ -652,7 +500,7 @@ export async function runAgentLoop({
   const startedAt = now();
   const deadline = startedAt + maxSeconds * 1000;
   const system = buildSystemPrompt({ persona, profile, orientation: orientation?.pack ?? null });
-  const messages = [{ role: 'user', text: task }];
+  let messages = [{ role: 'user', text: task }];
   const turns = [];
 
   const provider = startProviderFn();
@@ -662,74 +510,33 @@ export async function runAgentLoop({
   const usage = { inputTokens: 0, outputTokens: 0 };
   let budgetNudged = false;
 
-  /**
-   * How many turns at the tail of the run only looked — read or search, never
-   * a mutation, never a shell. The streak is what the stall nudge below reads.
-   */
-  const exploreStreak = () => {
-    let streak = 0;
-    for (let i = turns.length - 1; i >= 0; i -= 1) {
-      const tools = turns[i].tools;
-      if (tools.length && tools.every((t) => t.tool === 'read' || t.tool === 'search')) streak += 1;
-      else break;
-    }
-    return streak;
-  };
-
   try {
     while (!stop) {
       if (signal?.aborted) { stop = 'cancelled'; break; }
       if (turns.length >= maxTurns) { stop = 'turn-budget'; break; }
       if (now() >= deadline) { stop = 'time-budget'; break; }
 
-      // CONVERGENCE PRESSURE — the internal, deterministic precursor of a
-      // steering seam (Pi drains caller-supplied steering messages here; the
-      // harness has no caller to drain yet, but the loop itself has two things
-      // worth saying). Both were measured, not imagined: a benchmark run spent
-      // 15 consecutive turns reading and searching, then burned its last turns
-      // on a rushed destructive write — because nothing ever told the model
-      // the budget existed or that looking was no longer free.
-      const nudges = [];
+      // Secondary pressure only — hard explore gates are in exploreGate.
       const remainingTurns = maxTurns - turns.length;
       if (!budgetNudged && turns.length > 0 && remainingTurns <= Math.max(2, Math.floor(maxTurns / 4))) {
         budgetNudged = true;
-        nudges.push(
-          `Budget check: ${remainingTurns} of ${maxTurns} turns remain. Converge now — make the change, run the verification, and finish.`,
-        );
+        messages.push({
+          role: 'user',
+          text: `Budget check: ${remainingTurns} of ${maxTurns} turns remain. Converge — change code, re-run verification, finish.`,
+        });
       }
-      // Fires at 6, 12, 18 … so a model that goes back to wandering after the
-      // first nudge is told again rather than indulged.
-      const streak = exploreStreak();
-      if (streak > 0 && streak % 6 === 0) {
-        nudges.push(
-          `You have spent ${streak} consecutive turns reading and searching without changing anything. `
-          + 'State the change you intend, then make it with `edit` — prefer `edit` over rewriting a file with `write`. '
-          + 'Further exploration is spending the budget the change itself needs.',
-        );
-      }
-      if (nudges.length) messages.push({ role: 'user', text: nudges.join('\n\n') });
+
+      messages = compactMessages(messages);
 
       const turnIndex = turns.length + 1;
       const turnStartedAt = now();
       let completion;
       try {
         completion = await provider.complete(
-          // A SNAPSHOT, not the live array. The out-of-process path serializes
-          // immediately so it could not tell the difference, but a provider
-          // holding a reference that keeps mutating under it is a bug waiting
-          // for the first in-process caller.
           { system, messages: [...messages], tools: AGENT_TOOLS },
-          // Bounded by whatever is left, with NO floor. The previous
-          // `Math.max(1000, …)` deliberately granted a full second when 10 ms
-          // remained, so the operator's wall clock was a suggestion at the edge.
-          // The ceiling is the seam's own PROVIDER_TIMEOUT_MS rather than a
-          // re-spelled five minutes, so the two cannot drift apart.
           { timeout: Math.max(1, Math.min(deadline - now(), PROVIDER_TIMEOUT_MS)) },
         );
       } catch (error) {
-        // A failure that arrives after the deadline IS the deadline. Reporting
-        // it as `provider-error` blamed the provider for the operator's budget
-        // and produced exit 7 where 8 was the truth.
         stop = signal?.aborted ? 'cancelled' : now() >= deadline ? 'time-budget' : 'provider-error';
         detail = error.message;
         break;
@@ -740,10 +547,6 @@ export async function runAgentLoop({
       finalText = typeof completion?.text === 'string' ? completion.text : '';
       const calls = normalizeCalls(completion);
 
-      // F8 (Codex phase-5 review): the deadline was checked only at the TOP of
-      // a turn, so a completion arriving after it was reported as `done` — a
-      // run that ran out of time looked like a run that finished. It is checked
-      // again here, before the answer is acted on or accepted.
       if (now() >= deadline) {
         turns.push(recordTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: false }));
         onTurn?.(turns[turns.length - 1], { text: finalText });
@@ -751,9 +554,6 @@ export async function runAgentLoop({
         break;
       }
 
-      // The assistant's own content goes back verbatim: the loop does not
-      // interpret it, so a provider whose content model differs needs no change
-      // here. See the module note.
       messages.push({ role: 'assistant', blocks: completion?.blocks ?? [], text: finalText });
 
       if (!calls.length) {
@@ -763,23 +563,10 @@ export async function runAgentLoop({
         break;
       }
 
-      // A TRUNCATED MESSAGE'S TOOL CALLS ARE NEVER DISPATCHED (Pi's rule,
-      // agent-loop.ts `failToolCallsFromTruncatedMessage`, adopted after
-      // reading its source). A response stopped at the token limit can carry a
-      // tool call whose streamed arguments were cut mid-JSON — and the
-      // salvage parsing between here and the wire can turn that into an input
-      // that VALIDATES while being silently incomplete: an `edit` whose `old`
-      // lost its last lines matches nothing (annoying), but a `write` whose
-      // `content` lost its last lines writes a truncated file and reports
-      // success (destructive). Each call is answered with an error result
-      // instead, so the model re-issues them under a fresh budget. `length` is
-      // the NEUTRAL spelling: each adapter maps its own wire's truncation stop
-      // onto it, because a loop that knew another provider's vocabulary would
-      // be that provider's loop wearing a neutral name.
       if (completion?.stopReason === 'length') {
         const refusals = calls.map((call) => ({
           id: call.id,
-          output: 'this response hit the output-token limit, so the arguments of every tool call in it may be truncated — none were run; re-issue the calls',
+          output: 'output-token limit hit — tool arguments may be truncated; none were run; re-issue the calls',
           isError: true,
         }));
         turns.push(recordTurn({
@@ -800,9 +587,6 @@ export async function runAgentLoop({
       let fatal = null;
       for (const call of calls) {
         if (signal?.aborted) { fatal = { reason: 'cancelled', cancelled: true }; break; }
-        // …and again between calls in one batch. Three tool calls where the
-        // first exhausts the budget used to spawn all three, the last two with
-        // a negative remaining time. Nothing starts after the deadline.
         if (now() >= deadline) { fatal = { reason: 'the wall clock was reached mid-batch', expired: true }; break; }
         const outcome = await dispatchToolCall(call, {
           workspace,
@@ -810,11 +594,10 @@ export async function runAgentLoop({
           ctx,
           timeoutSeconds: toolTimeoutSeconds,
           remainingSeconds: (deadline - now()) / 1000,
+          turns,
         });
         if (!outcome.dispatched && outcome.fatal) { fatal = outcome; break; }
         if (!outcome.dispatched) {
-          // A malformed call the model can fix by trying again — hand the
-          // reason back rather than spending the run on it.
           toolResults.push({ id: call.id, output: outcome.reason, isError: true });
           toolRecords.push({ tool: call.name, dispatched: false, reason: outcome.reason });
           continue;

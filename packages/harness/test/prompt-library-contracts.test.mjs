@@ -77,7 +77,6 @@ test('canonical architecture replaces superseded harness architecture fragments'
     .sort();
   assert.deepEqual(architectureDocs, [
     'engineer-harness.md',
-    'harness-cli-workbench-delivery.md',
     'harness-cli-workbench.md',
     'skill-driven-prompt-library.md',
   ]);

@@ -1,34 +1,4 @@
-/**
- * GitHub Copilot as a provider — a subscription, not a key.
- *
- * WHY THIS EXISTS AS ITS OWN FILE when every other hosted provider is a table
- * row over `openai-compatible.mjs`: past authentication, Copilot IS that wire
- * format — same chat/completions, same tool calls — so the shaping is
- * imported from there rather than copied. What cannot be shared is how the
- * credential comes to exist. Copilot has no long-lived API key: the operator
- * holds an OAuth grant from their editor login, and the API takes a
- * SHORT-LIVED bearer minted from it. This file owns that ladder:
- *
- *   1. A pre-minted bearer, normalized by the seam into a harness-authored
- *      variable (the seam is the one file allowed to name the operator's own
- *      variables — P5AC7).
- *   2. An OAuth token to exchange, normalized the same way.
- *   3. The editor's own store — `~/.config/github-copilot/apps.json` (or the
- *      older `hosts.json`), written by VS Code / JetBrains / Copilot CLI at
- *      login. This is the zero-setup path: if Copilot works in the editor,
- *      `--provider github-copilot` works in the harness.
- *
- * The exchange calls `copilot_internal/v2/token` on `api.github.com` — the
- * same endpoint every editor integration uses — or on the host the seam
- * normalized from `GITHUB_COPILOT_EXCHANGE_URL`, for GHE and data-residency
- * accounts whose grant lives on their own domain. The bearer is cached until
- * a minute before its stated expiry. A 401 clears the cache and re-exchanges
- * once, so an expiring bearer mid-run costs one retry, not the turn.
- *
- * The bearer and the oauth token are both scrubbed from every error and every
- * result, same rule as every adapter: this process is the only one that holds
- * them, so it is the only one that can reliably take them back out.
- */
+/** GitHub Copilot adapter: editor OAuth/bearer exchange + chat/completions. */
 import http from 'node:http';
 import https from 'node:https';
 import {
@@ -45,17 +15,6 @@ import { findEditorOauthToken } from '../copilot-credential.mjs';
 const PROVIDER_ID = 'github-copilot';
 const DEFAULT_BASE_URL = 'https://api.githubcopilot.com';
 
-/**
- * The account's own API endpoint, read out of the bearer itself.
- *
- * The exchanged token is a semicolon-delimited metadata string, and one field
- * is literally the endpoint this account is meant to call:
- * `proxy-ep=proxy.individual.githubcopilot.com;...` — Individual, Business and
- * Enterprise plans each route differently, and the token names the route
- * (learned from Pi's implementation, verified against a live exchange). The
- * `proxy.` host answers the editor's own protocol; its `api.` sibling is the
- * REST surface this adapter speaks.
- */
 export function endpointFromBearer(bearer) {
   const match = /proxy-ep=([^;]+)/.exec(String(bearer ?? ''));
   if (!match) return null;
@@ -68,33 +27,8 @@ export function endpointFromBearer(bearer) {
 function apiBaseUrl() {
   return process.env.HARNESS_PROVIDER_BASE_URL || cached?.endpoint || DEFAULT_BASE_URL;
 }
-// The exchange host moves with the account: github.com for the public cloud,
-// the tenant's own host for GHE / data residency. The seam validates and
-// normalizes GITHUB_COPILOT_EXCHANGE_URL into this variable.
 const EXCHANGE_URL = process.env.HARNESS_COPILOT_EXCHANGE_URL || 'https://api.github.com/copilot_internal/v2/token';
 
-/**
- * The client identity declared to the Copilot API.
- *
- * THE VERSION GATE IS LIVE. The API answers HTTP 466 — "the VS Code version
- * you are using is no longer supported" — when the declared editor version
- * falls below a floor GitHub raises on its own schedule, and the account's own
- * /models response says "update your client to the latest version". A pinned
- * identity is therefore a dated kill switch: the constants below were once
- * current, stopped being so, and would eventually have taken every Copilot
- * call down with them.
- *
- * So the identity is RESOLVED IN THE SEAM at runtime — the installed VS Code
- * and Copilot Chat extension when present, the VS Code update API's answer
- * cached beside the model catalogue, whichever is newest — and arrives here in
- * two harness-authored variables, the same pattern as
- * HARNESS_PROVIDER_BASE_URL. The constants remain only as the floor for an
- * environment where nothing newer can be discovered, and they are labelled
- * stale because they are.
- */
-// The floor matches Pi's current pins rather than our older ones: the 466
-// gate has been observed firing in the range between the two, so a floor
-// below it is a floor that can already be underwater.
 const FLOOR_EDITOR_VERSION = '1.107.0'; // stale floor — last verified 2026-08
 const FLOOR_PLUGIN_VERSION = '0.35.0'; // stale floor — last verified 2026-08
 
@@ -106,34 +40,17 @@ function copilotHeaders() {
     'editor-plugin-version': `copilot-chat/${plugin}`,
     'copilot-integration-id': 'vscode-chat',
     'user-agent': `GitHubCopilotChat/${plugin}`,
-    // What the ecosystem's integrations send today (verified against Pi's,
-    // and against a live call): an explicit API version, and the intent the
-    // editing surfaces declare rather than the chat panel's.
-    'x-github-api-version': '2026-06-01',
+        'x-github-api-version': '2026-06-01',
     'openai-intent': 'conversation-edits',
   };
 }
 const COPILOT_HEADERS = copilotHeaders();
 
-/**
- * Who initiated this request — `user` when the last turn is a person's words,
- * `agent` when it is tool results coming back. Copilot's billing and abuse
- * heuristics read this header; an integration that reports everything as
- * user-initiated is describing an agent loop as a person typing very fast.
- */
 export function initiatorFor(wireMessages) {
   const last = Array.isArray(wireMessages) ? wireMessages[wireMessages.length - 1] : null;
   return last?.role === 'tool' ? 'agent' : 'user';
 }
 
-/**
- * The operator's OAuth token. The seam (provider.mjs) normalizes whatever the
- * operator exported into HARNESS_COPILOT_OAUTH — this adapter never names a
- * GitHub variable, which is the P5AC7 invariant: only the seam names keys.
- * The editor's own store is the zero-setup fallback, and the scan of it is
- * SHARED with the seam (lib/copilot-credential.mjs): two copies of the ladder
- * is how "signed in" and "not signed in" come to disagree.
- */
 function findOauthToken() {
   return process.env.HARNESS_COPILOT_OAUTH || findEditorOauthToken(process.env);
 }
@@ -143,9 +60,7 @@ let cached = null; // { bearer, expiresAtMs, endpoint }
 /** A bearer for the Copilot API, minted or cached. */
 async function bearerToken() {
   if (process.env.HARNESS_COPILOT_BEARER) {
-    // A pre-minted bearer may still name its endpoint; remember it so
-    // apiBaseUrl() can route to the account's own host.
-    if (!cached?.endpoint) {
+        if (!cached?.endpoint) {
       cached = { ...(cached ?? { expiresAtMs: 0 }), endpoint: endpointFromBearer(process.env.HARNESS_COPILOT_BEARER) };
     }
     return process.env.HARNESS_COPILOT_BEARER;
@@ -181,10 +96,7 @@ async function bearerToken() {
   if (!parsed?.token) throw new Error('Copilot token exchange returned no token');
   cached = {
     bearer: parsed.token,
-    // Coerced first: the exchange has been observed returning `expires_at` as
-    // a string, which `Number.isFinite` rejects untouched — silently discarding
-    // a real expiry for the 20-minute guess.
-    expiresAtMs: Number.isFinite(Number(parsed.expires_at)) ? Number(parsed.expires_at) * 1000 : Date.now() + 20 * 60_000,
+        expiresAtMs: Number.isFinite(Number(parsed.expires_at)) ? Number(parsed.expires_at) * 1000 : Date.now() + 20 * 60_000,
     endpoint: endpointFromBearer(parsed.token),
   };
   return cached.bearer;
@@ -204,12 +116,7 @@ async function callModel({ model, system, messages, tools, maxTokens, temperatur
     ...(wireTools ? { tools: wireTools, tool_choice: 'auto' } : {}),
   });
 
-  // The same streamed transport as every OpenAI-compatible provider — the SSE
-  // parsing, the delta folding, the first-byte retry guard and the idle timer
-  // all live once, in the shared adapter. Only the auth differs: a bearer that
-  // expires mid-session, so a 401 clears the cache and tries exactly once with
-  // a fresh one.
-  const run = async () => {
+    const run = async () => {
     const bearer = await bearerToken();
     const url = new URL(`${apiBaseUrl()}/chat/completions`);
     return streamCompletion({
@@ -259,12 +166,7 @@ async function handle(message) {
   if (message.type === 'shutdown') process.exit(0);
   if (message.type !== 'request') return;
   if (message.method === 'models') {
-    // WHAT THIS ACCOUNT CAN ACTUALLY USE. Copilot's catalogue differs by plan
-    // (Individual, Business, Enterprise) and an org policy can disable models
-    // per seat, so no list written into this repository could be right for
-    // every user — it would be simultaneously missing models and offering
-    // unsupported ones. The endpoint knows; nothing in the harness does.
-    try {
+        try {
       const bearer = await bearerToken();
       const res = await httpRequest(`${apiBaseUrl()}/models`, {
         method: 'GET',
@@ -272,96 +174,68 @@ async function handle(message) {
       });
       if (res.status < 200 || res.status >= 300) throw new Error(`${PROVIDER_ID}: HTTP ${res.status}`);
       const parsed = JSON.parse(res.text);
-      // The shape is `{data: [...]}`, but a gateway or a proxy may hand back a
-      // bare array or a `models` key. Accepting all three costs nothing and
-      // turns "returned no models" — which reads as an empty account — back
-      // into the parsing question it actually is.
       const list = Array.isArray(parsed?.data) ? parsed.data
         : Array.isArray(parsed) ? parsed
           : Array.isArray(parsed?.models) ? parsed.models : [];
       if (!list.length) {
         throw new Error(`${PROVIDER_ID}: /models returned no list (keys: ${Object.keys(parsed || {}).join(',') || 'none'})`);
       }
-      // WHAT THE HARNESS CAN CALL, which is not what an editor would show you.
-      // `model_picker_enabled` was the obvious filter and it is the wrong one:
-      // it is Copilot's answer for its OWN picker, and this account returns 52
-      // models with the flag false on every single one — filtering by it left
-      // an empty catalogue and the misleading report that the account has no
-      // models. `supported_endpoints` is the question actually being asked,
-      // since the harness only ever posts to /chat/completions.
       const seen = new Set();
       const models = [];
       for (const m of list) {
         const id = String(m?.id ?? '');
         if (!id || seen.has(id)) continue;
+        // Skip obvious non-agent utilities that sort first and hijack `auto`.
+        if (/^(copilot-search|text-embedding|embed)/i.test(id)) continue;
         const endpoints = Array.isArray(m?.supported_endpoints) ? m.supported_endpoints : null;
         if (endpoints && !endpoints.some((e) => String(e).includes('/chat/completions'))) continue;
-        // A MODEL THE ACCOUNT HAS NOT ENABLED IS NOT A CHOICE. `policy.state`
-        // is how Copilot reports a model that exists but needs the user or the
-        // org to accept its terms first — `claude-sonnet-5` comes back
-        // `disabled` for this account — and calling one returns "The requested
-        // model is not supported", which reads as a harness bug rather than a
-        // switch nobody has flipped. Absent policy means no gate to pass.
         if (m?.policy && m.policy.state !== 'enabled') continue;
-        // Only chat models: /chat/completions is the one thing the harness
-        // posts to, so an embedding model listed here would be a row that
-        // cannot answer.
         if (m?.capabilities?.type && m.capabilities.type !== 'chat') continue;
         seen.add(id);
         models.push({
           id,
           label: typeof m?.name === 'string' ? m.name : null,
-          // Kept only as an ORDERING hint — the models an editor would surface
-          // are a reasonable "most useful first", but never a gate.
           preferred: m?.model_picker_enabled === true,
           preview: m?.preview === true,
         });
       }
-      // METADATA IS A PRE-FILTER, NEVER THE VERDICT. Measured on a real
-      // account: of 24 models the fields above admit, 10 refuse an actual
-      // completion — `claude-haiku-4.5` and `gpt-5-mini` arrive
-      // `policy.state: enabled`, chat-capable, listing /chat/completions, and
-      // answer "The requested model is not supported"; `gpt-4` carries no
-      // gate of any kind and refuses too. No field in the record predicts the
-      // outcome in either direction, so the catalogue's promise — "these are
-      // the models you can use" — is only honest if each survivor has
-      // ANSWERED. One max_tokens:1 completion per candidate, a few at a time;
-      // `model refresh` is explicit and rare, and a wrong list costs more
-      // than a probe. A model that fails the probe for a transient reason
-      // reappears on the next refresh, so the cost of a false negative is one
-      // stale entry, not a lost capability.
-      const verified = [];
-      const queue = [...models];
-      const PROBE_CONCURRENCY = 4;
-      await Promise.all(Array.from({ length: PROBE_CONCURRENCY }, async () => {
-        for (let m = queue.shift(); m !== undefined; m = queue.shift()) {
-          try {
-            const probe = await httpRequest(`${apiBaseUrl()}/chat/completions`, {
-              method: 'POST',
-              // A probe is the harness asking, not a person typing.
-              headers: { ...COPILOT_HEADERS, 'x-initiator': 'agent', authorization: `Bearer ${await bearerToken()}`, 'content-type': 'application/json' },
-              body: JSON.stringify({ model: m.id, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
-              // A probe gets seconds, not the idle default: a model that
-              // cannot start one token in 8s is not usable as an agent model,
-              // and 24 probes at the 120s default could hold a refresh for
-              // 12 minutes against the fetch budget. Worst case is now
-              // 24 × 8s ÷ 4 lanes = 48s, provably inside it.
-              timeoutMs: 8_000,
-            });
-            if (probe.status >= 200 && probe.status < 300) verified.push(m);
-          } catch { /* unreachable counts as uncallable */ }
-        }
-      }));
-      // Preferred first, then alphabetically, so the list is stable between
-      // refreshes rather than mirroring whatever order the API replied in.
-      verified.sort((a, b) => (a.preferred === b.preferred ? a.id.localeCompare(b.id) : a.preferred ? -1 : 1));
-      if (!verified.length) {
-        throw new Error(`${PROVIDER_ID}: ${list.length} entries, none answered a probe call (${models.length} passed the metadata filter)`);
+      const verify = message.params?.verify === true
+        || process.env.HARNESS_COPILOT_VERIFY_MODELS === '1';
+      let out = models;
+      let probed = null;
+      if (verify) {
+        const verified = [];
+        const queue = [...models];
+        await Promise.all(Array.from({ length: 4 }, async () => {
+          for (let m = queue.shift(); m !== undefined; m = queue.shift()) {
+            try {
+              const probe = await httpRequest(`${apiBaseUrl()}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                  ...COPILOT_HEADERS,
+                  'x-initiator': 'agent',
+                  authorization: `Bearer ${await bearerToken()}`,
+                  'content-type': 'application/json',
+                },
+                body: JSON.stringify({ model: m.id, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+                timeoutMs: 8_000,
+              });
+              if (probe.status >= 200 && probe.status < 300) verified.push(m);
+            } catch { /* uncallable */ }
+          }
+        }));
+        out = verified;
+        probed = { candidates: models.length, verified: verified.length };
       }
-      // The counts travel with the list: a probe sweep spends real requests on
-      // the operator's account, and a catalogue that hid how it was made would
-      // be underselling both its cost and its honesty.
-      send({ type: 'result', id: message.id, result: { models: verified, probed: { candidates: models.length, verified: verified.length } } });
+      out.sort((a, b) => (a.preferred === b.preferred ? a.id.localeCompare(b.id) : a.preferred ? -1 : 1));
+      if (!out.length) {
+        throw new Error(`${PROVIDER_ID}: ${list.length} entries, none usable after filter${verify ? '/probe' : ''}`);
+      }
+      send({
+        type: 'result',
+        id: message.id,
+        result: { models: out, ...(probed ? { probed } : {}) },
+      });
     } catch (error) {
       send({ type: 'error', id: message.id, message: error.message });
     }

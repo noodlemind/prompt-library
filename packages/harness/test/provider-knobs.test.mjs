@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import {
-  DEFAULT_PROVIDER, PROVIDERS, providerEnv, resolveDefaultModel,
+  DEFAULT_PROVIDER, PROVIDERS, providerEnv, providerReadiness, resolveDefaultModel,
 } from '../lib/provider.mjs';
 import {
   AGENT_LIMITS, CONFIG_SCHEMA, coerceValue, loadConfigFile, resolveConfig, setConfigValue, unsetConfigValue,
@@ -52,6 +52,28 @@ test('planAgent falls back to the same default provider the config schema declar
   assert.equal(plan.providerId, DEFAULT_PROVIDER);
 });
 
+test('agent.providers allowlist is the default product set; readiness can filter by it', () => {
+  const home = tempDir('knobs-providers-home-');
+  const ws = tempDir('knobs-providers-ws-');
+  const resolved = resolveConfig({ copilotHome: home, workspace: ws });
+  assert.deepEqual(resolved.values['agent.providers'], [DEFAULT_PROVIDER]);
+  assert.equal(resolved.values['agent.enabled'], false, 'agent loop is off until enabled');
+
+  const filtered = providerReadiness({ enabledIds: resolved.values['agent.providers'] });
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].id, DEFAULT_PROVIDER);
+
+  setConfigValue({
+    scope: 'user',
+    key: 'agent.providers',
+    value: 'github-copilot,openai',
+    copilotHome: home,
+    workspace: ws,
+  });
+  const after = resolveConfig({ copilotHome: home, workspace: ws });
+  assert.deepEqual(after.values['agent.providers'], ['github-copilot', 'openai']);
+});
+
 // --- `model clear` forgets, it does not pin ---------------------------------
 
 test('model clear REMOVES the keys — it must not write the current default into the file', () => {
@@ -68,9 +90,10 @@ test('model clear REMOVES the keys — it must not write the current default int
 
   assert.equal(run(['model', 'clear']).status, 0);
   const text = fs.readFileSync(file, 'utf8');
-  assert.doesNotMatch(text, /agent\.provider/,
+  // `agent.providers` (allowlist) may remain; `agent.provider` (active choice) must not.
+  assert.doesNotMatch(text, /(?:^|\n)agent\.provider:/,
     'writing the default VALUE here pinned that day’s literal: a cleared user kept the old default forever after it changed');
-  assert.doesNotMatch(text, /agent\.model/);
+  assert.doesNotMatch(text, /(?:^|\n)agent\.model:/);
 
   const resolved = resolveConfig({ copilotHome: home, workspace: ws });
   assert.equal(resolved.values['agent.provider'], DEFAULT_PROVIDER, 'absent key, shipped default');

@@ -1,20 +1,3 @@
-/**
- * The editor's own Copilot credential store, read in ONE place.
- *
- * VS Code, JetBrains and the Copilot CLI all record a login under
- * `github-copilot/` in the user's config directory — `apps.json` in current
- * builds, `hosts.json` in older ones. Two callers need that fact: the seam
- * (`providerReadiness` reports "editor credential found" without reading the
- * value beyond the one field that says a login happened) and the adapter
- * (which reads the token to exchange it). They used to carry hand-rolled
- * copies of the same scan, which is how the seam and the adapter would
- * eventually disagree about whether someone is signed in — a path fix landing
- * in one copy and not the other.
- *
- * This module names no environment variable that holds a credential (P5AC7:
- * only the seam does that); it reads files an editor wrote, from a directory
- * derived from the environment it is handed.
- */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

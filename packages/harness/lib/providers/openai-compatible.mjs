@@ -1,31 +1,3 @@
-/**
- * The OpenAI-compatible provider adapter — one file for OpenRouter, OpenCode
- * Zen, Zen Go, OpenAI itself, Ollama, and any gateway that speaks
- * `/chat/completions`.
- *
- * THIS FILE IS NOT HARNESS CORE. Like `anthropic.mjs`, it runs as its own
- * process, started by `lib/provider.mjs`, and it is where the credential lives.
- * Nothing under `lib/` imports it — `test/provider-seam.test.mjs` asserts that,
- * because an import would collapse the boundary the separate process creates.
- *
- * ONE ADAPTER, NOT FIVE. The providers above differ in endpoint, key variable
- * and model names — not in wire format. Shipping five near-identical files
- * would guarantee that a fix to tool-call parsing lands in one of them and the
- * other four keep the bug. What varies is data, and it lives in `PROVIDERS`.
- *
- * IT USES NO SDK. Same reasoning as the Anthropic adapter: a plain HTTPS
- * request is fewer moving parts than a dependency, keeps the package
- * installable without a registry, and means the credential passes only through
- * code visible here.
- *
- * THE AWKWARD PART OF THIS FORMAT, stated because it is where bugs live: tool
- * arguments arrive as a JSON *string* rather than an object, and not every
- * server honors that — Ollama and some local runtimes send an object directly.
- * `parseArguments` accepts both and, when the JSON is malformed, hands the raw
- * text back as `{_raw}` instead of throwing. A model that emits broken JSON
- * should get "that call was malformed" from the loop and a chance to retry,
- * not take the run down.
- */
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -34,20 +6,6 @@ import tls from 'node:tls';
 const PROVIDER_ID = process.env.HARNESS_PROVIDER_ID || 'openai-compatible';
 const BASE_URL = process.env.HARNESS_PROVIDER_BASE_URL || '';
 
-/**
- * Remove the credential from anything derived from a server response.
- *
- * The adapter is the only process that HOLDS the key, which makes it the only
- * place that can reliably take it back out. A gateway — misconfigured, hostile,
- * or merely verbose — that echoes the Authorization header into a 401 body sent
- * that string back through `error.message`, into the loop's `stopDetail`, and
- * into the result object. Core's redactor masks secret SHAPES and the ambient
- * environment; it cannot know that this particular string is this run's key,
- * because core never sees the key at all.
- *
- * Applied to errors AND to successful content: a model that reads a config file
- * aloud is the same leak by a slower route.
- */
 export function scrubCredential(value, key) {
   if (!key || key.length < 8) return value;
   if (typeof value === 'string') return value.split(key).join('[redacted]');
@@ -61,9 +19,7 @@ export function scrubCredential(value, key) {
 }
 
 function send(message) {
-  // ONE choke point, so a future message type cannot forget. The key is read
-  // here and nowhere else in the emit path.
-  const safe = scrubCredential(message, apiKey());
+    const safe = scrubCredential(message, apiKey());
   process.stdout.write(`${JSON.stringify(safe)}\n`);
 }
 
@@ -74,21 +30,11 @@ function apiKey() {
   return name ? process.env[name] || null : null;
 }
 
-/**
- * The neutral request the loop speaks, translated into this wire format.
- *
- * The shape difference worth noting: one neutral message carrying N tool
- * results becomes N separate `role: 'tool'` messages here, because this format
- * has no notion of several results in one turn. The loop does not need to know
- * that, which is the point of translating on this side of the line.
- */
 export function toWireMessages(messages) {
   const out = [];
   for (const message of messages || []) {
     if (message.role === 'assistant') {
-      // Echoed VERBATIM: `blocks` is whatever this adapter returned last time,
-      // so it already carries `tool_calls` in the exact shape the server sent.
-      const raw = Array.isArray(message.blocks) && message.blocks[0] && message.blocks[0].role === 'assistant'
+            const raw = Array.isArray(message.blocks) && message.blocks[0] && message.blocks[0].role === 'assistant'
         ? message.blocks[0]
         : { role: 'assistant', content: String(message.text ?? '') };
       out.push(raw);
@@ -130,18 +76,6 @@ export function parseArguments(raw) {
   }
 }
 
-/**
- * How long a SOCKET may sit silent before the connection is judged dead.
- *
- * This is `req.setTimeout`'s real meaning — inactivity, not wall clock — and
- * streaming is what makes the two finally agree: deltas flow for the whole
- * generation, so 120s of true silence on a live stream is a dead connection
- * rather than a slow model. The buffered path this replaced received no byte
- * until the completion was finished, which quietly turned this timer into a
- * 120s cap on generation time that no caller could see or raise. The overall
- * deadline is the plugin host's per-request timeout, bounded by the loop from
- * the operator's remaining budget — never this.
- */
 const REQUEST_TIMEOUT_MS = Number(process.env.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS) || 120_000;
 
 /** An operator-tunable integer, or its default when unset or malformed. */
@@ -150,16 +84,6 @@ function envInt(name, fallback) {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : fallback;
 }
 
-/**
- * The proxy contract every HTTP tool honours, implemented here because this
- * process is the one that opens the socket. Plain `node:https` never reads
- * the proxy variables on its own, so before this the adapters could only
- * connect DIRECTLY — a hardcoded topology no corporate network satisfies.
- *
- * Scope, deliberately narrow: only https targets are ever proxied (a plain
- * http base URL is loopback-only by the seam's own transport rule, and
- * proxying loopback is never right), and the tunnel is the standard CONNECT.
- */
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0']);
 
 /** NO_PROXY, the way curl reads it: a comma list of suffixes, `*` for all,
@@ -197,13 +121,6 @@ export function proxyFor(target, env = process.env) {
   }
 }
 
-/**
- * A CONNECT tunnel through the proxy, resolved to the raw socket. Failures
- * are retriable: a proxy that refused once is the network's weather, not the
- * request's fault. A non-2xx answer to a CONNECT arrives as an ordinary
- * RESPONSE, not a 'connect' event — miss that and a refusal leaves the
- * promise pending forever.
- */
 export function openTunnel(proxy, host, port, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     const headers = {};
@@ -264,12 +181,6 @@ async function tunnelOptions(url, { timeoutMs = REQUEST_TIMEOUT_MS, env = proces
   };
 }
 
-/**
- * One buffered HTTP exchange, proxy-aware, shared by every adapter in this
- * directory — the Copilot adapter had its own copy of exactly this and the
- * two would have drifted at the first fix. The streamed completion path below
- * goes through the same tunnel logic.
- */
 export async function httpRequest(url, { method = 'GET', headers = {}, body = null, timeoutMs = REQUEST_TIMEOUT_MS, env = process.env } = {}) {
   const u = typeof url === 'string' ? new URL(url) : url;
   const connection = await tunnelOptions(u, { timeoutMs, env });
@@ -304,15 +215,6 @@ export async function httpRequest(url, { method = 'GET', headers = {}, body = nu
   });
 }
 
-/**
- * Two retries on the failures that are the NETWORK'S fault — 429, 5xx, a
- * dropped socket, a timeout — with backoff and Retry-After honored. A flaky
- * gateway response used to kill an agent turn the operator had budgeted for
- * with --max-turns; a 4xx that is the REQUEST'S fault is never retried,
- * because the same request would fail the same way. Both knobs cross the seam
- * by name (providerEnv), for the operator behind a gateway whose weather
- * needs more patience than the default.
- */
 export async function withRetry(attempt, {
   retries = envInt('HARNESS_PROVIDER_RETRIES', 2),
   baseDelayMs = envInt('HARNESS_PROVIDER_RETRY_BASE_MS', 1000),
@@ -352,9 +254,7 @@ function requestOptions() {
   const key = apiKey();
   const headers = { 'content-type': 'application/json' };
   if (key) headers.authorization = `Bearer ${key}`;
-  // OpenRouter ranks callers by these and the docs ask for them; they identify
-  // the tool, carry nothing about the user, and are harmless elsewhere.
-  if (PROVIDER_ID === 'openrouter') {
+    if (PROVIDER_ID === 'openrouter') {
     const link = packageLink();
     if (link) headers['http-referer'] = link;
     headers['x-openrouter-title'] = 'harness';
@@ -364,15 +264,7 @@ function requestOptions() {
 
 /** One chat-completions call. Rejects with a message the host can render;
  * never with anything carrying the key. */
-/**
- * Fold one SSE delta frame into the accumulating completion.
- *
- * `tool_calls` deltas arrive as FRAGMENTS addressed by index — the first frame
- * for an index carries id/name, later frames append to `arguments` — so
- * accumulation is by index with string concatenation, exactly the assembly the
- * OpenAI SDK performs. Exported for the Copilot adapter and for tests: this is
- * the part of streaming that silently corrupts tool calls when it is wrong.
- */
+
 export function foldStreamDelta(acc, frame) {
   const choice = frame?.choices?.[0];
   if (!choice) {
@@ -416,34 +308,9 @@ export function streamToResponse(acc) {
   };
 }
 
-/**
- * One streamed completion against an OpenAI-compatible /chat/completions.
- *
- * WHY STREAMING IS THE MECHANISM, not a bigger timeout. `req.setTimeout` is a
- * SOCKET-INACTIVITY timer, and the previous buffered request turned it into an
- * accidental wall clock: no byte arrives until the whole completion is ready,
- * so a long generation read as a dead connection at 120s. Streamed, bytes flow
- * for the whole generation and the same timer means what it says — 120s of
- * true silence on a live stream is a dead connection. This is the shape every
- * surveyed reference implementation uses; none of them plumb a wall-clock knob
- * down to the adapter. The plugin host's per-request timeout remains the one
- * overall deadline, and the loop already bounds it by the remaining budget.
- *
- * RETRY ONLY BEFORE THE FIRST BYTE. A completion partially consumed is not
- * idempotent — retrying it blind would bill twice and could act twice — so a
- * mid-stream failure surfaces as the error it is.
- *
- * A NON-STREAMING ANSWER IS STILL ACCEPTED. A gateway that ignores
- * `stream: true` answers with one JSON body; refusing it would fail servers
- * that are doing something reasonable, and the stub server the tests drive is
- * exactly such a server.
- */
 export function streamCompletion({ url, headers, transport, payload, providerId, onDelta = null, idleTimeoutMs = REQUEST_TIMEOUT_MS }) {
   let firstByte = false;
-  // The tunnel is acquired per attempt, before the request exists: a CONNECT
-  // refusal is retriable network weather and must count against the same
-  // retry budget as any other pre-first-byte failure.
-  const attempt = async () => {
+    const attempt = async () => {
     const connection = await tunnelOptions(url, { timeoutMs: idleTimeoutMs });
     return new Promise((resolve, reject) => {
     const acc = { content: '', toolCalls: [], finishReason: null, usage: null, model: null };
@@ -494,10 +361,7 @@ export function streamCompletion({ url, headers, transport, payload, providerId,
         });
         res.on('end', () => {
           if (res.statusCode < 200 || res.statusCode >= 300) {
-            // The status and the server's own message, never the request
-            // headers — an error path that echoed them would put the key in
-            // the host's log.
-            let detail = body.slice(0, 500);
+                        let detail = body.slice(0, 500);
             try {
               const parsed = JSON.parse(body);
               detail = parsed?.error?.message ?? parsed?.error ?? detail;
@@ -528,17 +392,13 @@ export function streamCompletion({ url, headers, transport, payload, providerId,
     req.end();
     });
   };
-  // The guard travels in `retriable` (false once a byte has arrived), so a
-  // mid-stream failure passes through withRetry without being re-attempted.
-  return withRetry(attempt);
+    return withRetry(attempt);
 }
 
 function callModel({ model, system, messages, tools, maxTokens, temperature }, { onDelta = null } = {}) {
   const wireTools = toWireTools(tools);
   const wireMessages = toWireMessages(messages);
-  // This format carries the system prompt as the first message rather than as
-  // its own field.
-  if (system) wireMessages.unshift({ role: 'system', content: system });
+    if (system) wireMessages.unshift({ role: 'system', content: system });
 
   const payload = JSON.stringify({
     model,
@@ -553,11 +413,6 @@ function callModel({ model, system, messages, tools, maxTokens, temperature }, {
   return streamCompletion({ url, headers, transport, payload, providerId: PROVIDER_ID, onDelta });
 }
 
-/**
- * Normalize into what the loop reads: the text, the tool calls in the neutral
- * `{id, name, input}` shape, and the raw assistant message it will echo back
- * without looking inside it.
- */
 export function shapeResult(response) {
   const message = response?.choices?.[0]?.message ?? {};
   const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
@@ -565,10 +420,7 @@ export function shapeResult(response) {
     text: typeof message.content === 'string' ? message.content : '',
     toolCalls: calls
       .filter((c) => c?.function?.name)
-      // Some servers omit the id on a single call; the loop needs one to
-      // correlate the result, and inventing a stable-per-position id is better
-      // than dropping an otherwise valid call.
-      .map((c, i) => ({ id: c.id || `call_${i}`, name: c.function.name, input: parseArguments(c.function.arguments) })),
+            .map((c, i) => ({ id: c.id || `call_${i}`, name: c.function.name, input: parseArguments(c.function.arguments) })),
     blocks: [message],
     stopReason: response?.choices?.[0]?.finish_reason ?? null,
     usage: {
@@ -605,11 +457,7 @@ async function handle(message) {
     return;
   }
   try {
-    // Each content delta goes out as a `chunk` the moment it arrives — the
-    // protocol's multi-part response (P5AC8), which the host forwards to
-    // whoever is watching and never uses to settle. The `result` at stream end
-    // is the same shaped completion the buffered path produced.
-    const response = await callModel(message.params || {}, {
+        const response = await callModel(message.params || {}, {
       onDelta: (text) => send({ type: 'chunk', id: message.id, text }),
     });
     send({ type: 'result', id: message.id, result: shapeResult(response) });
@@ -618,12 +466,6 @@ async function handle(message) {
   }
 }
 
-/**
- * The stdin loop attaches only when this file IS the adapter process. The
- * github-copilot adapter imports the wire shaping from here — same format,
- * different auth — and an import that attached a second stdin listener would
- * have both adapters answering every request.
- */
 const isMain = process.argv[1] && import.meta.url === (await import('node:url')).pathToFileURL(process.argv[1]).href;
 if (isMain) {
 let buffer = '';
@@ -639,9 +481,7 @@ process.stdin.on('data', (chunk) => {
     try {
       handle(JSON.parse(line));
     } catch {
-      // A line this adapter cannot parse is that line's problem — the host
-      // applies the same rule in the other direction.
-    }
+          }
   }
 });
 }

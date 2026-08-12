@@ -27,7 +27,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { EXIT } from './style.mjs';
 import { writeFileContained } from './fs-safe.mjs';
-import { DEFAULT_PROVIDER } from './provider.mjs';
+import { DEFAULT_PROVIDER, PROVIDER_IDS } from './provider.mjs';
 
 export const CONFIG_SCHEMA_VERSION = 1;
 
@@ -179,25 +179,55 @@ export const CONFIG_SCHEMA = Object.freeze({
     default: false,
     merge: 'restrictive',
     restrict: (a, b) => a && b,
-    description: 'allow the agent loop to call a provider; everything else in the harness runs without one',
+    description: 'master switch for the agent loop; off = no provider is ever started',
+  },
+  // Allowlist of provider ids. Intersection merge: a project may only narrow
+  // what the user enabled, never introduce a provider the user did not allow.
+  'agent.providers': {
+    type: 'list',
+    default: [DEFAULT_PROVIDER],
+    merge: 'restrictive',
+    restrict: (a, b) => {
+      const allowed = new Set(a);
+      return b.filter((id) => allowed.has(id));
+    },
+    description: 'enabled provider ids (disabled providers are hidden and cannot start)',
+    validate: (value) => {
+      if (!Array.isArray(value) || value.length === 0) {
+        throw usageError('agent.providers must list at least one known provider id');
+      }
+      const out = [];
+      const seen = new Set();
+      for (const raw of value) {
+        const id = String(raw ?? '').trim();
+        if (!id) continue;
+        if (!PROVIDER_IDS.includes(id)) {
+          throw usageError(
+            `unknown provider in agent.providers: ${id}`,
+            `known providers: ${PROVIDER_IDS.join(', ')}`,
+          );
+        }
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+      }
+      if (!out.length) {
+        throw usageError('agent.providers must list at least one known provider id');
+      }
+      return out;
+    },
   },
   'agent.provider': {
     type: 'string',
-    // COPILOT IS PRIMARY. It is the provider this project's users already
-    // have — the hydration target is Copilot, the personas are Copilot
-    // agents — and it is the only one that needs no key exported: an editor
-    // sign-in is the credential. A default nobody can use is a default that
-    // teaches people to pass a flag. The id itself is spelled once, in the
-    // seam — see DEFAULT_PROVIDER in lib/provider.mjs.
     default: DEFAULT_PROVIDER,
     merge: 'override',
-    description: 'default provider for `harness agent` (see: harness model)',
+    description: 'default provider for `harness agent` (must also be in agent.providers)',
   },
   'agent.model': {
     type: 'string',
     default: '',
     merge: 'override',
-    description: 'default model id; empty means the provider\'s own default',
+    description: 'default model id; empty means the provider default (or auto)',
   },
   'agent.max_turns': {
     type: 'number',
