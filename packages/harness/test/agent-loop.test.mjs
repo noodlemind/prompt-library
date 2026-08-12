@@ -141,15 +141,16 @@ test('a length-truncated message has its tool calls refused, not dispatched', as
 });
 
 // Benchmark: text nudges lost to search incentives. Explore is hard-capped.
-test('search is refused after the explore streak and after the per-run search budget', async () => {
+test('search and read are refused after the explore streak', async () => {
   const { ws, home } = scaffold('agent-explore-gate');
   fs.writeFileSync(path.join(ws, 'a.txt'), 'seed\n');
   const provider = scriptedProvider([
     callTool('r1', 'read', { path: 'a.txt' }),
     callTool('r2', 'read', { path: 'a.txt' }),
     callTool('r3', 'read', { path: 'a.txt' }),
-    // 3 explore turns already → next search is refused (tool-level, not a nudge).
+    // 3 explore turns already → next explore tools are refused (tool-level).
     callTool('s1', 'search', { query: 'anything' }),
+    callTool('r4', 'read', { path: 'a.txt' }),
     callTool('b1', 'bash', { script: 'echo act' }),
     say('done'),
   ]);
@@ -163,6 +164,46 @@ test('search is refused after the explore streak and after the per-run search bu
   assert.ok(searchTurn, 'search was attempted');
   assert.equal(searchTurn.tools[0].dispatched, false, 'search after explore streak must be refused');
   assert.match(searchTurn.tools[0].reason, /explore streak|search budget/);
+  const fourthRead = result.turns.find((t) => t.tools.some((x) => x.tool === 'read' && x.dispatched === false));
+  assert.ok(fourthRead, 'further read after the streak must also be refused');
+});
+
+test('a failed bash/exec tool result tells the model to edit next', async () => {
+  const { ws, home } = scaffold('agent-act-nudge');
+  const provider = scriptedProvider([
+    callTool('t1', 'exec', { argv: [process.execPath, '-e', 'process.exit(2)'] }),
+    (request) => {
+      const last = request.messages.at(-1);
+      assert.equal(last.role, 'user');
+      assert.match(last.toolResults[0].output, /command failed/i);
+      assert.match(last.toolResults[0].output, /edit/i);
+      return say('done');
+    },
+  ]);
+  const result = await agentResultOf(argvFor(ws, home, 'fix it'), {}, { startProviderFn: provider.start });
+  assert.equal(result.stopReason, 'done');
+});
+
+test('a timed-out completion is retried once with a short continue message', async () => {
+  const { ws, home } = scaffold('agent-timeout-retry');
+  let calls = 0;
+  const provider = {
+    start: () => ({
+      provider: 'scripted',
+      model: 'scripted-1',
+      alive: true,
+      logs: [],
+      async complete() {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error('plugin request complete timed out after 90000ms'), { code: 'E_TIMEOUT' });
+        return { text: 'recovered', toolCalls: [], blocks: [], usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+      close() {},
+    }),
+  };
+  const result = await agentResultOf(argvFor(ws, home, 'keep going'), {}, { startProviderFn: provider.start });
+  assert.equal(result.stopReason, 'done');
+  assert.equal(calls, 2, 'exactly one retry after timeout');
 });
 
 test('approaching the turn budget injects a budget check; steady action is not blocked', async () => {

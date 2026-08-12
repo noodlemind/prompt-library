@@ -5,6 +5,7 @@ import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { parseFlags, hasFlag } from './flags.mjs';
+import { positionalsOf } from './positionals.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
 import { readFileNoFollow, writeFileContained, appendFileContained } from './fs-safe.mjs';
 import { ensureHarnessDir } from './session.mjs';
@@ -389,6 +390,26 @@ export function runWrite({ workspace, path: relPath, content, expect = null, all
 
 // --- undo -----------------------------------------------------------------
 
+/** Outstanding mutations, newest first — read-only; does not consume the stack. */
+export function runUndoList({ workspace }) {
+  const stack = readUndoStack(path.resolve(workspace));
+  const entries = stack.map((e) => ({ id: e.id, mode: e.mode, path: e.path }));
+  return {
+    schema: EDIT_SCHEMA,
+    mode: 'undo-list',
+    path: null,
+    status: 'ok',
+    exitCode: 0,
+    reason: null,
+    entries,
+    undo: null,
+    degraded: null,
+    output: entries.length
+      ? entries.map((e) => ({ line: `${e.id}  ${e.mode}  ${e.path}` }))
+      : [{ line: 'nothing outstanding to undo' }],
+  };
+}
+
 export function runUndo({ workspace, dryRun = false }) {
   const workspaceResolved = path.resolve(workspace);
   const stack = readUndoStack(workspaceResolved);
@@ -564,6 +585,14 @@ export async function writeResultOf(argv, ctx = {}) {
 
 export async function undoResultOf(argv, ctx = {}) {
   const flags = parseFlags(argv);
+  const verb = positionalsOf(argv)[0] ?? null;
+  if (verb === 'list') {
+    // Read-only listing — no audit mutation event.
+    return runUndoList({ workspace: path.resolve(flags.workspace) });
+  }
+  if (verb && verb !== 'list') {
+    throw usageError(`unknown undo verb: ${verb}`, 'harness undo [list]');
+  }
   const result = runUndo({ workspace: path.resolve(flags.workspace), dryRun: flags.dryRun });
   emitAudit(ctx, result);
   return result;
@@ -575,14 +604,24 @@ function render(result, flags) {
     return;
   }
   const keyWidth = keyWidthFor(['status', result.mode]);
+  if (result.mode === 'undo-list') {
+    console.log(ui.line({
+      state: 'ok',
+      key: 'undo',
+      value: result.entries?.length ? `${result.entries.length} outstanding` : 'empty',
+      keyWidth,
+    }));
+    for (const row of result.output || []) console.log(`  ${inertLine(row.line)}`);
+    return;
+  }
   console.log(ui.line({
     state: result.status === 'ok' ? 'ok' : 'error',
     key: result.mode,
     value: result.path ?? '—',
     keyWidth,
   }));
-    for (const row of result.output) console.log(`  ${inertLine(row.line)}`);
-    if (result.degraded) {
+  for (const row of result.output || []) console.log(`  ${inertLine(row.line)}`);
+  if (result.degraded) {
     console.log(ui.line({ state: 'warn', key: 'control', value: `unserialized: ${result.degraded}`, keyWidth }));
   }
   if (result.status === 'ok' && result.undo?.id) {

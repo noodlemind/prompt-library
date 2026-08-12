@@ -926,13 +926,19 @@ registerCommand({
 
 registerCommand({
   name: 'undo',
-  summary: 'put back what the most recent edit or write replaced',
+  summary: 'put back the most recent edit/write, or list outstanding undos',
   group: 'engineer loop',
   sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-    surfaces: ['cli', 'tui'],
-  args: { positionals: [], flags: [] },
+  surfaces: ['cli', 'tui'],
+  usage: '[list]',
+  args: {
+    positionals: [
+      { name: 'verb', description: 'list — show outstanding undos without reverting', required: false, default: null },
+    ],
+    flags: [],
+  },
   handler: cmdUndo,
   resultOf: undoResultOf,
   exitOf: editExitFor,

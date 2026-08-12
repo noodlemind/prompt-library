@@ -17,16 +17,23 @@ export const READ_DEFAULT_LINES = 240;
 export const READ_MAX_BYTES = TOOL_RESULT_MAX_BYTES + 2_000;
 export const SEARCH_ROWS = 8;
 /** Persona text beyond this is truncated — full engineer.md is not a runtime prompt. */
-export const PERSONA_MAX_BYTES = 3_500;
+export const PERSONA_MAX_BYTES = 2_000;
 /** Orientation pack ceiling in the system prompt. */
-export const ORIENTATION_MAX_BYTES = 6_000;
+export const ORIENTATION_MAX_BYTES = 4_000;
 
-/** After this many consecutive explore-only turns, further search is refused. */
+/** After this many consecutive explore-only turns, further search/read is refused. */
 export const MAX_EXPLORE_STREAK = 3;
 /** Hard search calls per run (search attractor guard). */
 export const MAX_SEARCH_PER_RUN = 5;
 /** Keep full tool results for this many recent turns; older explores are stubbed. */
 export const TRANSCRIPT_FULL_TURNS = 6;
+/**
+ * Cap one model completion so a hung provider cannot burn the whole wall clock.
+ * Still bounded by the run deadline.
+ */
+export const AGENT_COMPLETION_TIMEOUT_MS = 90_000;
+/** One automatic retry after a timed-out complete (not after other errors). */
+export const AGENT_COMPLETION_RETRIES = 1;
 
 export const DEFAULT_PERSONA = 'engineer';
 export const DEFAULT_MAX_TURNS = CONFIG_SCHEMA['agent.max_turns'].default;
@@ -197,7 +204,7 @@ export function buildSystemPrompt({ persona, profile = BENCHMARK_PROFILE, orient
     '',
     '### Hard limits',
     `- Search is a last resort and is limited to ${MAX_SEARCH_PER_RUN} calls per run.`,
-    `- After ${MAX_EXPLORE_STREAK} consecutive read/search turns without bash/exec/edit/write, further search is refused.`,
+    `- After ${MAX_EXPLORE_STREAK} consecutive read/search turns without bash/exec/edit/write, further read/search is refused.`,
     '- Do not create plans, docs, or ceremony artifacts unless the task asks for them.',
     '',
     `OUT OF SCOPE for this run: ${profile.drops.map((d) => `${d.step} (needs ${d.precondition})`).join('; ')}.`,
@@ -277,18 +284,35 @@ export function searchCountOf(turns) {
 }
 
 export function exploreGate(call, { turns }) {
+  const streak = exploreStreakOf(turns);
   if (call.name === 'search') {
     if (searchCountOf(turns) >= MAX_SEARCH_PER_RUN) {
       return `search budget exhausted (${MAX_SEARCH_PER_RUN} per run) — run the test or edit a known path`;
     }
-    if (exploreStreakOf(turns) >= MAX_EXPLORE_STREAK) {
+    if (streak >= MAX_EXPLORE_STREAK) {
       return `explore streak is ${MAX_EXPLORE_STREAK}+ turns of read/search only — use bash/exec to reproduce or edit/write to act`;
     }
   }
-  if (call.name === 'read' && exploreStreakOf(turns) >= MAX_EXPLORE_STREAK + 2) {
-    return 'too many consecutive explore turns without acting — run a test (bash/exec) or make an edit';
+  // Same streak refuse for read: text nudges lost to explore incentives in the benchmark.
+  if (call.name === 'read' && streak >= MAX_EXPLORE_STREAK) {
+    return `explore streak is ${MAX_EXPLORE_STREAK}+ turns of read/search only — use bash/exec or edit/write to act`;
   }
   return null;
+}
+
+/** Whether the latest completed turn was a failed bash/exec (reproduce signal). */
+export function lastTurnWasFailedAction(turns) {
+  const last = turns[turns.length - 1];
+  if (!last?.tools?.length) return false;
+  return last.tools.some(
+    (t) => ACT_TOOLS.has(t.tool) && t.dispatched && t.tool !== 'edit' && t.tool !== 'write'
+      && (t.exitCode === null || t.exitCode === undefined ? t.status !== 'ok' : t.exitCode !== 0),
+  );
+}
+
+export function lastTurnMutated(turns) {
+  const last = turns[turns.length - 1];
+  return Boolean(last?.tools?.some((t) => (t.tool === 'edit' || t.tool === 'write') && t.dispatched));
 }
 
 export async function dispatchToolCall(call, {
@@ -492,6 +516,8 @@ export async function runAgentLoop({
   let finalText = '';
   const usage = { inputTokens: 0, outputTokens: 0 };
   let budgetNudged = false;
+  let lastExploreNudgeAt = 0;
+  let completionRetries = 0;
 
   try {
     while (!stop) {
@@ -499,7 +525,6 @@ export async function runAgentLoop({
       if (turns.length >= maxTurns) { stop = 'turn-budget'; break; }
       if (now() >= deadline) { stop = 'time-budget'; break; }
 
-      // Secondary pressure only — hard explore gates are in exploreGate.
       const remainingTurns = maxTurns - turns.length;
       if (!budgetNudged && turns.length > 0 && remainingTurns <= Math.max(2, Math.floor(maxTurns / 4))) {
         budgetNudged = true;
@@ -509,17 +534,45 @@ export async function runAgentLoop({
         });
       }
 
+      const streak = exploreStreakOf(turns);
+      if (streak >= MAX_EXPLORE_STREAK && streak !== lastExploreNudgeAt) {
+        lastExploreNudgeAt = streak;
+        messages.push({
+          role: 'user',
+          text:
+            `You have explored for ${streak} consecutive turns without bash/exec/edit/write. `
+            + 'Act now: edit a known path or re-run the failing command. Further read/search will be refused.',
+        });
+      }
+
       messages = compactMessages(messages);
 
       const turnIndex = turns.length + 1;
       const turnStartedAt = now();
       let completion;
       try {
+        const remainingMs = deadline - now();
+        const timeout = Math.max(
+          1,
+          Math.min(remainingMs, AGENT_COMPLETION_TIMEOUT_MS, PROVIDER_TIMEOUT_MS),
+        );
         completion = await provider.complete(
           { system, messages: [...messages], tools: AGENT_TOOLS },
-          { timeout: Math.max(1, Math.min(deadline - now(), PROVIDER_TIMEOUT_MS)) },
+          { timeout },
         );
+        completionRetries = 0;
       } catch (error) {
+        const timedOut = /timed out/i.test(String(error?.message || ''));
+        if (timedOut && completionRetries < AGENT_COMPLETION_RETRIES && now() < deadline) {
+          completionRetries += 1;
+          messages.push({
+            role: 'user',
+            text:
+              'Previous model call timed out. Continue with one short step only: '
+              + 'run the named test command, or make a single surgical edit, then stop or re-verify.',
+          });
+          continue;
+        }
         stop = signal?.aborted ? 'cancelled' : now() >= deadline ? 'time-budget' : 'provider-error';
         detail = error.message;
         break;
@@ -585,7 +638,15 @@ export async function runAgentLoop({
           toolRecords.push({ tool: call.name, dispatched: false, reason: outcome.reason });
           continue;
         }
-        toolResults.push({ id: call.id, output: renderToolResult(outcome.result), isError: outcome.result.status !== 'ok' });
+        let output = renderToolResult(outcome.result);
+        const failedAction = (call.name === 'bash' || call.name === 'exec')
+          && (outcome.result.status !== 'ok' || (Number.isFinite(outcome.result.exitCode) && outcome.result.exitCode !== 0));
+        if (failedAction) {
+          // Tool-level act pressure (benchmark: text-only nudges lost). Attach to
+          // the same tool-result message so the transcript shape stays stable.
+          output += '\n\nThe command failed. Prefer one focused `read` of the failing path, then `edit`, then re-run this command. Do not keep searching.';
+        }
+        toolResults.push({ id: call.id, output, isError: outcome.result.status !== 'ok' || failedAction });
         toolRecords.push({
           tool: call.name,
           dispatched: true,
