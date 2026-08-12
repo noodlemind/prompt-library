@@ -295,7 +295,9 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
     startProviderFn:
       startProviderFn || (() => {
         assertAgentEnabled({ workspace: p.workspace, copilotHome: p.copilotHome });
-        return startProvider({ provider: p.providerId, model: p.model, timeoutMs: p.maxSeconds * 1000 });
+        // `copilotHome` reaches the seam so the Copilot client identity can
+        // include the update-API version `model refresh` cached.
+        return startProvider({ provider: p.providerId, model: p.model, timeoutMs: p.maxSeconds * 1000, copilotHome: p.copilotHome });
       }),
     onTurn: (turn, { text }) => emitTurn(ctx, p, turn, text),
   });

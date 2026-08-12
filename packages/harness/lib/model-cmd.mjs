@@ -276,7 +276,7 @@ export async function cmdModel(argv, ctx = {}) {
    */
   if (verb === 'refresh') {
     const target = positionals[0] || modelStatus({ workspace, copilotHome }).provider;
-    if (!(target in PROVIDERS)) {
+    if (!Object.hasOwn(PROVIDERS, target)) {
       throw usageError(`unknown provider: ${target}`, `known providers: ${Object.keys(PROVIDERS).join(', ')}`);
     }
     const readiness = providerReadiness().find((p) => p.id === target);
@@ -287,13 +287,19 @@ export async function cmdModel(argv, ctx = {}) {
         hint: readiness?.reason || 'connect the provider, then refresh',
       });
     }
-    const fetched = await fetchModels({ provider: target });
+    const fetched = await fetchModels({ provider: target, copilotHome });
     writeModelCache(copilotHome, fetched);
     console.log(ui.line({
       state: 'ok',
       key: 'refresh',
       value: `${target} · ${fetched.models.length} model(s)`,
-      note: 'from the provider',
+      // The sweep spends real requests on the operator's account, so the
+      // output says what was done: how many candidates were probed and how
+      // many answered. A catalogue that hid how it was made would be
+      // underselling both its cost and its honesty.
+      note: fetched.probed
+        ? `verified ${fetched.probed.verified} of ${fetched.probed.candidates} candidates by live probe`
+        : 'from the provider',
     }));
     for (const id of fetched.models.slice(0, 12)) {
       console.log(ui.line({ state: 'pending', key: '', value: id, note: fetched.labels[id] || undefined }));
@@ -318,7 +324,7 @@ export async function cmdModel(argv, ctx = {}) {
   if (!providerId) {
     throw usageError('model set needs a provider', `harness model set <${Object.keys(PROVIDERS).join('|')}> [<model>]`);
   }
-  if (!(providerId in PROVIDERS)) {
+  if (!Object.hasOwn(PROVIDERS, providerId)) {
     throw usageError(`unknown provider: ${providerId}`, `known providers: ${Object.keys(PROVIDERS).join(', ')}`);
   }
   const modelId = positionals[1] || '';

@@ -128,7 +128,18 @@ export function parseArguments(raw) {
   }
 }
 
-/** How long one request may take before it is failed and retried. */
+/**
+ * How long a SOCKET may sit silent before the connection is judged dead.
+ *
+ * This is `req.setTimeout`'s real meaning — inactivity, not wall clock — and
+ * streaming is what makes the two finally agree: deltas flow for the whole
+ * generation, so 120s of true silence on a live stream is a dead connection
+ * rather than a slow model. The buffered path this replaced received no byte
+ * until the completion was finished, which quietly turned this timer into a
+ * 120s cap on generation time that no caller could see or raise. The overall
+ * deadline is the plugin host's per-request timeout, bounded by the loop from
+ * the operator's remaining budget — never this.
+ */
 const REQUEST_TIMEOUT_MS = Number(process.env.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS) || 120_000;
 
 /**
@@ -172,7 +183,169 @@ function requestOptions() {
 
 /** One chat-completions call. Rejects with a message the host can render;
  * never with anything carrying the key. */
-function callModel({ model, system, messages, tools, maxTokens, temperature }) {
+/**
+ * Fold one SSE delta frame into the accumulating completion.
+ *
+ * `tool_calls` deltas arrive as FRAGMENTS addressed by index — the first frame
+ * for an index carries id/name, later frames append to `arguments` — so
+ * accumulation is by index with string concatenation, exactly the assembly the
+ * OpenAI SDK performs. Exported for the Copilot adapter and for tests: this is
+ * the part of streaming that silently corrupts tool calls when it is wrong.
+ */
+export function foldStreamDelta(acc, frame) {
+  const choice = frame?.choices?.[0];
+  if (!choice) {
+    if (frame?.usage) acc.usage = frame.usage;
+    if (frame?.model && !acc.model) acc.model = frame.model;
+    return null;
+  }
+  const delta = choice.delta ?? {};
+  let textDelta = null;
+  if (typeof delta.content === 'string' && delta.content) {
+    acc.content += delta.content;
+    textDelta = delta.content;
+  }
+  for (const t of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
+    const at = Number.isInteger(t.index) ? t.index : 0;
+    const slot = acc.toolCalls[at] ?? (acc.toolCalls[at] = { id: null, type: 'function', function: { name: '', arguments: '' } });
+    if (t.id) slot.id = t.id;
+    if (t.function?.name) slot.function.name += t.function.name;
+    if (typeof t.function?.arguments === 'string') slot.function.arguments += t.function.arguments;
+  }
+  if (choice.finish_reason) acc.finishReason = choice.finish_reason;
+  if (frame.usage) acc.usage = frame.usage;
+  if (frame.model && !acc.model) acc.model = frame.model;
+  return textDelta;
+}
+
+/** The accumulated stream, reassembled into the non-streaming response shape so
+ * `shapeResult` stays the single normalizer for both transports. */
+export function streamToResponse(acc) {
+  return {
+    choices: [{
+      message: {
+        role: 'assistant',
+        content: acc.content || null,
+        ...(acc.toolCalls.length ? { tool_calls: acc.toolCalls.filter(Boolean) } : {}),
+      },
+      finish_reason: acc.finishReason ?? null,
+    }],
+    usage: acc.usage ?? null,
+    model: acc.model ?? null,
+  };
+}
+
+/**
+ * One streamed completion against an OpenAI-compatible /chat/completions.
+ *
+ * WHY STREAMING IS THE MECHANISM, not a bigger timeout. `req.setTimeout` is a
+ * SOCKET-INACTIVITY timer, and the previous buffered request turned it into an
+ * accidental wall clock: no byte arrives until the whole completion is ready,
+ * so a long generation read as a dead connection at 120s. Streamed, bytes flow
+ * for the whole generation and the same timer means what it says — 120s of
+ * true silence on a live stream is a dead connection. This is the shape every
+ * surveyed reference implementation uses; none of them plumb a wall-clock knob
+ * down to the adapter. The plugin host's per-request timeout remains the one
+ * overall deadline, and the loop already bounds it by the remaining budget.
+ *
+ * RETRY ONLY BEFORE THE FIRST BYTE. A completion partially consumed is not
+ * idempotent — retrying it blind would bill twice and could act twice — so a
+ * mid-stream failure surfaces as the error it is.
+ *
+ * A NON-STREAMING ANSWER IS STILL ACCEPTED. A gateway that ignores
+ * `stream: true` answers with one JSON body; refusing it would fail servers
+ * that are doing something reasonable, and the stub server the tests drive is
+ * exactly such a server.
+ */
+export function streamCompletion({ url, headers, transport, payload, providerId, onDelta = null, idleTimeoutMs = REQUEST_TIMEOUT_MS }) {
+  let firstByte = false;
+  const attempt = () => new Promise((resolve, reject) => {
+    const acc = { content: '', toolCalls: [], finishReason: null, usage: null, model: null };
+    let sse = false;
+    let carry = '';
+    let done = false;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve(streamToResponse(acc));
+    };
+    const feedSse = (text) => {
+      carry += text;
+      const frames = carry.split('\n\n');
+      carry = frames.pop() ?? '';
+      for (const frame of frames) {
+        for (const line of frame.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') { finish(); return; }
+          try {
+            const textDelta = foldStreamDelta(acc, JSON.parse(data));
+            if (textDelta && onDelta) onDelta(textDelta);
+          } catch { /* a malformed frame is dropped; the stream carries on */ }
+        }
+      }
+    };
+
+    const req = transport.request(
+      {
+        protocol: url.protocol,
+        host: url.hostname,
+        port: url.port || undefined,
+        path: `${url.pathname}${url.search}`,
+        method: 'POST',
+        headers: { ...headers, accept: 'text/event-stream', 'content-length': Buffer.byteLength(payload) },
+      },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        sse = String(res.headers['content-type'] ?? '').includes('text/event-stream');
+        res.on('data', (c) => {
+          firstByte = true;
+          if (res.statusCode >= 200 && res.statusCode < 300 && sse) feedSse(c);
+          else body += c;
+        });
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            // The status and the server's own message, never the request
+            // headers — an error path that echoed them would put the key in
+            // the host's log.
+            let detail = body.slice(0, 500);
+            try {
+              const parsed = JSON.parse(body);
+              detail = parsed?.error?.message ?? parsed?.error ?? detail;
+            } catch { /* keep the raw prefix */ }
+            reject(Object.assign(new Error(`${providerId} ${res.statusCode}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`), { status: res.statusCode, retryAfterMs: Number(res.headers['retry-after']) * 1000 || null }));
+            return;
+          }
+          if (sse) { finish(); return; }
+          try {
+            resolve(JSON.parse(body));
+          } catch (error) {
+            reject(new Error(`${providerId} returned unparseable JSON: ${error.message}`));
+          }
+        });
+      },
+    );
+    req.on('error', (error) => reject(Object.assign(
+      new Error(`${providerId} request failed: ${error.code || error.message}`),
+      { retriable: !firstByte },
+    )));
+    req.setTimeout(idleTimeoutMs, () => {
+      req.destroy(Object.assign(
+        new Error(`${providerId} stream idle for ${idleTimeoutMs}ms`),
+        { retriable: !firstByte },
+      ));
+    });
+    req.write(payload);
+    req.end();
+  });
+  // The guard travels in `retriable` (false once a byte has arrived), so a
+  // mid-stream failure passes through withRetry without being re-attempted.
+  return withRetry(attempt);
+}
+
+function callModel({ model, system, messages, tools, maxTokens, temperature }, { onDelta = null } = {}) {
   const wireTools = toWireTools(tools);
   const wireMessages = toWireMessages(messages);
   // This format carries the system prompt as the first message rather than as
@@ -182,57 +355,14 @@ function callModel({ model, system, messages, tools, maxTokens, temperature }) {
   const payload = JSON.stringify({
     model,
     messages: wireMessages,
+    stream: true,
     ...(maxTokens ? { max_tokens: maxTokens } : {}),
     ...(temperature === undefined ? {} : { temperature }),
     ...(wireTools ? { tools: wireTools, tool_choice: 'auto' } : {}),
   });
 
   const { url, headers, transport } = requestOptions();
-  return withRetry(() => new Promise((resolve, reject) => {
-    const req = transport.request(
-      {
-        protocol: url.protocol,
-        host: url.hostname,
-        port: url.port || undefined,
-        path: `${url.pathname}${url.search}`,
-        method: 'POST',
-        headers: { ...headers, 'content-length': Buffer.byteLength(payload) },
-      },
-      (res) => {
-        let body = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => { body += c; });
-        res.on('end', () => {
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            // The status and the server's own message, never the request
-            // headers — an error path that echoed them would put the key in the
-            // host's log.
-            let detail = body.slice(0, 500);
-            try {
-              const parsed = JSON.parse(body);
-              detail = parsed?.error?.message ?? parsed?.error ?? detail;
-            } catch { /* keep the raw prefix */ }
-            reject(Object.assign(new Error(`${PROVIDER_ID} ${res.statusCode}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`), { status: res.statusCode, retryAfterMs: Number(res.headers['retry-after']) * 1000 || null }));
-            return;
-          }
-          try {
-            resolve(JSON.parse(body));
-          } catch (error) {
-            reject(new Error(`${PROVIDER_ID} returned unparseable JSON: ${error.message}`));
-          }
-        });
-      },
-    );
-    req.on('error', (error) => reject(Object.assign(
-      new Error(`${PROVIDER_ID} request failed: ${error.code || error.message}`),
-      { retriable: true },
-    )));
-    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
-      req.destroy(Object.assign(new Error(`${PROVIDER_ID} request timed out after ${REQUEST_TIMEOUT_MS}ms`), { retriable: true }));
-    });
-    req.write(payload);
-    req.end();
-  }));
+  return streamCompletion({ url, headers, transport, payload, providerId: PROVIDER_ID, onDelta });
 }
 
 /**
@@ -261,9 +391,16 @@ export function shapeResult(response) {
   };
 }
 
+/** What this adapter is, declared rather than echoed. The handshake used to
+ * parrot `message.protocol`/`message.capabilities` straight back, which made
+ * the host's version-mismatch warning structurally unable to fire — the answer
+ * always matched because it WAS the question. */
+export const ADAPTER_PROTOCOL_VERSION = 1;
+const ADAPTER_CAPABILITIES = Object.freeze(['network']);
+
 async function handle(message) {
   if (message.type === 'hello') {
-    send({ type: 'hello', protocol: message.protocol, capabilities: message.capabilities });
+    send({ type: 'hello', protocol: ADAPTER_PROTOCOL_VERSION, capabilities: [...ADAPTER_CAPABILITIES] });
     return;
   }
   if (message.type === 'shutdown') {
@@ -280,7 +417,13 @@ async function handle(message) {
     return;
   }
   try {
-    const response = await callModel(message.params || {});
+    // Each content delta goes out as a `chunk` the moment it arrives — the
+    // protocol's multi-part response (P5AC8), which the host forwards to
+    // whoever is watching and never uses to settle. The `result` at stream end
+    // is the same shaped completion the buffered path produced.
+    const response = await callModel(message.params || {}, {
+      onDelta: (text) => send({ type: 'chunk', id: message.id, text }),
+    });
     send({ type: 'result', id: message.id, result: shapeResult(response) });
   } catch (error) {
     send({ type: 'error', id: message.id, message: error.message });

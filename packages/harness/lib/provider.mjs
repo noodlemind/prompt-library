@@ -34,13 +34,17 @@
  * sure that stays true as the file grows.
  */
 import fs from 'node:fs';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAX_COMPLETION_LINE_BYTES, startPlugin } from './plugin-host.mjs';
+import { readModelCache } from './model-cache.mjs';
 
-/** A model call is slower than a local tool, and a provider that has not
- * answered in 30 s is usually still thinking rather than stuck. */
+/** A model call is slower than a local tool: five minutes, because a long
+ * generation that has not finished is usually still thinking rather than
+ * stuck — and with streaming, the adapter's own idle timer catches the
+ * genuinely dead socket long before this ceiling does. */
 export const PROVIDER_TIMEOUT_MS = 300_000;
 
 /**
@@ -382,7 +386,97 @@ function usageError(message, hint) {
  * they are what grew the retired 223-file evaluation tree — and an env var on a
  * dedicated key is the proportionate control.
  */
-export function providerEnv(provider, { parentEnv = process.env } = {}) {
+/**
+ * The VS Code client identity the Copilot adapter declares — resolved at
+ * runtime, never pinned.
+ *
+ * WHY THIS EXISTS. The Copilot API enforces a minimum client version (HTTP 466,
+ * "the VS Code version you are using is no longer supported" — reproduced live)
+ * and GitHub raises the floor on its own schedule. An identity written into the
+ * source is therefore a dated kill switch. The industry answer is to track the
+ * client actually installed, so:
+ *
+ *   1. an operator override in the environment wins outright;
+ *   2. otherwise, the NEWEST version found among: the installed VS Code
+ *      (its app bundle's package.json, per-platform), the installed Copilot
+ *      Chat extension (~/.vscode/extensions/github.copilot-chat-*), and the
+ *      version the VS Code update API reported when `model refresh` last ran
+ *      (cached beside the model catalogue, same provenance treatment);
+ *   3. the adapter's own constants remain the floor for a machine where none
+ *      of those exist — explicitly labelled stale there.
+ *
+ * Resolved in the SEAM because the adapter runs deny-all: a child that may
+ * only reach the network cannot go looking around the filesystem for editors,
+ * and this file is already the one place that decides what an adapter is told.
+ */
+/** The github-copilot cache entry, or null — never a throw. The identity is
+ * decoration on a spawn path that must not fail because a cache file is odd. */
+function readModelCacheSafe(copilotHome) {
+  try {
+    return readModelCache(copilotHome)['github-copilot'] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveCopilotClient({ parentEnv = process.env, cache = null } = {}) {
+  const overrideEditor = parentEnv.HARNESS_COPILOT_EDITOR_VERSION;
+  const overridePlugin = parentEnv.HARNESS_COPILOT_PLUGIN_VERSION;
+  if (overrideEditor || overridePlugin) {
+    return { editorVersion: overrideEditor || null, pluginVersion: overridePlugin || null, source: 'override' };
+  }
+
+  const semverMax = (a, b) => {
+    if (!a) return b;
+    if (!b) return a;
+    const pa = String(a).split('.').map(Number);
+    const pb = String(b).split('.').map(Number);
+    for (let i = 0; i < 3; i += 1) {
+      if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0) ? a : b;
+    }
+    return a;
+  };
+
+  let editor = null;
+  let editorSource = null;
+  const home = parentEnv.HOME || os.homedir();
+  // The installed VS Code, per platform. Reading the app's own package.json is
+  // how the editor knows its version; absent or unreadable just means this
+  // rung contributes nothing.
+  const appManifests = [
+    '/Applications/Visual Studio Code.app/Contents/Resources/app/package.json',
+    parentEnv.LOCALAPPDATA ? path.join(parentEnv.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'resources', 'app', 'package.json') : null,
+    '/usr/share/code/resources/app/package.json',
+  ].filter(Boolean);
+  for (const manifest of appManifests) {
+    try {
+      const version = JSON.parse(fs.readFileSync(manifest, 'utf8'))?.version;
+      if (version && version !== semverMax(version, editor)) continue;
+      if (version) { editor = version; editorSource = 'installed'; }
+    } catch { /* not on this machine */ }
+  }
+  // The update API's answer, cached by `model refresh` — how the harness keeps
+  // tracking the current client on a machine where VS Code is not installed.
+  const published = cache?.client?.editorVersion ?? null;
+  if (published && semverMax(published, editor) === published) {
+    editor = published;
+    editorSource = 'update-api';
+  }
+
+  let plugin = null;
+  try {
+    const extensions = fs.readdirSync(path.join(home, '.vscode', 'extensions'));
+    for (const dir of extensions) {
+      const match = dir.match(/^github\.copilot-chat-(\d+\.\d+\.\d+)/);
+      if (match) plugin = semverMax(match[1], plugin);
+    }
+  } catch { /* no extensions directory */ }
+
+  if (!editor && !plugin) return { editorVersion: null, pluginVersion: null, source: 'floor' };
+  return { editorVersion: editor, pluginVersion: plugin, source: editorSource ?? 'installed' };
+}
+
+export function providerEnv(provider, { parentEnv = process.env, copilotClient = null } = {}) {
   const env = {};
   for (const name of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'SYSTEMROOT', 'NODE_EXTRA_CA_CERTS']) {
     if (parentEnv[name] !== undefined) env[name] = parentEnv[name];
@@ -418,6 +512,13 @@ export function providerEnv(provider, { parentEnv = process.env } = {}) {
   }
 
   if (provider.id === 'github-copilot') {
+    // The client identity the adapter will declare — resolved here, where the
+    // filesystem and the cache are reachable, and handed over as two
+    // harness-authored variables (the HARNESS_PROVIDER_BASE_URL pattern). The
+    // adapter's constants remain the floor when neither resolves.
+    const client = copilotClient ?? resolveCopilotClient({ parentEnv });
+    if (client?.editorVersion) env.HARNESS_COPILOT_EDITOR_VERSION = client.editorVersion;
+    if (client?.pluginVersion) env.HARNESS_COPILOT_PLUGIN_VERSION = client.pluginVersion;
     const oauthShape = /^(gho_|ghu_|ghp_|github_pat_)/;
     const direct = parentEnv.GITHUB_COPILOT_TOKEN;
     if (direct && !oauthShape.test(direct)) env.HARNESS_COPILOT_BEARER = direct;
@@ -536,6 +637,10 @@ export function startProvider({
   packageRoot = null,
   timeoutMs = PROVIDER_TIMEOUT_MS,
   parentEnv = process.env,
+  // Where the model cache lives, so the Copilot client identity can include
+  // the update-API rung `model refresh` recorded. Optional: without it the
+  // identity still resolves from the environment and the installed editor.
+  copilotHome = null,
   onChunk = null,
   spawnFn = undefined,
 } = {}) {
@@ -566,7 +671,12 @@ export function startProvider({
     // harness under `controls`, where it is audited.
     granted: ['network'],
     requested: ['network'],
-    env: providerEnv(provider, { parentEnv }),
+    env: providerEnv(provider, {
+      parentEnv,
+      copilotClient: provider.id === 'github-copilot'
+        ? resolveCopilotClient({ parentEnv, cache: copilotHome ? readModelCacheSafe(copilotHome) : null })
+        : null,
+    }),
     timeoutMs,
     maxLineBytes: MAX_COMPLETION_LINE_BYTES,
     onChunk,
@@ -583,7 +693,11 @@ export function startProvider({
       return plugin.logs;
     },
     complete(request, options = {}) {
-      return plugin.request('complete', { model: model || provider.defaultModel, ...request }, options);
+      // The seam's resolution is the authority and is written LAST: with the
+      // spread first, a request that happened to carry a `model` field would
+      // silently override `auto`/default resolution, and the model the caller
+      // negotiated at start would not be the model on the wire.
+      return plugin.request('complete', { ...request, model: model || provider.defaultModel }, options);
     },
     /** What this account can actually use. An adapter that has not implemented
      * it answers `unknown method`, and the caller keeps whatever it already
@@ -616,6 +730,33 @@ export function startProvider({
  * Never partially updates: a failed refresh throws and the cache is untouched,
  * because a half-written catalogue is worse than a stale one.
  */
+/** What VS Code is currently shipping, from its public update API. One small
+ * GET with a short timeout; any failure resolves to null. */
+function fetchLatestVsCodeVersion() {
+  const platform = process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32-x64' : 'linux-x64';
+  return new Promise((resolve) => {
+    const req = https.get(
+      `https://update.code.visualstudio.com/api/update/${platform}/stable/latest`,
+      { headers: { 'user-agent': 'harness' } },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => {
+          try {
+            const version = JSON.parse(body)?.productVersion;
+            resolve(typeof version === 'string' && /^\d+\.\d+/.test(version) ? { editorVersion: version, source: 'update-api' } : null);
+          } catch {
+            resolve(null);
+          }
+        });
+      },
+    );
+    req.on('error', () => resolve(null));
+    req.setTimeout(5_000, () => { req.destroy(); resolve(null); });
+  });
+}
+
 export async function fetchModels({
   provider: providerId,
   packageRoot = null,
@@ -625,10 +766,11 @@ export async function fetchModels({
   // appear, ~24 probes a few at a time. A refresh is explicit and rare; a
   // timeout that kills the sweep halfway returns the worse catalogue faster.
   timeoutMs = 180_000,
+  copilotHome = null,
   startProviderFn = null,
 } = {}) {
   const start = startProviderFn
-    || (() => startProvider({ provider: providerId, packageRoot, parentEnv, timeoutMs }));
+    || (() => startProvider({ provider: providerId, packageRoot, parentEnv, timeoutMs, copilotHome }));
   const handle = start();
   try {
     const result = await handle.models();
@@ -644,7 +786,25 @@ export async function fetchModels({
     if (!models.length) {
       throw Object.assign(new Error(`${providerId} returned no models`), { code: 'E_TARGET', exit: 1 });
     }
-    return { provider: providerId, models, labels, fetchedAt: new Date().toISOString() };
+    // The update-API rung of the Copilot client identity: refresh is the one
+    // deliberate network moment this module has, so it is also when the
+    // harness asks what the CURRENT VS Code version is — cached beside the
+    // catalogue with the same fetchedAt, so `startProvider` can declare a
+    // client at least as new as the one GitHub is shipping even on a machine
+    // with no editor installed. Failure is tolerated wholesale: the identity
+    // has two other rungs and a floor.
+    let client = null;
+    if (providerId === 'github-copilot') {
+      client = await fetchLatestVsCodeVersion().catch(() => null);
+    }
+    return {
+      provider: providerId,
+      models,
+      labels,
+      fetchedAt: new Date().toISOString(),
+      ...(result?.probed ? { probed: result.probed } : {}),
+      ...(client ? { client } : {}),
+    };
   } finally {
     handle.close();
   }

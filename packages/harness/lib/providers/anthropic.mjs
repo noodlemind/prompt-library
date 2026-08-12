@@ -114,13 +114,79 @@ function toWireTools(tools) {
   }));
 }
 
-/** One Messages API call. Rejects with a message the host can render; never
- * with anything carrying the key. */
-function callModel({ apiKey, model, system, messages, tools, maxTokens, temperature }) {
+/**
+ * Fold one Messages-API stream event into the accumulating response. This
+ * format is event-typed rather than delta-per-choice: `content_block_start`
+ * opens a block, `content_block_delta` appends to it (`text_delta` for prose,
+ * `input_json_delta` for a tool call's arguments, accumulated as a STRING and
+ * parsed once at stop), `message_delta` carries the stop reason and output
+ * usage. Exported for tests — this folding is where a streamed tool call
+ * silently corrupts when it is wrong.
+ */
+export function foldAnthropicEvent(acc, event) {
+  switch (event?.type) {
+    case 'message_start':
+      if (event.message?.model) acc.model = event.message.model;
+      if (event.message?.usage?.input_tokens != null) acc.usage.input_tokens = event.message.usage.input_tokens;
+      return null;
+    case 'content_block_start':
+      acc.blocks[event.index] = event.content_block?.type === 'tool_use'
+        ? { type: 'tool_use', id: event.content_block.id, name: event.content_block.name, _json: '' }
+        : { type: 'text', text: event.content_block?.text ?? '' };
+      return null;
+    case 'content_block_delta': {
+      const block = acc.blocks[event.index];
+      if (!block) return null;
+      if (event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
+        block.text = (block.text ?? '') + event.delta.text;
+        return event.delta.text;
+      }
+      if (event.delta?.type === 'input_json_delta' && typeof event.delta.partial_json === 'string') {
+        block._json += event.delta.partial_json;
+      }
+      return null;
+    }
+    case 'message_delta':
+      if (event.delta?.stop_reason) acc.stopReason = event.delta.stop_reason;
+      if (event.usage?.output_tokens != null) acc.usage.output_tokens = event.usage.output_tokens;
+      return null;
+    default:
+      return null;
+  }
+}
+
+/** The accumulated stream, reassembled into the non-streaming response shape
+ * so `shapeResult` stays the single normalizer for both transports. */
+export function anthropicStreamToResponse(acc) {
+  return {
+    content: acc.blocks.filter(Boolean).map((b) => {
+      if (b.type !== 'tool_use') return b;
+      let input = {};
+      try { input = b._json ? JSON.parse(b._json) : {}; } catch { /* refused below as an empty input, never a crash */ }
+      return { type: 'tool_use', id: b.id, name: b.name, input };
+    }),
+    stop_reason: acc.stopReason ?? null,
+    usage: acc.usage,
+    model: acc.model ?? null,
+  };
+}
+
+/**
+ * One STREAMED Messages API call. Rejects with a message the host can render;
+ * never with anything carrying the key.
+ *
+ * Streaming is the mechanism, not a nicety — see the shared adapter's note:
+ * a buffered response turns the socket-inactivity timer into an accidental
+ * cap on generation time. A gateway that ignores `stream: true` and answers
+ * with one JSON body is still accepted, which is also what keeps the test
+ * stub honest.
+ */
+function callModel({ apiKey, model, system, messages, tools, maxTokens, temperature }, { onDelta = null } = {}) {
   const wireTools = toWireTools(tools);
   const payload = JSON.stringify({
     model,
     max_tokens: maxTokens ?? 4096,
+    stream: true,
     ...(system ? { system } : {}),
     ...(temperature === undefined ? {} : { temperature }),
     ...(wireTools ? { tools: wireTools } : {}),
@@ -130,6 +196,23 @@ function callModel({ apiKey, model, system, messages, tools, maxTokens, temperat
   const url = new URL(BASE_URL);
   const transport = url.protocol === 'http:' ? http : https;
   return new Promise((resolve, reject) => {
+    const acc = { blocks: [], stopReason: null, usage: { input_tokens: null, output_tokens: null }, model: null };
+    let sse = false;
+    let carry = '';
+    const feedSse = (text) => {
+      carry += text;
+      const frames = carry.split('\n\n');
+      carry = frames.pop() ?? '';
+      for (const frame of frames) {
+        for (const line of frame.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          try {
+            const delta = foldAnthropicEvent(acc, JSON.parse(line.slice(5).trim()));
+            if (delta && onDelta) onDelta(delta);
+          } catch { /* a malformed frame is dropped; the stream carries on */ }
+        }
+      }
+    };
     const req = transport.request(
       {
         protocol: url.protocol,
@@ -141,6 +224,7 @@ function callModel({ apiKey, model, system, messages, tools, maxTokens, temperat
         method: 'POST',
         headers: {
           'content-type': 'application/json',
+          accept: 'text/event-stream',
           'content-length': Buffer.byteLength(payload),
           'anthropic-version': API_VERSION,
           'x-api-key': apiKey,
@@ -149,7 +233,11 @@ function callModel({ apiKey, model, system, messages, tools, maxTokens, temperat
       (res) => {
         let body = '';
         res.setEncoding('utf8');
-        res.on('data', (c) => { body += c; });
+        sse = String(res.headers['content-type'] ?? '').includes('text/event-stream');
+        res.on('data', (c) => {
+          if (res.statusCode >= 200 && res.statusCode < 300 && sse) feedSse(c);
+          else body += c;
+        });
         res.on('end', () => {
           if (res.statusCode < 200 || res.statusCode >= 300) {
             // The status and the API's own message, never the request headers —
@@ -161,6 +249,7 @@ function callModel({ apiKey, model, system, messages, tools, maxTokens, temperat
             reject(new Error(`anthropic ${res.statusCode}: ${detail}`));
             return;
           }
+          if (sse) { resolve(anthropicStreamToResponse(acc)); return; }
           try {
             resolve(JSON.parse(body));
           } catch (error) {
@@ -201,9 +290,14 @@ function shapeResult(response) {
   };
 }
 
+/** Declared, not echoed — see the shared adapter's note: an echo made the
+ * host's protocol-mismatch warning structurally unable to fire. */
+const ADAPTER_PROTOCOL_VERSION = 1;
+const ADAPTER_CAPABILITIES = Object.freeze(['network']);
+
 async function handle(message) {
   if (message.type === 'hello') {
-    send({ type: 'hello', protocol: message.protocol, capabilities: message.capabilities });
+    send({ type: 'hello', protocol: ADAPTER_PROTOCOL_VERSION, capabilities: [...ADAPTER_CAPABILITIES] });
     return;
   }
   if (message.type === 'shutdown') {
@@ -224,13 +318,23 @@ async function handle(message) {
     return;
   }
   try {
-    const response = await callModel({ apiKey, ...message.params });
+    const response = await callModel({ apiKey, ...message.params }, {
+      onDelta: (text) => send({ type: 'chunk', id: message.id, text }),
+    });
     send({ type: 'result', id: message.id, result: shapeResult(response) });
   } catch (error) {
     send({ type: 'error', id: message.id, message: error.message });
   }
 }
 
+/** The stdin loop attaches only when this file IS the adapter process — the
+ * same guard the shared adapter carries, and for the same reason: importing
+ * this module (its fold functions are exported for tests) must not attach a
+ * stdin listener, which would both double-answer requests and hold the
+ * importer's event loop open forever. The test runner hanging is how this
+ * was found. */
+const isMain = process.argv[1] && import.meta.url === (await import('node:url')).pathToFileURL(process.argv[1]).href;
+if (isMain) {
 let buffer = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -249,3 +353,4 @@ process.stdin.on('data', (chunk) => {
     }
   }
 });
+}

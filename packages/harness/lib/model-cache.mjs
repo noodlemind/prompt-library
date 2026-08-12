@@ -45,6 +45,10 @@ export function readModelCache(copilotHome) {
         models: entry.models.filter((m) => typeof m === 'string' && m),
         labels: entry.labels && typeof entry.labels === 'object' ? entry.labels : {},
         fetchedAt: typeof entry.fetchedAt === 'string' ? entry.fetchedAt : null,
+        // The client identity the provider's refresh recorded (today: the VS
+        // Code version its update API was shipping) — same provenance rules as
+        // the models beside it.
+        client: entry.client && typeof entry.client === 'object' ? entry.client : null,
       };
     }
     return out;
@@ -62,11 +66,11 @@ export function readModelCache(copilotHome) {
  * catalogue behind — the failure mode a reader degrades on would then be
  * indistinguishable from "never fetched".
  */
-export function writeModelCache(copilotHome, { provider, models, labels = {}, fetchedAt }) {
+export function writeModelCache(copilotHome, { provider, models, labels = {}, fetchedAt, client = null }) {
   const file = modelCachePath(copilotHome);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const providers = readModelCache(copilotHome);
-  providers[provider] = { models: [...models], labels: { ...labels }, fetchedAt };
+  providers[provider] = { models: [...models], labels: { ...labels }, fetchedAt, ...(client ? { client } : {}) };
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify({ schema: CACHE_SCHEMA, providers }, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(tmp, file);

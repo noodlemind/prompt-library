@@ -885,6 +885,35 @@ sanctioned-caller list is exported as data so `test/provider-seam.test.mjs`
 asserts the count rather than trusting the comment. A bundle manifest may still
 carry a `plugin:` field; nothing reads it.
 
+**Adapters stream.** Every completion is requested with `stream: true`, parsed
+as it arrives, and each content delta crosses the plugin protocol as a `chunk`
+message — the multi-part response the protocol always defined, now live end to
+end. Streaming is the timeout mechanism, not a nicety: a socket-inactivity
+timer on a buffered response silently becomes a cap on generation time, because
+no byte arrives until the completion is finished. Streamed, the same timer
+means what it says. Retries happen only before the first byte — a
+partially-consumed completion is not idempotent — and a gateway that ignores
+`stream: true` and answers with a single JSON body is still accepted.
+
+**The Copilot catalogue is verified by call, and refresh spends money saying
+so.** `harness model refresh github-copilot` filters the provider's `/models`
+answer by metadata, then sends each surviving candidate one `max_tokens: 1`
+completion — billed to the operator's account — and lists only what answered;
+the output reports `verified N of M candidates by live probe`. Metadata alone
+was measured wrong in both directions on a real account. The refresh also asks
+the VS Code update API what client version is current and caches the answer
+beside the catalogue: the Copilot API enforces a minimum client version, so the
+adapter's declared identity is resolved at runtime (operator override, the
+installed editor, the cached update-API answer — newest wins) with its
+constants as an explicitly stale floor.
+
+**The Copilot credential is a ladder, not a variable.** The seam normalizes
+whatever the operator exported into harness-authored variables, and the
+adapter's zero-setup fallback is the editor's own credential store on disk
+(`~/.config/github-copilot/`). The deny-all child environment governs what the
+adapter *inherits*; the documented disk fallback is how a machine that never
+exported anything still works, and it is a path the seam names, not a key.
+
 `harness agent` is the loop that consumes the seam — orient, model call,
 governed tool call through `exec`/`bash`, one journal record per turn, stop on
 a stated condition. It runs a **benchmark profile** that keeps orientation,

@@ -38,6 +38,7 @@ import {
   shapeResult,
   scrubCredential,
   withRetry,
+  streamCompletion,
 } from './openai-compatible.mjs';
 
 const PROVIDER_ID = 'github-copilot';
@@ -45,16 +46,40 @@ const BASE_URL = process.env.HARNESS_PROVIDER_BASE_URL || 'https://api.githubcop
 const EXCHANGE_URL = 'https://api.github.com/copilot_internal/v2/token';
 const REQUEST_TIMEOUT_MS = Number(process.env.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS) || 120_000;
 
-/** The headers the Copilot API expects from an integration. These identify a
- * tool class, carry nothing about the user, and match what the ecosystem's
- * editor integrations send. */
-const COPILOT_HEADERS = Object.freeze({
-  'editor-version': 'vscode/1.99.3',
-  'editor-plugin-version': 'copilot-chat/0.26.7',
-  'copilot-integration-id': 'vscode-chat',
-  'user-agent': 'GitHubCopilotChat/0.26.7',
-  'openai-intent': 'conversation-panel',
-});
+/**
+ * The client identity declared to the Copilot API.
+ *
+ * THE VERSION GATE IS LIVE. The API answers HTTP 466 — "the VS Code version
+ * you are using is no longer supported" — when the declared editor version
+ * falls below a floor GitHub raises on its own schedule, and the account's own
+ * /models response says "update your client to the latest version". A pinned
+ * identity is therefore a dated kill switch: the constants below were once
+ * current, stopped being so, and would eventually have taken every Copilot
+ * call down with them.
+ *
+ * So the identity is RESOLVED IN THE SEAM at runtime — the installed VS Code
+ * and Copilot Chat extension when present, the VS Code update API's answer
+ * cached beside the model catalogue, whichever is newest — and arrives here in
+ * two harness-authored variables, the same pattern as
+ * HARNESS_PROVIDER_BASE_URL. The constants remain only as the floor for an
+ * environment where nothing newer can be discovered, and they are labelled
+ * stale because they are.
+ */
+const FLOOR_EDITOR_VERSION = '1.99.3'; // stale floor — last verified 2026-08
+const FLOOR_PLUGIN_VERSION = '0.26.7'; // stale floor — last verified 2026-08
+
+function copilotHeaders() {
+  const editor = process.env.HARNESS_COPILOT_EDITOR_VERSION || FLOOR_EDITOR_VERSION;
+  const plugin = process.env.HARNESS_COPILOT_PLUGIN_VERSION || FLOOR_PLUGIN_VERSION;
+  return {
+    'editor-version': `vscode/${editor}`,
+    'editor-plugin-version': `copilot-chat/${plugin}`,
+    'copilot-integration-id': 'vscode-chat',
+    'user-agent': `GitHubCopilotChat/${plugin}`,
+    'openai-intent': 'conversation-panel',
+  };
+}
+const COPILOT_HEADERS = copilotHeaders();
 
 function configDir() {
   const xdg = process.env.XDG_CONFIG_HOME;
@@ -84,7 +109,7 @@ function findOauthToken() {
 
 let cached = null; // { bearer, expiresAtMs }
 
-function httpRequest(url, { method = 'GET', headers = {}, body = null } = {}) {
+function httpRequest(url, { method = 'GET', headers = {}, body = null, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const u = new URL(url);
   const transport = u.protocol === 'http:' ? http : https;
   return new Promise((resolve, reject) => {
@@ -108,8 +133,8 @@ function httpRequest(url, { method = 'GET', headers = {}, body = null } = {}) {
       new Error(`${PROVIDER_ID} request failed: ${error.code || error.message}`),
       { retriable: true },
     )));
-    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
-      req.destroy(Object.assign(new Error(`${PROVIDER_ID} request timed out after ${REQUEST_TIMEOUT_MS}ms`), { retriable: true }));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(Object.assign(new Error(`${PROVIDER_ID} request timed out after ${timeoutMs}ms`), { retriable: true }));
     });
     if (body) req.write(body);
     req.end();
@@ -150,12 +175,15 @@ async function bearerToken() {
   if (!parsed?.token) throw new Error('Copilot token exchange returned no token');
   cached = {
     bearer: parsed.token,
-    expiresAtMs: Number.isFinite(parsed.expires_at) ? parsed.expires_at * 1000 : Date.now() + 20 * 60_000,
+    // Coerced first: the exchange has been observed returning `expires_at` as
+    // a string, which `Number.isFinite` rejects untouched — silently discarding
+    // a real expiry for the 20-minute guess.
+    expiresAtMs: Number.isFinite(Number(parsed.expires_at)) ? Number(parsed.expires_at) * 1000 : Date.now() + 20 * 60_000,
   };
   return cached.bearer;
 }
 
-async function callModel({ model, system, messages, tools, maxTokens, temperature }) {
+async function callModel({ model, system, messages, tools, maxTokens, temperature }, { onDelta = null } = {}) {
   const wireTools = toWireTools(tools);
   const wireMessages = toWireMessages(messages);
   if (system) wireMessages.unshift({ role: 'system', content: system });
@@ -163,45 +191,38 @@ async function callModel({ model, system, messages, tools, maxTokens, temperatur
   const payload = JSON.stringify({
     model,
     messages: wireMessages,
+    stream: true,
     ...(maxTokens ? { max_tokens: maxTokens } : {}),
     ...(temperature === undefined ? {} : { temperature }),
     ...(wireTools ? { tools: wireTools, tool_choice: 'auto' } : {}),
   });
 
-  const attempt = async (allowReauth) => {
+  // The same streamed transport as every OpenAI-compatible provider — the SSE
+  // parsing, the delta folding, the first-byte retry guard and the idle timer
+  // all live once, in the shared adapter. Only the auth differs: a bearer that
+  // expires mid-session, so a 401 clears the cache and tries exactly once with
+  // a fresh one.
+  const run = async () => {
     const bearer = await bearerToken();
-    const res = await httpRequest(`${BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        ...COPILOT_HEADERS,
-        'content-type': 'application/json',
-        authorization: `Bearer ${bearer}`,
-      },
-      body: payload,
+    const url = new URL(`${BASE_URL}/chat/completions`);
+    return streamCompletion({
+      url,
+      headers: { ...COPILOT_HEADERS, 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
+      transport: url.protocol === 'http:' ? http : https,
+      payload,
+      providerId: PROVIDER_ID,
+      onDelta,
     });
-    if (res.status === 401 && allowReauth) {
-      // The bearer expired under us: mint a fresh one and try exactly once.
-      cached = null;
-      return attempt(false);
-    }
-    if (res.status < 200 || res.status >= 300) {
-      let detail = `HTTP ${res.status}`;
-      try {
-        const parsed = JSON.parse(res.text);
-        detail = parsed?.error?.message ?? parsed?.error ?? detail;
-      } catch { /* the status alone will have to do */ }
-      throw Object.assign(new Error(`${PROVIDER_ID}: ${detail}`), {
-        status: res.status,
-        retryAfterMs: Number(res.headers['retry-after']) * 1000 || null,
-      });
-    }
-    try {
-      return JSON.parse(res.text);
-    } catch (error) {
-      throw new Error(`${PROVIDER_ID} returned unparseable JSON: ${error.message}`);
-    }
   };
-  return withRetry(() => attempt(true));
+  try {
+    return await run();
+  } catch (error) {
+    if (error?.status === 401) {
+      cached = null;
+      return run();
+    }
+    throw error;
+  }
 }
 
 // ── the IPC loop, same protocol as every adapter ──────────────────────────
@@ -213,9 +234,14 @@ function send(message) {
   process.stdout.write(`${JSON.stringify(safe)}\n`);
 }
 
+/** Declared, not echoed — see the shared adapter's note: an echo made the
+ * host's protocol-mismatch warning structurally unable to fire. */
+const ADAPTER_PROTOCOL_VERSION = 1;
+const ADAPTER_CAPABILITIES = Object.freeze(['network']);
+
 async function handle(message) {
   if (message.type === 'hello') {
-    send({ type: 'hello', protocol: message.protocol, capabilities: message.capabilities });
+    send({ type: 'hello', protocol: ADAPTER_PROTOCOL_VERSION, capabilities: [...ADAPTER_CAPABILITIES] });
     return;
   }
   if (message.type === 'shutdown') process.exit(0);
@@ -302,6 +328,12 @@ async function handle(message) {
               method: 'POST',
               headers: { ...COPILOT_HEADERS, authorization: `Bearer ${await bearerToken()}`, 'content-type': 'application/json' },
               body: JSON.stringify({ model: m.id, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+              // A probe gets seconds, not the idle default: a model that
+              // cannot start one token in 8s is not usable as an agent model,
+              // and 24 probes at the 120s default could hold a refresh for
+              // 12 minutes against the fetch budget. Worst case is now
+              // 24 × 8s ÷ 4 lanes = 48s, provably inside it.
+              timeoutMs: 8_000,
             });
             if (probe.status >= 200 && probe.status < 300) verified.push(m);
           } catch { /* unreachable counts as uncallable */ }
@@ -313,7 +345,10 @@ async function handle(message) {
       if (!verified.length) {
         throw new Error(`${PROVIDER_ID}: ${list.length} entries, none answered a probe call (${models.length} passed the metadata filter)`);
       }
-      send({ type: 'result', id: message.id, result: { models: verified } });
+      // The counts travel with the list: a probe sweep spends real requests on
+      // the operator's account, and a catalogue that hid how it was made would
+      // be underselling both its cost and its honesty.
+      send({ type: 'result', id: message.id, result: { models: verified, probed: { candidates: models.length, verified: verified.length } } });
     } catch (error) {
       send({ type: 'error', id: message.id, message: error.message });
     }
@@ -324,13 +359,20 @@ async function handle(message) {
     return;
   }
   try {
-    const response = await callModel(message.params || {});
+    const response = await callModel(message.params || {}, {
+      onDelta: (text) => send({ type: 'chunk', id: message.id, text }),
+    });
     send({ type: 'result', id: message.id, result: shapeResult(response) });
   } catch (error) {
     send({ type: 'error', id: message.id, message: error.message });
   }
 }
 
+/** Attached only when this file IS the adapter process — see the identical
+ * guard in the shared adapter: an import must not double-answer requests or
+ * hold the importer's event loop open. */
+const isMain = process.argv[1] && import.meta.url === (await import('node:url')).pathToFileURL(process.argv[1]).href;
+if (isMain) {
 let buffer = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -346,3 +388,4 @@ process.stdin.on('data', (chunk) => {
     } catch { /* a line this adapter cannot parse is that line's problem */ }
   }
 });
+}

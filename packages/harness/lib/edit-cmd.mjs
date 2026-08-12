@@ -665,8 +665,42 @@ function requirePath(relPath, mode) {
   throw usageError(`${mode} requires --path <relative-path>`, `harness ${mode} --path <file> …`);
 }
 
+/** Every flag whose value is arbitrary text on this surface. One list, because
+ * the stripping below and the parsers above must agree byte-for-byte about
+ * which values are opaque. */
+const LITERAL_FLAGS = Object.freeze(['--path', '--old', '--new', '--content', '--expect']);
+
+/**
+ * The argv with every literal flag AND ITS VALUE removed — what `parseFlags`
+ * is allowed to see.
+ *
+ * `parseFlags` scans the whole argv, and a literal VALUE that happens to look
+ * like a harness flag was scanned too: `edit --old "--workspace" --new X`
+ * consumed `--new` as the workspace path, resolved the edit against a
+ * directory named `--new`, and failed with an error about the wrong thing.
+ * The content of a replacement is data, and data must never reach the flag
+ * parser.
+ */
+function withoutLiteralFlags(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (token === '--') {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const name = LITERAL_FLAGS.find((n) => token === n || token.startsWith(`${n}=`));
+    if (name) {
+      if (token === name) i += 1; // the space form: skip the value token too
+      continue;
+    }
+    out.push(token);
+  }
+  return out;
+}
+
 function planEdit(argv) {
-  const flags = parseFlags(argv);
+  const flags = parseFlags(withoutLiteralFlags(argv));
   const workspace = path.resolve(flags.workspace);
   const relPath = literalFlag(argv, '--path');
   requirePath(relPath, 'edit');
@@ -684,7 +718,7 @@ function planEdit(argv) {
 }
 
 function planWrite(argv) {
-  const flags = parseFlags(argv);
+  const flags = parseFlags(withoutLiteralFlags(argv));
   const workspace = path.resolve(flags.workspace);
   const relPath = literalFlag(argv, '--path');
   requirePath(relPath, 'write');
@@ -746,7 +780,9 @@ export function exitFor(result) {
 
 async function runCommand(argv, ctx, resultOf) {
   const result = await resultOf(argv, ctx);
-  render(result, parseFlags(argv));
+  // The same stripping the planners apply: this re-parse only asks about
+  // --json/--verbose, and a literal value shaped like a flag must not answer.
+  render(result, parseFlags(withoutLiteralFlags(argv)));
   ctx.reportStatus?.(result.status);
   return exitFor(result);
 }
