@@ -83,3 +83,16 @@ test('CLI inventory is still machine nouns', () => {
   assert.ok(rows.some((r) => r.id === 'command:tree' && r.label === 'tree'));
   assert.ok(rows.some((r) => r.id === 'command:learnings' && r.label === 'learnings'));
 });
+
+test('empty palette with section headers never selects a section', async () => {
+  const { createOverlay } = await import('../lib/tui/overlay.mjs');
+  const { rows } = buildCommandIndex({ surface: 'tui', workspace: process.cwd() });
+  const ordered = orderPaletteRows(rows, { query: '' });
+  assert.ok(ordered[0]?.section);
+  const overlay = createOverlay({ rows: ordered });
+  assert.equal(overlay.selected?.section, undefined);
+  assert.ok(overlay.selected?.label);
+  const enter = overlay.handleKey(null, { name: 'return' });
+  assert.equal(enter.intent, 'choose');
+  assert.equal(enter.row?.section, undefined);
+});

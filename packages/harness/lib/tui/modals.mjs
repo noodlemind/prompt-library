@@ -81,7 +81,7 @@ export const SETTING_LABELS = Object.freeze({
   'tui.startup': 'Startup panels',
   'tui.verbosity': 'Ledger verbosity',
   'tui.alt_screen': 'Alternate screen',
-  'tui.restore': 'Restore on exit',
+  'tui.restore': 'Restore prior runs on open',
 });
 
 function formatValue(value) {

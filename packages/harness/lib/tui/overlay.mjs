@@ -83,17 +83,27 @@ export function createOverlay({
     offset = Math.max(0, Math.min(offset, Math.max(0, items.length - page)));
   };
 
-  const move = (delta) => {
-    if (!items.length) return false;
-        const step = delta === 0 ? 1 : Math.sign(delta);
-    let next = (index + delta + items.length) % items.length;
-    for (let guard = 0; guard < items.length && items[next]?.section; guard += 1) {
-      next = (next + step + items.length) % items.length;
+  /** Never land on a section heading — it is chrome, not a choice. */
+  const landOnChoice = (from = 0, step = 1) => {
+    if (!items.length) { index = 0; offset = 0; return; }
+    const n = items.length;
+    let next = ((from % n) + n) % n;
+    const dir = step === 0 ? 1 : Math.sign(step);
+    for (let guard = 0; guard < n && items[next]?.section; guard += 1) {
+      next = (next + dir + n) % n;
     }
     index = next;
     clamp();
+  };
+
+  const move = (delta) => {
+    if (!items.length) return false;
+    const step = delta === 0 ? 1 : Math.sign(delta);
+    landOnChoice(index + delta, step);
     return true;
   };
+
+  landOnChoice(0, 1);
 
   return {
     kind,
@@ -104,7 +114,7 @@ export function createOverlay({
     get selected() { return items[index] ?? null; },
     get visible() { return items.slice(offset, offset + page); },
     get offset() { return offset; },
-    setRows(next) { items = [...next]; index = 0; offset = 0; },
+    setRows(next) { items = [...next]; landOnChoice(0, 1); },
     setQuery(next) { text = String(next ?? ''); },
     setFooter(next) { footer = next; },
     get footerText() { return footer; },
@@ -117,10 +127,15 @@ export function createOverlay({
       if (name === 'down' || (ctrl && name === 'n')) return { intent: null, changed: move(1) };
       if (name === 'pageup') return { intent: null, changed: move(-page) };
       if (name === 'pagedown') return { intent: null, changed: move(page) };
-      if (name === 'home') { index = 0; clamp(); return { intent: null, changed: true }; }
-      if (name === 'end') { index = Math.max(0, items.length - 1); clamp(); return { intent: null, changed: true }; }
+      if (name === 'home') { landOnChoice(0, 1); return { intent: null, changed: true }; }
+      if (name === 'end') { landOnChoice(Math.max(0, items.length - 1), -1); return { intent: null, changed: true }; }
       if (name === 'return' || name === 'enter' || name === 'tab') {
-        return items.length ? { intent: 'choose', row: items[index], changed: true } : { intent: null, changed: false };
+        if (!items.length) return { intent: null, changed: false };
+        if (items[index]?.section) {
+          landOnChoice(index + 1, 1);
+          return { intent: null, changed: true };
+        }
+        return { intent: 'choose', row: items[index], changed: true };
       }
       if (actions) {
                 if (name === 'backspace') return { intent: 'close', changed: true };

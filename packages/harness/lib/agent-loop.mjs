@@ -148,8 +148,19 @@ export const AGENT_ADDON_DISCLAIMER =
 
 const EXPLORE_TOOLS = new Set(['search', 'read']);
 const ACT_TOOLS = new Set(['edit', 'write', 'apply', 'bash', 'exec']);
-const READ_ONLY_TOOLS = new Set(['search', 'read', 'todo']);
-const MUTATE_TOOLS = new Set(['edit', 'write', 'apply']);
+const READ_ONLY_TOOLS = new Set(['search', 'read']);
+const MUTATE_TOOLS = new Set(['edit', 'write', 'apply', 'todo']);
+
+/** todo list is read-only; add/complete/clear mutate and must stay serial. */
+function isReadOnlyCall(call) {
+  if (!call?.name) return false;
+  if (READ_ONLY_TOOLS.has(call.name)) return true;
+  if (call.name === 'todo') {
+    const verb = typeof call.input?.verb === 'string' ? call.input.verb.trim() : 'list';
+    return verb === 'list' || verb === '';
+  }
+  return false;
+}
 
 export const AGENT_TOOLS = Object.freeze([
   Object.freeze({
@@ -521,9 +532,8 @@ export async function runTaskVerifier({
   const runCtx = bound && bound.signal ? { ...ctx, signal: bound.signal } : ctx;
   try {
     const result = await execResultOf(execArgv, runCtx);
-    const ok = result.status === 'ok'
-      && (result.exitCode === 0 || result.exitCode === null || result.exitCode === undefined);
-    return { ok, result };
+    const ok = result.status === 'ok' && result.exitCode === 0;
+    return { ok, result, reason: ok ? undefined : `verifier exit ${result.exitCode ?? 'none'}` };
   } catch (error) {
     return { ok: false, reason: error.message, result: null };
   } finally {
@@ -581,6 +591,9 @@ export async function dispatchToolCall(call, {
   } else if (call.name === 'todo') {
     fatalOnThrow = false;
     const verb = typeof input.verb === 'string' ? input.verb.trim() : 'list';
+    if (!['list', 'add', 'complete', 'clear'].includes(verb)) {
+      return { dispatched: false, reason: 'todo verb must be list | add | complete | clear', fatal: false };
+    }
     argv = [...base, verb];
     if (typeof input.text === 'string' && input.text) argv.push('--text', input.text);
     if (typeof input.id === 'string' && input.id) argv.push('--id', input.id);
@@ -652,7 +665,7 @@ export async function dispatchToolCall(call, {
 export async function dispatchToolBatch(calls, options = {}) {
   if (!calls.length) return [];
 
-  const allReadOnly = calls.every((c) => READ_ONLY_TOOLS.has(c.name));
+  const allReadOnly = calls.every((c) => isReadOnlyCall(c));
   if (allReadOnly && calls.length > 1) {
     return Promise.all(calls.map((call) => dispatchToolCall(call, options)));
   }
@@ -661,9 +674,9 @@ export async function dispatchToolBatch(calls, options = {}) {
   let i = 0;
   while (i < calls.length) {
     const call = calls[i];
-    if (READ_ONLY_TOOLS.has(call.name)) {
+    if (isReadOnlyCall(call)) {
       const group = [];
-      while (i < calls.length && READ_ONLY_TOOLS.has(calls[i].name)) {
+      while (i < calls.length && isReadOnlyCall(calls[i])) {
         group.push(calls[i]);
         i += 1;
       }

@@ -187,9 +187,19 @@ export async function configResultOf(argv, ctx = {}) {
     file: written.file,
     value: after.values[key],
     ...after.provenance[key],
-    effectiveChanged: after.values[key] === written.value,
+    effectiveChanged: configValuesEqual(after.values[key], written.value),
     ...(scope === 'project' && !trustedAfter ? { trustNowStale: true } : {}),
   };
+}
+
+/** Scalar === ; arrays compare by joined form so list keys do not false-warn. */
+function configValuesEqual(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const as = Array.isArray(a) ? a.map(String).join(',') : String(a ?? '');
+    const bs = Array.isArray(b) ? b.map(String).join(',') : String(b ?? '');
+    return as === bs;
+  }
+  return a === b;
 }
 
 function renderShow(result) {
@@ -241,10 +251,10 @@ export async function cmdConfig(argv, ctx = {}) {
     if (!result.effectiveChanged) {
       console.log(ui.line({
         state: 'warn',
-        key: 'set',
+        key: 'effective',
         value: effective,
         note: [result.source, result.note, 'not effective'].filter(Boolean).join(' · '),
-        keyWidth,
+        keyWidth: keyWidthFor(['set', 'file', 'effective']),
       }));
     }
   }

@@ -187,11 +187,11 @@ export const CONFIG_SCHEMA = Object.freeze({
   'tui.statusline': {
     type: 'list',
         ordered: true,
-    default: ['plan', 'gate', 'run', 'knowledge'],
+    default: ['plan', 'gate', 'agent', 'shell', 'run', 'knowledge'],
     merge: 'override',
-    description: 'footer items, in order (plan, gate, run, knowledge)',
+    description: 'footer items, in order (plan, gate, agent, shell, run, knowledge)',
     validate: (value) => {
-      const allowed = ['plan', 'gate', 'run', 'knowledge'];
+      const allowed = ['plan', 'gate', 'agent', 'shell', 'run', 'knowledge'];
       for (const item of value) {
         if (!allowed.includes(item)) {
           throw usageError(`tui.statusline entries must be one of ${allowed.join(', ')} (got ${JSON.stringify(item)})`);

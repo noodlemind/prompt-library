@@ -1051,8 +1051,7 @@ test('FIELD: arrow keys skip section headings — a heading is not a choice', ()
       { label: 'llama', provider: 'groq', model: 'llama' },
     ],
   });
-  // Opens on a heading; the first move must land on a selectable row.
-  overlay.handleKey(null, { name: 'down' });
+  // Opens on the first selectable row, never a section heading.
   assert.equal(overlay.selected.label, 'gpt-4o');
   overlay.handleKey(null, { name: 'down' });
   assert.equal(overlay.selected.label, 'llama', 'the second heading is stepped over, not landed on');
