@@ -1,102 +1,67 @@
-# Prompt Library
+# Adaptive Engineer Harness
 
-Skill-driven software engineering prompt library with **25 skills**, **21 agents**, scoped instructions, review checks, and a three-tier memory model (product plans, global knowledge, user profile). Primary platforms: GitHub Copilot in VS Code and IntelliJ IDEA.
+Skill-driven AI engineering for teams on **GitHub Copilot** (VS Code / IntelliJ): one accountable entry (`@engineer`), gated delivery, and memory that compounds.
 
-## Quick Start
+**Read this first:** [Adaptive Engineer Harness — concept](docs/adaptive-engineer-harness.md)
 
-1. Clone this repository
-2. Open in VS Code 1.109+ with GitHub Copilot Chat
-3. Install harness: **`npm install -g @dev-kit/harness@latest && harness install`** from Nexus ([setup](docs/onboarding/nexus-registry-setup.md)) — or **`npm install -g ./packages/harness && harness install`** from this repo before publishing
-4. Open a **product** repository (no prompt-library files copied into it); ensure `docs/plans/` exists
-5. **`@engineer`** — request substantial investigation or delivery; only change-making work enters plan, implement, verify, and compound
-6. Optional: **`/harness-doctor`** — health check; **`/project-readme`** — README upkeep; **`/triage-issues`** — backlog triage
+That document is the shared understanding of the practice (modes, lifecycle, skill-first primitives, memory tiers, loop design). Everything else is implementation.
 
-See [Harness Quickstart](docs/onboarding/harness-quickstart.md).
+---
 
-## Vision
+## Quick start
 
-`@engineer` behaves like a real engineer: **starter skills**, **expert network**, **principles**, **compounded team knowledge**, and **approved growth** of skills and specialists. See [Engineer Harness Architecture](docs/architecture/engineer-harness.md).
+1. Clone this repository  
+2. Install the CLI and hydrate Copilot:
 
-## Architecture
+```bash
+npm install -g ./packages/harness    # or @dev-kit/harness@latest from your registry
+harness install
+```
 
-Skill-first: skills are workflow contracts; agents provide isolated judgment; instructions apply by file pattern.
+3. Open a **product** repository (do not copy prompt-library source into it)  
+4. In Copilot Chat, select **`@engineer`**  
+5. Optional: `/harness-doctor`, `/project-readme`, `/triage-issues`
 
-| Primitive | Location |
-|-----------|----------|
-| Skills | `.github/skills/*/SKILL.md` |
-| Agents | `.github/agents/*.agent.md` |
-| Team knowledge | `knowledge/` → hydrated to `~/.copilot/knowledge/` |
-| Product plans | `docs/plans/` in each **product** repo only |
+---
 
-Standards: [Engineer Harness Architecture](docs/architecture/engineer-harness.md) and [Skill-Driven Prompt Library Standard](docs/architecture/skill-driven-prompt-library.md).
-
-## Connected Pipeline
+## At a glance
 
 ```text
-@engineer: Answer → direct, ceremony-free reply; Investigate → evidence-backed read-only report
-           Deliver → orient → establish intent → investigate → work → on-demand gaps → verify → review → compound → report
-                     open → planned → in-progress → review → done  (or blocked-capability)
+@engineer: Answer → direct reply
+           Investigate → evidence-only report
+           Deliver → orient → plan → work → verify → review → compound → report
+           Review → independent code review
 ```
 
-Pipeline steps (`/capture-issue`, `/plan-issue`, …) are **engineer-internal** (`user-invocable: false`), loaded on demand by `@engineer`. Optional: `/brainstorming`, `/deepen-plan`, `/document-review`. Plan files are the per-issue context pack. See `docs/plans/_plan-template.md` and `capture-gate.md`.
+| Piece | Role |
+|-------|------|
+| **Skills** (25) | Reusable workflows; most are engineer-internal |
+| **Agents** (21) | Specialists + engineer + implementer + coordinators |
+| **Harness CLI** | Orient, gate, verify, knowledge, optional headless `agent` loop |
+| **Knowledge** | Team solutions hydrated globally; product plans stay in the product repo |
 
-## Skills (25)
+User-invocable skills: `/engineer`, `/harness-doctor`, `/project-readme`, `/triage-issues`.
 
-User-invocable: `/engineer`, `/harness-doctor`, `/project-readme`, `/triage-issues`. All other skills are engineer-internal, loaded on demand by `@engineer`.
+---
 
-| Skill | Type | Access | Purpose |
-|-------|------|--------|---------|
-| `/engineer` | Engineering | User | Accountable full-cycle coordinator |
-| `/harness-doctor` | Utility | User | Hydrate and harness health check |
-| `/project-readme` | Documentation | User | README maintenance |
-| `/triage-issues` | Utility | User | Backlog prioritization |
-| `/recall` | Memory | Internal | Team + repo knowledge before work |
-| `/index-memory` | Memory | Internal | Rebuild `knowledge/manifest.yaml` |
-| `/consolidate` | Memory | Internal | Convert unconsolidated episodes into learnings via `harness consolidate` |
-| `/capture-issue` | Pipeline | Internal | Create product plan file |
-| `/plan-issue` | Pipeline | Internal | Research and lock plan |
-| `/code-review` | Pipeline | Internal | Confidence-scored review |
-| `/compound-learnings` | Pipeline | Internal | Publish to global `knowledge/solutions/` |
-| `/brainstorming` | Extension | Internal | Requirements exploration |
-| `/deepen-plan` | Extension | Internal | Interactive plan deepening |
-| `/document-review` | Extension | Internal | Document quality gate |
-| `/create-primitive` | Extension | Internal | Approved primitive creation |
-| `/import-conventions` | Extension | Internal | Import external conventions |
-| `/java`, `/python`, `/sql`, `/aws` | Domain | Internal | Domain workflows |
-| `/codebase-context` | Utility | Internal | Architecture snapshot |
-| `/ensure-plan`, `/ensure-capability`, `/auto-compound`, `/auto-skill-draft` | Internal | Internal | Planning, on-demand gap resolution, automatic post-success learning, and experimental skill drafting |
+## Repository layout
 
-## Agents (21)
-
-17 specialists + `@engineer` + `@code-implementer` + 2 coordinators (`plan-coordinator`, `code-review-coordinator`). Only `@engineer` is user-invocable; coordinators are internal, dispatched by `@engineer`. Inventory: `CLAUDE.md` or `knowledge/capability-registry.yaml`.
-
-## Knowledge compounding
-
-| Tier | Where | What |
-|------|--------|------|
-| Team (global) | `knowledge/solutions/` + `manifest.yaml` | Cross-repo learnings after hydrate |
-| Product | `docs/plans/` | Active issues (local only) |
-| Product (optional) | `docs/solutions/` | Repo-private learnings |
-| User | `~/.copilot/knowledge/profile.md` | Preferences |
-
-Context lookup order: `.github/skills/references/knowledge-locations.md`.
-
-## Directory structure
-
+```text
+.github/          agents, skills, instructions, hooks
+knowledge/        team solutions + capability registry (hydrated globally)
+docs/
+  adaptive-engineer-harness.md   # concept (this practice)
+  plans/                         # plan template; product repos hold live plans
+packages/harness/                # CLI package
+README.md                        # this file
+AGENTS.md                        # agent inventory for coding agents
 ```
-.github/          agents, skills, instructions, copilot-instructions.md
-knowledge/        team solutions, manifest, capability-registry (hydrated globally)
-docs/architecture/  canonical harness architecture and primitive standard
-docs/plans/       template + at most one live PR plan (see docs/plans/README.md)
-.vscode/          @dev-kit/harness tasks (install/upgrade/doctor), MCP config
-AGENTS.md         Cross-tool guidance
-```
+
+---
 
 ## Requirements
 
-- VS Code 1.109+ with GitHub Copilot Chat (or current IntelliJ Copilot with global customizations)
-- Global install via `@dev-kit/harness` (see [Install](docs/install.md))
+- VS Code 1.109+ with GitHub Copilot Chat, or IntelliJ with global Copilot customizations  
+- Node.js for `harness` CLI  
 
-## Installation
-
-[Global Install and Sync Guide](docs/install.md)
+Package details: [packages/harness/README.md](packages/harness/README.md)

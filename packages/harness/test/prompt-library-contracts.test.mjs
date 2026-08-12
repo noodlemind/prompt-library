@@ -12,25 +12,15 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 
 const ENGINEER_AGENT_MAX_TOKENS = 900;
 const SKILL_BODY_MAX_LINES = 300;
-const architecturePath = 'docs/architecture/engineer-harness.md';
+const architecturePath = 'docs/adaptive-engineer-harness.md';
 const supersededArchitectureDocs = [
-  'adaptive-engineer-harness.md',
-  'capability-catalog-review.md',
-  'capability-lifecycle.md',
-  'composer-gap-fulfillment-loop.md',
-  'composer-parity-review.md',
-  'composer-style-autonomous-harness-proposal.md',
-  'cross-host-validation.md',
-  'engineer-memory-system.md',
-  'engineer-operating-model.md',
-  'engineer-vision-and-growth-loop.md',
-  'enterprise-capability-expansion.md',
-  'harness-enforcement.md',
-  'harness-pre-implementation-review.md',
-  'lexical-retrieval-v2.md',
-  'npm-harness-distribution-plan.md',
-  'semantic-retrieval-v2.md',
-  'tool-native-harness-design.md',
+  'architecture/engineer-harness.md',
+  'architecture/skill-driven-prompt-library.md',
+  'architecture/harness-cli-workbench.md',
+  'MEMORY-MODEL.md',
+  'install.md',
+  'onboarding/harness-quickstart.md',
+  'agent-loop.md',
 ];
 
 function read(rel) {
@@ -41,7 +31,7 @@ function exists(rel) {
   return fs.existsSync(path.join(repoRoot, rel));
 }
 
-test('canonical architecture defines task modes, ownership, gap handling, and runtime modes', () => {
+test('canonical concept doc defines task modes, ownership, gap handling, and runtime modes', () => {
   const model = read(architecturePath);
 
   for (const phrase of [
@@ -50,30 +40,24 @@ test('canonical architecture defines task modes, ownership, gap handling, and ru
     'Investigate',
     'Deliver',
     'Review',
-    'Engineer accountability',
-    'Component ownership',
-    'Gap classification',
-    'Standalone mode',
-    'Degraded mode',
-    'Governed mode',
-    'Single-owner contracts',
+    'Engineer',
+    'Skill-first',
+    'Standalone',
+    'Degraded',
+    'Governed',
+    'Bounded delegation',
   ]) {
     assert.match(model, new RegExp(phrase, 'i'), `missing ${phrase}`);
   }
 });
 
-test('canonical architecture replaces superseded harness architecture fragments', () => {
-  const architectureDocs = fs
-    .readdirSync(path.join(repoRoot, 'docs', 'architecture'))
-    .filter((name) => name.endsWith('.md'))
-    .sort();
-  assert.deepEqual(architectureDocs, [
-    'engineer-harness.md',
-    'harness-cli-workbench.md',
-    'skill-driven-prompt-library.md',
-  ]);
+test('docs surface is a single concept doc plus plan/solution scaffolding', () => {
+  const docsRoot = path.join(repoRoot, 'docs');
+  const topLevel = fs.readdirSync(docsRoot).filter((name) => !name.startsWith('.')).sort();
+  assert.deepEqual(topLevel, ['adaptive-engineer-harness.md', 'plans', 'solutions']);
+  assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
-    assert.equal(exists(`docs/architecture/${name}`), false, `${name} should be removed`);
+    assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);
   }
 });
 
@@ -223,7 +207,7 @@ test('active entry points use the accountable Engineer vocabulary', () => {
   const activeEntryPoints = [
     'README.md',
     '.github/agents/engineer.agent.md',
-    'docs/onboarding/harness-quickstart.md',
+    'docs/adaptive-engineer-harness.md',
   ];
   for (const rel of activeEntryPoints) {
     const contract = read(rel);
@@ -560,15 +544,13 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   const commands = read('packages/harness/lib/commands.mjs');
   assert.doesNotMatch(commands, /const KNOWLEDGE_MODES\s*=\s*new Set/, 'commands.mjs must not keep its own copy of KNOWLEDGE_MODES');
   assert.match(commands, /KNOWLEDGE_MODES[^=]*=[\s\S]*?await import\('\.\/knowledge\/store\.mjs'\)/, 'commands.mjs imports KNOWLEDGE_MODES from store.mjs');
-    assert.ok(exists('docs/MEMORY-MODEL.md'), 'docs/MEMORY-MODEL.md exists');
-  const memoryModel = read('docs/MEMORY-MODEL.md');
-  assert.match(memoryModel, /stateDiagram/, 'MEMORY-MODEL.md includes the lifecycle stateDiagram');
-  assert.match(memoryModel, /promote/, 'MEMORY-MODEL.md documents learning promote');
-  // packages/harness/README.md documents the opt-in commit mode.
+  const concept = read('docs/adaptive-engineer-harness.md');
+  assert.match(concept, /stateDiagram/, 'concept doc includes the learning lifecycle stateDiagram');
+  assert.match(concept, /promote/, 'concept doc documents learning promote');
   assert.match(read('packages/harness/README.md'), /knowledge commit/, 'README documents knowledge commit');
-    assert.match(store, /export function readGovernance/, 'store.mjs exports readGovernance');
+  assert.match(store, /export function readGovernance/, 'store.mjs exports readGovernance');
   assert.match(apply, /governed/, 'apply.mjs tracks governed reapplication');
-  assert.match(memoryModel, /governance/i, 'MEMORY-MODEL.md documents the governance ledger');
+  assert.match(concept, /governance/i, 'concept doc documents the governance ledger');
     assert.match(
     commands,
     /quarantined episode\(s\) — inspect with harness consolidate --status, clear with knowledge purge <path>/,
@@ -652,7 +634,7 @@ test('canonical architecture defines capability promotion through retirement', (
   assert.match(lifecycle, /trigger eval/i);
   assert.match(lifecycle, /outcome eval/i);
   assert.match(lifecycle, /promotion evidence/i);
-  assert.match(lifecycle, /engineer-autopilot/i);
+  assert.match(lifecycle, /tombstone/i);
   assert.match(lifecycle, /overlap/i);
 });
 
@@ -712,14 +694,12 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
 
   assert.match(read('.github/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
 
-  const enforcementDoc = read(architecturePath);
-  assert.doesNotMatch(enforcementDoc, /Each entry must include/);
-  assert.match(enforcementDoc, /exemptions.*waivers.*arrays/is);
-
-  const standard = read('docs/architecture/skill-driven-prompt-library.md');
-  assert.match(standard, /plan_schema:\s*1/);
-  assert.match(standard, /verification:\s*\n\s+required:[\s\S]*criteria:/);
-  assert.match(standard, /reviews:\s*\n\s+required:[\s\S]*completed:[\s\S]*critical_open:/);
+  const concept = read(architecturePath);
+  assert.match(concept, /exemptions/i);
+  assert.match(concept, /waivers/i);
+  assert.match(concept, /plan_schema:\s*1/);
+  assert.match(concept, /verification:\s*\n\s+required:[\s\S]*criteria:/);
+  assert.match(concept, /reviews:\s*\n\s+required:[\s\S]*completed:[\s\S]*critical_open:/);
 
   const packageReadme = read('packages/harness/README.md');
   assert.match(packageReadme, /\$PLAN[^\n]*single plan resolved from the PR/i);

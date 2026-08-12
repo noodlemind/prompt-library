@@ -6,7 +6,7 @@ The npm package is named **`@dev-kit/harness`** for registry uniqueness. The exe
 
 ## Developers
 
-After Nexus `.npmrc` setup ([guide](../../docs/onboarding/nexus-registry-setup.md)):
+Install from your org registry when published, or from a local clone of this monorepo:
 
 ```bash
 npm install -g @dev-kit/harness@latest

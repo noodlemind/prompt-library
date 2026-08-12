@@ -4,7 +4,7 @@ Filled from `.github/skills/references/capability-gap-proposal.md`. Approval art
 
 ## Summary
 
-- **Requested outcome:** Drain accumulated learning-episode debt into the T2 learnings store on a governed schedule, per `docs/MEMORY-MODEL.md`.
+- **Requested outcome:** Drain accumulated learning-episode debt into the T2 learnings store on a governed schedule, per `docs/adaptive-engineer-harness.md`.
 - **Observed gap:** The knowledge layer shipped the deterministic half of the consolidation loop as CLI commands (`harness consolidate --status | --candidates | --apply`), but the model half — reading the work packet, deciding one `ADD`/`STRENGTHEN`/`SUPERSEDE`/`MERGE`/`NOOP` op per episode cluster, writing the ops JSON, and honoring the mode gate — had no invocable primitive.
 - **Why existing capabilities are insufficient:** `/auto-compound` and `compound --insight` capture episodes but never cluster them; `/compound-learnings` publishes solution docs; `/index-memory` rebuilds the BM25 manifest over solution docs and does not touch the learnings store; `/harness-doctor` diagnoses without writing. No surviving skill produces consolidation ops.
 - **User impact if not addressed:** Episode debt accumulates unconsolidated; `orient` cannot inject condensed learnings, and the `due: true` drain signal from `harness consolidate --status` has no responder.

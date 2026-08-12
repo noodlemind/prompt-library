@@ -45,11 +45,9 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 .vscode/
   mcp.json             — MCP server configuration (Context7)
 docs/
-  architecture/        — canonical Engineer Harness architecture and primitive standard
-  plans/               — issue and plan files with state tracking
-  solutions/           — documented learnings from solved problems
-  brainstorms/         — brainstorm documents from /brainstorming skill
-  codebase-snapshot.md — generated codebase snapshot with architecture diagrams
+  adaptive-engineer-harness.md  — shared concept / practice doc
+  plans/               — plan template; product repos hold live plans
+packages/harness/      — CLI package
 AGENTS.md              — primary cross-host guidance
 CLAUDE.md              — optional compatibility guidance
 ```
@@ -156,7 +154,7 @@ Update these files to keep everything synchronized:
 3. `.github/copilot-instructions.md` — shared context
 4. `.github/agent-context.md` — prompt-library repo knowledge
 5. `README.md` — overview if applicable
-6. `docs/architecture/skill-driven-prompt-library.md` — if primitive boundaries or workflow contracts changed
+6. `docs/adaptive-engineer-harness.md` — if primitive boundaries or workflow contracts changed
 
 ## Testing
 

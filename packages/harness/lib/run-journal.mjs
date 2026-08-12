@@ -12,7 +12,7 @@ export const RUNS_FILE = 'runs.jsonl';
 export const RUN_SCHEMA = 1;
 
 /** The terminal statuses a run may end in, plus the one non-terminal state.
- * Fixed by `docs/architecture/harness-cli-workbench.md` §Runs and evidence. */
+ * Fixed by `docs/adaptive-engineer-harness.md` §Runs and evidence. */
 export const RUN_STATUSES = Object.freeze([
   'running',
   'succeeded',

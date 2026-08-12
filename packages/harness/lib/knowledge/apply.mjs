@@ -312,7 +312,7 @@ const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
  * the read path verifies a `plan` points at a real plan file; it remains an
  * assertion feeding only human-gated displays (`harness learnings --why`,
  * `consolidate --status`), never an automated decision on its own (P1-1,
- * documented in docs/MEMORY-MODEL.md). Still admitted with a shape check:
+ * documented in docs/adaptive-engineer-harness.md). Still admitted with a shape check:
  * when present, must be a short, single-line, workspace-relative-LOOKING
  * string — never a vehicle for a control-char injection (inertLine's doc
  * comment covers the render-side half of that same defense) or a `..`

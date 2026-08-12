@@ -4,9 +4,9 @@ Plans are **transient execution artifacts**, not long-term documentation. Keep a
 
 After a plan's pull request merges, remove the completed plan in a plan-only cleanup unless it still contains unresolved work. Git and pull-request history preserve the execution audit. Before deletion, move durable information to its real owner:
 
-- Architecture and operating decisions → `docs/architecture/`
+- Architecture and operating decisions → `docs/adaptive-engineer-harness.md`
 - Reusable verified learning → `knowledge/solutions/`
-- Stable repository guidance → `README.md`, `AGENTS.md`, or `.github/agent-context.md`
+- Stable repository guidance → `README.md` or `AGENTS.md`
 
 This prompt-library repository should normally contain no dated plans. An open product-changing PR may retain exactly one live linked plan; CI ignores deleted plan paths and validates that one remaining file. A plan-only cleanup changes no product files, so it does not require another plan.
 
@@ -14,7 +14,7 @@ This prompt-library repository should normally contain no dated plans. An open p
 
 | Need | Location |
 |------|----------|
-| Engineer runtime, growth, memory, and enforcement | `docs/architecture/engineer-harness.md` |
+| Engineer runtime, growth, memory, and enforcement | `docs/adaptive-engineer-harness.md` |
 | Plan file template for product work | `docs/plans/_plan-template.md` |
 | Capture gate | `.github/skills/references/capture-gate.md` |
 
