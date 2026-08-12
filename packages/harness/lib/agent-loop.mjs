@@ -51,6 +51,7 @@ import { EXIT } from './style.mjs';
 import { CONFIG_SCHEMA } from './config.mjs';
 import { PROVIDER_TIMEOUT_MS } from './provider.mjs';
 import { execResultOf, bashResultOf } from './exec-cmd.mjs';
+import { TIMEOUT_MAX_SECONDS } from './exec-policy.mjs';
 import { editResultOf, writeResultOf } from './edit-cmd.mjs';
 import { getResultOf } from './retrieval/compat-results.mjs';
 import { searchResultOf } from './retrieval/search-cmd.mjs';
@@ -394,7 +395,15 @@ export function resolveToolTimeout({ requested, ceiling = null }) {
   if (Number.isFinite(requested) && requested > 0) bounds.push(Math.floor(requested));
   if (Number.isFinite(ceiling)) bounds.push(Math.floor(ceiling));
   if (!bounds.length) return null;
-  return Math.max(1, Math.min(...bounds));
+  // Clamped into exec's own legal range at BOTH ends. The floor was always
+  // here; the ceiling was not, so a model asking for a timeout above exec's
+  // hard maximum had its legal-in-spirit request forwarded verbatim into
+  // `--timeout`, exec's validator refused it, and an exec refusal is fatal to
+  // the run — a model's first bash call killed a parity benchmark in two
+  // seconds. The model may ask for less time than the maximum; asking for
+  // more just means the maximum. The operator's `--tool-timeout` ceiling
+  // still applies through `bounds`, and can only lower this further.
+  return Math.min(TIMEOUT_MAX_SECONDS, Math.max(1, Math.min(...bounds)));
 }
 
 /**

@@ -105,6 +105,29 @@ test('P5AC9: the loop orients, acts through a tool, and stops when the model ask
   assert.equal(result.usage.outputTokens, 10, 'usage accumulates across turns');
 });
 
+// A legal model request must never kill the run. `resolveToolTimeout` clamped
+// its floor and not its ceiling, so a model asking for more time than exec's
+// hard maximum had the raw value forwarded into `--timeout`, exec's validator
+// refused, and the refusal was fatal — a parity benchmark died in two seconds
+// on the model's first bash call.
+test('a tool timeout above exec\'s maximum clamps to the maximum instead of killing the run', async () => {
+  const { ws } = (() => {
+    const dir = tempDir('agent-timeout-clamp-');
+    return { ws: dir };
+  })();
+  const outcome = await dispatchToolCall(
+    { id: '1', name: 'bash', input: { script: 'echo ok', timeout: 7200 } },
+    { workspace: ws, copilotHome: null },
+  );
+  assert.equal(outcome.dispatched, true, 'asking for more than the maximum means the maximum, not a dead run');
+  assert.equal(outcome.timeoutSeconds, 3600);
+
+  // The operator's ceiling still applies, and still only ever lowers.
+  assert.equal(resolveToolTimeout({ requested: 7200, ceiling: 300 }), 300);
+  assert.equal(resolveToolTimeout({ requested: 7200 }), 3600);
+  assert.equal(resolveToolTimeout({ requested: 30 }), 30);
+});
+
 // Adopted from Pi's loop (`failToolCallsFromTruncatedMessage`): a response
 // stopped at the token limit can carry a tool call whose streamed arguments
 // were cut mid-JSON and salvage-parsed into something that VALIDATES while
