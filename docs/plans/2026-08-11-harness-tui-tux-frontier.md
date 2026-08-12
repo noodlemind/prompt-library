@@ -2,9 +2,9 @@
 plan_schema: 1
 title: "Harness TUI/TUX: frontier-inspired Session Ledger"
 type: feat
-status: in-progress
+status: done
 plan_lock: true
-phase: 1
+phase: 4
 priority: P1
 risk: yellow
 autonomy: balanced
@@ -133,20 +133,20 @@ This plan adapts the **best control surfaces** from Grok Build, Claude Code, Cod
 
 ### Modes & gates (P1)
 
-- [ ] **AC8** Shift+Tab cycles **host-defined** modes (minimum: agent off / agent on; prefer extend toward `assist` / `plan` without breaking current toggle). Mode changes are ledger events.
-- [ ] **AC9** When a plan or agent proposes gated work, TUI can present **approve / comment-or-edit / quit** style choices that map to host gate/plan state (thin first pass OK if wired to existing gate).
-- [ ] **AC10** Structured **question** checkpoint primitive exists (ledger event + overlay) for multi-choice; unanswered → inconclusive with reason, not failed.
+- [x] **AC8** Shift+Tab cycles **host-defined** modes (minimum: agent off / agent on; prefer extend toward `assist` / `plan` without breaking current toggle). Mode changes are ledger events.
+- [x] **AC9** When a plan or agent proposes gated work, TUI can present **approve / comment-or-edit / quit** style choices that map to host gate/plan state (thin first pass OK if wired to existing gate).
+- [x] **AC10** Structured **question** checkpoint primitive exists (ledger event + overlay) for multi-choice; unanswered → inconclusive with reason, not failed.
 
 ### Inspect & recovery (P1–P2)
 
-- [ ] **AC11** `/inspect` or `inspect` (config/status) shows effective value, source, scope for key settings (at least `agent.enabled`, model if present).
-- [ ] **AC12** Session recovery surface: list or resume prior runs/sessions from existing journal APIs where present; export/fork can be stubbed with honest “not yet” only if inventory shows no API—prefer thin real wiring.
-- [ ] **AC13** Docs: short TUX section in concept doc or package README—composer grammar, modes, palette, host-first boundary. Official Grok product named **Grok Build** if mentioned; community clones not equated.
+- [x] **AC11** `/inspect` or `inspect` (config/status) shows effective value, source, scope for key settings (at least `agent.enabled`, model if present).
+- [x] **AC12** Session recovery surface: list or resume prior runs/sessions from existing journal APIs where present; export/fork can be stubbed with honest “not yet” only if inventory shows no API—prefer thin real wiring.
+- [x] **AC13** Docs: short TUX section in concept doc or package README—composer grammar, modes, palette, host-first boundary. Official Grok product named **Grok Build** if mentioned; community clones not equated.
 
 ### Quality
 
-- [ ] **AC14** `packages/harness` tests green for touched areas; `tui-design` contracts preserved (no box chrome regressions).
-- [ ] **AC15** No new agent-only mutation path; no LLM from kernel on host path.
+- [x] **AC14** `packages/harness` tests green for touched areas; `tui-design` contracts preserved (no box chrome regressions).
+- [x] **AC15** No new agent-only mutation path; no LLM from kernel on host path.
 
 ## Plan
 
@@ -321,3 +321,14 @@ Rules:
 
 - Config sugar + default user scope; agent product verbs; usage ledger status; status/hint agent chrome; help expanded.
 - Targeted tests green (config + tui-design + tui + sugar).
+
+### 2026-08-11 — Phases 2–4 implemented
+
+- Palette selection **preview** (canonical argv; config key/value/scope).
+- Host modes `commands | assist | plan` (Shift+Tab cycle; `mode …` verbs); plan labels proposal-only.
+- **gate menu** approve/comment/quit → registry `gate` / plan path / dismiss.
+- **question** multi-choice checkpoint; skip → inconclusive.
+- Kernel **`inspect`** (config/permissions/workspace/tools) + TUI verbs.
+- **runs** / **resume &lt;id&gt;** → `run list` / `run resume`.
+- Docs: Session Ledger TUX in concept doc + package README.
+- Tests: `tui-tux-phase2.test.mjs`; enumerability fixtures for inspect.

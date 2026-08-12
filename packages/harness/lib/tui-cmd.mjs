@@ -12,7 +12,7 @@ import { buildCommandIndex } from './command-index.mjs';
 import { createTally, interpretLine, stripControl, tokenize } from './tui/session.mjs';
 import { createOverlay, splitPrefix, applyPrefix, treeRows, filterSectioned } from './tui/overlay.mjs';
 import { createLedger, statusForExit } from './tui/ledger.mjs';
-import { renderBlock, foldState } from './tui/block.mjs';
+import { renderBlock, foldState, createBlock } from './tui/block.mjs';
 import { renderHeader, renderExit } from './tui/chrome.mjs';
 import { completePath } from './tui/complete.mjs';
 import { resolveValues } from './tui/values.mjs';
@@ -25,6 +25,15 @@ import { readJournal, foldRuns, runStatusFromReported } from './run-journal.mjs'
 import { modelPickerRows, modelStatus } from './model-cmd.mjs';
 import { createProcessEventRegistry, detectActor } from './event-registry.mjs';
 import { setRunContext, currentRunContext } from './run-context.mjs';
+import { previewSelection, renderPreviewLines } from './tui/preview.mjs';
+import {
+  normalizeHostMode,
+  nextHostMode,
+  agentEnabledForMode,
+  modeChrome,
+} from './tui/host-mode.mjs';
+import { createQuestion, answerQuestion, questionLines, questionEvent } from './tui/question.mjs';
+import { gateActionRows, parseGateAction, gatePromptLines } from './tui/gate-actions.mjs';
 
 /** `/Users/me/x` reads better as `~/x`, and the header has one row. */
 const tildePath = (full) => {
@@ -152,6 +161,35 @@ export async function runLedger({
     }
   };
 
+  // Host mode: session-local chrome that keeps config agent.enabled in sync.
+  let hostMode = agentMode() ? 'assist' : 'commands';
+  let openQuestion = null;
+  let gatePromptOpen = false;
+
+  const applyHostMode = async (mode, { display = true } = {}) => {
+    const next = normalizeHostMode(mode);
+    const wantAgent = agentEnabledForMode(next);
+    const on = agentMode();
+    if (wantAgent !== on) {
+      await runArgv(
+        ['config', 'set', 'agent.enabled', wantAgent ? 'true' : 'false', '--scope', 'user'],
+        { display: display ? (wantAgent ? 'agent mode on' : 'agent mode off') : null },
+      );
+    }
+    hostMode = next;
+    if (display) {
+      const chrome = modeChrome(hostMode);
+      say(ui.line({
+        state: 'ok',
+        key: 'mode',
+        value: chrome.mode,
+        note: chrome.note,
+      }));
+    }
+    readActiveModel();
+    refreshStatus();
+  };
+
   let routingIndex = null;
   const indexForRouting = () => {
     routingIndex ??= buildCommandIndex({ surface: 'tui', workspace });
@@ -162,6 +200,7 @@ export async function runLedger({
     const gate = gateOf();
     const plan = planOf();
     const last = ledger.lastCommand();
+    const chrome = modeChrome(hostMode);
     const agentOn = agentMode();
     session.setStatus({
       workspace: tildePath(workspace),
@@ -173,15 +212,15 @@ export async function runLedger({
       version,
       model: activeModel,
       agent: agentOn,
-      authority: agentOn ? 'assist' : 'commands',
+      authority: chrome.authority,
+      mode: chrome.mode,
     });
     session.setHint({
       gate,
       shell: settings['exec.bash_enabled'] === false ? 'denied' : 'allowed',
       rerun: last?.command ? shortCommand(last.command) : null,
-      // What a bare line will actually do, so the composer can offer it or not.
       agent: agentOn,
-      mode: agentOn ? 'agent on' : 'agent off',
+      mode: chrome.mode,
     });
     readActiveModel();
   };
@@ -511,7 +550,91 @@ export async function runLedger({
       say(ui.line({ state: 'warn', key: 'tui', value: 'already open', note: 'the session ledger is this surface — pick another command' }));
       return;
     }
-    if (resolved) await runArgv(resolved);
+    if (resolved) {
+      const preview = previewSelection(row, values);
+      for (const line of renderPreviewLines(ui, preview)) say(line);
+      await runArgv(resolved);
+    }
+  };
+
+  const openGatePrompt = () => {
+    const snapshot = { plan: planOf() ? path.basename(planOf()) : null, gate: gateOf() };
+    for (const line of gatePromptLines(snapshot)) {
+      say(ui.paint('muted', `  ${line}`));
+    }
+    gatePromptOpen = true;
+    session.setPrompt({
+      title: 'gate',
+      label: 'a / c / q',
+      note: 'approve · comment · quit',
+    });
+  };
+
+  const handleGateAnswer = async (raw) => {
+    const action = parseGateAction(raw);
+    gatePromptOpen = false;
+    clearPrompt();
+    if (!action || action.kind === 'dismiss') {
+      say(ui.line({ state: 'warn', key: 'gate', value: 'dismissed', note: 'no command run' }));
+      return;
+    }
+    if (action.kind === 'open-plan') {
+      const plan = planOf();
+      if (plan) say(ui.line({ key: 'plan', value: plan, note: 'edit notes in the plan file, then gate again' }));
+      else say(ui.line({ state: 'warn', key: 'plan', value: 'none', note: 'no active plan in session' }));
+      return;
+    }
+    if (action.argv) await runArgv(action.argv, { display: 'gate approve' });
+  };
+
+  const openQuestionPrompt = (question) => {
+    openQuestion = question;
+    for (const line of questionLines(question)) say(ui.paint('muted', `  ${line}`));
+    session.setPrompt({
+      title: 'question',
+      label: 'choice',
+      note: 'number or label · esc/skip → inconclusive',
+    });
+  };
+
+  const handleQuestionAnswer = (raw) => {
+    const result = answerQuestion(openQuestion, raw);
+    clearPrompt();
+    if (!result.ok) {
+      say(ui.line({ state: 'warn', key: 'question', value: result.reason }));
+      if (openQuestion?.status === 'open') {
+        session.setPrompt({
+          title: 'question',
+          label: 'choice',
+          note: 'number or label · esc/skip → inconclusive',
+        });
+      }
+      return;
+    }
+    const q = result.question;
+    openQuestion = null;
+    const block = createBlock({
+      command: 'question',
+      status: result.inconclusive ? 'inconclusive' : 'ok',
+      kind: 'note',
+      lines: [JSON.stringify(questionEvent(q))],
+    });
+    if (result.inconclusive) {
+      say(ui.line({
+        state: 'warn',
+        key: 'question',
+        value: 'inconclusive',
+        note: q.reason || 'gate unanswered',
+      }));
+    } else {
+      say(ui.line({
+        state: 'ok',
+        key: 'question',
+        value: q.selected?.label || q.selected?.id,
+        note: q.prompt,
+      }));
+    }
+    void block;
   };
 
   const beginSelection = async (choice, prefill = {}) => {
@@ -726,13 +849,8 @@ export async function runLedger({
 
       if (event.intent === 'clear') { doClear(); continue; }
 
-            if (event.intent === 'agent-mode') {
-        const on = agentMode();
-        await runArgv(['config', 'set', 'agent.enabled', on ? 'false' : 'true', '--scope', 'user'], {
-          display: on ? 'agent mode off' : 'agent mode on',
-        });
-        readActiveModel();
-        refreshStatus();
+      if (event.intent === 'agent-mode') {
+        await applyHostMode(nextHostMode(hostMode));
         continue;
       }
 
@@ -885,6 +1003,16 @@ export async function runLedger({
         continue;
       }
 
+      // Open gate / question prompts consume the next line.
+      if (gatePromptOpen) {
+        await handleGateAnswer(line);
+        continue;
+      }
+      if (openQuestion?.status === 'open') {
+        handleQuestionAnswer(line);
+        continue;
+      }
+
       const parsed = interpretLine(line);
       if (parsed.kind === 'empty') {
                 if (pipedPalette) say(ui.paint('muted', `type 1–${pipedPalette.length} to pick a row, /text to refilter, or a command`));
@@ -940,23 +1068,43 @@ export async function runLedger({
       } else if (parsed.kind === 'clear') {
         doClear();
       } else if (parsed.kind === 'agent-mode-set') {
-        const enable = parsed.enabled === true;
-        await runArgv(
-          ['config', 'set', 'agent.enabled', enable ? 'true' : 'false', '--scope', 'user'],
-          { display: enable ? 'agent mode on' : 'agent mode off' },
-        );
-        readActiveModel();
-        refreshStatus();
+        await applyHostMode(parsed.enabled ? 'assist' : 'commands');
+      } else if (parsed.kind === 'host-mode-set') {
+        await applyHostMode(parsed.mode);
+      } else if (parsed.kind === 'gate-menu') {
+        openGatePrompt();
+      } else if (parsed.kind === 'ask-question') {
+        openQuestionPrompt(createQuestion({
+          prompt: parsed.prompt || 'Choose an option',
+          choices: parsed.choices || ['yes', 'no', 'skip'],
+        }));
+      } else if (parsed.kind === 'inspect') {
+        await runArgv(['inspect', parsed.verb || 'config', ...(parsed.key ? [parsed.key] : [])].filter(Boolean), {
+          display: parsed.key ? `inspect ${parsed.verb || 'config'} ${parsed.key}` : `inspect ${parsed.verb || 'config'}`,
+        });
+      } else if (parsed.kind === 'runs-list') {
+        await runArgv(['run', 'list', '--limit', '12'], { display: 'run list' });
+      } else if (parsed.kind === 'runs-resume') {
+        if (parsed.id) await runArgv(['run', 'resume', parsed.id], { display: `run resume ${parsed.id}` });
+        else await runArgv(['run', 'list', '--limit', '12'], { display: 'run list' });
       } else if (parsed.kind === 'reference') {
         const hits = completePath(parsed.target, { workspace });
         if (!hits.length) say(ui.line({ state: 'warn', key: 'file', value: parsed.target, note: 'no match in this workspace' }));
         else hits.forEach((h) => say(ui.line({ state: 'pending', key: h.kind, value: h.path })));
       } else if (parsed.argv?.[0] === 'tui') {
                 say(ui.line({ state: 'warn', key: 'tui', value: 'already open', note: 'the session ledger is this surface' }));
-      } else if (parsed.argv?.length && !hasCommand(parsed.argv[0]) && agentMode()) {
+      } else if (parsed.argv?.length && !hasCommand(parsed.argv[0]) && agentMode() && modeChrome(hostMode).agent) {
+        if (hostMode === 'plan') {
+          say(ui.line({
+            state: 'pending',
+            key: 'plan',
+            value: 'proposal only',
+            note: 'mode plan — agent may answer; use gate menu before mutate',
+          }));
+        }
         await askAgent(line);
       } else if (parsed.argv?.length > 1 && !hasCommand(parsed.argv[0])) {
-                say(ui.line({ state: 'warn', key: 'ask', value: 'agent mode is off', note: 'shift+tab turns it on · ! runs a shell line · / for commands' }));
+                say(ui.line({ state: 'warn', key: 'ask', value: 'agent mode is off', note: 'shift+tab cycles modes · ! shell · / commands' }));
       } else {
                 const routed = interactive ? routeTypedLine(parsed.argv, { workspace, index: indexForRouting() }) : null;
         if (routed?.picker === 'model') openModelPicker();
@@ -980,14 +1128,19 @@ export async function runLedger({
       ['/<text>', 'filter the palette (run: plan: search: check: learn:)'],
       ['!', 'enter bash mode — every line runs through governed bash · esc leaves'],
       ['!<command>', 'run one shell command without entering the mode'],
-      ['agent on|off', 'toggle optional agent (same as shift+tab)'],
+      ['agent on|off', 'toggle optional agent'],
+      ['mode commands|assist|plan', 'host modes · shift+tab cycles'],
+      ['gate menu', 'approve / comment / quit for the active plan'],
+      ['inspect [config|permissions|workspace]', 'effective values and provenance'],
+      ['runs / resume', 'list prior runs · resume <id> judges safety'],
+      ['question prompt|a|b', 'structured multi-choice checkpoint'],
       ['config set key value', 'user scope by default; --scope project for the repo'],
       ['config set key=value', 'sugar form; spaces around = also work'],
       ['@<path>', 'complete a file path'],
       ['replay', 're-run the previous block'],
       ['replay <id>', 're-run any block by id, from its record line'],
       ['results', 'open one of the last search\u2019s results'],
-      ['shift+tab', 'agent mode on or off \u2014 whether a bare line is a question'],
+      ['shift+tab', 'cycle host mode: commands → assist → plan'],
       ['ctrl+\u2191', 'walk the ledger blocks'],
       ['ctrl+o', 'fold or unfold the last block'],
       ['esc esc', 'open the run tree'],

@@ -72,6 +72,28 @@ Use pinned version in CI:
 | `init-repo` | Create plan/session paths plus trusted checks and rollout policy stubs |
 | `uninstall` | Remove files tracked in `.harness-lock.json` only |
 
+### Session Ledger (`harness tui`)
+
+Interactive projection of the kernel — not a second Adaptive Engineer.
+
+```text
+/          palette          ! shell          ? help
+shift+tab  mode cycle: commands → assist → plan
+agent on|off   config set key=value   (user scope default)
+gate menu   inspect config   runs / resume <id>
+```
+
+See `docs/adaptive-engineer-harness.md` § Session Ledger TUX.
+
+### Dual tracks (Deliver vs autonomous)
+
+| Track | When | How |
+|-------|------|-----|
+| **Deliver** | Real product work | Host `@engineer` + `gate` / `verify` / `compound` / growth |
+| **Autonomous** | Evals / long-horizon unattended | `harness agent --profile autonomous --verify-cmd "…"` |
+
+Same kernel tools; autonomous does **not** require plans or compound. See `docs/agent-loop.md` and `eval/README.md`.
+
 ### Agent runtime (`@engineer` invokes these)
 
 These commands govern Deliver mode. Quick Answer and read-only Investigate

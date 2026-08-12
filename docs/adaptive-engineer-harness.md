@@ -10,10 +10,22 @@ This is the only conceptual document for the system. Implementation lives in cod
 |-------|------|-------------------------|
 | **Host-first** — `@engineer` | Canonical Adaptive Engineer (modes, lifecycle, judgment) | Host-owned; not the harness kernel |
 | **Kernel-always** — `harness` CLI | Deterministic control plane (orient, gate, edit/exec, verify, compound, knowledge, report) | **Never** on the host path |
-| **Agent-optional** — `harness agent` | Minimal headless add-on when the user opts in (`agent.enabled`, default off) | Yes, opt-in only |
-| **Benchmark-test-only** | Efficiency/regression fixture for the add-on (`BENCHMARK_PROFILE`) | Test-only — **not** product lifecycle |
+| **Agent-optional** — `harness agent` | Opt-in headless loop on the **same kernel** (`agent.enabled`, default off); profiles: deliver \| autonomous | Yes, opt-in only |
+| **Benchmark-test-only** | Efficiency/regression fixture (`BENCHMARK_PROFILE` / `--profile benchmark`) | Test-only — **not** product lifecycle |
 
-Correct invariant: **the kernel never initiates LLM calls.** The optional agent process may, only when enabled. Full Adaptive Engineering is **host `@engineer` + kernel gate → verify → compound → consolidate/promote** — not the headless add-on loop.
+Correct invariant: **the kernel never initiates LLM calls.** The optional agent process may, only when enabled. Full Adaptive Engineering is **host `@engineer` + kernel gate → verify → compound → consolidate/promote** — not the headless add-on loop alone.
+
+### Dual tracks, one kernel
+
+| Track | Name | When | Outer loop |
+|---|---|---|---|
+| **A — Trusted Deliver** | `deliver` | Real product work | Orient → intent/plan → **gate** → work → **verify** → review → **compound** → report/growth |
+| **B — Autonomous solve** | `autonomous` (alias `bench`) | Internal evals, SWE-style tasks, unattended long-horizon | Short system card → ACI tools → **task verifier** → stop |
+
+Shared: `edit` / `write` / `apply` / `get` / `search` / `bash` / `exec` / `todo` — registry commands only; no second mutation stack.  
+Not shared: plan lock, product `harness verify --plan`, compound, full engineer persona, human mid-loop requirements.
+
+**Invariants vs flexible steps.** Deliver *invariants* are: mode before mutation, locked plan before recognized edits, passed verify before done, compound after proof. The **nine-step Deliver sequence** (orient → intent → investigate → work → gaps → verify → review → compound → report) is the **product lifecycle** for accountable team delivery — **not** a claim that it is the only agent architecture in the industry (ReAct, plan-and-execute, SWE-agent ACI, and verifier stacks all ship elsewhere).
 
 ### Host growth loop (after every Deliver verify)
 
@@ -25,7 +37,27 @@ harness report --growth            # session-end growth report
 
 Verified `compound` does not re-ask for structure the evidence already implies. If compound cannot run (no plan, stale evidence, knowledge mode off on insight path), the event carries `blockedReason` / `compoundStatus: skipped` for the growth report — never silent success.
 
-Primary effectiveness metrics (not turn counts): verify-pass→compound rate, recall→cite linkage, verify→compound latency when timestamps exist, promotion-eligible yield, quarantine health. Turn/search caps are **secondary** and apply only to the optional agent / benchmark fixtures.
+Primary effectiveness metrics for Adaptive Engineering (not turn counts): verify-pass→compound rate, recall→cite linkage, verify→compound latency when timestamps exist, promotion-eligible yield, quarantine health. Turn/search caps are **secondary** on the optional agent. **Autonomous / leaderboard** scoreboards are separate: pass@1, steps, tokens, duration — do not mix into the AE growth report as primary success.
+
+### Session Ledger TUX (`harness tui`)
+
+The interactive surface is a **Session Ledger** (blocks-as-records), not a second Engineer. Inspired by Grok Build gates, Claude/Codex slash discovery, Amp palettes, and Cursor Ask/Plan modes — adapted to host-first AE.
+
+| Input | Meaning |
+|-------|---------|
+| bare line | Kernel command; or optional agent when mode is **assist** / **plan** |
+| `/` | Command palette over the **same registry** (preview shows full argv) |
+| `!` | Governed shell |
+| `?` | Keymap / grammar |
+| Shift+Tab | Cycle host mode: **commands** → **assist** → **plan** |
+| `agent on` / `off` | Product verbs → `config set agent.enabled …` (user scope by default) |
+| `config set key=value` | Sugar; scope defaults to **user**; use `--scope project` for the repo |
+| `gate menu` | Approve / comment / quit for the active plan |
+| `inspect config` | Effective values + provenance (no LLM) |
+| `runs` / `resume <id>` | List / judge prior runs from the journal |
+| `question …\|a\|b` | Structured multi-choice checkpoint (unanswered → inconclusive) |
+
+Usage mistakes (exit 2) project as ledger **`usage`**, not a failed verify. Kernel contracts stay nonzero for scripts. Official xAI terminal product is **Grok Build** (`grok`); community `grok-cli` packages are not the same trust domain.
 
 ---
 
@@ -180,7 +212,19 @@ Trust gradient: episodes stay local or in the product repo; learnings are not pu
 
 ## The agent loop (headless CLI)
 
-`harness agent` is an optional headless turn loop for the same delivery idea without an editor host.
+`harness agent` is an optional headless turn loop on the **same kernel**. Prefer host **`@engineer`** for real Deliver work.
+
+| Profile | Flag | Stop / ceremony |
+|---------|------|-----------------|
+| **deliver** | `--profile deliver` | Product-minded prompt; gate/verify/compound remain host+hooks responsibilities |
+| **autonomous** | `--profile autonomous` (default for opt-in agent) | Short system card; **no** plan/gate/compound; success = **task verifier green** (`--verify-cmd`) |
+| **benchmark** | `--profile benchmark` | Test/efficiency fixture only (`BENCHMARK_PROFILE`) |
+
+```bash
+harness config set agent.enabled true --scope user   # default remains false
+harness agent "fix the failing test" --profile autonomous --verify-cmd "node ./task/verify.mjs"
+harness agent "work a locked plan" --profile deliver --max-turns 20
+```
 
 Benchmark lesson: **tool incentives beat text nudges.**
 
@@ -188,11 +232,13 @@ Benchmark lesson: **tool incentives beat text nudges.**
 |----------|--------|
 | Reproduce first | Prefer `bash`/`exec` when the task names a test |
 | Search attractor | Search is last resort; hard caps per run and explore streak |
-| Context blow-up | Bounded tool results, clipped persona/orientation |
+| Context blow-up | Bounded tool results, compaction, short autonomous card |
+| Multi-file | `apply` all-or-nothing CAS on the single write path |
+| Long-horizon | `todo` worklist under `.harness/todo.json` |
 | Destructive rewrite | Write refuses large→small replacement; prefer `edit` |
 | Truncation | Token-limited completions never run partial tool args |
 
-Master switch: `agent.enabled` (default off). Provider allowlist: `agent.providers`. Credentials are **guide-only** (env / editor login) — the harness does not store API keys.
+Master switch: `agent.enabled` (default off). Provider allowlist: `agent.providers`. Credentials are **guide-only** (env / editor login) — the harness does not store API keys. Details: [agent-loop.md](./agent-loop.md).
 
 ---
 

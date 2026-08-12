@@ -56,6 +56,15 @@ const AGENT_MODE_WORDS = Object.freeze({
   '/agent off': { kind: 'agent-mode-set', enabled: false },
 });
 
+const HOST_MODE_WORDS = Object.freeze({
+  'mode commands': { kind: 'host-mode-set', mode: 'commands' },
+  'mode assist': { kind: 'host-mode-set', mode: 'assist' },
+  'mode plan': { kind: 'host-mode-set', mode: 'plan' },
+  '/mode commands': { kind: 'host-mode-set', mode: 'commands' },
+  '/mode assist': { kind: 'host-mode-set', mode: 'assist' },
+  '/mode plan': { kind: 'host-mode-set', mode: 'plan' },
+});
+
 /** `replay` and `replay <id>` — re-run a block by name rather than by sigil. */
 const REPLAY_WORDS = new Set(['replay', 'rerun', 're-run']);
 
@@ -63,8 +72,51 @@ export function interpretLine(rawLine) {
   const line = stripControl(rawLine).trim();
   if (!line) return { kind: 'empty' };
 
-  const agentVerb = AGENT_MODE_WORDS[line.toLowerCase()];
+  const lower = line.toLowerCase();
+  const agentVerb = AGENT_MODE_WORDS[lower];
   if (agentVerb) return { ...agentVerb };
+  const modeVerb = HOST_MODE_WORDS[lower];
+  if (modeVerb) return { ...modeVerb };
+
+  // Gate menu (Grok-style approve / comment / quit)
+  if (lower === 'gate menu' || lower === '/gate' || lower === 'gate actions') {
+    return { kind: 'gate-menu' };
+  }
+
+  // Inspect product verbs
+  const inspectMatch = lower.match(/^\/?inspect(?:\s+(config|permissions|workspace|tools))?(?:\s+(\S+))?$/);
+  if (inspectMatch) {
+    return {
+      kind: 'inspect',
+      verb: inspectMatch[1] || 'config',
+      key: inspectMatch[2] || null,
+    };
+  }
+
+  // Session recovery via run journal
+  if (lower === 'runs' || lower === '/runs' || lower === 'run list' || lower === '/resume') {
+    return { kind: 'runs-list' };
+  }
+  const resumeMatch = lower.match(/^(?:\/?resume|run resume)\s+(\S+)$/);
+  if (resumeMatch) return { kind: 'runs-resume', id: resumeMatch[1] };
+
+  // Demo question checkpoint: question "prompt" | a | b | c
+  if (lower.startsWith('question ') || lower.startsWith('/question ')) {
+    const body = line.replace(/^\/?question\s+/i, '');
+    const parts = body.split('|').map((p) => p.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      return {
+        kind: 'ask-question',
+        prompt: parts[0],
+        choices: parts.slice(1),
+      };
+    }
+    return {
+      kind: 'ask-question',
+      prompt: body || 'Choose an option',
+      choices: ['yes', 'no', 'skip'],
+    };
+  }
 
   const sessionKey = line.startsWith('/') ? line.slice(1).trim() : line;
   if (Object.hasOwn(SESSION_WORDS, sessionKey) && !sessionKey.includes(' ')) {

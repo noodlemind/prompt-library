@@ -162,6 +162,8 @@ const DECLARED_VERBS = Object.freeze({
   model: ['show', 'set', 'clear', 'refresh'],
   resources: ['list', 'show', 'register', 'unregister', 'bundles', 'add', 'update', 'remove'],
   undo: ['list'],
+  todo: ['list', 'add', 'complete', 'clear'],
+  inspect: ['config', 'permissions', 'workspace', 'tools'],
 });
 
 const VERB_FLAGS = Object.freeze({
@@ -213,6 +215,7 @@ const VERB_POSITIONALS = Object.freeze({
   model: { set: ['provider', 'model'], refresh: ['provider'] },
   // `list` takes no name — it is the query over all of them.
   resources: { show: ['path'], register: ['path'], unregister: ['path'], add: ['path'], update: ['path'], remove: ['path'] },
+  inspect: { config: ['key'] },
 });
 
 test('AC8: every verb-consumed positional is declared and reaches its row as a picker', () => {
@@ -252,7 +255,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 55, '15 knowledge/learning verbs + lookup’s 11 kinds + tree’s 2 subjects + checks’ 3 verbs + config’s 4 verbs + trust’s 3 verbs + run’s 4 verbs + resources’ 8 verbs + model’s 4 verbs + undo list');
+  assert.equal(Object.values(actual).flat().length, 63, 'prior 59 + inspect’s 4 verbs');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -298,8 +301,8 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
     }
   }
   // declared verbs + row-bearing verb flags; model verbs collapse to picker on TUI.
-  assert.equal(rows.filter((r) => r.kind === 'verb').length, 65, 'palette-visible declared verbs + row-bearing verb flags');
-  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 69, 'the CLI surface keeps every verb');
+  assert.equal(rows.filter((r) => r.kind === 'verb').length, 73, 'palette-visible declared verbs + row-bearing verb flags (+ inspect)');
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 77, 'the CLI surface keeps every verb (+ inspect)');
 });
 
 /**
