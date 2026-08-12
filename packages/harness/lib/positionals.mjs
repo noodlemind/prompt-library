@@ -1,13 +1,13 @@
 export const VALUE_FLAGS = Object.freeze(new Set([
   '--agent', '--allow-env', '--autonomy', '--base', '--body', '--body-file', '--branch',
-  '--category', '--claim', '--collection', '--command', '--content', '--copilot-home', '--criteria',
+  '--category', '--changes', '--claim', '--collection', '--command', '--content', '--copilot-home', '--criteria',
   '--cursor', '--cwd', '--date', '--depth', '--docid', '--domain', '--enforcement',
-  '--expect', '--gap', '--host', '--ids', '--impacted', '--intent', '--layer', '--learnings',
+  '--expect', '--gap', '--host', '--id', '--ids', '--impacted', '--intent', '--layer', '--learnings',
   '--limit', '--lines', '--match', '--max-bytes', '--max-seconds', '--max-turns',
   '--min-score', '--model', '--new', '--offset', '--old', '--ops', '--output', '--path', '--phase', '--plan',
-  '--provider', '--query', '--reason', '--risk', '--scope', '--session', '--since',
-  '--slug', '--source', '--stale', '--status', '--tags', '--target', '--timeout',
-  '--title', '--to', '--tool-timeout', '--trigger', '--type', '--until', '--why',
+  '--profile', '--provider', '--query', '--reason', '--risk', '--scope', '--session', '--since',
+  '--slug', '--source', '--spec', '--stale', '--status', '--tags', '--target', '--text', '--timeout',
+  '--title', '--to', '--tool-timeout', '--trigger', '--type', '--until', '--verify-cmd', '--why',
   '--workspace',
   '-c',
 ]));

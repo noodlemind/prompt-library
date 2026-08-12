@@ -1,3 +1,7 @@
+/**
+ * Knowledge store transactions, locks, rollback, and absorb atomicity.
+ * Folded from knowledge-structural-hardening.
+ */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -59,7 +63,7 @@ function seedLearning(c, slug = 'seeded-claim') {
   return `sql/${slug}`;
 }
 
-test('S1: a planted symlink at a learning path cannot be strengthened — the outside target is byte-identical afterwards', () => {
+test('a planted symlink at a learning path cannot be strengthened — the outside target is byte-identical afterwards', () => {
   const c = ctx();
   seedLearning(c, 'anchor-claim');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -89,7 +93,7 @@ test('S1: a planted symlink at a learning path cannot be strengthened — the ou
   assert.equal(fs.readFileSync(victim, 'utf8'), original, 'the symlink target was never written through');
 });
 
-test('S1: writeLearningFile never writes THROUGH a symlinked leaf, and refuses a non-learning path shape', () => {
+test('writeLearningFile never writes THROUGH a symlinked leaf, and refuses a non-learning path shape', () => {
     const root = path.join(tempDir('sh-io-'), 'knowledge', 'repo-id');
   fs.mkdirSync(root, { recursive: true });
   const victim = path.join(root, 'victim.txt');
@@ -110,7 +114,7 @@ test('S1: writeLearningFile never writes THROUGH a symlinked leaf, and refuses a
   assert.equal(writeLearningFile(path.join(root, 'learnings', 'deep', 'nested', 'x.md'), 'x'), false);
 });
 
-test('S1: mirrorLearnings never mirrors content read through a symlinked learning path', () => {
+test('mirrorLearnings never mirrors content read through a symlinked learning path', () => {
   const c = ctx();
   seedLearning(c, 'mirrored-claim');
   const cfg = writeStoreConfig(c.ws, { home: c.harnessHome, commit: 'repo' });
@@ -136,7 +140,7 @@ test('S1: mirrorLearnings never mirrors content read through a symlinked learnin
   assert.equal(fs.existsSync(path.join(mirrorRoot, 'sql', 'linked-claim.md')), false, 'and the symlinked id was not mirrored at all');
 });
 
-test('S1: absorb quarantines the planted link out of learnings/ instead of leaving it live', () => {
+test('absorb quarantines the planted link out of learnings/ instead of leaving it live', () => {
   const c = ctx();
   seedLearning(c, 'quarantine-anchor');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -166,7 +170,7 @@ const openStore = (c) => {
   return tx.dir;
 };
 
-test('S2: the store carries a .gitignore, and `git clean -fd` cannot sweep the lock', () => {
+test('the store carries a .gitignore, and `git clean -fd` cannot sweep the lock', () => {
   const c = ctx();
   const dir = openStore(c);
 
@@ -181,7 +185,7 @@ test('S2: the store carries a .gitignore, and `git clean -fd` cannot sweep the l
   assert.ok(fs.existsSync(path.join(dir, '.lock')), '`git clean -fd` must not be able to delete the lock');
 });
 
-test('S2: a legacy store with no .gitignore gains one the next time it is opened', () => {
+test('a legacy store with no .gitignore gains one the next time it is opened', () => {
   const c = ctx();
   const dir = openStore(c);
   fs.rmSync(path.join(dir, '.gitignore'), { force: true });
@@ -191,7 +195,7 @@ test('S2: a legacy store with no .gitignore gains one the next time it is opened
   assert.match(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), /^\/\.lock\/$/m);
 });
 
-test('S2: a .gitignore a human already wrote is extended, never replaced', () => {
+test('a .gitignore a human already wrote is extended, never replaced', () => {
   const c = ctx();
   const dir = openStore(c);
   fs.writeFileSync(path.join(dir, '.gitignore'), '# mine\nscratch/\n', 'utf8');
@@ -206,7 +210,7 @@ test('S2: a .gitignore a human already wrote is extended, never replaced', () =>
   assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), after);
 });
 
-test('S2: releaseStoreLock never removes a lock owned by somebody else', () => {
+test('releaseStoreLock never removes a lock owned by somebody else', () => {
   const c = ctx();
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const lockPath = path.join(dir, '.lock');
@@ -226,7 +230,7 @@ test('S2: releaseStoreLock never removes a lock owned by somebody else', () => {
   assert.equal(lockOwnership(lockPath, mine.token), 'foreign');
 });
 
-test('S2: a transaction that loses its lock mid-flight leaves the new holder alone', () => {
+test('a transaction that loses its lock mid-flight leaves the new holder alone', () => {
   const c = ctx();
   seedLearning(c, 'lock-anchor');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -242,7 +246,7 @@ test('S2: a transaction that loses its lock mid-flight leaves the new holder alo
   assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')).token, 'thief');
 });
 
-test('S3: parsePorcelainZ decodes non-ASCII, spaces, quotes, backslashes, a literal " -> ", and rename pairs', () => {
+test('parsePorcelainZ decodes non-ASCII, spaces, quotes, backslashes, a literal " -> ", and rename pairs', () => {
   const z = [
     '?? learnings/café/x.md',
     '?? learnings/a -> b/c.md',
@@ -271,7 +275,7 @@ test('S3: parsePorcelainZ decodes non-ASCII, spaces, quotes, backslashes, a lite
   assert.equal(parsed[parsed.length - 1].status, ' M', 'the entry AFTER a rename is not shifted by one');
 });
 
-test('S3: a hand edit to a non-ASCII learning path is absorbed, not silently skipped', () => {
+test('a hand edit to a non-ASCII learning path is absorbed, not silently skipped', () => {
   const c = ctx();
   seedLearning(c, 'ascii-anchor');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -289,7 +293,7 @@ test('S3: a hand edit to a non-ASCII learning path is absorbed, not silently ski
   assert.equal(listLearnings(dir).find((l) => l.id === 'café/délai').fm.source, 'human', 'and absorbed with honest provenance');
 });
 
-test('S3: a learning path containing a literal " -> " is absorbed, not mis-split into a phantom path', {
+test('a learning path containing a literal " -> " is absorbed, not mis-split into a phantom path', {
   skip: process.platform === 'win32' ? 'a filename containing ">" cannot exist on Windows' : false,
 }, () => {
   const c = ctx();
@@ -308,7 +312,7 @@ test('S3: a learning path containing a literal " -> " is absorbed, not mis-split
   assert.deepEqual(result.absorbed.map((a) => a.id), ['a -> b/c']);
 });
 
-test('S4: rollbackStore reports failure when git cannot reset, instead of returning silently', () => {
+test('rollbackStore reports failure when git cannot reset, instead of returning silently', () => {
   const c = ctx();
   seedLearning(c, 'rollback-anchor');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -328,7 +332,7 @@ test('S4: rollbackStore reports failure when git cannot reset, instead of return
   assert.equal(fs.existsSync(path.join(dir, 'learnings', 'sql', 'dirty.md')), false);
 });
 
-test('S4: rollbackStore reports failure when the tree is still dirty despite a zero exit', () => {
+test('rollbackStore reports failure when the tree is still dirty despite a zero exit', () => {
   const c = ctx();
   seedLearning(c, 'unreachable-anchor');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -342,7 +346,7 @@ test('S4: rollbackStore reports failure when the tree is still dirty despite a z
   assert.equal(fs.readFileSync(path.join(dir, 'learnings', 'sql', 'tracked-edit.md'), 'utf8'), 'y\n');
 });
 
-test('S4: rollbackToCheckpoint discards a post-materialization write back to the checkpoint', () => {
+test('rollbackToCheckpoint discards a post-materialization write back to the checkpoint', () => {
   const c = ctx();
   seedLearning(c, 'checkpoint-anchor');
 
@@ -363,7 +367,7 @@ test('S4: rollbackToCheckpoint discards a post-materialization write back to the
   assert.equal(git(tx.dir, ['status', '--porcelain', '-uall', '-z']).stdout, '', 'and the store tree is clean');
 });
 
-test('S4: a transaction whose rollbackToCheckpoint FAILED never commits, even if fn returns normally', () => {
+test('a transaction whose rollbackToCheckpoint FAILED never commits, even if fn returns normally', () => {
   const c = ctx();
   seedLearning(c, 'failed-rollback-anchor');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
@@ -391,7 +395,7 @@ test('S4: a transaction whose rollbackToCheckpoint FAILED never commits, even if
   );
 });
 
-test('S4: recordCheckpoint aborts when it cannot refresh the journal, rather than leaving a stale checkpoint', () => {
+test('recordCheckpoint aborts when it cannot refresh the journal, rather than leaving a stale checkpoint', () => {
   const c = ctx();
   seedLearning(c, 'journal-anchor');
 

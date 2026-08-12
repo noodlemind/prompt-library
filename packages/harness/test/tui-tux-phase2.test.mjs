@@ -22,29 +22,7 @@ test('host modes cycle commands → assist → plan → commands', () => {
   assert.equal(modeChrome('plan').authority, 'propose');
 });
 
-test('previewSelection surfaces config key value scope and full command', () => {
-  const row = {
-    label: 'Config set agent.enabled',
-    argvTokens: [
-      { kind: 'command', value: 'config' },
-      { kind: 'subcommand', value: 'set' },
-      { kind: 'value', positional: 'key', valueName: 'key' },
-      { kind: 'value', positional: 'value', valueName: 'value' },
-      { kind: 'flag', value: '--scope' },
-      { kind: 'value', flag: '--scope', valueName: 'scope' },
-    ],
-  };
-  const preview = previewSelection(row, {
-    key: 'agent.enabled',
-    value: 'false',
-    '--scope': 'user',
-  });
-  // resolveSelection may need exact token shapes from real index — assert helper structure
-  assert.ok(preview.lines.length >= 1 || preview.invalid || preview.lines.some((l) => /needs:/.test(l)));
-});
-
-test('previewSelection on ready config-like argv list', () => {
-  // Minimal row that resolveSelection can build when argvTokens are pure commands + fixed values
+test('previewSelection skips ledger dump when argv is ready', () => {
   const row = {
     label: 'status',
     argvTokens: [
@@ -54,7 +32,23 @@ test('previewSelection on ready config-like argv list', () => {
   const preview = previewSelection(row, {});
   assert.ok(preview.argv);
   assert.deepEqual(preview.argv, ['status']);
-  assert.match(preview.lines.join('\n'), /command: status/);
+  assert.equal(preview.skipLedger, true, 'ready runs do not dump sparse command/key/value rows');
+  assert.equal(preview.lines.length, 0);
+});
+
+test('previewSelection surfaces needs: when positionals are missing', () => {
+  const row = {
+    label: 'config set',
+    argvTokens: [
+      { kind: 'command', value: 'config' },
+      { kind: 'subcommand', value: 'set' },
+      { kind: 'value', positional: 'key', valueName: 'key' },
+      { kind: 'value', positional: 'value', valueName: 'value' },
+    ],
+  };
+  const preview = previewSelection(row, {});
+  assert.equal(preview.skipLedger, false);
+  assert.ok(preview.lines.some((l) => /needs:/.test(l)) || preview.invalid || preview.argv);
 });
 
 test('question checkpoint: answer and unanswered inconclusive', () => {

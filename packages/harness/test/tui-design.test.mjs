@@ -720,12 +720,15 @@ test('FIELD: the chrome takes the width the terminal actually has', async () => 
   session.close();
 });
 
-test('FIELD: the palette scales with the terminal instead of cramming into 72 columns', () => {
+test('FIELD: overlays track terminal width the way the composer does', () => {
   const overlay = createOverlay({ rows: [{ label: 'index status', summary: 'x', sideEffect: 'read' }] });
   const wide = renderOverlay(overlay, { ui, width: 200 });
-  assert.equal(displayWidth(wide[0]), 110, 'on a wide terminal the box takes a readable measure');
+  assert.equal(displayWidth(wide[0]), 198, 'on a wide terminal the modal fills the window, not a 110-cell stamp');
   const narrow = renderOverlay(overlay, { ui, width: 50 });
-  assert.equal(displayWidth(narrow[0]), 46, 'on a narrow one it takes everything but a margin');
+  assert.equal(displayWidth(narrow[0]), 48, 'on a narrow one it takes everything but a 1-cell margin');
+  // Explicit cap still works for tests / tight sheets.
+  const capped = renderOverlay(overlay, { ui, width: 200, maxWidth: 80 });
+  assert.equal(displayWidth(capped[0]), 80);
 });
 
 test('FIELD: exit is discoverable — a palette row and a key in the hint row', async () => {

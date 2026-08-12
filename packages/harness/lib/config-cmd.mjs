@@ -224,20 +224,29 @@ export async function cmdConfig(argv, ctx = {}) {
     const keyWidth = keyWidthFor([result.key, 'source']);
     console.log(ui.line({ key: result.key, value: Array.isArray(result.value) ? result.value.join(',') : String(result.value), note: [result.source, result.note].filter(Boolean).join(' · '), keyWidth }));
   } else {
-    const keyWidth = keyWidthFor(['set', 'file', 'effective', 'scope']);
+    // Compact product lines — avoid a sparse 4-row key dump that fills a wide
+    // tinted block with empty columns on the session ledger.
+    const written = Array.isArray(result.written) ? result.written.join(',') : String(result.written);
+    const effective = Array.isArray(result.value) ? result.value.join(',') : String(result.value);
     const scopeNote = result.scopeDefaulted ? `${result.scope} (default)` : result.scope;
-    console.log(ui.line({ state: 'ok', key: 'set', value: `${result.key} = ${Array.isArray(result.written) ? result.written.join(',') : String(result.written)}`, note: scopeNote, keyWidth }));
-    console.log(ui.line({ key: 'file', value: result.file, keyWidth }));
-    if (result.scopeDefaulted) {
-      console.log(ui.line({ key: 'scope', value: 'user', note: 'default — use --scope project for the repo', keyWidth }));
-    }
+    const keyWidth = keyWidthFor(['set', 'file']);
     console.log(ui.line({
-      state: result.effectiveChanged ? 'ok' : 'warn',
-      key: 'effective',
-      value: Array.isArray(result.value) ? result.value.join(',') : String(result.value),
-      note: [result.source, result.note].filter(Boolean).join(' · '),
+      state: 'ok',
+      key: 'set',
+      value: `${result.key} = ${written}`,
+      note: scopeNote,
       keyWidth,
     }));
+    console.log(ui.line({ key: 'file', value: result.file, keyWidth }));
+    if (!result.effectiveChanged) {
+      console.log(ui.line({
+        state: 'warn',
+        key: 'set',
+        value: effective,
+        note: [result.source, result.note, 'not effective'].filter(Boolean).join(' · '),
+        keyWidth,
+      }));
+    }
   }
 
   // One rule, shared with the lane path through the registry's `exitOf`.

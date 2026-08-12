@@ -8,7 +8,7 @@ import { createStyle, EXIT } from './style.mjs';
 import { dispatch, hasCommand, getCommand } from './registry.mjs';
 import { openPalette, resolveSelection, selectionPlan, signatureOf } from './tui/palette.mjs';
 import { routeTypedLine } from './tui/typed-line.mjs';
-import { buildCommandIndex } from './command-index.mjs';
+import { buildCommandIndex, orderPaletteRows } from './command-index.mjs';
 import { createTally, interpretLine, stripControl, tokenize } from './tui/session.mjs';
 import { createOverlay, splitPrefix, applyPrefix, treeRows, filterSectioned } from './tui/overlay.mjs';
 import { createLedger, statusForExit } from './tui/ledger.mjs';
@@ -203,6 +203,7 @@ export async function runLedger({
     const last = ledger.lastCommand();
     const chrome = modeChrome(hostMode);
     const agentOn = agentMode();
+    const shell = settings['exec.bash_enabled'] === false ? 'denied' : 'allowed';
     session.setStatus({
       workspace: tildePath(workspace),
       branch: git.branch,
@@ -215,10 +216,11 @@ export async function runLedger({
       agent: agentOn,
       authority: chrome.authority,
       mode: chrome.mode,
+      shell,
     });
     session.setHint({
       gate,
-      shell: settings['exec.bash_enabled'] === false ? 'denied' : 'allowed',
+      shell,
       rerun: last?.command ? shortCommand(last.command) : null,
       agent: agentOn,
       mode: chrome.mode,
@@ -421,19 +423,22 @@ export async function runLedger({
   const paletteRows = (query) => {
     const { prefix, rest } = splitPrefix(query);
     const palette = openPalette({ workspace, query: rest });
-    const rows = applyPrefix(palette.rows, prefix).map((row) => ({
+    let rows = applyPrefix(palette.rows, prefix).map((row) => ({
       ...row,
       signature: signatureOf(row),
-      note: stripFlagSyntax(row.summary),
+      // Product note first; fall back to cleaned registry summary.
+      note: stripFlagSyntax(row.note || row.summary || ''),
       reason: row.unavailable || null,
     }));
     if (!prefix) {
       const q = rest.trim().toLowerCase();
-      const matching = SESSION_ROWS.filter((r) => !q || r.label.includes(q));
-            for (const row of matching) {
+      const matching = SESSION_ROWS.filter((r) => !q || r.label.includes(q) || (r.note || '').includes(q));
+      for (const row of matching) {
         if (q && row.label.startsWith(q)) rows.unshift(row);
         else rows.push(row);
       }
+      // Empty query: common intents first (not A–Z registry dump).
+      if (!q) rows = orderPaletteRows(rows, { query: '' });
     }
     return rows;
   };
@@ -552,8 +557,12 @@ export async function runLedger({
       return;
     }
     if (resolved) {
+      // Only surface needs:/warnings — never a multi-row argv dump (the run
+      // block already shows the command; sparse key/value/scope rows look broken).
       const preview = previewSelection(row, values);
-      for (const line of renderPreviewLines(ui, preview)) say(line);
+      if (!preview.skipLedger) {
+        for (const line of renderPreviewLines(ui, preview)) say(line);
+      }
       await runArgv(resolved);
     }
   };
@@ -1249,34 +1258,31 @@ export async function runLedger({
   function emitHelp() {
     const rows = [
       ['help / ?', 'this keymap and grammar'],
-      ['/', 'open the command palette'],
-      ['/<text>', 'filter the palette (run: plan: search: check: learn:)'],
-      ['/', 'open the command palette'],
-      ['/<text>', 'filter the palette (run: plan: search: check: learn:)'],
-      ['!', 'enter bash mode — every line runs through governed bash · esc leaves'],
-      ['!<command>', 'run one shell command without entering the mode'],
-      ['bash', 'same as ! — enter bash mode'],
-      ['tree', 'workspace file tree · also: tree knowledge'],
-      ['tree lib', 'workspace tree under a path'],
-      ['search <query>', 'search · then type results'],
+      ['/', 'open the command palette · common intents first'],
+      ['/<text>', 'filter the palette (run: search: check: learn:)'],
+      ['!', 'shell mode · esc leaves'],
+      ['!<command>', 'one shell command without entering the mode'],
+      ['tree', 'browse project files · tree knowledge for the store'],
+      ['tree lib', 'file tree under a path'],
+      ['learnings', 'list what was learned · why <id> for provenance'],
+      ['search <query>', 'search code and knowledge · then type results'],
+      ['remember <claim>', 'teach the harness a durable claim'],
       ['agent on|off', 'toggle optional agent'],
       ['mode commands|assist|plan', 'host modes · shift+tab cycles'],
       ['gate menu', 'approve / comment / quit for the active plan'],
-      ['inspect config', 'effective values and provenance'],
+      ['inspect config', 'why a setting has its effective value'],
       ['runs', 'list prior runs'],
-      ['config set key=value', 'user scope by default'],
+      ['config set key=value', 'settings · user scope by default'],
       ['@<path>', 'complete a file path'],
-      ['results', 'open one of the last search\u2019s results'],
+      ['results', 'open one of the last search hits'],
       ['replay', 're-run the previous block'],
-      ['replay <id>', 're-run any block by id, from its record line'],
+      ['replay <id>', 're-run any block by id'],
       ['shift+tab', 'cycle host mode: commands → assist → plan'],
-      ['ctrl+\u2191', 'walk the ledger blocks'],
+      ['ctrl+\u2191', 'walk ledger blocks'],
       ['ctrl+o', 'fold or unfold the last block'],
-      ['esc esc', 'open the run tree'],
       ['esc', 'interrupt a running command'],
-      ['ctrl+d', 'close the session'],
-      ['clear', 'clear the viewport (keeps scrollback)'],
-      ['exit / quit', 'close the session and print the tally'],
+      ['ctrl+d / exit', 'close the session'],
+      ['clear', 'clear the viewport · scrollback survives'],
     ];
     const keyWidth = Math.max(...rows.map(([k]) => k.length));
     say(rows.map(([k, v]) => ui.line({ key: k, value: v, keyWidth })));

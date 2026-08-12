@@ -3,7 +3,7 @@ import { displayWidth, clipTo, padTo } from './width.mjs';
 /** The footer's left column, in the order the design fixes. Configurable per
  * the mock's `statusline items` setting — Warp makes this configurable because
  * it is taste, and the same argument applies here. */
-export const DEFAULT_FOOTER_ITEMS = Object.freeze(['plan', 'gate', 'agent', 'run', 'knowledge']);
+export const DEFAULT_FOOTER_ITEMS = Object.freeze(['plan', 'gate', 'agent', 'shell', 'run', 'knowledge']);
 
 const GATE_GLYPH = {
   pass: ['ok', 'ok'],
@@ -91,6 +91,15 @@ export function footerSegments(snapshot = {}, items = DEFAULT_FOOTER_ITEMS) {
       }
       if (snapshot.agent === false || snapshot.agent === 'off') {
         return { token: 'muted', text: 'agent off' };
+      }
+      return null;
+    },
+    shell: () => {
+      if (snapshot.shell === 'denied' || snapshot.shell === false) {
+        return { token: 'warn', text: 'shell off' };
+      }
+      if (snapshot.shell === 'allowed' || snapshot.shell === true) {
+        return { token: 'muted', text: 'shell on' };
       }
       return null;
     },

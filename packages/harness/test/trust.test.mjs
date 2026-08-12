@@ -242,3 +242,76 @@ test('a trust change is recorded on the envelope lane too', () => {
     .split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.type === 'trust');
   assert.equal(events.length, 1, 'an audit a caller can skip by choosing an output format is not an audit');
 });
+
+// --- folded from review souvenirs -----------------------------------------
+
+function writeChecks(workspace, body) {
+  fs.mkdirSync(path.join(workspace, '.github', 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, '.github', 'harness', 'checks.yaml'), body);
+}
+
+test('rewriting checks.yaml after approval invalidates trust', () => {
+  const s = scopes();
+  const marker = path.join(s.workspace, 'MARKER');
+  writeChecks(s.workspace, 'version: 1\nchecks:\n  c:\n    command: ["node", "-e", "0"]\n');
+  approveProject(s);
+  assert.equal(trustStatus(s).state, 'trusted');
+
+  writeChecks(s.workspace, `version: 1\nchecks:\n  c:\n    command: ${JSON.stringify([process.execPath, '-e', `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "x")`])}\n`);
+  assert.equal(trustStatus(s).state, 'stale', 'the executed file must be pinned like every other authority-bearing file');
+
+  const res = spawnSync(process.execPath, [
+    binPath, 'checks', 'run', 'c', '--no-events',
+    '--workspace', s.workspace, '--copilot-home', s.copilotHome,
+  ], { cwd: packageRoot, encoding: 'utf8' });
+  assert.equal(res.status, 4); // EXIT.needsApproval
+  assert.equal(fs.existsSync(marker), false, 'the rewritten command must not have run');
+  assert.ok(PINNED_FILES.some((f) => f.endsWith('checks.yaml')));
+});
+
+test('config set --scope project reports the trust its own write just invalidated', () => {
+  const s = scopes();
+  approveProject(s);
+  const res = spawnSync(process.execPath, [
+    binPath, 'config', 'set', 'exec.timeout_seconds', '5', '--scope', 'project', '--json', '--no-events',
+    '--workspace', s.workspace, '--copilot-home', s.copilotHome,
+  ], { cwd: packageRoot, encoding: 'utf8' });
+  const result = JSON.parse(res.stdout);
+  assert.equal(result.trustNowStale, true, 'the write made the project stale and the answer must say so');
+  assert.equal(result.value, 600, 'a stale project contributes nothing, so the effective value is the default');
+  assert.equal(trustStatus(s).state, 'stale');
+});
+
+test('a structurally partial trust store denies and refuses to be overwritten', () => {
+  const s = scopes();
+  approveProject(s);
+  fs.writeFileSync(trustStorePath(s.copilotHome), 'version: 1\nprojects:\n');
+  assert.equal(trustStatus(s).trusted, false, 'a damaged store is not an empty one');
+  assert.throws(() => approveProject(s), (e) => e.code === 'E_TARGET',
+    'overwriting it would discard every approval and revocation it held');
+});
+
+test('`harness trust --json approve` no longer reports success while approving nothing', () => {
+  const s = scopes();
+  fs.mkdirSync(path.join(s.workspace, '.github', 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(s.workspace, '.github', 'harness', 'policy.yaml'), 'version: 1\nenforcement: warn\n');
+
+  const res = spawnSync(process.execPath, [
+    binPath, 'trust', '--json', 'approve',
+    '--workspace', s.workspace, '--copilot-home', s.copilotHome,
+  ], { encoding: 'utf8' });
+  const parsed = JSON.parse(res.stdout);
+  assert.equal(parsed.verb, 'approve',
+    '`approve` must not be read as the value of `--json`');
+  assert.equal(fs.existsSync(path.join(s.copilotHome, 'harness', 'trust.yaml')), true, 'approval must be recorded');
+});
+
+test('the CLI refuses an unknown trust verb instead of approving', () => {
+  const s = scopes();
+  const res = spawnSync(process.execPath, [
+    binPath, 'trust', 'frobnicate', 'approve',
+    '--workspace', s.workspace, '--copilot-home', s.copilotHome,
+  ], { encoding: 'utf8' });
+  assert.notEqual(res.status, 0, 'an unknown verb must be an error');
+  assert.equal(fs.existsSync(path.join(s.copilotHome, 'harness', 'trust.yaml')), false, 'and must approve nothing');
+});

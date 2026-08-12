@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import vm from 'node:vm';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
@@ -13,6 +14,41 @@ import { ensureHarnessDir } from './session.mjs';
 const ui = createStyle({ argv: process.argv.slice(2) });
 
 export const EDIT_SCHEMA = 1;
+
+/** Extensions that get a cheap syntax refuse before write (AC18). Non-code is skipped. */
+export const LINT_ON_EDIT_EXTENSIONS = Object.freeze(new Set([
+  '.json', '.js', '.cjs', '.mjs',
+]));
+
+/**
+ * Optional syntax check for known code extensions. Returns null if ok or skipped;
+ * returns an error string if the content should be refused.
+ */
+export function syntaxCheckContent(relPath, content) {
+  if (typeof content !== 'string') return null;
+  const ext = path.extname(relPath || '').toLowerCase();
+  if (!LINT_ON_EDIT_EXTENSIONS.has(ext)) return null;
+  if (ext === '.json') {
+    try {
+      JSON.parse(content);
+      return null;
+    } catch (error) {
+      return `JSON syntax error: ${error.message}`;
+    }
+  }
+  // .js / .cjs / .mjs — cheap parse via vm.Script; ESM import/export is skipped (not a hard refuse).
+  try {
+    // eslint-disable-next-line no-new
+    new vm.Script(content, { filename: relPath || 'edit.js' });
+    return null;
+  } catch (error) {
+    const msg = String(error?.message || error);
+    if (/Cannot use import statement|Unexpected token 'export'|await is only valid/.test(msg)) {
+      return null;
+    }
+    return `JS syntax error: ${msg}`;
+  }
+}
 
 const LOCK_STALE_MS = 30_000;
 
@@ -239,6 +275,10 @@ export function runEdit({ workspace, path: relPath, old, next, dryRun = false })
     const before = target.content;
         const lineNumber = before.slice(0, first).split(/\r?\n/).length;
     const after = before.slice(0, first) + next + before.slice(first + old.length);
+    const syntaxError = syntaxCheckContent(relPath, after);
+    if (syntaxError) {
+      return failed('edit', relPath, 'syntax', `refusing to write invalid syntax to ${relPath}`, syntaxError);
+    }
         if (dryRun) {
       return {
         ...dryRunResult('edit', relPath, before, after),
@@ -348,6 +388,11 @@ export function runWrite({ workspace, path: relPath, content, expect = null, all
           'a digest match proves the file was read, not that all of it was — use `edit` for a change to part of it, or pass --allow-shrink if replacing it with less is genuinely intended',
         );
       }
+    }
+
+    const syntaxError = syntaxCheckContent(relPath, content);
+    if (syntaxError) {
+      return failed('write', relPath, 'syntax', `refusing to write invalid syntax to ${relPath}`, syntaxError);
     }
 
     if (dryRun) {

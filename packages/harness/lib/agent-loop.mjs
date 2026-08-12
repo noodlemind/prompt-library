@@ -8,6 +8,8 @@ import { TIMEOUT_MAX_SECONDS } from './exec-policy.mjs';
 import { editResultOf, writeResultOf } from './edit-cmd.mjs';
 import { getResultOf } from './retrieval/compat-results.mjs';
 import { searchResultOf } from './retrieval/search-cmd.mjs';
+import { todoResultOf } from './todo-cmd.mjs';
+import { applyResultOf } from './apply-cmd.mjs';
 
 export const AGENT_SCHEMA = 1;
 
@@ -18,14 +20,16 @@ export const READ_MAX_BYTES = TOOL_RESULT_MAX_BYTES + 2_000;
 export const SEARCH_ROWS = 8;
 /** Persona text beyond this is truncated — full engineer.md is not a runtime prompt. */
 export const PERSONA_MAX_BYTES = 2_000;
-/** Orientation pack ceiling in the system prompt. */
+/** Hard cap for the entire autonomous system card (AC9). */
+export const AUTONOMOUS_SYSTEM_MAX_BYTES = 2_048;
+/** Orientation pack ceiling in the system prompt (deliver / legacy). */
 export const ORIENTATION_MAX_BYTES = 4_000;
 
 /** After this many consecutive explore-only turns, further search/read is refused. */
 export const MAX_EXPLORE_STREAK = 3;
 /** Hard search calls per run (search attractor guard). */
 export const MAX_SEARCH_PER_RUN = 5;
-/** Keep full tool results for this many recent turns; older explores are stubbed. */
+/** Keep full tool results for this many recent turns; older results are compacted. */
 export const TRANSCRIPT_FULL_TURNS = 6;
 /**
  * Cap one model completion so a hung provider cannot burn the whole wall clock.
@@ -38,9 +42,18 @@ export const AGENT_COMPLETION_RETRIES = 1;
 export const DEFAULT_PERSONA = 'engineer';
 export const DEFAULT_MAX_TURNS = CONFIG_SCHEMA['agent.max_turns'].default;
 export const DEFAULT_MAX_SECONDS = CONFIG_SCHEMA['agent.max_seconds'].default;
+/**
+ * Default optional-agent profile id.
+ * `autonomous` is the first-class eval/long-horizon track (prefer with --verify-cmd).
+ * Existing efficiency fixtures may pass `--profile benchmark`.
+ */
+export const DEFAULT_PROFILE_ID = 'autonomous';
 
 export const STOP_REASONS = Object.freeze({
   done: { status: 'ok', exit: EXIT.ok, summary: 'the model finished and asked for nothing more' },
+  'verifier-pass': { status: 'ok', exit: EXIT.ok, summary: 'the task verifier passed' },
+  'verifier-missing': { status: 'failed', exit: 1, summary: 'autonomous run needs a task verifier for proven success' },
+  'verifier-failed': { status: 'failed', exit: 1, summary: 'the model stopped but the task verifier did not pass' },
   'turn-budget': { status: 'failed', exit: 1, summary: 'the turn budget was reached before the model finished' },
   'time-budget': { status: 'timed-out', exit: EXIT.timedOut, summary: 'the wall clock was reached before the model finished' },
   'tool-error': { status: 'failed', exit: 1, summary: 'a tool could not be dispatched at all' },
@@ -48,30 +61,95 @@ export const STOP_REASONS = Object.freeze({
   cancelled: { status: 'cancelled', exit: EXIT.cancelled, summary: 'the run was cancelled' },
 });
 
+const LIFECYCLE_DROPS_AUTONOMOUS = Object.freeze([
+  Object.freeze({ step: 'gate', precondition: 'a locked plan under docs/plans/' }),
+  Object.freeze({ step: 'verify', precondition: 'product harness verify --plan (use task --verify-cmd instead)' }),
+  Object.freeze({ step: 'compound', precondition: 'a knowledge store that outlives this run' }),
+  Object.freeze({ step: 'human-review', precondition: 'a reviewer' }),
+]);
+
 /**
- * TEST / EFFICIENCY FIXTURE ONLY for the optional headless agent add-on.
+ * First-class autonomous / long-horizon solve track (evals, unattended).
+ * Same kernel tools as Deliver; no plan/gate/compound ceremony.
+ */
+export const AUTONOMOUS_PROFILE = Object.freeze({
+  id: 'autonomous',
+  track: 'autonomous',
+  testOnly: false,
+  shortCard: true,
+  maxTurnsDefault: 50,
+  maxSecondsDefault: 1800,
+  keeps: Object.freeze(['orient', 'retrieval', 'governed-exec', 'journal', 'task-verifier', 'todo', 'apply']),
+  drops: LIFECYCLE_DROPS_AUTONOMOUS,
+});
+
+/**
+ * Optional headless Deliver-oriented agent profile (product-minded prompt).
+ * Host @engineer remains the full Deliver owner; this does not replace hooks.
+ */
+export const DELIVER_PROFILE = Object.freeze({
+  id: 'deliver',
+  track: 'deliver',
+  testOnly: false,
+  shortCard: false,
+  maxTurnsDefault: DEFAULT_MAX_TURNS,
+  maxSecondsDefault: DEFAULT_MAX_SECONDS,
+  keeps: Object.freeze(['orient', 'plan', 'gate', 'retrieval', 'governed-exec', 'verify', 'compound', 'journal']),
+  drops: Object.freeze([]),
+});
+
+/**
+ * TEST / EFFICIENCY FIXTURE ONLY — alias of autonomous drops with a fixture id.
  * Not the Adaptive Engineering product lifecycle. Full AE is host @engineer
- * + kernel gate/verify/compound. Drops of gate/verify/compound here are
- * intentional for bare-container benchmarks — not product bugs to "fix".
+ * + kernel gate/verify/compound.
  */
 export const BENCHMARK_PROFILE = Object.freeze({
   id: 'benchmark',
+  track: 'autonomous',
   testOnly: true,
+  shortCard: true,
+  maxTurnsDefault: 50,
+  maxSecondsDefault: 1800,
   keeps: Object.freeze(['orient', 'retrieval', 'governed-exec', 'journal']),
-  drops: Object.freeze([
-    Object.freeze({ step: 'gate', precondition: 'a locked plan under docs/plans/' }),
-    Object.freeze({ step: 'verify', precondition: 'named checks in .github/harness/checks.yaml' }),
-    Object.freeze({ step: 'compound', precondition: 'a knowledge store that outlives this run' }),
-    Object.freeze({ step: 'human-review', precondition: 'a reviewer' }),
-  ]),
+  drops: LIFECYCLE_DROPS_AUTONOMOUS,
 });
 
-/** One-line product disclaimer for optional agent runs (AC11). */
+const PROFILE_BY_ID = Object.freeze({
+  deliver: DELIVER_PROFILE,
+  autonomous: AUTONOMOUS_PROFILE,
+  bench: AUTONOMOUS_PROFILE,
+  benchmark: BENCHMARK_PROFILE,
+});
+
+/** Resolve CLI/config profile name to a frozen profile object. */
+export function resolveProfile(name = DEFAULT_PROFILE_ID) {
+  const key = String(name || DEFAULT_PROFILE_ID).trim().toLowerCase();
+  const profile = PROFILE_BY_ID[key];
+  if (!profile) {
+    throw Object.assign(
+      new Error(`unknown agent profile: ${name}`),
+      {
+        code: 'E_USAGE',
+        exit: EXIT.usage,
+        hint: 'known profiles: deliver | autonomous | bench (alias) | benchmark (fixture)',
+      },
+    );
+  }
+  return profile;
+}
+
+export function listProfileIds() {
+  return ['deliver', 'autonomous', 'bench', 'benchmark'];
+}
+
+/** One-line product disclaimer for optional agent runs. */
 export const AGENT_ADDON_DISCLAIMER =
   'optional add-on loop — not full Adaptive Engineering (host @engineer + gate/verify/compound)';
 
 const EXPLORE_TOOLS = new Set(['search', 'read']);
-const ACT_TOOLS = new Set(['edit', 'write', 'bash', 'exec']);
+const ACT_TOOLS = new Set(['edit', 'write', 'apply', 'bash', 'exec']);
+const READ_ONLY_TOOLS = new Set(['search', 'read', 'todo']);
+const MUTATE_TOOLS = new Set(['edit', 'write', 'apply']);
 
 export const AGENT_TOOLS = Object.freeze([
   Object.freeze({
@@ -133,6 +211,38 @@ export const AGENT_TOOLS = Object.freeze([
     },
   }),
   Object.freeze({
+    name: 'apply',
+    description:
+      'Apply multiple file edits in one all-or-nothing batch (CAS). Each item is path+old+new or path+content(+expect). '
+      + 'Prefer for coordinated multi-file fixes. Single write path — same as edit/write.',
+    schema: {
+      type: 'object',
+      properties: {
+        changes: {
+          type: 'array',
+          description: 'list of {path, old, new} or {path, content, expect?}',
+          items: { type: 'object' },
+        },
+      },
+      required: ['changes'],
+    },
+  }),
+  Object.freeze({
+    name: 'todo',
+    description:
+      'Durable worklist for long-horizon tasks. verb: list|add|complete|clear. '
+      + 'Use add to track steps; complete when done. State lives under .harness/todo.json.',
+    schema: {
+      type: 'object',
+      properties: {
+        verb: { type: 'string', description: 'list | add | complete | clear' },
+        text: { type: 'string', description: 'item text for add' },
+        id: { type: 'string', description: 'item id for complete' },
+      },
+      required: ['verb'],
+    },
+  }),
+  Object.freeze({
     name: 'read',
     description:
       'Read a known path. Use after you know which file failed (from a test run or the task). '
@@ -167,6 +277,7 @@ const TOOL_NAMES = new Set(AGENT_TOOLS.map((t) => t.name));
 export const AGENT_VALUE_FLAGS = Object.freeze([
   '--agent', '--provider', '--model', '--max-turns', '--max-seconds', '--tool-timeout',
   '--workspace', '--copilot-home', '--output', '--plan', '--host', '--limit', '--query',
+  '--profile', '--verify-cmd',
 ]);
 
 function usageError(message, hint) {
@@ -192,7 +303,29 @@ export function resolvePersona(copilotHome, name = DEFAULT_PERSONA) {
   }
 }
 
-export function buildSystemPrompt({ persona, profile = BENCHMARK_PROFILE, orientation = null }) {
+function autonomousSystemCard({ hasVerifier = false } = {}) {
+  const lines = [
+    'You are a headless coding agent on the autonomous track (same harness kernel as Deliver; no plan/gate/compound).',
+    '',
+    '## Workflow',
+    '1. Reproduce — run the failing test/command with bash/exec when named.',
+    '2. Read only the failing path; edit surgically (edit or multi-file apply).',
+    '3. Use todo for multi-step work.',
+    hasVerifier
+      ? '4. The harness re-runs the task verifier after mutations; stop when it is green.'
+      : '4. Re-run the same command to prove the fix; then stop with no tool call.',
+    '',
+    '## Limits',
+    `- Search last resort (max ${MAX_SEARCH_PER_RUN}/run).`,
+    `- After ${MAX_EXPLORE_STREAK} explore-only turns, read/search is refused.`,
+    '- Prefer edit/apply over full-file rewrite. No ceremony artifacts unless asked.',
+    '',
+    `OUT OF SCOPE: ${LIFECYCLE_DROPS_AUTONOMOUS.map((d) => d.step).join(', ')}.`,
+  ];
+  return lines.join('\n');
+}
+
+function deliverSystemBody({ persona, orientation = null }) {
   const parts = [];
   if (persona.text) {
     parts.push(clipBytes(persona.text.trim(), PERSONA_MAX_BYTES));
@@ -203,27 +336,58 @@ export function buildSystemPrompt({ persona, profile = BENCHMARK_PROFILE, orient
     );
   }
   parts.push([
-    `## Runtime: ${profile.id}`,
+    '## Runtime: deliver (optional agent)',
     '',
-    'Headless run — no human mid-loop. Act with tools; finish with a short summary and no tool call.',
+    'Product-oriented headless run. Host @engineer remains the accountable Deliver owner.',
+    'If the workspace has a locked plan, respect gate/verify norms. Prefer surgical edits.',
     '',
-    '### Workflow (required order)',
-    '1. **Reproduce first** — if the task names a test or command, run it with `bash`/`exec` before searching.',
-    '2. **Read only what failed** — open the path named by the test failure or task; do not browse.',
-    '3. **Edit surgically** — prefer `edit` over `write`. Never invent a smaller rewrite of a large file.',
-    '4. **Re-run the same command** — prove the fix; then stop.',
+    '### Workflow',
+    '1. Orient from context; reproduce failing commands with bash/exec.',
+    '2. Edit surgically; re-run checks.',
+    '3. Prefer product `harness verify --plan` when a plan exists; do not skip proof.',
     '',
     '### Hard limits',
-    `- Search is a last resort and is limited to ${MAX_SEARCH_PER_RUN} calls per run.`,
-    `- After ${MAX_EXPLORE_STREAK} consecutive read/search turns without bash/exec/edit/write, further read/search is refused.`,
-    '- Do not create plans, docs, or ceremony artifacts unless the task asks for them.',
-    '',
-    `OUT OF SCOPE for this run: ${profile.drops.map((d) => `${d.step} (needs ${d.precondition})`).join('; ')}.`,
+    `- Search is limited to ${MAX_SEARCH_PER_RUN} calls per run.`,
+    `- After ${MAX_EXPLORE_STREAK} consecutive explore-only turns, further read/search is refused.`,
   ].join('\n'));
   if (orientation) {
     parts.push(`## Orientation\n\n${clipBytes(orientation, ORIENTATION_MAX_BYTES)}`);
   }
   return parts.join('\n\n');
+}
+
+/**
+ * Build the system prompt for the optional agent loop.
+ * Autonomous: short card (≤2KB). Deliver: persona clip + product workflow.
+ */
+export function buildSystemPrompt({
+  persona,
+  profile = AUTONOMOUS_PROFILE,
+  orientation = null,
+  hasVerifier = false,
+} = {}) {
+  const resolved = profile?.id ? profile : resolveProfile(profile);
+  if (resolved.shortCard || resolved.track === 'autonomous' || resolved.testOnly) {
+    // Autonomous / benchmark: short card only — do not inject full engineer.agent.md body.
+    let card = autonomousSystemCard({ hasVerifier });
+    if (orientation && resolved.id !== 'benchmark') {
+      // Light orientation clip only if room remains.
+      const room = AUTONOMOUS_SYSTEM_MAX_BYTES - Buffer.byteLength(card, 'utf8') - 32;
+      if (room > 200) {
+        card = `${card}\n\n## Orientation\n\n${clipBytes(orientation, Math.min(room, 800))}`;
+      }
+    }
+    // Benchmark fixture: keep OUT OF SCOPE wording tests expect + persona marker when present historically.
+    // Persona: only a tiny optional one-liner if hydrated and tiny; never blow the cap.
+    if (persona?.text && resolved.id === 'benchmark') {
+      // Legacy tests expect SPECIFIC-PERSONA-MARKER in benchmark-default runs.
+      // Keep a clipped persona prefix for benchmark fixture compatibility only.
+      const clipped = clipBytes(persona.text.trim(), 400);
+      card = `${clipped}\n\n${card}`;
+    }
+    return clipBytes(card, AUTONOMOUS_SYSTEM_MAX_BYTES);
+  }
+  return deliverSystemBody({ persona, orientation });
 }
 
 export async function orientForTask({ workspace, copilotHome, task, runOrientFn, dryRun = false }) {
@@ -304,7 +468,6 @@ export function exploreGate(call, { turns }) {
       return `explore streak is ${MAX_EXPLORE_STREAK}+ turns of read/search only — use bash/exec to reproduce or edit/write to act`;
     }
   }
-  // Same streak refuse for read: text nudges lost to explore incentives in the benchmark.
   if (call.name === 'read' && streak >= MAX_EXPLORE_STREAK) {
     return `explore streak is ${MAX_EXPLORE_STREAK}+ turns of read/search only — use bash/exec or edit/write to act`;
   }
@@ -316,14 +479,56 @@ export function lastTurnWasFailedAction(turns) {
   const last = turns[turns.length - 1];
   if (!last?.tools?.length) return false;
   return last.tools.some(
-    (t) => ACT_TOOLS.has(t.tool) && t.dispatched && t.tool !== 'edit' && t.tool !== 'write'
+    (t) => ACT_TOOLS.has(t.tool) && t.dispatched && t.tool !== 'edit' && t.tool !== 'write' && t.tool !== 'apply'
       && (t.exitCode === null || t.exitCode === undefined ? t.status !== 'ok' : t.exitCode !== 0),
   );
 }
 
 export function lastTurnMutated(turns) {
   const last = turns[turns.length - 1];
-  return Boolean(last?.tools?.some((t) => (t.tool === 'edit' || t.tool === 'write') && t.dispatched));
+  return Boolean(last?.tools?.some((t) => MUTATE_TOOLS.has(t.tool) && t.dispatched));
+}
+
+export function turnMutated(turn) {
+  return Boolean(turn?.tools?.some((t) => MUTATE_TOOLS.has(t.tool) && t.dispatched && t.status === 'ok'));
+}
+
+/**
+ * Run the task verifier via kernel exec (argv only — no free shell from plan strings).
+ * @returns {{ ok: boolean, result?: object, reason?: string }}
+ */
+export async function runTaskVerifier({
+  verifyCmd,
+  workspace,
+  copilotHome,
+  ctx = {},
+  remainingSeconds = null,
+} = {}) {
+  if (!Array.isArray(verifyCmd) || !verifyCmd.length) {
+    return { ok: false, reason: 'missing verify-cmd' };
+  }
+  const argvList = verifyCmd.filter((a) => typeof a === 'string');
+  if (!argvList.length) return { ok: false, reason: 'empty verify-cmd' };
+
+  const base = ['--workspace', workspace];
+  if (copilotHome) base.push('--copilot-home', copilotHome);
+  const timeout = resolveToolTimeout({ requested: remainingSeconds, ceiling: remainingSeconds });
+  const execArgv = timeout === null
+    ? [...base, '--', ...argvList]
+    : [...base, '--timeout', String(timeout), '--', ...argvList];
+
+  const bound = deadlineSignal(remainingSeconds, ctx.signal);
+  const runCtx = bound && bound.signal ? { ...ctx, signal: bound.signal } : ctx;
+  try {
+    const result = await execResultOf(execArgv, runCtx);
+    const ok = result.status === 'ok'
+      && (result.exitCode === 0 || result.exitCode === null || result.exitCode === undefined);
+    return { ok, result };
+  } catch (error) {
+    return { ok: false, reason: error.message, result: null };
+  } finally {
+    bound?.done?.();
+  }
 }
 
 export async function dispatchToolCall(call, {
@@ -373,6 +578,26 @@ export async function dispatchToolCall(call, {
     if (!query) return { dispatched: false, reason: 'search requires a non-empty `query`', fatal: false };
     argv = [...base, query];
     run = searchToolResultOf;
+  } else if (call.name === 'todo') {
+    fatalOnThrow = false;
+    const verb = typeof input.verb === 'string' ? input.verb.trim() : 'list';
+    argv = [...base, verb];
+    if (typeof input.text === 'string' && input.text) argv.push('--text', input.text);
+    if (typeof input.id === 'string' && input.id) argv.push('--id', input.id);
+    run = todoResultOf;
+  } else if (call.name === 'apply') {
+    fatalOnThrow = false;
+    if (!Array.isArray(input.changes) || !input.changes.length) {
+      return { dispatched: false, reason: 'apply requires a non-empty `changes` array', fatal: false };
+    }
+    let json;
+    try {
+      json = JSON.stringify(input.changes);
+    } catch {
+      return { dispatched: false, reason: 'apply changes must be JSON-serializable', fatal: false };
+    }
+    argv = [...base, '--changes', json];
+    run = applyResultOf;
   } else {
     fatalOnThrow = false;
     const rel = typeof input.path === 'string' ? input.path.trim() : '';
@@ -396,7 +621,6 @@ export async function dispatchToolCall(call, {
       if (typeof input.content !== 'string') {
         return { dispatched: false, reason: 'write requires `content` — the complete contents of the file', fatal: false };
       }
-      // No allow_shrink on the agent lane — elision must be unrepresentable.
       argv = [...base, '--path', rel, '--content', input.content];
       if (typeof input.expect === 'string' && input.expect) argv.push('--expect', input.expect);
       run = writeResultOf;
@@ -419,6 +643,38 @@ export async function dispatchToolCall(call, {
   } finally {
     bound?.done?.();
   }
+}
+
+/**
+ * Dispatch a batch of tool calls. Read-only tools may run in parallel;
+ * mutate/exec remain serial (and serial relative to each other).
+ */
+export async function dispatchToolBatch(calls, options = {}) {
+  if (!calls.length) return [];
+
+  const allReadOnly = calls.every((c) => READ_ONLY_TOOLS.has(c.name));
+  if (allReadOnly && calls.length > 1) {
+    return Promise.all(calls.map((call) => dispatchToolCall(call, options)));
+  }
+
+  const outcomes = [];
+  let i = 0;
+  while (i < calls.length) {
+    const call = calls[i];
+    if (READ_ONLY_TOOLS.has(call.name)) {
+      const group = [];
+      while (i < calls.length && READ_ONLY_TOOLS.has(calls[i].name)) {
+        group.push(calls[i]);
+        i += 1;
+      }
+      const groupOut = await Promise.all(group.map((c) => dispatchToolCall(c, options)));
+      outcomes.push(...groupOut);
+    } else {
+      outcomes.push(await dispatchToolCall(call, options));
+      i += 1;
+    }
+  }
+  return outcomes;
 }
 
 async function searchToolResultOf(argv, ctx = {}) {
@@ -475,8 +731,15 @@ function normalizeCalls(completion) {
   return calls.filter((c) => c && typeof c.name === 'string' && typeof c.id === 'string');
 }
 
-/** Stub old explore tool results so the transcript cannot grow without bound. */
-export function compactMessages(messages, { keepTurns = TRANSCRIPT_FULL_TURNS } = {}) {
+/**
+ * Compact old tool results to bound context.
+ * Autonomous: general compaction of old tool results.
+ * Explore-only stubs retained for deliver/benchmark compatibility.
+ */
+export function compactMessages(messages, {
+  keepTurns = TRANSCRIPT_FULL_TURNS,
+  mode = 'explore', // 'explore' | 'all'
+} = {}) {
   const toolUserIndexes = [];
   for (let i = 0; i < messages.length; i += 1) {
     if (messages[i]?.role === 'user' && Array.isArray(messages[i].toolResults)) toolUserIndexes.push(i);
@@ -485,6 +748,17 @@ export function compactMessages(messages, { keepTurns = TRANSCRIPT_FULL_TURNS } 
   const dropBefore = toolUserIndexes[toolUserIndexes.length - keepTurns];
   return messages.map((m, i) => {
     if (i >= dropBefore || m.role !== 'user' || !Array.isArray(m.toolResults)) return m;
+    if (mode === 'all') {
+      return {
+        ...m,
+        toolResults: m.toolResults.map((r) => ({
+          ...r,
+          output: r.isError
+            ? clipBytes(String(r.output || ''), 400)
+            : '[earlier tool result omitted to save context]',
+        })),
+      };
+    }
     const onlyExplore = m.toolResults.every((r) => /^(status: ok|search budget|explore streak|too many consecutive)/.test(String(r.output || ''))
       || String(r.output || '').includes('match')
       || String(r.output || '').includes('sha256:'));
@@ -499,25 +773,44 @@ export function compactMessages(messages, { keepTurns = TRANSCRIPT_FULL_TURNS } 
   });
 }
 
+function profileSummary(profile) {
+  return {
+    id: profile.id,
+    track: profile.track ?? (profile.testOnly ? 'autonomous' : profile.id),
+    testOnly: Boolean(profile.testOnly),
+    keeps: [...(profile.keeps || [])],
+    drops: (profile.drops || []).map((d) => ({ ...d })),
+  };
+}
+
 export async function runAgentLoop({
   task,
   workspace,
   copilotHome,
   persona,
-  profile = BENCHMARK_PROFILE,
+  profile = AUTONOMOUS_PROFILE,
   orientation = null,
   maxTurns = DEFAULT_MAX_TURNS,
   maxSeconds = DEFAULT_MAX_SECONDS,
   toolTimeoutSeconds = null,
+  verifyCmd = null,
   startProviderFn,
   ctx = {},
   signal = null,
   onTurn = null,
   now = () => Date.now(),
 }) {
+  const resolvedProfile = profile?.id ? profile : resolveProfile(profile);
+  const isAutonomous = resolvedProfile.track === 'autonomous' || resolvedProfile.testOnly;
+  const hasVerifier = Array.isArray(verifyCmd) && verifyCmd.length > 0;
   const startedAt = now();
   const deadline = startedAt + maxSeconds * 1000;
-  const system = buildSystemPrompt({ persona, profile, orientation: orientation?.pack ?? null });
+  const system = buildSystemPrompt({
+    persona,
+    profile: resolvedProfile,
+    orientation: orientation?.pack ?? null,
+    hasVerifier,
+  });
   let messages = [{ role: 'user', text: task }];
   const turns = [];
 
@@ -529,6 +822,8 @@ export async function runAgentLoop({
   let budgetNudged = false;
   let lastExploreNudgeAt = 0;
   let completionRetries = 0;
+  let verifier = null;
+  let mutatedSinceVerifier = false;
 
   try {
     while (!stop) {
@@ -541,7 +836,9 @@ export async function runAgentLoop({
         budgetNudged = true;
         messages.push({
           role: 'user',
-          text: `Budget check: ${remainingTurns} of ${maxTurns} turns remain. Converge — change code, re-run verification, finish.`,
+          text: hasVerifier
+            ? `Budget check: ${remainingTurns} of ${maxTurns} turns remain. Converge — change code so the task verifier passes.`
+            : `Budget check: ${remainingTurns} of ${maxTurns} turns remain. Converge — change code, re-run verification, finish.`,
         });
       }
 
@@ -556,7 +853,10 @@ export async function runAgentLoop({
         });
       }
 
-      messages = compactMessages(messages);
+      messages = compactMessages(messages, {
+        keepTurns: TRANSCRIPT_FULL_TURNS,
+        mode: isAutonomous ? 'all' : 'explore',
+      });
 
       const turnIndex = turns.length + 1;
       const turnStartedAt = now();
@@ -606,7 +906,37 @@ export async function runAgentLoop({
       if (!calls.length) {
         turns.push(recordTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: true }));
         onTurn?.(turns[turns.length - 1], { text: finalText });
-        stop = 'done';
+
+        // Autonomous with verifier: model "done" is not success unless verifier is green.
+        if (isAutonomous && hasVerifier) {
+          const v = await runTaskVerifier({
+            verifyCmd,
+            workspace,
+            copilotHome,
+            ctx,
+            remainingSeconds: (deadline - now()) / 1000,
+          });
+          verifier = {
+            ran: true,
+            ok: v.ok,
+            exitCode: v.result?.exitCode ?? null,
+            reason: v.reason ?? null,
+          };
+          if (v.ok) {
+            stop = 'verifier-pass';
+          } else {
+            stop = 'verifier-failed';
+            detail = v.reason || `verifier exit ${v.result?.exitCode ?? 'unknown'}`;
+          }
+        } else if (isAutonomous && !hasVerifier && resolvedProfile.id === 'autonomous') {
+          // First-class autonomous success is verifier-shaped (AC11–AC12).
+          // Without --verify-cmd, model prose alone is not ok success-with-proof.
+          stop = 'verifier-missing';
+          detail = 'pass --verify-cmd <argv...> for verifier-shaped success';
+        } else {
+          // deliver / benchmark fixture: model-done remains a valid stop
+          stop = 'done';
+        }
         break;
       }
 
@@ -629,21 +959,45 @@ export async function runAgentLoop({
         continue;
       }
 
+      const outcomes = await dispatchToolBatch(calls, {
+        workspace,
+        copilotHome,
+        ctx,
+        timeoutSeconds: toolTimeoutSeconds,
+        remainingSeconds: (deadline - now()) / 1000,
+        turns,
+      });
+
       const toolResults = [];
       const toolRecords = [];
       let fatal = null;
-      for (const call of calls) {
-        if (signal?.aborted) { fatal = { reason: 'cancelled', cancelled: true }; break; }
-        if (now() >= deadline) { fatal = { reason: 'the wall clock was reached mid-batch', expired: true }; break; }
-        const outcome = await dispatchToolCall(call, {
-          workspace,
-          copilotHome,
-          ctx,
-          timeoutSeconds: toolTimeoutSeconds,
-          remainingSeconds: (deadline - now()) / 1000,
-          turns,
-        });
-        if (!outcome.dispatched && outcome.fatal) { fatal = outcome; break; }
+
+      for (let i = 0; i < calls.length; i += 1) {
+        const call = calls[i];
+        const outcome = outcomes[i] || { dispatched: false, reason: 'missing outcome', fatal: true };
+        if (signal?.aborted) {
+          toolRecords.push({ tool: call.name, dispatched: false, reason: 'cancelled', status: 'cancelled' });
+          fatal = { reason: 'cancelled', cancelled: true };
+          break;
+        }
+        if (now() >= deadline && !outcome.dispatched) {
+          toolRecords.push({ tool: call.name, dispatched: false, reason: 'wall clock', status: 'cancelled' });
+          fatal = { reason: 'the wall clock was reached mid-batch', expired: true };
+          break;
+        }
+        if (!outcome.dispatched && outcome.fatal) {
+          const aborted = /abort|cancel|timed? ?out|wall.?clock/i.test(String(outcome.reason || ''));
+          toolRecords.push({
+            tool: call.name,
+            dispatched: false,
+            reason: outcome.reason,
+            status: aborted || now() >= deadline ? 'cancelled' : 'failed',
+          });
+          fatal = outcome.expired || now() >= deadline
+            ? { reason: outcome.reason || 'the wall clock was reached mid-batch', expired: true }
+            : outcome;
+          break;
+        }
         if (!outcome.dispatched) {
           toolResults.push({ id: call.id, output: outcome.reason, isError: true });
           toolRecords.push({ tool: call.name, dispatched: false, reason: outcome.reason });
@@ -653,19 +1007,32 @@ export async function runAgentLoop({
         const failedAction = (call.name === 'bash' || call.name === 'exec')
           && (outcome.result.status !== 'ok' || (Number.isFinite(outcome.result.exitCode) && outcome.result.exitCode !== 0));
         if (failedAction) {
-          // Tool-level act pressure (benchmark: text-only nudges lost). Attach to
-          // the same tool-result message so the transcript shape stays stable.
           output += '\n\nThe command failed. Prefer one focused `read` of the failing path, then `edit`, then re-run this command. Do not keep searching.';
         }
+        // Wall-clock abort on a long tool: surface cancelled status for the operator journal.
+        const timedOut = now() >= deadline
+          || outcome.result.status === 'cancelled'
+          || outcome.result.signal === 'SIGTERM'
+          || outcome.result.signal === 'SIGKILL';
+        const status = timedOut && (call.name === 'bash' || call.name === 'exec') && outcome.result.status !== 'ok'
+          ? 'cancelled'
+          : outcome.result.status;
         toolResults.push({ id: call.id, output, isError: outcome.result.status !== 'ok' || failedAction });
         toolRecords.push({
           tool: call.name,
           dispatched: true,
-          status: outcome.result.status,
+          status,
           exitCode: outcome.result.exitCode,
           durationMs: outcome.result.durationMs,
           timeoutSeconds: outcome.result.timeoutSeconds ?? outcome.timeoutSeconds ?? null,
         });
+        if (MUTATE_TOOLS.has(call.name) && outcome.result.status === 'ok') {
+          mutatedSinceVerifier = true;
+        }
+        if (timedOut && (call.name === 'bash' || call.name === 'exec')) {
+          fatal = { reason: 'the wall clock was reached mid-batch', expired: true };
+          break;
+        }
       }
 
       const turn = recordTurn({ turnIndex, turnStartedAt, now, tools: toolRecords, usage: completion?.usage ?? null, ended: false });
@@ -678,9 +1045,43 @@ export async function runAgentLoop({
         break;
       }
       messages.push({ role: 'user', toolResults });
+
+      // After a mutation batch on autonomous+verifier, run the task verifier.
+      if (isAutonomous && hasVerifier && mutatedSinceVerifier) {
+        const v = await runTaskVerifier({
+          verifyCmd,
+          workspace,
+          copilotHome,
+          ctx,
+          remainingSeconds: (deadline - now()) / 1000,
+        });
+        verifier = {
+          ran: true,
+          ok: v.ok,
+          exitCode: v.result?.exitCode ?? null,
+          reason: v.reason ?? null,
+        };
+        if (v.ok) {
+          stop = 'verifier-pass';
+          finalText = finalText || 'task verifier passed';
+          break;
+        }
+        mutatedSinceVerifier = false;
+        messages.push({
+          role: 'user',
+          text:
+            `Task verifier failed (exit ${v.result?.exitCode ?? 'n/a'}${v.reason ? `: ${v.reason}` : ''}). `
+            + 'Fix the remaining issue and mutate again; the harness will re-run the verifier.',
+        });
+      }
     }
   } finally {
     provider.close();
+  }
+
+  // Budget exhaust while verifier never green → non-ok (already non-ok status).
+  if ((stop === 'turn-budget' || stop === 'time-budget') && isAutonomous && hasVerifier && !verifier?.ok) {
+    detail = detail || 'budget exhausted before task verifier passed';
   }
 
   const reason = STOP_REASONS[stop] || STOP_REASONS['provider-error'];
@@ -688,7 +1089,7 @@ export async function runAgentLoop({
     schema: AGENT_SCHEMA,
     task,
     persona: { name: persona.name, hydrated: persona.hydrated },
-    profile: { id: profile.id, keeps: [...profile.keeps], drops: profile.drops.map((d) => ({ ...d })) },
+    profile: profileSummary(resolvedProfile),
     orientation: orientation
       ? { available: orientation.available, contextPack: orientation.contextPack ?? null, reason: orientation.reason ?? null }
       : { available: false, contextPack: null, reason: 'orientation not attempted' },
@@ -705,6 +1106,15 @@ export async function runAgentLoop({
     usage,
     durationMs: now() - startedAt,
     text: finalText,
+    verifier,
+    metrics: {
+      pass: reason.status === 'ok',
+      steps: turns.length,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      durationMs: now() - startedAt,
+      stopReason: stop,
+    },
   };
 }
 

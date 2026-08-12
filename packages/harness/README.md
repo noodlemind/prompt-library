@@ -77,8 +77,10 @@ Use pinned version in CI:
 Interactive projection of the kernel — not a second Adaptive Engineer.
 
 ```text
-/          palette          ! shell          ? help
-shift+tab  mode cycle: commands → assist → plan
+/          palette (common intents first)   ! shell   ? help
+shift+tab  mode: commands → assist → plan
+tree       browse project files · tree knowledge for the store
+learnings  list what was learned · why <id> for provenance
 agent on|off   config set key=value   (user scope default)
 gate menu   inspect config   runs / resume <id>
 ```

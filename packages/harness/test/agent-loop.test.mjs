@@ -5,10 +5,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { agentResultOf, taskFromArgv } from '../lib/agent-cmd.mjs';
+import { agentJournalArgv, agentResultOf, taskFromArgv } from '../lib/agent-cmd.mjs';
 import { hasCommand } from '../lib/registry.mjs';
 import {
   AGENT_TOOLS,
+  AGENT_VALUE_FLAGS,
   BENCHMARK_PROFILE,
   MAX_EXPLORE_STREAK,
   MAX_SEARCH_PER_RUN,
@@ -20,7 +21,8 @@ import {
   resolvePersona,
   resolveToolTimeout,
 } from '../lib/agent-loop.mjs';
-import { getCommand } from '../lib/registry.mjs';
+import { GLOBAL_FLAGS, getCommand } from '../lib/registry.mjs';
+import { parseFlags } from '../lib/flags.mjs';
 import { EXIT } from '../lib/style.mjs';
 import { setRunContext, clearRunContext } from '../lib/run-context.mjs';
 import { createEventRegistry } from '../lib/event-registry.mjs';
@@ -70,7 +72,15 @@ const callTool = (id, name, input) => ({
   usage: { inputTokens: 5, outputTokens: 5 },
 });
 
-const argvFor = (ws, home, task, extra = []) => [...task.split(' '), '--workspace', ws, '--copilot-home', home, '--no-events', ...extra];
+/** Historical efficiency-fixture profile (benchmark). First-class autonomous needs --verify-cmd. */
+const argvFor = (ws, home, task, extra = []) => [
+  ...task.split(' '),
+  '--workspace', ws,
+  '--copilot-home', home,
+  '--no-events',
+  '--profile', 'benchmark',
+  ...extra,
+];
 
 // --- P5AC9: the loop completes a task -------------------------------------
 
@@ -326,8 +336,13 @@ test('P5AC9: a refusal from the governed surface stops the loop rather than bein
 // --- P5AC9: the stop conditions -------------------------------------------
 
 test('P5AC9: every stop reason maps to a distinct, named outcome', () => {
-  assert.deepEqual(Object.keys(STOP_REASONS).sort(), ['cancelled', 'done', 'provider-error', 'time-budget', 'tool-error', 'turn-budget']);
+  assert.deepEqual(Object.keys(STOP_REASONS).sort(), [
+    'cancelled', 'done', 'provider-error', 'time-budget', 'tool-error', 'turn-budget',
+    'verifier-failed', 'verifier-missing', 'verifier-pass',
+  ]);
   assert.equal(STOP_REASONS.done.status, 'ok');
+  assert.equal(STOP_REASONS['verifier-pass'].status, 'ok');
+  assert.equal(STOP_REASONS['verifier-missing'].status, 'failed');
   assert.equal(STOP_REASONS['time-budget'].status, 'timed-out');
   assert.equal(STOP_REASONS.cancelled.status, 'cancelled');
   assert.notEqual(STOP_REASONS.done.exit, STOP_REASONS['turn-budget'].exit,
@@ -538,11 +553,14 @@ test('the loop builds no provider wire shape — every one of them lives in the 
 });
 
 test('the declared tools are exactly the governed surfaces, and every one of them is a command', () => {
-  assert.deepEqual(AGENT_TOOLS.map((t) => t.name).sort(), ['bash', 'edit', 'exec', 'read', 'search', 'write']);
+  assert.deepEqual(
+    AGENT_TOOLS.map((t) => t.name).sort(),
+    ['apply', 'bash', 'edit', 'exec', 'read', 'search', 'todo', 'write'],
+  );
   // Act tools lead; search is last (benchmark: search attractor).
   assert.ok(AGENT_TOOLS.findIndex((t) => t.name === 'bash') < AGENT_TOOLS.findIndex((t) => t.name === 'search'));
   assert.match(AGENT_TOOLS.find((t) => t.name === 'search').description, /Last resort/i);
-  assert.match(buildSystemPrompt({ persona: { name: 'engineer', text: null } }), /Reproduce first/);
+  assert.match(buildSystemPrompt({ persona: { name: 'engineer', text: null } }), /Reproduce|reproduce/i);
   assert.equal(typeof exploreGate, 'function');
   assert.ok(MAX_EXPLORE_STREAK >= 2);
   assert.ok(MAX_SEARCH_PER_RUN >= 3);
@@ -550,7 +568,10 @@ test('the declared tools are exactly the governed surfaces, and every one of the
     assert.ok(tool.description.length > 40, 'a tool the model must reason about needs its constraints described');
     assert.equal(tool.schema.type, 'object');
   }
-    const commandFor = { bash: 'bash', exec: 'exec', read: 'get', search: 'search', edit: 'edit', write: 'write' };
+  const commandFor = {
+    bash: 'bash', exec: 'exec', read: 'get', search: 'search',
+    edit: 'edit', write: 'write', todo: 'todo', apply: 'apply',
+  };
   for (const tool of AGENT_TOOLS) {
     assert.ok(hasCommand(commandFor[tool.name]), `${tool.name} must dispatch to a registered command`);
   }
@@ -577,6 +598,7 @@ test('the system prompt survives a persona that is absent, empty, or enormous', 
   ]) {
     const system = buildSystemPrompt({ persona });
     assert.ok(system.includes('OUT OF SCOPE'), 'the profile section is never the part that gets dropped');
+    assert.ok(Buffer.byteLength(system, 'utf8') <= 2048 + 64, 'autonomous card stays short');
   }
 });
 
@@ -648,4 +670,122 @@ test('the loop never RAISES a timeout the operator lowered in their config', asy
   assert.equal(resolveToolTimeout({ requested: undefined, ceiling: 5 }), 5);
   assert.equal(resolveToolTimeout({ requested: 0, ceiling: null }), null, 'a nonsense request is not a bound');
   assert.equal(resolveToolTimeout({ requested: -5, ceiling: 10 }), 10);
+});
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('`agent` is in the SIGINT bridge, so cancellation runs its cleanup', () => {
+  const source = fs.readFileSync(binPath, 'utf8');
+  const match = /\[([^\]]*)\]\.includes\(command\)/.exec(source);
+  assert.ok(match, 'the signal bridge should still be a declared list');
+  assert.match(match[1], /'agent'/,
+    'without it Ctrl-C skips the `finally` that closes the provider');
+});
+
+test('the wall clock stops a batch of tool calls partway through', async () => {
+  const { ws, home } = scaffold('agent-batch-deadline');
+  const calls = ['a', 'b', 'c'].map((id) => ({ id, name: 'bash', input: { script: 'sleep 2' } }));
+  const provider = scriptedProvider([
+    { text: '', toolCalls: calls, blocks: [], usage: { inputTokens: 1, outputTokens: 1 } },
+  ]);
+  const result = await agentResultOf(
+    argvFor(ws, home, 'a task', ['--max-seconds', '1']),
+    {},
+    { startProviderFn: provider.start },
+  );
+  assert.equal(result.stopReason, 'time-budget');
+  const dispatched = result.turns.flatMap((t) => t.tools).filter((t) => t.dispatched);
+  assert.equal(dispatched.length, 1,
+    'the first call consumed the budget; the other two must not still be spawned');
+});
+
+test('a completion that arrives after the deadline is time-budget, not done', async () => {
+  const { ws, home } = scaffold('agent-late-complete');
+  const provider = () => ({
+    provider: 'scripted', model: 's', alive: true, logs: [],
+    async complete() {
+      await new Promise((r) => setTimeout(r, 1200));
+      return { text: 'finished', toolCalls: [], blocks: [], usage: { inputTokens: 1, outputTokens: 1 } };
+    },
+    close() {},
+  });
+  const result = await agentResultOf(
+    argvFor(ws, home, 'a task', ['--max-seconds', '1']),
+    {},
+    { startProviderFn: provider },
+  );
+  assert.equal(result.stopReason, 'time-budget',
+    'a run that ran out of time must not report itself as finished');
+  assert.notEqual(result.exitCode, 0);
+});
+
+test('a provider failure after the deadline is a time budget, not a provider error', async () => {
+  const { ws, home } = scaffold('agent-late-provider-fail');
+  const provider = () => ({
+    provider: 'scripted', model: 's', alive: true, logs: [],
+    async complete() { await new Promise((r) => setTimeout(r, 1400)); throw new Error('gateway exploded'); },
+    close() {},
+  });
+  const result = await agentResultOf(
+    argvFor(ws, home, 'a task', ['--max-seconds', '1']),
+    {},
+    { startProviderFn: provider },
+  );
+  assert.equal(result.stopReason, 'time-budget',
+    'blaming the provider for the operator budget produces the wrong exit');
+});
+
+test('the run journal records the task by size and digest, never its words', () => {
+  const projected = agentJournalArgv([
+    'summarize', 'the', 'BLUEBIRD', 'acquisition',
+    '--provider', 'openrouter', '--max-turns', '5', '--dry-run',
+  ]);
+  const joined = projected.join(' ');
+  assert.equal(/BLUEBIRD/.test(joined), false,
+    'the journal must not store the task transcript');
+  assert.match(joined, /<task:\d+b:[0-9a-f]{12}>/, 'two runs still have to be tellable apart');
+  assert.match(joined, /--provider openrouter/, 'configuration is not conversation and stays readable');
+  assert.match(joined, /--max-turns 5/);
+  assert.match(joined, /--dry-run/);
+});
+
+test('the journal projection is wired to the registry entry', () => {
+  assert.equal(typeof getCommand('agent').journalArgv, 'function');
+});
+
+test('a boolean flag before the task does not eat its first word', () => {
+  assert.equal(taskFromArgv(['--dry-run', 'fix', 'the', 'bug']), 'fix the bug');
+  assert.equal(taskFromArgv(['--no-events', 'fix', 'the', 'bug']), 'fix the bug');
+  assert.equal(taskFromArgv(['--json', '--verbose', 'fix', 'it']), 'fix it');
+  assert.equal(taskFromArgv(['--provider', 'ollama', 'fix', 'it']), 'fix it');
+  assert.equal(taskFromArgv(['--max-turns', '3', 'fix', 'it']), 'fix it');
+});
+
+test('every declared value-taking agent flag is one the task parser knows about', () => {
+  const declared = [...GLOBAL_FLAGS, ...(getCommand('agent').args?.flags || [])]
+    .filter((f) => f.type !== 'boolean')
+    .map((f) => f.name);
+  const missing = declared.filter((name) => !AGENT_VALUE_FLAGS.includes(name));
+  assert.deepEqual(missing, [],
+    'a value-taking flag missing from the set silently eats the first word of the task');
+});
+
+test('nothing in AGENT_VALUE_FLAGS is actually a boolean that would skip a task word', () => {
+  const declared = new Map(
+    [...GLOBAL_FLAGS, ...(getCommand('agent').args?.flags || [])].map((f) => [f.name, f.type]),
+  );
+  const consumesAValue = (name) => ['SENTINEL', '7'].some((value) => {
+    try {
+      return JSON.stringify(parseFlags([name, value]) ?? {}).includes(value);
+    } catch {
+      return true;
+    }
+  });
+  const notValueTaking = AGENT_VALUE_FLAGS.filter((name) => {
+    if (name === '--output') return false;
+    if (declared.get(name) && declared.get(name) !== 'boolean') return false;
+    return !consumesAValue(name);
+  });
+  assert.deepEqual(notValueTaking, [],
+    'listing a boolean here makes the parser skip a word that belonged to the task');
 });

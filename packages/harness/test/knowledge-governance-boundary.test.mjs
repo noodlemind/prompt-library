@@ -1,3 +1,7 @@
+/**
+ * Knowledge branch/overlay boundaries, promote, prune, and absorb guards.
+ * Folded from knowledge-boundary-hardening.
+ */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -350,7 +354,7 @@ test('D: hand-deleting a BRANCH copy never retires the golden claim of the same 
   assert.equal(readGovernance(dir).get('sql/shared-x')?.action, 'retire', 'no layer holds it any more — a real retirement');
 });
 
-test('E: hand-deleting a PROMOTED golden claim still records a retire — an inactive bucket tombstone never suppresses governance', () => {
+test('hand-deleting a PROMOTED golden claim still records a retire — an inactive bucket tombstone never suppresses governance', () => {
   const ws = featureWorkspace('feature/promo-delete');
   const home = tempDir('bh-home-e-');
   const ep = writeFixEpisode(ws, 'docs/solutions/perf/promo-delete.md');

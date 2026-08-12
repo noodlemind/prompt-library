@@ -161,6 +161,15 @@ export const CONFIG_SCHEMA = Object.freeze({
       return value;
     },
   },
+  'agent.profile': {
+    type: 'enum',
+    values: ['deliver', 'autonomous', 'bench', 'benchmark'],
+    default: 'autonomous',
+    merge: 'override',
+    description:
+      'optional agent track: deliver (product-minded) or autonomous/bench (verifier-shaped long-horizon; no plan/gate/compound). '
+      + 'benchmark is a test fixture alias. Does not enable agent.enabled.',
+  },
 
     'tui.density': {
     type: 'enum',

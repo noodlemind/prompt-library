@@ -1,16 +1,17 @@
 /**
  * Human-readable preview of a palette selection before it runs.
- * Shows the canonical argv (for scripts) without forcing the user to type flags.
+ * Product rule: one compact line (or needs:), never a multi-row key/value dump.
+ * The run block already echoes the command — preview only clarifies intent.
  */
 import { resolveSelection, containsFlagSyntax } from './palette.mjs';
 
 /**
  * @param {object} row command-index row
  * @param {Record<string, string>} [values]
- * @returns {{ lines: string[], argv: string[]|null, invalid: string|null }}
+ * @returns {{ lines: string[], argv: string[]|null, invalid: string|null, skipLedger: boolean }}
  */
 export function previewSelection(row, values = {}) {
-  if (!row) return { lines: [], argv: null, invalid: 'no selection' };
+  if (!row) return { lines: [], argv: null, invalid: 'no selection', skipLedger: true };
   const { argv, invalid, missing } = resolveSelection(row, values);
   if (missing?.length) {
     return {
@@ -19,33 +20,26 @@ export function previewSelection(row, values = {}) {
       ],
       argv: null,
       invalid: null,
+      skipLedger: false,
     };
   }
   if (invalid || !argv) {
-    return { lines: [], argv: null, invalid: invalid || 'cannot resolve' };
+    return { lines: [], argv: null, invalid: invalid || 'cannot resolve', skipLedger: true };
   }
 
-  const lines = [];
-  lines.push(`command: ${argv.join(' ')}`);
-
-  // Config set — surface key / value / scope without making the user type them.
-  if (argv[0] === 'config' && argv[1] === 'set') {
-    const key = argv[2];
-    const value = argv[3];
-    let scope = 'user';
-    const si = argv.indexOf('--scope');
-    if (si !== -1 && argv[si + 1]) scope = argv[si + 1];
-    if (key) lines.push(`key: ${key}`);
-    if (value !== undefined) lines.push(`value: ${value}`);
-    lines.push(`scope: ${scope}`);
+  // Ready selections: the ledger block already prints the command line.
+  // Do not dump sparse "command / key / value / scope" rows into scrollback —
+  // that is CLI form noise on a product surface.
+  if (containsFlagSyntax(row.label || '')) {
+    return {
+      lines: ['note: label still contains flags — prefer human labels in the index'],
+      argv,
+      invalid: null,
+      skipLedger: false,
+    };
   }
 
-  // Labels in the palette must not teach flag soup.
-  if (row.label && containsFlagSyntax(row.label)) {
-    lines.push('note: label still contains flags — prefer human labels in the index');
-  }
-
-  return { lines, argv, invalid: null };
+  return { lines: [], argv, invalid: null, skipLedger: true };
 }
 
 /**
@@ -55,11 +49,11 @@ export function previewSelection(row, values = {}) {
  */
 export function renderPreviewLines(ui, preview) {
   if (!preview?.lines?.length) return [];
-  return preview.lines.map((text, i) => {
+  return preview.lines.map((text) => {
     const [key, ...rest] = text.split(':');
     if (rest.length) {
       return ui.line({
-        state: i === 0 ? 'pending' : undefined,
+        state: key.trim() === 'needs' ? 'warn' : 'pending',
         key: key.trim(),
         value: rest.join(':').trim(),
       });

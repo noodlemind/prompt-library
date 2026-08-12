@@ -55,22 +55,25 @@ Import from `./helpers/index.mjs` (or a specific file).
 
 `npm test` always means the full suite (CI default).
 
-## Souvenir inventory (Phase 0 — fold targets)
+## Souvenir inventory — retired
 
-| File | Lines | Owning module(s) | Decision |
-|------|------:|------------------|----------|
-| `coderabbit-review-findings.test.mjs` | ~230 | flags, trust, checks, config, bundles | fold |
-| `codex-review-findings.test.mjs` | ~159 | trust, controls, config, flags, bash, checks | fold |
-| `codex-phase5-findings.test.mjs` | ~525 | sync/retire, agent-loop, journal, providers | fold |
-| `knowledge-adversarial-fixes.test.mjs` | ~239 | knowledge store-io / apply / get | fold → path-safety |
-| `knowledge-path-safety-round2.test.mjs` | ~169 | get, recall, candidates, sync | fold → path-safety |
-| `knowledge-boundary-hardening.test.mjs` | ~586 | promote, absorb, prune, governance | fold → promote/admin |
-| `knowledge-recall-hardening.test.mjs` | ~136 | context-pack / recall | fold → recall/pack |
-| `knowledge-store-io-hardening.test.mjs` | ~942 | store-io, store lock | keep temporarily; rename later |
-| `knowledge-structural-hardening.test.mjs` | ~440 | store learnings, absorb, rollback | fold into store tests |
-| `verify-severity-hardening.test.mjs` | ~459 | verify / checks severity | fold → verify module |
+All `*findings*`, `codex-*`, `coderabbit-*`, `*-hardening*`, `*-round*`, and `*adversarial*` test **filenames** under `test/` have been removed.
 
-**Keep (not souvenirs):** `tui-design.test.mjs` (product design contracts), module-named knowledge tests, gate/verify golden paths.
+| Former souvenir | Module home now |
+|-----------------|-----------------|
+| `coderabbit-review-findings.test.mjs` | `flag-value-guards`, `trust`, `checks-command`, `config-command`, `policy`, `bundle-sync`, `doctor-structural`, `retention` |
+| `codex-review-findings.test.mjs` | `trust`, `controls`, `exec-command`, `config-command`, `checks-command` |
+| `codex-phase5-findings.test.mjs` | `bundle-sync`, `plugin-host`, `agent-loop`, `local-primitives`, `provider-adapters`, `tui` |
+| `knowledge-adversarial-fixes.test.mjs` + `knowledge-path-safety-round2.test.mjs` | **`knowledge-path-safety.test.mjs`** |
+| `knowledge-boundary-hardening.test.mjs` | **`knowledge-governance-boundary.test.mjs`** |
+| `knowledge-recall-hardening.test.mjs` | **`context-pack.test.mjs`** |
+| `knowledge-store-io-hardening.test.mjs` | **`knowledge-store-io.test.mjs`** |
+| `knowledge-structural-hardening.test.mjs` | **`knowledge-store-transaction.test.mjs`** |
+| `verify-severity-hardening.test.mjs` | **`verify-severity.test.mjs`** |
+
+**Keep (not souvenirs):** `tui-design.test.mjs` (product design contracts), other module-named knowledge/gate/verify tests.
+
+Headers in folded files may still mention the former name for archaeology; **do not** reintroduce souvenir filenames.
 
 ## Related plan
 

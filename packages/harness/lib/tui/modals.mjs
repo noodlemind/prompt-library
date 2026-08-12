@@ -13,45 +13,75 @@ export const MODAL_FAMILY_LABELS = Object.freeze({
   config: 'Settings',
   model: 'Model',
   checks: 'Checks',
-  trust: 'Trust',
-  run: 'Runs',
+  trust: 'Project trust',
+  run: 'Past runs',
   todo: 'Todos',
   inspect: 'Inspect',
-  resources: 'Resources',
-  knowledge: 'Knowledge',
-  learning: 'Learning',
-  lookup: 'Lookup',
-  undo: 'Undo',
-  tree: 'Tree',
+  resources: 'Skills & agents',
+  knowledge: 'Knowledge layer',
+  learning: 'Manage a learning',
+  lookup: 'Open by id',
+  undo: 'Undo list',
+  tree: 'Browse files & knowledge',
 });
 
 /** Short action names inside a family sheet. */
 export const ACTION_LABELS = Object.freeze({
-  'config:show': 'Show all',
-  'config:get': 'Get one value',
-  'config:set': 'Set a value',
-  'config:validate': 'Validate',
+  'config:show': 'Show all settings',
+  'config:get': 'Get one setting',
+  'config:set': 'Change a setting',
+  'config:validate': 'Validate config files',
   'checks:list': 'List checks',
   'checks:show': 'Show a check',
   'checks:run': 'Run a check',
-  'trust:status': 'Status',
-  'trust:approve': 'Approve this project',
+  'trust:status': 'Trust status',
+  'trust:approve': 'Trust this project',
   'trust:revoke': 'Revoke trust',
   'run:list': 'List past runs',
   'run:show': 'Show a run',
   'run:tree': 'Event tree',
-  'run:resume': 'Resume check',
+  'run:resume': 'Can this run resume?',
   'todo:list': 'List items',
   'todo:add': 'Add item',
   'todo:complete': 'Complete item',
   'todo:clear': 'Clear all',
-  'inspect:config': 'Config provenance',
-  'inspect:permissions': 'Permissions',
-  'inspect:workspace': 'Workspace',
-  'inspect:tools': 'Tools',
-  'tree:workspace': 'Workspace files',
-  'tree:knowledge': 'Knowledge store',
+  'inspect:config': 'Why is this setting this value?',
+  'inspect:permissions': 'What is allowed here?',
+  'inspect:workspace': 'Where is this workspace?',
+  'inspect:tools': 'Which tools are on?',
+  'tree:workspace': 'Browse project files',
+  'tree:knowledge': 'Browse knowledge store',
   'undo:list': 'List undos',
+  'lookup:plan': 'Open a plan by id',
+  'lookup:learning': 'Open a learning by id',
+  'lookup:run': 'Open a run by id',
+});
+
+/** Human titles for settings keys (schema id stays in the note). */
+export const SETTING_LABELS = Object.freeze({
+  'agent.enabled': 'Agent loop',
+  'agent.providers': 'Allowed providers',
+  'agent.provider': 'Default provider',
+  'agent.model': 'Default model',
+  'agent.max_turns': 'Agent max turns',
+  'agent.max_seconds': 'Agent max seconds',
+  'agent.profile': 'Agent profile',
+  'exec.timeout_seconds': 'Command timeout',
+  'exec.bash_enabled': 'Shell (bash)',
+  'exec.allow_env': 'Env allowlist',
+  'exec.network': 'Network for exec',
+  'checks.env_allowlist': 'Checks use env allowlist',
+  'runs.retention_days': 'Run history retention',
+  'tui.density': 'TUI density',
+  'tui.dividers': 'TUI dividers',
+  'tui.statusline': 'Status line items',
+  'tui.scheme': 'Color scheme',
+  'tui.tint': 'Row tint',
+  'tui.palette_chord': 'Palette chord',
+  'tui.startup': 'Startup panels',
+  'tui.verbosity': 'Ledger verbosity',
+  'tui.alt_screen': 'Alternate screen',
+  'tui.restore': 'Restore on exit',
 });
 
 function formatValue(value) {
@@ -71,19 +101,23 @@ export function configSettingsRows({ workspace, copilotHome } = {}) {
   rows.push({
     section: true,
     label: 'settings',
-    note: 'effective values · enter to change · scope user by default',
+    note: 'enter to change · saved to user by default',
   });
   for (const key of CONFIG_KEYS) {
     const schema = CONFIG_SCHEMA[key];
     const prov = resolved.provenance[key] || {};
     const value = resolved.values[key];
+    const human = SETTING_LABELS[key] || schema?.description || key;
+    const title = SETTING_LABELS[key] || key;
     rows.push({
-      label: key,
-      note: `${formatValue(value)} · ${prov.source || 'default'}`,
+      label: title,
+      note: `${formatValue(value)} · ${prov.source || 'default'} · ${key}`,
       sideEffect: null,
       configKey: key,
       configSchema: schema,
       currentValue: value,
+      // Keep machine key for search/filter.
+      keywords: `${key} ${human}`,
     });
   }
   rows.push({ section: true, label: 'actions', note: '' });
@@ -114,17 +148,21 @@ export function verbActionRows(noun, { workspace = process.cwd() } = {}) {
   rows.push({
     section: true,
     label: MODAL_FAMILY_LABELS[noun] || noun,
-    note: entry.summary || 'choose an action',
+    note: 'choose an action',
   });
   for (const row of cli.rows) {
     if (row.noun !== noun || row.kind !== 'verb') continue;
     const verb = String(row.verb || '').split(/\s+/)[0];
-    const human = ACTION_LABELS[`${noun}:${verb}`] || row.summary || `${noun} ${verb}`;
+    const key = `${noun}:${verb}`;
+    const human = ACTION_LABELS[key]
+      || ACTION_LABELS[`${noun}:${row.verb}`]
+      || row.label
+      || `${noun} ${verb}`;
     rows.push({
       ...row,
       label: human,
       signature: signatureOf(row),
-      note: row.summary || '',
+      note: row.note || row.summary || '',
     });
   }
   return rows;

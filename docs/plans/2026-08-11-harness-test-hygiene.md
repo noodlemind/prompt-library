@@ -2,7 +2,7 @@
 plan_schema: 1
 title: "Harness test hygiene: de-bloat, layer, and stop review archaeology"
 type: refactor
-status: in-progress
+status: deferred
 plan_lock: true
 phase: 2
 priority: P1
@@ -46,7 +46,7 @@ updated: 2026-08-11
 # Harness test hygiene — implementation requirements
 
 > **Audience:** Grok Coding Agent (or any implementer).  
-> **Companion to:** `docs/plans/2026-08-11-adaptive-engineering-growth-loop.md` (product work).  
+> **Companions:** growth/product model in `docs/adaptive-engineer-harness.md`; dual-track lifecycle in `docs/plans/2026-08-11-engineer-dual-track-lifecycle.md`.  
 > **This plan is test architecture only.** Do not gut safety tests to hit line-count vanity metrics.
 
 ## Overview
@@ -141,8 +141,9 @@ This plan restructures tests so they stay strict where it matters (security, des
 ### Structure
 
 - [x] **AC6** `harness-cli.test.mjs` is split by domain **or** reduced so install/doctor/plan-gate/evidence/vscode/shim are not one opaque 2k+ line file.  
-- [ ] **AC7** At least half of souvenir findings/hardening files (by count at inventory) are folded into module-named tests and deleted, **or** explicitly kept with a one-line reason in inventory (keep should be rare).  
-- [ ] **AC8** Remaining knowledge safety coverage is discoverable under stable names (e.g. `knowledge-store-*.test.mjs`, `knowledge-path-safety.test.mjs`) without `round2` / reviewer brands.
+- [x] **AC7** At least half of souvenir findings/hardening files (by count at inventory) are folded into module-named tests and deleted, **or** explicitly kept with a one-line reason in inventory (keep should be rare).  
+  _(2026-08-11: all 10 inventory souvenirs deleted — review brands + knowledge/verify hardening.)_  
+- [x] **AC8** Remaining knowledge safety coverage is discoverable under stable names (e.g. `knowledge-store-*.test.mjs`, `knowledge-path-safety.test.mjs`) without `round2` / reviewer brands.
 
 ### Layers & speed
 

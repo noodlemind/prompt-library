@@ -170,3 +170,13 @@ test('exec.network is restrictive — a project may cut the network off and neve
   );
   assert.equal(JSON.parse(res.stdout).value, 'deny');
 });
+
+test('the control set reports environment-allowlist as audit-only when the child inherits', () => {
+  const inheriting = resolveControls({ environmentAllowlisted: false, spawn: () => ({ status: 0 }) });
+  const env = inheriting.controls.find((c) => c.id === 'environment-allowlist');
+  assert.equal(env.realized, 'audit-only', 'an audit that contradicts reality is worse than none, because it is believed');
+  assert.ok(inheriting.degraded.some((c) => c.id === 'environment-allowlist'));
+
+  const applied = resolveControls({ environmentAllowlisted: true, spawn: () => ({ status: 0 }) });
+  assert.equal(applied.controls.find((c) => c.id === 'environment-allowlist').realized, 'enforced');
+});

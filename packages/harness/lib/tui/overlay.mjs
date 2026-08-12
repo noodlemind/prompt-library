@@ -156,8 +156,21 @@ function effectFloor(row, ui) {
   return row?.sideEffect ? displayWidth(ui.stripAnsi(row.sideEffect)) + 1 : 0;
 }
 
-export function renderOverlay(overlay, { ui, width = 80, maxWidth = 110 } = {}) {
-    const box = Math.max(40, Math.min(width - 4, maxWidth));
+/**
+ * Modal / action-sheet width. Matches the composer and palette: nearly the full
+ * terminal, not a fixed 110-cell postage stamp on a wide window. `maxWidth`
+ * remains for tests and rare tight surfaces; product callers leave it unset.
+ */
+export function overlayBoxWidth(width = 80, maxWidth = null) {
+  const cols = Math.max(24, Number(width) || 80);
+  // 1-cell side margin keeps the border off the edge without shrinking a lot.
+  const room = Math.max(20, cols - 2);
+  if (maxWidth == null || maxWidth === Infinity) return room;
+  return Math.max(20, Math.min(room, maxWidth));
+}
+
+export function renderOverlay(overlay, { ui, width = 80, maxWidth = null } = {}) {
+  const box = overlayBoxWidth(width, maxWidth);
   const inner = box - 2;
   const b = ui.unicode
     ? { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' }

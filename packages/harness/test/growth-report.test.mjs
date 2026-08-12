@@ -116,7 +116,10 @@ test('agent dry-run carries optional-addon disclaimer (AC11)', async () => {
   assert.equal(result.runtime, 'optional-addon');
   assert.equal(result.disclaimer, AGENT_ADDON_DISCLAIMER);
   assert.match(result.disclaimer, /not full Adaptive Engineering/i);
-  assert.equal(result.profile.testOnly, true);
+  // Default profile is first-class autonomous (not the benchmark fixture).
+  assert.equal(result.profile.id, 'autonomous');
+  assert.equal(result.profile.testOnly, false);
+  assert.equal(BENCHMARK_PROFILE.testOnly, true);
 });
 
 test('agent disabled by default denies without provider (AC10)', async () => {

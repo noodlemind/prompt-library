@@ -229,3 +229,44 @@ test('list and show stay exit 0 — they answer a question rather than run one',
     assert.equal(res.status, EXIT.ok, `${argv.join(' ')} must not inherit run's verdict`);
   }
 });
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('`harness checks --json list` finds its verb', () => {
+  const ws = tempDir('checks-json-verb-');
+  const res = spawnSync(process.execPath, [binPath, 'checks', '--json', 'list', '--workspace', ws], { encoding: 'utf8' });
+  assert.equal(/requires a verb/.test(res.stdout + res.stderr), false, 'the verb must not be eaten by `--json`');
+});
+
+test('`harness run --status succeeded list` is not refused as an unknown verb', () => {
+  const ws = tempDir('run-status-verb-');
+  const res = spawnSync(process.execPath, [binPath, 'run', '--status', 'succeeded', 'list', '--workspace', ws], { encoding: 'utf8' });
+  assert.equal(/unknown run verb/.test(res.stdout + res.stderr), false,
+    'the gate and the handler must agree on verb scanning');
+});
+
+test('a named check refuses to run when the configuration will not parse', async () => {
+  const { runNamedCheck } = await import('../lib/checks.mjs');
+  const ws = tempDir('checks-badcfg-ws-');
+  const home = tempDir('checks-badcfg-home-');
+  fs.mkdirSync(path.join(home, 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'harness', 'config.yaml'), '"exec.bash_enabled": definitely-not-false\n');
+
+  const result = await runNamedCheck(ws, 'x', { command: [process.execPath, '-e', '0'] }, { copilotHome: home });
+  assert.equal(result.status, 'unavailable',
+    'a dropped key can be a control — config errors must fail closed');
+  assert.match(result.reason, /configuration has errors/);
+});
+
+test('a timed-out check exits with the reserved timed-out code', () => {
+  const ws = workspaceWithChecks(`version: 1\nchecks:\n  slow:\n    command: ${JSON.stringify([process.execPath, '-e', 'setTimeout(() => {}, 60000)'])}\n    timeout_seconds: 1\n`);
+  const copilotHome = tempDir('checks-timeout-home-');
+  approveProject({ workspace: ws, copilotHome });
+  const res = spawnSync(
+    process.execPath,
+    [binPath, 'checks', 'run', 'slow', '--workspace', ws, '--copilot-home', copilotHome, '--no-events', '--output', 'json-envelope'],
+    { cwd: packageRoot, encoding: 'utf8' },
+  );
+  assert.equal(res.status, EXIT.timedOut, 'the reported status and the exit code must mean the same thing');
+  assert.equal(JSON.parse(res.stdout).status, 'timed-out');
+});

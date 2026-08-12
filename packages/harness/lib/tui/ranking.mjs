@@ -37,23 +37,27 @@ function isSubsequence(query, text) {
 
 export function scoreRow(row, rawQuery) {
   const query = String(rawQuery || '').trim().toLowerCase();
+  // Label first, then noun/note so "tree" still hits "Browse files & knowledge".
   const label = String(row.label || '').toLowerCase();
+  const noun = String(row.noun || '').toLowerCase();
+  const note = String(row.note || row.summary || row.keywords || '').toLowerCase();
+  const hay = `${label} ${noun} ${note}`.trim();
   if (!query) return 0;
-  if (!label) return null;
+  if (!hay) return null;
 
-  if (label === query) return SCORE.EXACT;
-  if (label.startsWith(query)) return SCORE.PREFIX;
+  if (label === query || noun === query) return SCORE.EXACT;
+  if (label.startsWith(query) || noun.startsWith(query)) return SCORE.PREFIX;
 
-  const labelWords = words(label);
-    if (labelWords.some((w) => w.startsWith(query))) return SCORE.WORD_BOUNDARY;
+  const labelWords = words(`${label} ${noun}`);
+  if (labelWords.some((w) => w.startsWith(query))) return SCORE.WORD_BOUNDARY;
 
-    const queryWords = words(query);
+  const queryWords = words(query);
   if (queryWords.length > 1 && queryWords.every((q) => labelWords.some((w) => w.startsWith(q)))) {
     return SCORE.ALL_WORDS;
   }
 
-  if (label.includes(query)) return SCORE.INTERIOR;
-    if (isSubsequence(query, label)) return SCORE.SUBSEQUENCE;
+  if (hay.includes(query)) return SCORE.INTERIOR;
+  if (isSubsequence(query, label) || isSubsequence(query, noun)) return SCORE.SUBSEQUENCE;
   return null;
 }
 

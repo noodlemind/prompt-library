@@ -207,3 +207,33 @@ test('shipped primitives are never listed as locally added', () => {
   assert.equal(listed.primitives.length, 0,
     'a fresh install has added nothing by hand, so the list is empty rather than 500 shipped files');
 });
+
+// --- folded from review souvenirs -----------------------------------------
+
+test('registration pins the digest of the bytes that were validated', async () => {
+  const { readPrimitiveOnce, validatePrimitive } = await import('../lib/local-primitives.mjs');
+  const home = tempDir('prim-digest-');
+  const rel = 'skills/demo/SKILL.md';
+  fs.mkdirSync(path.join(home, 'skills', 'demo'), { recursive: true });
+  fs.writeFileSync(path.join(home, rel), '---\nname: demo\ndescription: a demo\n---\n\nbody\n');
+
+  const snapshot = readPrimitiveOnce(home, rel);
+  const validation = validatePrimitive(home, rel, snapshot);
+  assert.equal(validation.valid, true);
+  assert.equal(validation.digest, snapshot.digest,
+    'validating one read and hashing another is how content swapped between them gets registered');
+
+  fs.writeFileSync(path.join(home, rel), '---\nname: demo\ndescription: swapped\n---\n\nother\n');
+  assert.equal(validatePrimitive(home, rel, snapshot).digest, snapshot.digest);
+});
+
+test('a symlinked primitive is refused, not followed', async () => {
+  const { readPrimitiveOnce } = await import('../lib/local-primitives.mjs');
+  const home = tempDir('prim-symlink-');
+  const rel = 'skills/demo/SKILL.md';
+  fs.mkdirSync(path.join(home, 'skills', 'demo'), { recursive: true });
+  const elsewhere = path.join(home, 'elsewhere.md');
+  fs.writeFileSync(elsewhere, '---\nname: demo\ndescription: d\n---\n');
+  fs.symlinkSync(elsewhere, path.join(home, rel));
+  assert.throws(() => readPrimitiveOnce(home, rel), (e) => /symlink/.test(e.message));
+});
