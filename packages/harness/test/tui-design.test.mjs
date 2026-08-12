@@ -175,29 +175,26 @@ test('DESIGN: the header is a two-line identity block printed once', () => {
   assert.equal(rows[2], '');
 });
 
-test('DESIGN: the hint row carries what you can act on now, and nothing else', () => {
-    const row = renderHint({ ui, width: 120, mode: 'deliver', gate: 'pass', shell: 'allowed', rerun: 'verify' });
-  assert.match(row, /deliver/, 'the mode');
+test('DESIGN: the hint row carries keys only — mode lives on the rule and footer', () => {
+  const row = renderHint({ ui, width: 120, mode: 'assist', gate: 'pass', shell: 'allowed', agent: true });
   assert.match(row, /↵ run/, 'what Enter does');
-  assert.match(row, /shift\+tab mode/, 'the gate that decides what a bare line means');
-  assert.match(row, /\? keys/, 'and where every other key is listed');
+  assert.match(row, /shift\+tab mode/, 'cycles host mode');
+  assert.match(row, /\? keys/, 'where every other key is listed');
+  assert.match(row, /\/ palette/, 'palette is first-class');
 
-  // The four that moved out, each to somewhere it reads better.
-  assert.doesNotMatch(row, /shell allowed/, 'a standing policy fact belongs in `?`, not under the cursor');
-  assert.doesNotMatch(row, /replay re-runs/, 'restated a block already on screen — and read as a fragment');
-  assert.doesNotMatch(row, /ctrl\+d/, 'listed by `?`');
-  assert.doesNotMatch(row, /interrupt/, 'the live region announces `esc cancels` while something is actually running');
-  assert.doesNotMatch(row, /gate/,
-    'the gate was stated three times; its textual home is the footer and its ambient home is the hairline tint');
+  // Mode/agent are not restated under the cursor (they sit on the rule label).
+  assert.doesNotMatch(row, /agent on/, 'agent status is footer/rule, not the hint');
+  assert.doesNotMatch(row, /assist/, 'mode is the right-hand rule label');
+  assert.doesNotMatch(row, /shell allowed/, 'policy fact belongs in `?`');
+  assert.doesNotMatch(row, /gate/, 'gate lives in the footer');
 
-  // Four items, not seven. The count is the point.
+  // Four key clusters, not a crowded posture strip.
   assert.equal(row.split('·').length, 4);
 });
 
-test('DESIGN: the hint drops keys before it drops posture — posture is what changes', () => {
+test('DESIGN: the hint drops keys when the row is narrow', () => {
   const narrow = renderHint({ ui, width: 26, shell: 'denied' });
-  assert.match(narrow, /deliver/);
-  assert.doesNotMatch(narrow, /run/, 'the keys are learned once; the posture changes under you');
+  assert.match(narrow, /run|mode|keys|palette/);
   assert.ok(displayWidth(narrow) <= 26);
 });
 
@@ -846,7 +843,8 @@ test('REVIEW-2: palette rows are two aligned columns, description left-aligned',
 
 test('REVIEW-7: the empty composer carries a placeholder that vanishes on typing', () => {
   const composer = createComposer({ width: 80 });
-  assert.match(composer.render()[1], /run a command · \/ for the palette/, 'Codex and Grok both seat one here');
+  assert.match(composer.render()[1], /ask or run a command · \/ palette/, 'Codex and Grok both seat one here');
+  assert.match(composer.render()[1], /· ask/, 'leading middot keeps the caret off the first letter');
   composer.handleKey('s', { name: 's' });
   assert.doesNotMatch(composer.render()[1], /run a command/, 'and it is never part of the value');
   assert.equal(composer.value, 's');
@@ -925,7 +923,7 @@ test('FIELD: a value question is asked at the composer, where the answer is type
   assert.equal(askAt, ruleAt + 1, 'and the question is the very next row — the input row itself');
 
   session.setPrompt(null);
-  assert.ok(output.lines.some((l) => /run a command · \/ for the palette/.test(l)),
+  assert.ok(output.lines.some((l) => /ask or run a command · \/ palette|run a command · \/ palette/.test(l)),
     'clearing the prompt restores the ordinary placeholder');
   session.close();
 });

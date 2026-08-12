@@ -61,26 +61,22 @@ export function renderHint({
   void gate;
   void shell;
   void rerun;
-  // Prefer explicit agent boolean from the session; fall back to mode label.
-  const agentLabel = agent === true || agent === 'on'
-    ? 'agent on'
-    : agent === false || agent === 'off'
-      ? 'agent off'
-      : mode;
-  const parts = [ui.paint(agent === true || agent === 'on' ? 'info' : 'muted', agentLabel)];
-
+  void agent;
+  void mode;
+  // Mode/agent live on the rule label (right) and footer — hint is keys only
+  // so the chrome does not say "agent on" three times.
   const keys = [
     `${ui.paint('muted', ui.unicode ? '↵' : 'enter')} ${ui.paint('muted', 'run')}`,
-    // The gate that decides what a bare line MEANS, and the key that flips it.
     `${ui.paint('muted', 'shift+tab')} ${ui.paint('muted', 'mode')}`,
     `${ui.paint('muted', '?')} ${ui.paint('muted', 'keys')}`,
+    `${ui.paint('muted', '/')} ${ui.paint('muted', 'palette')}`,
   ];
   const sep = ui.paint('muted', ' · ');
-  const posture = parts.join(sep);
-  const full = `  ${posture}${sep}${keys.join(sep)}`;
+  const full = `  ${keys.join(sep)}`;
   if (displayWidth(full) <= width) return full;
-  const short = `  ${posture}`;
-  return displayWidth(short) <= width ? short : `  ${clipTo(ui.stripAnsi(posture), Math.max(0, width - 2))}`;
+  const shortKeys = keys.slice(0, 2);
+  const short = `  ${shortKeys.join(sep)}`;
+  return displayWidth(short) <= width ? short : `  ${clipTo(ui.stripAnsi(short), Math.max(0, width - 2))}`;
 }
 
 export function footerSegments(snapshot = {}, items = DEFAULT_FOOTER_ITEMS) {
@@ -103,16 +99,37 @@ export function footerSegments(snapshot = {}, items = DEFAULT_FOOTER_ITEMS) {
   return items.map((k) => build[k]?.()).filter(Boolean);
 }
 
+/** Collapse a long workspace path for the footer (keep ~ and last two segments). */
+export function shortWorkspacePath(workspace, max = 42) {
+  const text = String(workspace ?? '');
+  if (!text || displayWidth(text) <= max) return text;
+  const parts = text.replace(/\\/g, '/').split('/').filter(Boolean);
+  if (parts.length <= 2) return clipTo(text, max);
+  const tail = parts.slice(-2).join('/');
+  const head = text.startsWith('~') ? '~/' : '…/';
+  const out = `${head}${tail}`;
+  return displayWidth(out) <= max ? out : clipTo(out, max);
+}
+
 export function renderFooter(snapshot = {}, {
   ui,
   width = 80,
   items = DEFAULT_FOOTER_ITEMS,
 } = {}) {
   const sep = ui.paint('muted', ' · ');
-    const fixed = [];
-  if (snapshot.workspace) fixed.push(ui.paint('info', snapshot.workspace));
+  const fixed = [];
+  if (snapshot.workspace) {
+    fixed.push(ui.paint('info', shortWorkspacePath(snapshot.workspace, Math.min(48, Math.floor(width * 0.45)))));
+  }
   if (snapshot.branch) fixed.push(ui.paint('muted', snapshot.branch));
-  const lifecycle = footerSegments(snapshot, items).map((s) => {
+  // Prefer mode over redundant "agent on" when both exist.
+  const footerItems = items.includes('agent') && snapshot.mode
+    ? items.filter((k) => k !== 'agent')
+    : items;
+  if (snapshot.mode) {
+    fixed.push(ui.paint(snapshot.mode === 'commands' ? 'muted' : 'info', snapshot.mode));
+  }
+  const lifecycle = footerSegments(snapshot, footerItems).map((s) => {
     const glyph = s.state ? ` ${ui.glyph(s.state === 'ok' || s.state === 'succeeded' ? 'ok' : s.state === 'failed' ? 'error' : 'pending')}` : '';
     return `${ui.paint(s.token, s.text)}${glyph}`;
   });
@@ -120,17 +137,26 @@ export function renderFooter(snapshot = {}, {
   if (snapshot.tests) right.push(ui.paint('muted', snapshot.tests));
   if (snapshot.learnings) right.push(ui.paint('muted', snapshot.learnings));
   if (snapshot.generation) right.push(ui.paint('muted', `gen ${snapshot.generation}`));
-    if (snapshot.model) right.push(ui.paint('info', snapshot.model));
+  if (snapshot.model) right.push(ui.paint('info', snapshot.model));
   if (snapshot.version) right.push(ui.paint('muted', `harness ${snapshot.version}`));
 
   if (!fixed.length && !lifecycle.length && !right.length) return '';
-    const compose = (life) => `  ${[...fixed, ...life].join(sep)}`;
+  const compose = (life) => `  ${[...fixed, ...life].join(sep)}`;
   let life = [...lifecycle];
   let leftText = compose(life);
   const rightText = right.length ? `${right.join(sep)}  ` : '';
   while (life.length && displayWidth(ui.stripAnsi(leftText)) > width) {
     life.pop();
     leftText = compose(life);
+  }
+  // If still too wide, shrink workspace-first fixed path by recomposing without long path.
+  if (displayWidth(ui.stripAnsi(leftText)) + displayWidth(ui.stripAnsi(rightText)) > width && snapshot.workspace) {
+    const tighter = shortWorkspacePath(snapshot.workspace, 28);
+    const fixed2 = [];
+    if (tighter) fixed2.push(ui.paint('info', tighter));
+    if (snapshot.branch) fixed2.push(ui.paint('muted', snapshot.branch));
+    if (snapshot.mode) fixed2.push(ui.paint(snapshot.mode === 'commands' ? 'muted' : 'info', snapshot.mode));
+    leftText = `  ${[...fixed2, ...life].join(sep)}`;
   }
   return twoColumn(leftText, rightText, width);
 }

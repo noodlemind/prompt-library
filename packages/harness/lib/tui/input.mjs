@@ -87,10 +87,19 @@ export function createInput({
         composer.setRuleLabel(`${hintState.mode} · ${prompt.title}`);
         composer.setPlaceholder(`${prompt.label}${prompt.note ? ` — ${prompt.note}` : ''} · ↵ submits · exit cancels`);
       } else {
-        composer.setRuleLabel([hintState.mode, hintState.shell === 'denied' ? 'shell denied' : null].filter(Boolean).join(' · '));
-                composer.setPlaceholder(hintState.agent === false
-          ? 'run a command · / for the palette · shift+tab to ask'
-          : null);
+        const mode = hintState.mode || (hintState.agent === false ? 'commands' : 'assist');
+        composer.setRuleLabel([
+          mode,
+          hintState.shell === 'denied' ? 'shell denied' : null,
+        ].filter(Boolean).join(' · '));
+        // Mode-specific placeholders; leading · keeps the caret from eating text.
+        if (hintState.agent === false || mode === 'commands') {
+          composer.setPlaceholder('· run a command · / palette · shift+tab for agent');
+        } else if (mode === 'plan') {
+          composer.setPlaceholder('· ask (plan mode) · proposals only · / palette');
+        } else {
+          composer.setPlaceholder('· ask or run a command · / palette');
+        }
       }
       rows.push(...composer.render());
     }

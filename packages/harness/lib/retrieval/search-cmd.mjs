@@ -64,16 +64,125 @@ function openArgvFor(row) {
   return null;
 }
 
+/** Max hits printed in the ledger by default. Full set still goes to results picker. */
+export const SEARCH_LEDGER_PREVIEW = 8;
+
+function shortLocation(row) {
+  const where = String(row.location || row.id || '');
+  // Drop redundant basename note when location already ends with the same file.
+  return where;
+}
+
+function hitLabel(row, index) {
+  const where = shortLocation(row);
+  const title = row.title && row.title !== path.basename(where.replace(/:\d+(?::\d+)?$/, ''))
+    ? row.title
+    : null;
+  return {
+    index: index + 1,
+    source: row.source || 'hit',
+    where: inertLine(where),
+    title: title ? inertLine(String(title)) : undefined,
+    reason: row.reason ? inertLine(String(row.reason)) : undefined,
+  };
+}
+
+/**
+ * Human ledger lines for search. Never dumps raw --cursor tokens.
+ * @param {object} result runSearch result
+ * @param {{ verbose?: boolean, explain?: boolean, preview?: number, compact?: boolean }} opts
+ */
+export function formatSearchLedger(result, opts = {}) {
+  const preview = Number.isInteger(opts.preview) ? opts.preview : SEARCH_LEDGER_PREVIEW;
+  const lines = [];
+  lines.push({
+    key: 'search',
+    value: `${result.total} result${result.total === 1 ? '' : 's'}`,
+    note: `match ${result.match}`,
+  });
+
+  const skipped = (result.sources || []).filter((x) => x.status !== 'ok');
+  if (skipped.length) {
+    if (opts.verbose) {
+      for (const s of skipped) {
+        lines.push({
+          state: s.status === 'failed' ? 'error' : 'warn',
+          key: s.source,
+          value: s.status,
+          note: s.reason ?? undefined,
+        });
+      }
+    } else {
+      const names = skipped.map((s) => s.source).join(', ');
+      const failed = skipped.some((s) => s.status === 'failed');
+      lines.push({
+        state: failed ? 'error' : 'muted',
+        key: 'skipped',
+        value: names,
+        note: skipped.length === 1 ? (skipped[0].reason || undefined) : `${skipped.length} sources`,
+      });
+    }
+  }
+
+  const page = result.results || [];
+  const show = opts.compact ? page.slice(0, preview) : page;
+  show.forEach((row, i) => {
+    const hit = hitLabel(row, i);
+    lines.push({
+      key: String(hit.index),
+      value: hit.where,
+      note: [hit.source, hit.title].filter(Boolean).join(' · ') || undefined,
+    });
+    if (opts.explain && hit.reason) {
+      lines.push({ key: 'why', value: hit.reason, state: 'muted' });
+    }
+  });
+
+  if (opts.compact && page.length > show.length) {
+    lines.push({
+      state: 'muted',
+      key: 'shown',
+      value: `${show.length} of ${page.length}`,
+      note: 'type results to browse all',
+    });
+  }
+
+  if (result.truncated && result.nextCursor) {
+    if (opts.verbose) {
+      lines.push({
+        key: 'more',
+        value: `${page.length}+ remaining`,
+        note: `re-run with --cursor (see --json)`,
+      });
+      lines.push({
+        state: 'muted',
+        key: 'cursor',
+        value: String(result.nextCursor),
+      });
+    } else {
+      lines.push({
+        state: 'muted',
+        key: 'more',
+        value: 'next page available',
+        note: opts.compact ? 'results · or search again with --verbose for cursor' : 'pass --cursor from --json nextCursor',
+      });
+    }
+  }
+
+  return lines;
+}
+
 export async function cmdSearch(argv, ctx = {}) {
   const { flags } = searchContext(argv);
   const result = searchResult(argv);
 
-    ctx.reportSelection?.({
+  // TUI (and any host that registers a selection) gets a full pick list.
+  ctx.reportSelection?.({
     kind: 'results',
     title: `${result.total} result(s)`,
     items: result.results
-      .map((row) => ({
-        label: String(row.location || row.id || ''),
+      .map((row, i) => ({
+        label: `${i + 1}. ${String(row.location || row.id || '')}`,
         note: [row.source, row.title].filter(Boolean).join(' · '),
         argv: openArgvFor(row),
       }))
@@ -85,21 +194,17 @@ export async function cmdSearch(argv, ctx = {}) {
     return 0;
   }
 
-  const keyWidth = keyWidthFor(['results', 'sources', 'more']);
-  console.log(ui.line({ key: 'search', value: `${result.total} result(s)`, note: `match ${result.match}`, keyWidth }));
-
-    for (const s of result.sources.filter((x) => x.status !== 'ok')) {
-    console.log(ui.line({ state: s.status === 'failed' ? 'error' : 'warn', key: s.source, value: s.status, note: s.reason ?? undefined, keyWidth }));
-  }
-
-  for (const row of result.results) {
-    const where = row.location || row.id;
-    console.log(ui.line({ key: row.source, value: inertLine(String(where)), note: row.title ? inertLine(row.title) : undefined, keyWidth }));
-    if (flags.explain && row.reason) console.log(ui.paint('muted', `    ${inertLine(row.reason)}`));
-  }
-
-  if (result.truncated) {
-    console.log(ui.line({ key: 'more', value: `--cursor ${result.nextCursor}`, keyWidth }));
+  // When selection is wired (ledger/TUI), keep the scrollback short.
+  const compact = typeof ctx.reportSelection === 'function' && !flags.verbose;
+  const ledgerLines = formatSearchLedger(result, {
+    verbose: flags.verbose,
+    explain: flags.explain,
+    compact,
+    preview: SEARCH_LEDGER_PREVIEW,
+  });
+  const keyWidth = keyWidthFor(['search', 'skipped', 'shown', 'more', 'cursor', 'why', ...ledgerLines.map((l) => l.key)]);
+  for (const line of ledgerLines) {
+    console.log(ui.line({ ...line, keyWidth }));
   }
   return 0;
 }

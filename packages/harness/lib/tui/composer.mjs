@@ -46,7 +46,9 @@ export function createComposer({
 
   let bashMode = false;
 
-    const DEFAULT_PLACEHOLDER = 'ask, or run a command · / for the palette';
+  // Leading middot avoids the caret glyph colliding with the first letter of
+  // "ask" in some terminals (read as a broken box + "sk, or run…").
+  const DEFAULT_PLACEHOLDER = '· ask or run a command · / palette';
   let placeholder = DEFAULT_PLACEHOLDER;
 
   const asText = (clusters) => clusters.join('');
@@ -257,9 +259,13 @@ export function createComposer({
 
     const body = [];
     const empty = lines.length === 1 && lines[0].length === 0;
-        const caretOut = bashMode ? paint('warn', `${ascii ? '!' : '!'} `) : paint('info', caret);
+    // Always end caret with a space so the placeholder never sits under the glyph.
+    const caretOut = bashMode
+      ? paint('warn', '! ')
+      : paint('info', `${glyphs.caret} `);
     if (empty) {
-      body.push(`${caretOut}${paint('muted', bashMode ? 'shell command · esc leaves bash mode' : placeholder)}`);
+      const ph = bashMode ? '· shell command · esc leaves bash' : placeholder;
+      body.push(`${caretOut}${paint('muted', ph)}`);
     } else {
       lines.forEach((clusters, i) => {
         const text = asText(clusters);
