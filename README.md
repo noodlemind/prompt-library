@@ -2,25 +2,20 @@
 
 Skill-driven AI engineering for teams on **GitHub Copilot** (VS Code / IntelliJ): one accountable entry (`@engineer`), gated delivery, and memory that compounds.
 
-**Read this first:** [Adaptive Engineer Harness — concept](docs/adaptive-engineer-harness.md)
-
-That document is the shared understanding of the practice (modes, lifecycle, skill-first primitives, memory tiers, loop design). Everything else is implementation.
+**Concept (start here):** [docs/adaptive-engineer-harness.md](docs/adaptive-engineer-harness.md)
 
 ---
 
 ## Quick start
-
-1. Clone this repository  
-2. Install the CLI and hydrate Copilot:
 
 ```bash
 npm install -g ./packages/harness    # or @dev-kit/harness@latest from your registry
 harness install
 ```
 
-3. Open a **product** repository (do not copy prompt-library source into it)  
-4. In Copilot Chat, select **`@engineer`**  
-5. Optional: `/harness-doctor`, `/project-readme`, `/triage-issues`
+1. Open a **product** repo (do not copy this library’s source into it).
+2. In Copilot Chat, select **`@engineer`**.
+3. Optional: `/harness-doctor`, `/project-readme`, `/triage-issues`.
 
 ---
 
@@ -35,29 +30,43 @@ harness install
 
 | Piece | Role |
 |-------|------|
-| **Skills** (25) | Reusable workflows; most are engineer-internal |
+| **Skills** (25) | Reusable workflows; four user-invocable, rest engineer-internal |
 | **Agents** (21) | Specialists + engineer + implementer + coordinators |
-| **Harness CLI (kernel)** | Orient, gate, verify, compound, knowledge, `report --growth` — **no LLM** |
-| **Optional `harness agent`** | Opt-in headless add-on only (`agent.enabled`) — **not** the AE runtime |
+| **Kernel (`harness`)** | Orient, gate, edit/exec, verify, compound, knowledge, growth report — **never** starts an LLM on the host path |
+| **Optional agent** | Opt-in headless loop (`agent.enabled`, default off) — same tools, not a second Engineer |
 | **Knowledge** | Team solutions hydrated globally; product plans stay in the product repo |
 
 User-invocable skills: `/engineer`, `/harness-doctor`, `/project-readme`, `/triage-issues`.
 
-After a passed host verify: `harness compound --plan <p>` then `harness report --growth`.
+After a passed Deliver verify:
+
+```bash
+harness compound --plan <path>
+harness report --growth
+```
+
+### Two tracks, one kernel
+
+| Track | Use for | Success |
+|-------|---------|---------|
+| **Deliver** | Real product work (`@engineer` + gate/verify/compound) | Passed verify + compound/growth |
+| **Autonomous** | Evals / unattended solve (`harness agent --profile autonomous`) | Task verifier green (`--verify-cmd`) |
+
+Details: [docs/agent-loop.md](docs/agent-loop.md) · package CLI: [packages/harness/README.md](packages/harness/README.md)
 
 ---
 
-## Repository layout
+## Layout
 
 ```text
-.github/          agents, skills, instructions, hooks
-knowledge/        team solutions + capability registry (hydrated globally)
+.github/           agents, skills, instructions, hooks
+knowledge/         team solutions + capability registry (hydrated globally)
 docs/
-  adaptive-engineer-harness.md   # concept (this practice)
-  plans/                         # plan template; product repos hold live plans
-packages/harness/                # CLI package
-README.md                        # this file
-AGENTS.md                        # agent inventory for coding agents
+  adaptive-engineer-harness.md   # practice model
+  agent-loop.md                  # optional headless agent
+  plans/                         # template + transient execution plans (this repo)
+packages/harness/                # CLI, TUI, eval pack
+AGENTS.md                        # inventory for coding agents
 ```
 
 ---
@@ -65,6 +74,4 @@ AGENTS.md                        # agent inventory for coding agents
 ## Requirements
 
 - VS Code 1.109+ with GitHub Copilot Chat, or IntelliJ with global Copilot customizations  
-- Node.js for `harness` CLI  
-
-Package details: [packages/harness/README.md](packages/harness/README.md)
+- Node.js 20+ for the `harness` CLI  
