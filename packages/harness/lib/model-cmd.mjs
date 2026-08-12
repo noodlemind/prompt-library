@@ -86,7 +86,7 @@ export function modelPickerRows({ workspace, copilotHome, parentEnv = process.en
       {
         section: true,
         label: 'providers not connected',
-        note: 'connect one (export KEY=… or VS Code Chat sign-in), then refresh',
+        note: 'connect one (provider key or active VS Code bridge), then refresh',
         ready: false,
         disabled: true,
       },
@@ -257,7 +257,7 @@ export async function cmdModel(argv, ctx = {}) {
       value: `${target} · ${fetched.models.length} model(s)`,
       note: fetched.probed
         ? `verified ${fetched.probed.verified} of ${fetched.probed.candidates} by probe`
-        : 'from the provider (use --verify to probe each model)',
+        : 'from the provider',
     }));
     for (const id of fetched.models.slice(0, 12)) {
       console.log(ui.line({ state: 'pending', key: '', value: id, note: fetched.labels[id] || undefined }));

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -179,7 +180,7 @@ test('the editor bridge authenticates loopback requests and preserves model tool
   );
 });
 
-test('the GitHub Copilot adapter prefers the editor for both catalogue and completion', async (t) => {
+test('the GitHub Copilot adapter uses the editor for both catalogue and completion', async (t) => {
   const copilotHome = tempDir('bridge-provider-home-');
   const { vscode, context } = fakeVSCode();
   const bridge = await startBridgeServer({ vscode, context, copilotHome });
@@ -200,6 +201,40 @@ test('the GitHub Copilot adapter prefers the editor for both catalogue and compl
   const completion = await provider.complete({ messages: [{ role: 'user', text: 'hello' }], tools: [] });
   assert.equal(completion.text, 'editor response');
   assert.equal(completion.model, 'copilot/gpt-4.1');
+});
+
+test('GitHub Copilot refuses direct HTTPS credentials when the editor bridge is absent', async (t) => {
+  const copilotHome = tempDir('bridge-required-home-');
+  let directRequests = 0;
+  const direct = http.createServer((_req, res) => {
+    directRequests += 1;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'direct response' } }] }));
+  });
+  await new Promise((resolve) => direct.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => direct.close(resolve)));
+
+  const provider = startProvider({
+    provider: 'github-copilot',
+    copilotHome,
+    parentEnv: {
+      PATH: process.env.PATH,
+      GITHUB_COPILOT_TOKEN: 'direct-token-must-be-ignored',
+      GITHUB_COPILOT_BASE_URL: `http://127.0.0.1:${direct.address().port}`,
+    },
+  });
+  t.after(() => provider.close());
+
+  await assert.rejects(
+    () => provider.complete({ messages: [{ role: 'user', text: 'hello' }], tools: [] }),
+    /VS Code language-model bridge.*(?:not running|missing)/i,
+  );
+  assert.equal(directRequests, 0, 'GitHub Copilot must never fall through to a direct HTTP request');
+});
+
+test('the GitHub Copilot adapter contains no direct endpoint or token-exchange implementation', () => {
+  const source = fs.readFileSync(path.join(packageRoot, 'lib', 'providers', 'github-copilot.mjs'), 'utf8');
+  assert.doesNotMatch(source, /node:https|api\.githubcopilot\.com|copilot_internal|GITHUB_COPILOT_TOKEN/);
 });
 
 test('an editor permission denial is authoritative and never falls through to direct API auth', async (t) => {

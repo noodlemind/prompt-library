@@ -1380,7 +1380,7 @@ test('CATALOG: fetchModels normalizes an adapter answer, and refuses an empty on
 test('PICKER: typing narrows a sectioned list, and a heading only survives its children', async () => {
     const { filterSectioned } = await import('../lib/tui/overlay.mjs');
   const rows = [
-    { section: true, label: 'github-copilot', note: 'editor credential found' },
+    { section: true, label: 'github-copilot', note: 'VS Code language model bridge' },
     { label: 'claude-sonnet-5', note: 'Claude Sonnet 5' },
     { label: 'gpt-4o', note: 'active · GPT-4o' },
     { section: true, label: 'groq', note: 'GROQ_API_KEY is set' },

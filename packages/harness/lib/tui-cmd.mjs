@@ -1345,7 +1345,8 @@ export async function ensureFirstRunInstall({
   if (process.env.HARNESS_SKIP_FIRST_RUN_INSTALL === '1') return false;
   const lock = readLock(copilotHome);
   const currentVersion = packageVersion || readVersion();
-  if (lock && !isNewerPackageVersion(currentVersion, lock.version)) return false;
+  if (lock && isNewerPackageVersion(lock.version, currentVersion)) return false;
+  if (lock && !isNewerPackageVersion(currentVersion, lock.version) && hasInstalledVSCodeBridge(lock)) return false;
   const command = lock ? 'upgrade' : 'install';
   const runInstall = install || (await import('./commands.mjs')).cmdInstallOrUpgrade;
   const args = [
@@ -1361,6 +1362,19 @@ export async function ensureFirstRunInstall({
     throw Object.assign(new Error(`automatic harness ${command} failed with exit ${exit}`), { code: 'E_INSTALL', exit });
   }
   return true;
+}
+
+function hasInstalledVSCodeBridge(lock) {
+  const bridge = lock?.vscodeBridge;
+  if (bridge?.id !== 'dev-kit.harness-copilot-bridge' || typeof bridge.path !== 'string') return false;
+  try {
+    const stat = fs.lstatSync(bridge.path);
+    return stat.isDirectory()
+      && !stat.isSymbolicLink()
+      && fs.statSync(path.join(bridge.path, 'extension.cjs')).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function isNewerPackageVersion(current, installed) {

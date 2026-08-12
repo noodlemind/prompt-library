@@ -20,7 +20,10 @@ export function bridgeStatePath(copilotHome = null, env = process.env) {
 
 function validateState(state) {
   if (!state || typeof state !== 'object') {
-    throw bridgeError('VS Code language-model bridge state is missing', 'E_EDITOR_BRIDGE_UNAVAILABLE');
+    throw bridgeError(
+      'VS Code language-model bridge is not running; run harness install --configure-vscode, reload the VS Code window, and retry',
+      'E_EDITOR_BRIDGE_UNAVAILABLE',
+    );
   }
   if (state.protocol !== EDITOR_BRIDGE_PROTOCOL) {
     throw bridgeError(`unsupported VS Code language-model bridge protocol: ${String(state.protocol)}`, 'E_EDITOR_BRIDGE_INVALID');
@@ -37,8 +40,8 @@ function validateState(state) {
   return state;
 }
 
-/** Read only state owned by this user. Invalid or stale state is equivalent to
- * no active editor bridge so callers may use their documented fallback. */
+/** Read only state owned by this user. Invalid or stale state means the editor
+ * bridge is unavailable; GitHub Copilot requests must fail closed. */
 export function readEditorBridgeState({ copilotHome = null, statePath = null, parentEnv = process.env } = {}) {
   const file = statePath || bridgeStatePath(copilotHome, parentEnv);
   try {
