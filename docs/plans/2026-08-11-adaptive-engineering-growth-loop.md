@@ -46,7 +46,8 @@ updated: 2026-08-11
 
 > **Audience:** Grok Coding Agent (or any implementer).  
 > **Source:** Expert review of Harness CLI, TUI, and Agent Loop with product constraints from the owner.  
-> **This document is the requirements contract.** Implement only what is specified. Do not expand the optional agent into a second Engineer.
+> **This document is the requirements contract.** Implement only what is specified. Do not expand the optional agent into a second Engineer.  
+> **Companion:** test-suite de-bloat lives in `docs/plans/2026-08-11-harness-test-hygiene.md` — run in parallel; new tests from this plan use module names + shared helpers, never `*findings*` souvenir files.
 
 ## Overview
 
