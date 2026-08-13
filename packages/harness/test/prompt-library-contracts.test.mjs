@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +31,11 @@ function exists(rel) {
   return fs.existsSync(path.join(repoRoot, rel));
 }
 
+function isTracked(rel) {
+  const out = execFileSync('git', ['-C', repoRoot, 'ls-files', '--', rel], { encoding: 'utf8' }).trim();
+  return out.length > 0;
+}
+
 test('canonical concept doc defines task modes, ownership, gap handling, and runtime modes', () => {
   const model = read(architecturePath);
 
@@ -50,10 +56,28 @@ test('canonical concept doc defines task modes, ownership, gap handling, and run
   }
 });
 
-test('docs surface is concept + agent-loop + plan/solution scaffolding', () => {
+test('docs surface is primer + concept + agent-loop + plan/solution scaffolding', () => {
   const docsRoot = path.join(repoRoot, 'docs');
-  const topLevel = fs.readdirSync(docsRoot).filter((name) => !name.startsWith('.')).sort();
-  assert.deepEqual(topLevel, ['adaptive-engineer-harness.md', 'agent-loop.md', 'plans', 'solutions']);
+  const generatedTopLevel = ['codebase-map.md', 'codebase-snapshot.md'];
+  for (const name of generatedTopLevel) {
+    assert.equal(
+      isTracked(`docs/${name}`),
+      false,
+      `docs/${name} is generated and must remain untracked`,
+    );
+  }
+  const generated = new Set(generatedTopLevel);
+  const topLevel = fs
+    .readdirSync(docsRoot)
+    .filter((name) => !name.startsWith('.') && !generated.has(name))
+    .sort();
+  assert.deepEqual(topLevel, [
+    'adaptive-engineer-harness.md',
+    'adaptive-engineering-primer.md',
+    'agent-loop.md',
+    'plans',
+    'solutions',
+  ]);
   assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);
@@ -68,6 +92,21 @@ test('docs surface is concept + agent-loop + plan/solution scaffolding', () => {
   assert.match(agentLoop, /@engineer/);
   assert.doesNotMatch(read('packages/harness/README.md'), /harness agent[\s\S]{0,80}Adaptive Engineer runtime/i);
   assert.match(read('packages/harness/README.md'), /opt-in add-on/i);
+});
+
+test('team primer distinguishes change contracts from SDD/BMAD plans', () => {
+  const primer = read('docs/adaptive-engineering-primer.md');
+  for (const phrase of [
+    'Mode before action',
+    'plan_lock',
+    'Spec Kit',
+    'BMAD',
+    '2048',
+    'harness verify',
+  ]) {
+    assert.match(primer, new RegExp(phrase), `primer missing ${phrase}`);
+  }
+  assert.doesNotMatch(primer, /next big thing/i, 'primer must stay factual, not a pitch');
 });
 
 test('engineer agent is frozen, thin, and owns the only normative nine-step delivery lifecycle', () => {

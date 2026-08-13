@@ -16,6 +16,7 @@ After merge, remove the completed plan (plan-only cleanup) unless unresolved wor
 
 | Need | Location |
 |------|----------|
+| Team primer | `docs/adaptive-engineering-primer.md` |
 | Practice model | `docs/adaptive-engineer-harness.md` |
 | Optional agent | `docs/agent-loop.md` |
 | Plan template | `docs/plans/_plan-template.md` |

@@ -1,5 +1,7 @@
 # Adaptive Engineer Harness
 
+Team briefing (why this method, how a plan differs from Spec Kit / BMAD, token bounds): [adaptive-engineering-primer.md](./adaptive-engineering-primer.md).
+
 Adaptive Engineering is an evidence-governed way to deliver AI-assisted software changes. It lets the process expand or contract with the task, while keeping the acceptance bar fixed:
 
 > **Mode before action. Intent before mutation. Evidence before done. Learning after proof.**
@@ -231,6 +233,7 @@ For explicit or non-TUI setup, use `harness install --configure-vscode`. See the
 
 | Need | Location |
 |------|----------|
+| Team primer | `docs/adaptive-engineering-primer.md` |
 | Practice model | `docs/adaptive-engineer-harness.md` |
 | Optional headless loop | `docs/agent-loop.md` |
 | CLI, TUI, installation, and CI | `packages/harness/README.md` |
