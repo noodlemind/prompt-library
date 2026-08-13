@@ -227,6 +227,8 @@ checks:
     'env CI=1 node scripts/validate-schema.mjs',
     'command node scripts/validate-schema.mjs',
     'command -p node scripts/validate-schema.mjs',
+    "bash -c 'node scripts/validate-schema.mjs'",
+    'node ./scripts/validate-schema.mjs',
   ]) {
     const wrapped = runHook('require-plan-gate.mjs', workspace, {
       tool_name: 'run_in_terminal',
@@ -234,6 +236,61 @@ checks:
     });
     assert.equal(outputJson(wrapped).hookSpecificOutput?.permissionDecision, 'deny', command);
   }
+});
+
+test('changed checks.yaml does not block legacy sessions or sole harness gate', () => {
+  const workspace = tempWorkspace();
+  const plan = writePlan(workspace);
+  fs.writeFileSync(
+    path.join(workspace, '.github', 'harness', 'checks.yaml'),
+    `version: 1
+checks:
+  harness-tests:
+    command: [node, scripts/run-harness-tests.mjs]
+`
+  );
+  fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  fs.writeFileSync(
+    path.join(workspace, '.harness', 'session.json'),
+    JSON.stringify({
+      version: 1,
+      gatedPlan: plan,
+      gatedPlanDigest: 'abc',
+      gateStatus: 'pass',
+      lastGateAt: new Date().toISOString(),
+    })
+  );
+
+  const legacy = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'run_in_terminal',
+    tool_input: { command: 'git status' },
+  });
+  assert.equal(outputJson(legacy).continue, true, 'missing gatedChecksDigest is a legacy session, not a hard deny');
+
+  writePassedGate(workspace, plan);
+  fs.writeFileSync(
+    path.join(workspace, '.github', 'harness', 'checks.yaml'),
+    `version: 1
+checks:
+  harness-tests:
+    command: [node, scripts/run-harness-tests.mjs]
+  extra:
+    command: [node, scripts/extra.mjs]
+`
+  );
+
+  const mixed = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'run_in_terminal',
+    tool_input: { command: 'harness gate --json; node scripts/extra.mjs' },
+  });
+  assert.equal(outputJson(mixed).hookSpecificOutput?.permissionDecision, 'deny');
+  assert.match(outputJson(mixed).hookSpecificOutput?.permissionDecisionReason || '', /changed-check-config/);
+
+  const sole = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'run_in_terminal',
+    tool_input: { command: 'harness gate --json' },
+  });
+  assert.equal(outputJson(sole).continue, true);
 });
 
 test('non-mutation VS Code tools remain read-only even when their payload includes a path', () => {
@@ -843,6 +900,15 @@ test('destructive push guard blocks refspec force pushes without overblocking be
     'git push --force origin feature:main',
     'git push --repo origin +HEAD:main',
     'git -C . push --force origin main',
+    "sh -c 'git push --force origin main'",
+    'bash -lc "git push --force origin main"',
+    'pwsh -Command "git push --force origin main"',
+    'git push --delete origin main',
+    'git push origin -d main',
+    'git PUSH --force origin main',
+    'git push --mirror origin',
+    'git push --force --all origin',
+    'git push --force origin',
   ]) {
     const blocked = runHook('block-destructive-commands.mjs', workspace, {
       tool_name: 'Bash',

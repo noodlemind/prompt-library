@@ -2,7 +2,7 @@
 /** PreToolUse terminal guard: block destructive shell commands. */
 import fs from 'node:fs';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
-import { normalizeToolPayload, tokenizeShell } from './lib/tool-payload.mjs';
+import { normalizeToolPayload, unwrapShellSegments } from './lib/tool-payload.mjs';
 
 const BLOCKED = [
   /\brm\s+-rf\s+\//,
@@ -14,8 +14,8 @@ const BLOCKED = [
 function protectedDestination(refspec) {
   const withoutForce = String(refspec || '').replace(/^\+/, '');
   const separator = withoutForce.lastIndexOf(':');
-  const destination = (separator >= 0 ? withoutForce.slice(separator + 1) : withoutForce).replace(/^refs\/heads\//, '');
-  return /^(?:main|master)$/.test(destination);
+  const destination = (separator >= 0 ? withoutForce.slice(separator + 1) : withoutForce).replace(/^refs\/heads\//i, '');
+  return /^(?:main|master)$/i.test(destination);
 }
 
 function gitPushArgs(tokens) {
@@ -29,16 +29,23 @@ function gitPushArgs(tokens) {
       else if (/^--(?:exec-path|git-dir|work-tree|namespace|super-prefix|config-env)=/.test(arg) || arg.startsWith('-')) index += 1;
       else break;
     }
-    if (tokens[index] === 'push') return tokens.slice(index + 1);
+    if (String(tokens[index] || '').toLowerCase() === 'push') return tokens.slice(index + 1);
   }
   return null;
 }
 
+function isShortFlag(arg, letter) {
+  return /^-[^-]/.test(arg) && arg.includes(letter);
+}
+
 function destructiveProtectedPush(command) {
-  for (const segment of String(command || '').split(/(?:&&|\|\||[;|\n])/)) {
-    const args = gitPushArgs(tokenizeShell(segment));
+  for (const tokens of unwrapShellSegments(command)) {
+    const args = gitPushArgs(tokens);
     if (!args) continue;
-    const forced = args.some((arg) => /^--force(?:-with-lease)?(?:=|$)/.test(arg) || /^-[^-]*f/.test(arg));
+    const forced = args.some((arg) => /^--force(?:-with-lease)?(?:=|$)/.test(arg) || isShortFlag(arg, 'f'));
+    const deleting = args.some((arg) => arg === '--delete' || isShortFlag(arg, 'd'));
+    const mirrored = args.some((arg) => arg === '--mirror');
+    const all = args.some((arg) => arg === '--all');
     const positional = [];
     let remoteByOption = false;
     for (let index = 0; index < args.length; index += 1) {
@@ -51,8 +58,9 @@ function destructiveProtectedPush(command) {
       else if (!arg.startsWith('-')) positional.push(arg);
     }
     const refspecs = positional.slice(remoteByOption ? 0 : 1);
+    if (mirrored || (forced && (all || refspecs.length === 0))) return true;
     if (refspecs.some((refspec) => protectedDestination(refspec)
-      && (forced || refspec.startsWith('+') || refspec.startsWith(':')))) return true;
+      && (forced || deleting || refspec.startsWith('+') || refspec.startsWith(':')))) return true;
   }
   return false;
 }

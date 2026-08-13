@@ -62,12 +62,26 @@ test('every provider resolves to an adapter that exists on disk', () => {
   for (const provider of Object.values(PROVIDERS)) {
     assert.ok(fs.existsSync(path.join(root, 'lib', provider.adapter)), `${provider.id} → ${provider.adapter}`);
     assert.ok(provider.defaultModel, `${provider.id} needs a default model or --provider alone is unusable`);
-    if (provider.id === 'github-copilot') {
-      assert.equal(provider.transport, 'vscode.lm');
+    if (provider.transport === 'vscode.lm') {
+      assert.equal(provider.id, 'github-copilot');
     } else {
       assert.ok(provider.baseUrl && provider.baseUrlVar, `${provider.id} needs a base URL and an override variable`);
     }
   }
+});
+
+test('editor-bridge transport, not the Copilot id, owns env and readiness', () => {
+  const fake = {
+    id: 'other-editor',
+    keyRequired: false,
+    transport: 'vscode.lm',
+    defaultModel: 'gpt-4.1',
+  };
+  const env = providerEnv(fake, { parentEnv: { PATH: '/usr/bin', GITHUB_COPILOT_TOKEN: 'secret' }, copilotHome: os.tmpdir() });
+  assert.equal(env.HARNESS_PROVIDER_ID, 'other-editor');
+  assert.ok(env.HARNESS_COPILOT_BRIDGE_STATE);
+  assert.equal('GITHUB_COPILOT_TOKEN' in env, false);
+  assert.equal('HARNESS_PROVIDER_BASE_URL' in env, false);
 });
 
 test('the OpenAI-compatible providers share ONE adapter, while Copilot is editor-only', () => {

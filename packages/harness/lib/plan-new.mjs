@@ -191,13 +191,17 @@ export async function cmdPlanNew(argv) {
 
   const configured = loadConfiguredChecks(workspace);
   if (configured.error) throw new Error(`plan-new: ${configured.error}`);
-  const names = configured.checks ? Object.keys(configured.checks) : [];
+  const names = Object.entries(configured.checks || {})
+    .filter(([, config]) => Array.isArray(config?.command)
+      && config.command.length > 0
+      && config.command.every((part) => typeof part === 'string' && part.trim().length > 0))
+    .map(([name]) => name);
   if (names.length === 0) {
     throw new Error('plan-new: configure at least one named check in .github/harness/checks.yaml before generating a gate-ready plan');
   }
   if (opts.check) {
-    if (!Object.hasOwn(configured.checks, opts.check)) {
-      throw new Error(`plan-new: --verification-check ${opts.check} is not configured; choose one of: ${names.join(', ')}`);
+    if (!names.includes(opts.check)) {
+      throw new Error(`plan-new: --verification-check ${opts.check} is not an executable configured check; choose one of: ${names.join(', ')}`);
     }
   } else if (names.length === 1) {
     [opts.check] = names;

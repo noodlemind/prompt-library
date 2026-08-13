@@ -21,7 +21,7 @@ export function bridgeStatePath(copilotHome = null, env = process.env) {
 function validateState(state) {
   if (!state || typeof state !== 'object') {
     throw bridgeError(
-      'VS Code language-model bridge is not running; run harness install --configure-vscode, reload the VS Code window, and retry',
+      'VS Code language-model bridge is not running. GitHub Copilot is editor-only — GITHUB_COPILOT_TOKEN, OAuth, and direct HTTPS are not accepted. Run harness install --configure-vscode, reload the VS Code window, and retry',
       'E_EDITOR_BRIDGE_UNAVAILABLE',
     );
   }

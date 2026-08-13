@@ -19,10 +19,10 @@ harness tui                    # first launch hydrates VS Code + CLI automatical
 harness doctor --host vscode
 ```
 
-`harness tui` runs the global hydration when no install lock exists and runs it
-once more after npm installs a newer package version. Same-version launches do
-nothing. Hydration also installs the Harness Copilot Bridge; reload VS Code
-after installation or upgrade. `harness install --configure-vscode` and
+`harness tui` hydrates when no install lock exists, upgrades when the running
+package is newer, and repairs a same-version lock whose VS Code bridge is
+missing. A current bridge install does nothing. Reload VS Code after
+installation or upgrade. `harness install --configure-vscode` and
 `harness upgrade` remain available for explicit/non-TUI setup.
 
 `prepare`/`prepack` build `assets/` so installs match published tarballs.

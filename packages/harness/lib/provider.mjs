@@ -231,7 +231,7 @@ export function providerEnv(provider, { parentEnv = process.env, copilotHome = n
     env.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS = parentEnv.HARNESS_PROVIDER_REQUEST_TIMEOUT_MS;
   }
 
-  if (provider.id === 'github-copilot') {
+  if (provider.transport === 'vscode.lm') {
     env.HARNESS_COPILOT_BRIDGE_STATE = bridgeStatePath(copilotHome, parentEnv);
     return env;
   }
@@ -287,7 +287,7 @@ export function resolveProvider(id) {
 
 /** How an operator connects this provider — guide-only, never stores a key. */
 export function connectHint(provider) {
-  if (provider.id === 'github-copilot') {
+  if (provider.transport === 'vscode.lm') {
     return 'run harness install --configure-vscode, reload VS Code, and sign in to Copilot Chat';
   }
   if (provider.keyRequired === false) {
@@ -317,7 +317,7 @@ export function providerReadiness({ parentEnv = process.env, enabledIds = null, 
     .map((provider) => {
       const connect = connectHint(provider);
 
-      if (provider.id === 'github-copilot') {
+      if (provider.transport === 'vscode.lm') {
         const viaBridge = Boolean(readEditorBridgeState({ copilotHome, parentEnv }));
         return {
           id: provider.id,

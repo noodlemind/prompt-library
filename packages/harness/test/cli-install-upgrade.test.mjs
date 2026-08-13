@@ -184,15 +184,24 @@ test('install creates global harness shim', () => {
 });
 
 test('TUI launch installs or version-upgrades once with VS Code configuration enabled', async () => {
+  const previousExtensions = process.env.HARNESS_VSCODE_EXTENSIONS_DIR;
   const copilotHome = tempDir('first-tui-home-');
   const workspace = tempDir('first-tui-workspace-');
-  const bridgePath = path.join(tempDir('first-tui-extensions-'), 'dev-kit.harness-copilot-bridge');
+  const extensionsDir = tempDir('first-tui-extensions-');
+  process.env.HARNESS_VSCODE_EXTENSIONS_DIR = extensionsDir;
+  try {
+  const bridgePath = path.join(extensionsDir, 'dev-kit.harness-copilot-bridge');
   const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
   const calls = [];
   const install = async (command, argv) => {
     calls.push({ command, argv });
     fs.mkdirSync(bridgePath, { recursive: true });
     fs.writeFileSync(path.join(bridgePath, 'extension.cjs'), 'module.exports = {};\n');
+    fs.writeFileSync(path.join(bridgePath, 'package.json'), JSON.stringify({
+      name: 'harness-copilot-bridge',
+      publisher: 'dev-kit',
+      version: '0.1.0',
+    }));
     fs.writeFileSync(
       path.join(copilotHome, '.harness-lock.json'),
       JSON.stringify({
@@ -229,8 +238,12 @@ test('TUI launch installs or version-upgrades once with VS Code configuration en
     path.join(copilotHome, '.harness-lock.json'),
     JSON.stringify({ package: '@dev-kit/harness', version: '99.0.0', files: ['skills'] }),
   );
-  assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), false);
-  assert.equal(calls.length, 2, 'running an older CLI never auto-downgrades a newer hydrated install');
+    assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), false);
+    assert.equal(calls.length, 2, 'running an older CLI never auto-downgrades a newer hydrated install');
+  } finally {
+    if (previousExtensions === undefined) delete process.env.HARNESS_VSCODE_EXTENSIONS_DIR;
+    else process.env.HARNESS_VSCODE_EXTENSIONS_DIR = previousExtensions;
+  }
 });
 
 test('TUI launch repairs a same-version legacy install that has no VS Code bridge', async () => {
@@ -254,6 +267,57 @@ test('TUI launch repairs a same-version legacy install that has no VS Code bridg
   }), true);
   assert.deepEqual(calls.map((call) => call.command), ['upgrade']);
   assert.ok(calls[0].argv.includes('--configure-vscode'));
+});
+
+test('TUI launch repairs a same-version lock whose bridge path is a decoy or symlink payload', async () => {
+  const copilotHome = tempDir('decoy-tui-home-');
+  const workspace = tempDir('decoy-tui-workspace-');
+  const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
+  const decoy = tempDir('decoy-bridge-');
+  fs.writeFileSync(path.join(decoy, 'extension.cjs'), 'module.exports = {};\n');
+  fs.writeFileSync(
+    path.join(copilotHome, '.harness-lock.json'),
+    JSON.stringify({
+      package: '@dev-kit/harness',
+      version: packageVersion,
+      files: ['skills'],
+      vscodeBridge: { id: 'dev-kit.harness-copilot-bridge', version: '0.1.0', path: decoy },
+    }),
+  );
+  const calls = [];
+  assert.equal(await ensureFirstRunInstall({
+    copilotHome,
+    workspace,
+    packageVersion,
+    install: async (command) => {
+      calls.push(command);
+      return 0;
+    },
+  }), true);
+  assert.deepEqual(calls, ['upgrade']);
+
+  const linked = tempDir('linked-bridge-');
+  fs.symlinkSync(decoy, path.join(linked, 'bridge'));
+  fs.writeFileSync(
+    path.join(copilotHome, '.harness-lock.json'),
+    JSON.stringify({
+      package: '@dev-kit/harness',
+      version: packageVersion,
+      files: ['skills'],
+      vscodeBridge: { id: 'dev-kit.harness-copilot-bridge', version: '0.1.0', path: path.join(linked, 'bridge') },
+    }),
+  );
+  calls.length = 0;
+  assert.equal(await ensureFirstRunInstall({
+    copilotHome,
+    workspace,
+    packageVersion,
+    install: async (command) => {
+      calls.push(command);
+      return 0;
+    },
+  }), true);
+  assert.deepEqual(calls, ['upgrade']);
 });
 
 test('install tracks the VS Code bridge across a CLI-only upgrade and uninstall removes it safely', () => {
@@ -560,4 +624,15 @@ test('upgrade purges retired prompt wrappers and single-entry retirements from h
   assert.equal(fs.readFileSync(userPrompt, 'utf8'), 'keep me\n', 'untracked content under a directory tombstone must survive');
   assert.equal(fs.existsSync(path.join(home, 'skills', 'btw')), false);
   assert.equal(fs.existsSync(path.join(home, 'agents', 'pipeline-navigator.agent.md')), false);
+});
+
+test('applyRetired does not wipe untracked siblings when the lock named the directory tombstone', () => {
+  const home = tempDir('retired-dir-lock-');
+  fs.mkdirSync(path.join(home, 'prompts'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'prompts', 'engineer.prompt.md'), 'legacy\n');
+  fs.writeFileSync(path.join(home, 'prompts', 'user-owned.prompt.md'), 'keep me\n');
+  const stats = applyRetired(home, ['prompts'], { files: ['prompts'] }, {}, () => {});
+  assert.equal(stats.removed, 0);
+  assert.equal(fs.readFileSync(path.join(home, 'prompts', 'user-owned.prompt.md'), 'utf8'), 'keep me\n');
+  assert.equal(fs.existsSync(path.join(home, 'prompts', 'engineer.prompt.md')), true);
 });

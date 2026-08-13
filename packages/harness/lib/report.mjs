@@ -12,18 +12,15 @@ const RECOVERY_LOOP_MIN_BLOCKS = 2;
 const RECOVERY_LOOP_FLAT_COST = 2500; // baseline tokens per block→recover→retry cycle
 const TREND_DRIFT_RATIO = 1.2;
 
+function eventTime(event) {
+  const parsed = Date.parse(event?.ts || '');
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
 function chronologicalCap(events) {
-  const byKey = new Map();
-  events.forEach((event, index) => {
-    const key = event?.id ? `id:${event.id}` : `anonymous:${index}`;
-    byKey.set(key, { event, index });
-  });
-  return [...byKey.values()]
-    .sort((a, b) => {
-      const aTime = Date.parse(a.event?.ts || '') || 0;
-      const bTime = Date.parse(b.event?.ts || '') || 0;
-      return aTime - bTime || a.index - b.index;
-    })
+  return events
+    .map((event, index) => ({ event, index, time: eventTime(event) }))
+    .sort((a, b) => a.time - b.time || a.index - b.index)
     .slice(-REPORT_EVENT_CAP)
     .map(({ event }) => event);
 }

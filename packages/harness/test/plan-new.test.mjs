@@ -143,6 +143,17 @@ test('cmdPlanNew requires a configured check and an explicit choice when several
   assert.match(ambiguous.stderr, /--verification-check.*unit-tests.*lint/i);
   const selected = harness(ws, ['plan-new', '--type', 'feat', '--slug', 'selected-check', '--intent', 'Do work', '--date', '2026-07-21', '--verification-check', 'lint']);
   assert.equal(selected.status, 0, selected.stderr);
+
+  fs.writeFileSync(checksPath, 'version: 1\nchecks:\n  docs-only:\n    timeout_seconds: 10\n  unit-tests:\n    command: [npm, test]\n');
+  const docsOnly = harness(ws, ['plan-new', '--type', 'feat', '--slug', 'docs-only-check', '--intent', 'Do work', '--date', '2026-07-21', '--verification-check', 'docs-only']);
+  assert.equal(docsOnly.status, 1);
+  assert.match(docsOnly.stderr, /not configured|executable/i);
+  const autoExec = harness(ws, ['plan-new', '--type', 'feat', '--slug', 'auto-exec', '--intent', 'Do work', '--date', '2026-07-21', '--json']);
+  assert.equal(autoExec.status, 0, autoExec.stderr);
+  assert.deepEqual(
+    YAML.parse(fs.readFileSync(path.join(ws, JSON.parse(autoExec.stdout).path), 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]).verification.required,
+    ['unit-tests'],
+  );
   fs.rmSync(ws, { recursive: true, force: true });
 });
 

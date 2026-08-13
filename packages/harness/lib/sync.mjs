@@ -112,18 +112,23 @@ export function applyRetired(copilotHome, retiredList, previousLock, flags, log)
       stats.skipped++;
       continue;
     }
-    if (exactTracked) {
-      if (!fs.existsSync(dest)) continue;
-      if (flags.dryRun) {
-        log(`would remove retired: ${rel}`);
+    if (exactTracked && fs.existsSync(dest)) {
+      const destStat = fs.lstatSync(dest);
+      if (!destStat.isDirectory() || destStat.isSymbolicLink()) {
+        if (flags.dryRun) {
+          log(`would remove retired: ${rel}`);
+          stats.removed++;
+          continue;
+        }
+        fs.rmSync(dest, { force: true });
+        log(`removed retired: ${rel}`);
         stats.removed++;
         continue;
       }
-      fs.rmSync(dest, { recursive: true, force: true });
-      log(`removed retired: ${rel}`);
-      stats.removed++;
-      continue;
+      // Directory tombstones fall through and delete only lock-tracked leaves.
     }
+
+    if (trackedDescendants.length === 0) continue;
 
     // Older locks record shipped leaf files. A directory tombstone owns those
     // descendants, but not unrelated user files that happen to share the dir.

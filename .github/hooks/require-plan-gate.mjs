@@ -7,7 +7,7 @@ import { planContractText } from './lib/evidence-binding.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy } from './lib/policy.mjs';
-import { isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive, tokenizeShell } from './lib/tool-payload.mjs';
+import { isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive, unwrapShellSegments } from './lib/tool-payload.mjs';
 
 const startedAt = Date.now();
 let payload = {};
@@ -142,48 +142,31 @@ function configuredChecksDigest(workspace) {
   return crypto.createHash('sha256').update(fs.readFileSync(configPath)).digest('hex');
 }
 
-function normalizeCommandTokens(tokens) {
-  const normalized = tokens.slice();
-  const assignment = /^[A-Za-z_][A-Za-z0-9_]*=.*/;
-  while (normalized[0] && assignment.test(normalized[0])) normalized.shift();
-  if (path.basename(normalized[0] || '') === 'env') {
-    normalized.shift();
-    while (normalized.length) {
-      if (assignment.test(normalized[0])) normalized.shift();
-      else if (normalized[0] === '--') {
-        normalized.shift();
-        break;
-      } else if (normalized[0] === '-u' || normalized[0] === '--unset') normalized.splice(0, 2);
-      else if (/^--unset=/.test(normalized[0]) || /^-(?:i|0)$/.test(normalized[0]) || normalized[0] === '--ignore-environment') normalized.shift();
-      else break;
-    }
-  }
-  while (normalized[0] && assignment.test(normalized[0])) normalized.shift();
-  if (path.basename(normalized[0] || '') === 'command') {
-    normalized.shift();
-    if (normalized[0] === '-p') normalized.shift();
-    if (normalized[0] === '--') normalized.shift();
-  }
-  return normalized;
+function normalizeArg(value) {
+  return path.posix.normalize(String(value || '').replace(/\\/g, '/')).replace(/^\.\//, '');
 }
 
 function commandMatches(actual, expected) {
   if (actual.length < expected.length) return false;
   return expected.every((part, index) => {
     if (index === 0) return path.basename(actual[index] || '') === path.basename(part);
-    return actual[index] === part;
+    return normalizeArg(actual[index]) === normalizeArg(part);
   });
 }
 
 function unplannedNamedChecks(commands, command, planText) {
   const required = new Set(requiredChecks(planText));
-  const segments = String(command || '')
-    .split(/(?:&&|\|\||[;|\n])/)
-    .map((segment) => normalizeCommandTokens(tokenizeShell(String(segment))))
-    .filter((tokens) => tokens.length > 0);
+  const segments = unwrapShellSegments(command);
   return commands
     .filter(({ name, argv }) => !required.has(name) && segments.some((segment) => commandMatches(segment, argv)))
     .map(({ name }) => name);
+}
+
+function isSoleHarnessGate(command) {
+  const segments = unwrapShellSegments(command);
+  return segments.length > 0 && segments.every((tokens) => (
+    path.basename(tokens[0] || '') === 'harness' && tokens[1] === 'gate'
+  ));
 }
 
 try {
@@ -204,7 +187,9 @@ if (!normalized.mutation) {
       const activePlan = session.gatedPlan || session.activePlan;
       const planText = activePlan ? fs.readFileSync(path.join(normalized.workspace, activePlan), 'utf8') : '';
       const currentDigest = configuredChecksDigest(normalized.workspace);
-      if (session.gatedChecksDigest !== currentDigest && !/^\s*harness\s+gate\b/.test(normalized.command)) {
+      if (Object.hasOwn(session, 'gatedChecksDigest')
+        && session.gatedChecksDigest !== currentDigest
+        && !isSoleHarnessGate(normalized.command)) {
         deny(
           'changed-check-config',
           'The configured check manifest changed after the implement gate. Rerun harness gate before running terminal commands',

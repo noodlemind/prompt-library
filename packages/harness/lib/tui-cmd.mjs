@@ -36,6 +36,7 @@ import {
 import { createQuestion, answerQuestion, questionLines, questionEvent } from './tui/question.mjs';
 import { gateActionRows, parseGateAction, gatePromptLines } from './tui/gate-actions.mjs';
 import { configSettingsRows, verbActionRows } from './tui/modals.mjs';
+import { resolveVSCodeExtensionsDir, VSCODE_BRIDGE_DIR, VSCODE_BRIDGE_ID } from './install-vscode-bridge.mjs';
 
 /** `/Users/me/x` reads better as `~/x`, and the header has one row. */
 const tildePath = (full) => {
@@ -1364,14 +1365,28 @@ export async function ensureFirstRunInstall({
   return true;
 }
 
+function readBridgeIdentity(root) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    return `${manifest.publisher}.${manifest.name}`;
+  } catch {
+    return null;
+  }
+}
+
 function hasInstalledVSCodeBridge(lock) {
   const bridge = lock?.vscodeBridge;
-  if (bridge?.id !== 'dev-kit.harness-copilot-bridge' || typeof bridge.path !== 'string') return false;
+  if (bridge?.id !== VSCODE_BRIDGE_ID || typeof bridge.path !== 'string') return false;
+  const expected = path.resolve(resolveVSCodeExtensionsDir(), VSCODE_BRIDGE_DIR);
+  if (path.resolve(bridge.path) !== expected) return false;
   try {
-    const stat = fs.lstatSync(bridge.path);
-    return stat.isDirectory()
-      && !stat.isSymbolicLink()
-      && fs.statSync(path.join(bridge.path, 'extension.cjs')).isFile();
+    const dir = fs.lstatSync(expected);
+    const entry = fs.lstatSync(path.join(expected, 'extension.cjs'));
+    return dir.isDirectory()
+      && !dir.isSymbolicLink()
+      && entry.isFile()
+      && !entry.isSymbolicLink()
+      && readBridgeIdentity(expected) === VSCODE_BRIDGE_ID;
   } catch {
     return false;
   }

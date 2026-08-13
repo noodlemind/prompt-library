@@ -73,9 +73,9 @@ export function loadPostingsIndex(indexDir) {
   if (!fs.existsSync(postingsPath) || !fs.existsSync(metaPath)) return null;
 
   try {
-    const postings = JSON.parse(fs.readFileSync(postingsPath, 'utf8'));
     const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
     if (meta.version !== POSTINGS_INDEX_VERSION) return null;
+    const postings = JSON.parse(fs.readFileSync(postingsPath, 'utf8'));
     return { ...postings, meta };
   } catch {
     return null;

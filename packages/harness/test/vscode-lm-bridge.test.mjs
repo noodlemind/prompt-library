@@ -227,7 +227,7 @@ test('GitHub Copilot refuses direct HTTPS credentials when the editor bridge is 
 
   await assert.rejects(
     () => provider.complete({ messages: [{ role: 'user', text: 'hello' }], tools: [] }),
-    /VS Code language-model bridge.*(?:not running|missing)/i,
+    /VS Code language-model bridge.*(?:not running|missing).*GITHUB_COPILOT_TOKEN/i,
   );
   assert.equal(directRequests, 0, 'GitHub Copilot must never fall through to a direct HTTP request');
 });

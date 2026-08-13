@@ -2,7 +2,7 @@
 plan_schema: 1
 title: "Use VS Code for GitHub Copilot transport and finish TUI onboarding"
 type: fix
-status: done
+status: review
 plan_lock: true
 phase: 5
 risk: amber
@@ -142,6 +142,19 @@ Both catalogue and completion traffic must pass through the active VS Code bridg
 - `packages/harness/test/tui-design.test.mjs`
 - `packages/harness/test/command-index-contract.test.mjs`
 - `packages/harness/docs/codebase-map.md`
+- `.github/hooks/block-destructive-commands.mjs`
+- `.github/hooks/lib/events.mjs`
+- `.github/hooks/lib/tool-payload.mjs`
+- `.github/hooks/require-plan-gate.mjs`
+- `packages/harness/lib/plan-new.mjs`
+- `packages/harness/lib/plan-readiness.mjs`
+- `packages/harness/lib/sync.mjs`
+- `packages/harness/lib/report.mjs`
+- `packages/harness/lib/postings-index.mjs`
+- `packages/harness/lib/index-status.mjs`
+- `packages/harness/test/hook-runtime.test.mjs`
+- `packages/harness/test/plan-new.test.mjs`
+- `packages/harness/test/report.test.mjs`
 
 ## Verification Plan
 
@@ -194,3 +207,4 @@ Both catalogue and completion traffic must pass through the active VS Code bridg
 - 2026-08-12 — `engineer`: removed Copilot token discovery, OAuth exchange, direct endpoints, proxy/CA forwarding, and model probes; added fail-closed bridge readiness plus same-version legacy-install repair.
 - 2026-08-12 — `verify`: the named check and all seven criteria passed; the first final gate identified two missing impacted-file declarations, which were added before rerunning verification.
 - 2026-08-12 — `verify`: final gate passed with 1,958 tests, all seven criteria, plan scope, required reviews, and workspace stability satisfied (`.harness/evidence/2026-08-12-fix-ghcp-editor-transport-plan-796ce2f70f8c.json`).
+- 2026-08-13 — `code-review`: PR #49 review found a wrapped force-push regression in the rewritten destructive-command hook, a `harness gate; …` digest bypass, and unplanned review-fix files. Status set to `review`; those paths and hook/plan-new/sync/report/postings fixes are now in scope.
