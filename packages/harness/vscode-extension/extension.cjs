@@ -126,26 +126,65 @@ async function selectModel(vscode, requested) {
   return matched;
 }
 
+const ACCESS_STATE_KEY = 'harness.copilotLmAccessGranted';
+const sessionGrants = new WeakMap();
+const inflightGrants = new WeakMap();
+
+function accessInformation(context) {
+  // Stable VS Code API: ExtensionContext.languageModelAccessInformation.
+  // context.extension is an Extension<T> and does not carry this object.
+  return context?.languageModelAccessInformation
+    ?? context?.extension?.languageModelAccessInformation
+    ?? null;
+}
+
+function hasRememberedGrant(context) {
+  return Boolean(sessionGrants.get(context) || context?.globalState?.get?.(ACCESS_STATE_KEY));
+}
+
+function rememberGrant(context) {
+  if (!context) return;
+  sessionGrants.set(context, true);
+  try { void context.globalState?.update?.(ACCESS_STATE_KEY, true); } catch { /* persist is best-effort */ }
+}
+
+async function requestGrant(vscode, context) {
+  const allow = 'Allow';
+  const answer = await vscode.window.showInformationMessage(
+    'Allow Harness to send this request through your signed-in GitHub Copilot model?',
+    { modal: true },
+    allow,
+  );
+  if (answer !== allow) {
+    throw Object.assign(new Error('GitHub Copilot model access was not approved in VS Code'), {
+      code: 'E_EDITOR_NO_PERMISSION',
+    });
+  }
+  rememberGrant(context);
+}
+
 async function ensureAccess(vscode, context, model) {
-  const access = context.extension?.languageModelAccessInformation?.canSendRequest?.(model);
+  const access = accessInformation(context)?.canSendRequest?.(model);
   if (access === false) {
     throw Object.assign(new Error('VS Code has denied this Harness extension access to GitHub Copilot models'), {
       code: 'E_EDITOR_NO_PERMISSION',
     });
   }
-  if (access === undefined) {
-    const allow = 'Allow';
-    const answer = await vscode.window.showInformationMessage(
-      'Allow Harness to send this request through your signed-in GitHub Copilot model?',
-      { modal: true },
-      allow,
-    );
-    if (answer !== allow) {
-      throw Object.assign(new Error('GitHub Copilot model access was not approved in VS Code'), {
-        code: 'E_EDITOR_NO_PERMISSION',
-      });
-    }
+  if (access === true) {
+    rememberGrant(context);
+    return;
   }
+  // undefined: VS Code has not recorded a decision. The custom modal does not
+  // grant language-model access — sendRequest does — so asking on every agent
+  // turn reopened the popup 3–4 times per question. Remember the first Allow
+  // for this window (and persist it) and coalesce concurrent prompts.
+  if (hasRememberedGrant(context)) return;
+  let pending = inflightGrants.get(context);
+  if (!pending) {
+    pending = requestGrant(vscode, context).finally(() => inflightGrants.delete(context));
+    inflightGrants.set(context, pending);
+  }
+  await pending;
 }
 
 function errorCode(error) {

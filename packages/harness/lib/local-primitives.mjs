@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { writeFileContained } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, writeFileContained } from './fs-safe.mjs';
 
 export const REGISTERED_FILE = path.join('harness', 'registered.yaml');
 export const REGISTRY_SCHEMA = 1;
@@ -31,7 +31,7 @@ function walk(root, base = '') {
   for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
     const rel = base ? `${base}/${entry.name}` : entry.name;
     if (entry.isDirectory()) out.push(...walk(path.join(root, entry.name), rel));
-    else if (entry.isFile()) out.push(rel);
+    else if (entry.isFile() || entry.isSymbolicLink()) out.push(rel);
   }
   return out;
 }
@@ -57,10 +57,21 @@ export function readPrimitiveOnce(copilotHome, rel) {
     return { bytes, text: bytes.toString('utf8'), digest: `sha256-${crypto.createHash('sha256').update(bytes).digest('hex')}` };
 }
 
+export function isCanonicalPrimitive(rel) {
+  const kind = primitiveKind(rel);
+  return Boolean(kind && kind.match.test(rel));
+}
+
+function primitiveKind(rel) {
+  const key = Object.keys(PRIMITIVE_KINDS).find((k) => rel.startsWith(`${PRIMITIVE_KINDS[k].dir}/`));
+  return key ? { key, ...PRIMITIVE_KINDS[key] } : null;
+}
+
 export function validatePrimitive(copilotHome, rel, snapshot = null) {
   const errors = [];
-  const kindKey = Object.keys(PRIMITIVE_KINDS).find((k) => rel.startsWith(`${PRIMITIVE_KINDS[k].dir}/`));
-  const kind = kindKey ? PRIMITIVE_KINDS[kindKey] : null;
+  const kindInfo = primitiveKind(rel);
+  const kindKey = kindInfo?.key ?? null;
+  const kind = kindInfo;
   if (!kind) return { valid: false, kind: null, name: null, errors: [`${rel}: not under a primitive directory`] };
   if (!kind.match.test(rel)) {
     errors.push(`${rel}: a ${kindKey.replace(/s$/, '')} must be ${kind.describe} — a file elsewhere is never discovered`);
@@ -156,7 +167,10 @@ export function localPrimitiveStatus({ copilotHome, shippedFiles = new Set(), lo
     const digest = fileDigest(path.join(copilotHome, rel));
     let state = 'pending';
     let reason = 'found but not registered — `harness resources register` after reading it';
-    if (!validation.valid) {
+    if (!isCanonicalPrimitive(rel)) {
+      state = 'stray';
+      reason = 'not a canonical skill, agent, or instruction file — `harness resources discard` removes it';
+    } else if (!validation.valid) {
       state = 'invalid';
       reason = validation.errors[0];
     } else if (registry.unreadable) {
@@ -233,4 +247,77 @@ export function unregisterPrimitive({ copilotHome, rel }) {
   delete registry.primitives[rel];
   writeRegistry(copilotHome, registry);
     return { path: rel, state: 'pending' };
+}
+
+export function discardPrimitive({ copilotHome, rel, shippedFiles = new Set(), lockFiles = new Set() }) {
+  const kind = primitiveKind(rel);
+  if (!kind) {
+    throw Object.assign(new Error(`not under a primitive directory: ${rel}`), {
+      code: 'E_USAGE',
+      exit: 2,
+      hint: 'discard only removes files under skills/, agents/, or instructions/',
+    });
+  }
+  if (shippedFiles.has(rel) || lockFiles.has(rel)) {
+    throw Object.assign(new Error(`refusing to discard a harness-owned file: ${rel}`), {
+      code: 'E_TARGET',
+      exit: 1,
+      hint: 'uninstall or `harness resources remove <bundle>` withdraws files the harness placed',
+    });
+  }
+  const { local } = classifyPrimitives({ copilotHome, shippedFiles, lockFiles });
+  if (!local.includes(rel)) {
+    throw Object.assign(new Error(`not a locally-added file: ${rel}`), {
+      code: 'E_NOT_FOUND',
+      exit: 9,
+      hint: 'harness resources list',
+    });
+  }
+  const full = assertNoSymlinkAncestors(copilotHome, rel);
+  if (!full) {
+    throw Object.assign(new Error(`refusing to discard ${rel}: path escapes the Copilot home or is a symlink`), {
+      code: 'E_TARGET',
+      exit: 1,
+    });
+  }
+  let stat;
+  try {
+    stat = fs.lstatSync(full);
+  } catch {
+    throw Object.assign(new Error(`not found: ${rel}`), { code: 'E_NOT_FOUND', exit: 9, hint: 'harness resources list' });
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw Object.assign(new Error(`refusing to discard ${rel}: not a regular file`), {
+      code: 'E_TARGET',
+      exit: 1,
+    });
+  }
+
+  const registry = readRegistry(copilotHome);
+  if (registry.unreadable) {
+    throw Object.assign(new Error('refusing to write over an unreadable registration store'), {
+      code: 'E_TARGET', exit: 1, hint: `inspect ${registeredPath(copilotHome)} by hand`,
+    });
+  }
+  if (registry.primitives[rel]) {
+    delete registry.primitives[rel];
+    writeRegistry(copilotHome, registry);
+  }
+
+  fs.unlinkSync(full);
+  const removed = [rel];
+  const kindRoot = path.join(path.resolve(copilotHome), kind.dir);
+  let dir = path.dirname(full);
+  while (dir !== kindRoot && dir.startsWith(`${kindRoot}${path.sep}`)) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      break;
+    }
+    if (entries.length) break;
+    fs.rmdirSync(dir);
+    dir = path.dirname(dir);
+  }
+  return { path: rel, state: 'discarded', removed };
 }

@@ -184,20 +184,28 @@ export function overlayBoxWidth(width = 80, maxWidth = null) {
   return Math.max(20, Math.min(room, maxWidth));
 }
 
+/** Shared box chrome for overlay and walkthrough so borders cannot drift. */
+export function overlayBoxChrome(ui, inner) {
+  const paint = ui?.paint ? (token, text) => ui.paint(token, text) : (_t, text) => text;
+  const b = ui?.unicode
+    ? { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' }
+    : { tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|' };
+  return {
+    b,
+    edge: (l, r) => paint('info', `${l}${b.h.repeat(inner)}${r}`),
+    rowOf: (content, tint = null) => {
+      const padded = padTo(content, inner);
+      const body = ui?.tintRow ? ui.tintRow(tint || 'panel', padded) : padded;
+      return `${paint('info', b.v)}${body}${paint('info', b.v)}`;
+    },
+    divider: () => paint('info', `${b.v}${paint('muted', b.h.repeat(inner))}${b.v}`),
+  };
+}
+
 export function renderOverlay(overlay, { ui, width = 80, maxWidth = null } = {}) {
   const box = overlayBoxWidth(width, maxWidth);
   const inner = box - 2;
-  const b = ui.unicode
-    ? { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' }
-    : { tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|' };
-
-  const edge = (l, r) => ui.paint('info', `${l}${b.h.repeat(inner)}${r}`);
-  const rowOf = (content, tint = null) => {
-    const padded = padTo(content, inner);
-    const body = tint ? ui.tintRow(tint, padded) : ui.tintRow('panel', padded);
-    return `${ui.paint('info', b.v)}${body}${ui.paint('info', b.v)}`;
-  };
-  const divider = () => ui.paint('info', `${b.v}${ui.paint('muted', b.h.repeat(inner))}${b.v}`);
+  const { b, edge, rowOf, divider } = overlayBoxChrome(ui, inner);
 
   const out = [edge(b.tl, b.tr)];
 

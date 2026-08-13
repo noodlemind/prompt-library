@@ -55,6 +55,15 @@ export const ACTION_LABELS = Object.freeze({
   'lookup:plan': 'Open a plan by id',
   'lookup:learning': 'Open a learning by id',
   'lookup:run': 'Open a run by id',
+  'resources:list': 'List local skills and agents',
+  'resources:show': 'Show one local file',
+  'resources:register': 'Register a local skill or agent',
+  'resources:unregister': 'Unregister without deleting',
+  'resources:discard': 'Delete a local skill, agent, or extra file',
+  'resources:bundles': 'List installed bundles',
+  'resources:add': 'Install a bundle',
+  'resources:update': 'Replace an installed bundle',
+  'resources:remove': 'Uninstall a bundle',
 });
 
 /** Human titles for settings keys (schema id stays in the note). */

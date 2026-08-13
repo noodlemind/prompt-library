@@ -120,8 +120,14 @@ export function createInput({
     let offset = 0;
     if (live?.block) offset += 1 + Math.min(live.block.lines.length, LIVE_TAIL);
     if (overlay) {
+      if (overlay.kind === 'walkthrough') {
+        // A tour is not a prompt — hide the caret so it does not blink in the title.
+        return { row: 0, col: 0, hide: true };
+      }
       // The boxed overlay's input row is its second row — index 1, 0-based.
-      return { row: offset + 1, col: ui.stripAnsi(`  ${overlay.title ? `${overlay.title} ` : ''}${overlay.query}`).length + 2 };
+      const title = overlay.title ? `${overlay.title} ` : '';
+      const query = overlay.query ?? '';
+      return { row: offset + 1, col: ui.stripAnsi(`  ${title}${query}`).length + 2 };
     }
     if (palette) offset += palette.overlay.visible.length + (palette.overlay.footerText ? 1 : 0);
     const c = composer.cursor;
@@ -153,7 +159,12 @@ export function createInput({
     moveTo(top, 1);
         emit(lines.join('\n'));
     painted = lines.length;
-    const { row, col } = cursorInRegion();
+    const { row, col, hide } = cursorInRegion();
+    if (hide) {
+      emit(`${ESC}[?25l`);
+      return;
+    }
+    emit(`${ESC}[?25h`);
         moveTo(top + Math.max(0, Math.min(row, painted - 1)), 1);
     if (col > 0) emit(`${ESC}[${col}C`);
   };
@@ -368,7 +379,10 @@ export function createInput({
       closed = true;
       frame(() => {
         erase();
-                if (interactive) moveTo(Math.min(contentRow, height()), 1);
+                if (interactive) {
+          emit(`${ESC}[?25h`);
+          moveTo(Math.min(contentRow, height()), 1);
+        }
       });
       if (interactive) {
         input.off?.('keypress', onKeypress);

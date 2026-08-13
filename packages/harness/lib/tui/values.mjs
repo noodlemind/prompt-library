@@ -3,6 +3,7 @@ import { readModelCache } from '../model-cache.mjs';
 import { CONFIG_SCHEMA, CONFIG_KEYS, SCOPES } from '../config.mjs';
 import { readJournal, foldRuns } from '../run-journal.mjs';
 import { completePath } from './complete.mjs';
+import { listLocalPrimitives } from '../primitive-origins.mjs';
 
 /** How many rows a value picker offers before it stops being a glance. Paths
  * and runs are truncated to this; the filter is how you reach the rest. */
@@ -96,7 +97,17 @@ function runs({ workspace }) {
     }));
 }
 
-const FREE = new Set(['path', 'plan', 'model', 'config-value']);
+const STATE_RANK = { invalid: 0, stray: 1, stale: 2, pending: 3, registered: 4 };
+
+function primitives({ copilotHome }) {
+  if (!copilotHome) return [];
+  return listLocalPrimitives(copilotHome)
+    .sort((a, b) => (STATE_RANK[a.state] ?? 9) - (STATE_RANK[b.state] ?? 9) || a.path.localeCompare(b.path))
+    .slice(0, MAX_VALUES)
+    .map((p) => item(p.path, { note: `${p.state} · ${p.reason}` }));
+}
+
+const FREE = new Set(['path', 'plan', 'model', 'config-value', 'primitive']);
 
 const RESOLVERS = {
   provider: providers,
@@ -109,6 +120,7 @@ const RESOLVERS = {
   path: paths,
   plan: plans,
   run: runs,
+  primitive: primitives,
 };
 
 export function resolveValues(choices, { workspace = process.cwd(), copilotHome = null, parentEnv = process.env, values = {}, query = '' } = {}) {

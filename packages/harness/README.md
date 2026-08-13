@@ -35,7 +35,7 @@ harness init-repo    # product repo stubs: plans, checks, policy
 ### Pin version (product repos)
 
 ```json
-{ "devDependencies": { "@dev-kit/harness": "0.8.15" } }
+{ "devDependencies": { "@dev-kit/harness": "0.8.18" } }
 ```
 
 Or root `.harness-version` with the same pin.

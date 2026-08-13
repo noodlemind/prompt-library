@@ -15,6 +15,8 @@ export const VALUE_SOURCES = Object.freeze({
   plan: 'a plan file',
   /** Runs from this workspace's journal, most recent first. */
   run: 'a run from the journal',
+  /** Locally-added skills, agents, and extra files under the Copilot home. */
+  primitive: 'a locally-added skill, agent, or extra file',
 });
 
 /** The names, for validation and for error messages. */
