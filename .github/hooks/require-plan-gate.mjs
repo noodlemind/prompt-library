@@ -7,7 +7,7 @@ import { planContractText } from './lib/evidence-binding.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy } from './lib/policy.mjs';
-import { isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive, tokenizeShell } from './lib/tool-payload.mjs';
+import { isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive, unwrapShellSegments } from './lib/tool-payload.mjs';
 
 const startedAt = Date.now();
 let payload = {};
@@ -136,48 +136,37 @@ function requiredChecks(planText) {
   return [];
 }
 
-function configuredCheckCommands(workspace) {
+function configuredChecksDigest(workspace) {
   const configPath = path.join(workspace, '.github', 'harness', 'checks.yaml');
-  if (!fs.existsSync(configPath)) return [];
-  const commands = [];
-  let name = null;
-  for (const line of fs.readFileSync(configPath, 'utf8').split(/\r?\n/)) {
-    const heading = line.match(/^\s{2}([^\s:#][^:]*):\s*$/);
-    if (heading) {
-      name = heading[1].trim();
-      continue;
-    }
-    const command = line.match(/^\s{4}command:\s*(\[.*\])\s*$/);
-    if (!name || !command) continue;
-    try {
-      const argv = JSON.parse(command[1]);
-      if (Array.isArray(argv) && argv.every((part) => typeof part === 'string') && argv.length) {
-        commands.push({ name, argv });
-      }
-    } catch {
-      // The CLI performs authoritative YAML validation; this hook only recognizes safe inline argv arrays.
-    }
-  }
-  return commands;
+  if (!fs.existsSync(configPath)) return null;
+  return crypto.createHash('sha256').update(fs.readFileSync(configPath)).digest('hex');
+}
+
+function normalizeArg(value) {
+  return path.posix.normalize(String(value || '').replace(/\\/g, '/')).replace(/^\.\//, '');
 }
 
 function commandMatches(actual, expected) {
   if (actual.length < expected.length) return false;
   return expected.every((part, index) => {
     if (index === 0) return path.basename(actual[index] || '') === path.basename(part);
-    return actual[index] === part;
+    return normalizeArg(actual[index]) === normalizeArg(part);
   });
 }
 
-function unplannedNamedChecks(workspace, command, planText) {
+function unplannedNamedChecks(commands, command, planText) {
   const required = new Set(requiredChecks(planText));
-  const segments = String(command || '')
-    .split(/(?:&&|\|\||[;|\n])/)
-    .map((segment) => tokenizeShell(String(segment)))
-    .filter((tokens) => tokens.length > 0);
-  return configuredCheckCommands(workspace)
+  const segments = unwrapShellSegments(command);
+  return commands
     .filter(({ name, argv }) => !required.has(name) && segments.some((segment) => commandMatches(segment, argv)))
     .map(({ name }) => name);
+}
+
+function isSoleHarnessGate(command) {
+  const segments = unwrapShellSegments(command);
+  return segments.length > 0 && segments.every((tokens) => (
+    path.basename(tokens[0] || '') === 'harness' && tokens[1] === 'gate'
+  ));
 }
 
 try {
@@ -197,7 +186,18 @@ if (!normalized.mutation) {
       const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
       const activePlan = session.gatedPlan || session.activePlan;
       const planText = activePlan ? fs.readFileSync(path.join(normalized.workspace, activePlan), 'utf8') : '';
-      const unplanned = unplannedNamedChecks(normalized.workspace, normalized.command, planText);
+      const currentDigest = configuredChecksDigest(normalized.workspace);
+      if (Object.hasOwn(session, 'gatedChecksDigest')
+        && session.gatedChecksDigest !== currentDigest
+        && !isSoleHarnessGate(normalized.command)) {
+        deny(
+          'changed-check-config',
+          'The configured check manifest changed after the implement gate. Rerun harness gate before running terminal commands',
+          'invalid'
+        );
+      }
+      const commands = Array.isArray(session.gatedCheckCommands) ? session.gatedCheckCommands : [];
+      const unplanned = unplannedNamedChecks(commands, normalized.command, planText);
       if (unplanned.length) {
         deny(
           'out-of-plan-verification',

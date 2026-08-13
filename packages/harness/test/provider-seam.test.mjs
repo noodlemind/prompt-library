@@ -57,7 +57,7 @@ test('P5AC7: harness core imports no model SDK', () => {
 });
 
 test('P5AC7: no module in core except the seam names a provider key at all', () => {
-  const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar);
+  const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar).filter(Boolean);
   const offenders = [];
   for (const { rel, text } of libSources()) {
         if (rel === 'lib/provider.mjs') continue;

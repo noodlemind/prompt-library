@@ -97,9 +97,12 @@ function shouldSkipDest(rel, flags, destExists) {
 
 export function applyRetired(copilotHome, retiredList, previousLock, flags, log) {
   const stats = { removed: 0, skipped: 0 };
-  const prevFiles = new Set(previousLock?.files || []);
-  for (const rel of retiredList) {
-    if (!prevFiles.has(rel)) {
+  const prevFiles = new Set((previousLock?.files || []).map((file) => String(file).replace(/\\/g, '/').replace(/\/$/, '')));
+  for (const rawRel of retiredList) {
+    const rel = String(rawRel).replace(/\\/g, '/').replace(/\/$/, '');
+    const exactTracked = prevFiles.has(rel);
+    const trackedDescendants = [...prevFiles].filter((file) => file.startsWith(`${rel}/`));
+    if (!exactTracked && trackedDescendants.length === 0) {
       stats.skipped++;
       continue;
     }
@@ -109,15 +112,46 @@ export function applyRetired(copilotHome, retiredList, previousLock, flags, log)
       stats.skipped++;
       continue;
     }
-    if (!fs.existsSync(dest)) continue;
-    if (flags.dryRun) {
-      log(`would remove retired: ${rel}`);
-      stats.removed++;
-      continue;
+    if (exactTracked && fs.existsSync(dest)) {
+      const destStat = fs.lstatSync(dest);
+      if (!destStat.isDirectory() || destStat.isSymbolicLink()) {
+        if (flags.dryRun) {
+          log(`would remove retired: ${rel}`);
+          stats.removed++;
+          continue;
+        }
+        fs.rmSync(dest, { force: true });
+        log(`removed retired: ${rel}`);
+        stats.removed++;
+        continue;
+      }
+      // Directory tombstones fall through and delete only lock-tracked leaves.
     }
-    fs.rmSync(dest, { recursive: true, force: true });
-    log(`removed retired: ${rel}`);
-    stats.removed++;
+
+    if (trackedDescendants.length === 0) continue;
+
+    // Older locks record shipped leaf files. A directory tombstone owns those
+    // descendants, but not unrelated user files that happen to share the dir.
+    for (const tracked of trackedDescendants.sort((a, b) => b.length - a.length)) {
+      const trackedDest = resolveContainedPath(copilotHome, tracked);
+      if (!trackedDest || !fs.existsSync(trackedDest)) continue;
+      if (flags.dryRun) {
+        log(`would remove retired: ${tracked}`);
+        stats.removed++;
+        continue;
+      }
+      fs.rmSync(trackedDest, { recursive: true, force: true });
+      log(`removed retired: ${tracked}`);
+      stats.removed++;
+
+      let parent = path.dirname(trackedDest);
+      while (parent !== path.dirname(dest) && fs.existsSync(parent)) {
+        if (!fs.statSync(parent).isDirectory() || fs.readdirSync(parent).length > 0) break;
+        fs.rmdirSync(parent);
+        if (parent === dest) break;
+        parent = path.dirname(parent);
+      }
+    }
   }
   return stats;
 }

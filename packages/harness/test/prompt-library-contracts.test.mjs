@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +31,11 @@ function exists(rel) {
   return fs.existsSync(path.join(repoRoot, rel));
 }
 
+function isTracked(rel) {
+  const out = execFileSync('git', ['-C', repoRoot, 'ls-files', '--', rel], { encoding: 'utf8' }).trim();
+  return out.length > 0;
+}
+
 test('canonical concept doc defines task modes, ownership, gap handling, and runtime modes', () => {
   const model = read(architecturePath);
 
@@ -50,10 +56,28 @@ test('canonical concept doc defines task modes, ownership, gap handling, and run
   }
 });
 
-test('docs surface is concept + agent-loop + plan/solution scaffolding', () => {
+test('docs surface is primer + concept + agent-loop + plan/solution scaffolding', () => {
   const docsRoot = path.join(repoRoot, 'docs');
-  const topLevel = fs.readdirSync(docsRoot).filter((name) => !name.startsWith('.')).sort();
-  assert.deepEqual(topLevel, ['adaptive-engineer-harness.md', 'agent-loop.md', 'plans', 'solutions']);
+  const generatedTopLevel = ['codebase-map.md', 'codebase-snapshot.md'];
+  for (const name of generatedTopLevel) {
+    assert.equal(
+      isTracked(`docs/${name}`),
+      false,
+      `docs/${name} is generated and must remain untracked`,
+    );
+  }
+  const generated = new Set(generatedTopLevel);
+  const topLevel = fs
+    .readdirSync(docsRoot)
+    .filter((name) => !name.startsWith('.') && !generated.has(name))
+    .sort();
+  assert.deepEqual(topLevel, [
+    'adaptive-engineer-harness.md',
+    'adaptive-engineering-primer.md',
+    'agent-loop.md',
+    'plans',
+    'solutions',
+  ]);
   assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);
@@ -68,6 +92,42 @@ test('docs surface is concept + agent-loop + plan/solution scaffolding', () => {
   assert.match(agentLoop, /@engineer/);
   assert.doesNotMatch(read('packages/harness/README.md'), /harness agent[\s\S]{0,80}Adaptive Engineer runtime/i);
   assert.match(read('packages/harness/README.md'), /opt-in add-on/i);
+});
+
+test('adaptive engineering primer distinguishes change contracts from SDD/BMAD plans', () => {
+  const primer = read('docs/adaptive-engineering-primer.md');
+  for (const phrase of [
+    'Mode before action',
+    'plan_lock',
+    'Spec Kit',
+    'BMAD',
+    '2048',
+    'harness verify',
+  ]) {
+    assert.match(primer, new RegExp(phrase), `primer missing ${phrase}`);
+  }
+  assert.doesNotMatch(primer, /next big thing/i, 'primer must stay factual, not a pitch');
+  assert.doesNotMatch(
+    primer,
+    /JSON command output is not fed back/i,
+    'primer must not claim host @engineer never reads kernel JSON',
+  );
+  assert.match(primer, /Handle gaps/, 'primer must name the nine-stage Deliver model');
+  assert.match(primer, /\| 9 \| Report \|/, 'primer must list Report as stage 9');
+  assert.match(primer, /argv arrays/, 'primer must describe the named-check argv boundary');
+  assert.match(primer, /without a shell/, 'primer must say named checks run without a shell');
+  assert.match(primer, /referenced Spec Kit and BMAD pages/, 'primer must scope the SDD/BMAD absence claim to cited pages');
+});
+
+test('named checks execute argv from checks.yaml, not plan text', () => {
+  const verify = read('packages/harness/lib/verify.mjs');
+  assert.match(verify, /loadNamedChecks/, 'verify loads repository-owned named checks');
+  assert.match(verify, /runNamedCheck/, 'verify runs named checks, not plan command strings');
+  assert.doesNotMatch(verify, /verification_commands/, 'verify must not read plan command strings');
+  const checks = read('packages/harness/lib/checks.mjs');
+  assert.match(checks, /CHECKS_REL = '\.github\/harness\/checks\.yaml'/, 'named checks live in checks.yaml');
+  const runner = read('packages/harness/lib/runner.mjs');
+  assert.match(runner, /shell:\s*false/, 'named checks must not run through a shell');
 });
 
 test('engineer agent is frozen, thin, and owns the only normative nine-step delivery lifecycle', () => {
@@ -267,6 +327,20 @@ test('plan-producing primitives emit schema v1 and trusted named checks', () => 
     assert.match(contract, /verification:\s*\n\s+required:/, `${rel} must emit named checks`);
     assert.match(contract, /reviews:\s*\n\s+required:/, `${rel} must emit review state`);
     assert.doesNotMatch(contract, /verification_commands:/, `${rel} must not emit shell strings`);
+  }
+});
+
+test('packaged hook assets stay byte-identical to .github/hooks security files', () => {
+  const files = [
+    'block-destructive-commands.mjs',
+    'require-plan-gate.mjs',
+    'lib/tool-payload.mjs',
+  ];
+  for (const rel of files) {
+    const source = read(`.github/hooks/${rel}`);
+    const shipped = read(`packages/harness/assets/hooks/${rel}`);
+    assert.equal(shipped, source, `${rel} must be rebuilt into packages/harness/assets/hooks`);
+    assert.match(shipped, /unwrapShellSegments/, `${rel} must ship the shared unwrap helper`);
   }
 });
 

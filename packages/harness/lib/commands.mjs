@@ -28,6 +28,7 @@ import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } f
 import { installVSCodeBridge, uninstallVSCodeBridge } from './install-vscode-bridge.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy } from './policy.mjs';
+import { configuredCheckSnapshot } from './plan-readiness.mjs';
 import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 
@@ -41,11 +42,29 @@ export function readPkgVersion() {
   return p.version;
 }
 
+function hookAssetsStale(sourceHooks, bundledHooks) {
+  if (!fs.existsSync(sourceHooks)) return false;
+  const files = [
+    'block-destructive-commands.mjs',
+    'require-plan-gate.mjs',
+    'lib/tool-payload.mjs',
+  ];
+  return files.some((rel) => {
+    const src = path.join(sourceHooks, rel);
+    const dst = path.join(bundledHooks, rel);
+    if (!fs.existsSync(src)) return false;
+    if (!fs.existsSync(dst)) return true;
+    return fs.statSync(src).mtimeMs > fs.statSync(dst).mtimeMs;
+  });
+}
+
 export function getAssetsRoot() {
   const bundled = path.join(pkgRoot, 'assets');
+  const sourceHooks = path.resolve(pkgRoot, '../../.github/hooks');
+  const bundledHooks = path.join(bundled, 'hooks');
   const skillsOk = fs.existsSync(path.join(bundled, 'skills', 'engineer', 'SKILL.md'));
   const hooksOk = fs.existsSync(path.join(bundled, 'hooks', 'hooks.json'));
-  if (skillsOk && hooksOk) {
+  if (skillsOk && hooksOk && !hookAssetsStale(sourceHooks, bundledHooks)) {
     return bundled;
   }
   const buildScript = path.resolve(pkgRoot, '../../scripts/build-harness-assets.mjs');
@@ -55,6 +74,7 @@ export function getAssetsRoot() {
       return bundled;
     }
   }
+  if (skillsOk && hooksOk) return bundled;
   throw new Error(
     'Package assets not found. From a prompt-library clone run: npm --prefix packages/harness run build:assets. Otherwise reinstall the packaged CLI with: npm install -g @dev-kit/harness.'
   );
@@ -669,15 +689,19 @@ export async function cmdGate(argv) {
   result.projectPolicyError = policy.projectPolicyError ?? null;
   result.policyExitCode = policyExitCode;
   const previous = readSession(workspace) || {};
+  const gatePassed = result.pass && result.exitCode === 0;
+  const checkSnapshot = gatePassed ? configuredCheckSnapshot(workspace) : null;
   writeSession(
     workspace,
     {
       ...previous,
       activePlan: result.plan?.path || previous.activePlan || null,
       gatedPlan: result.plan?.path || null,
-      gatedPlanDigest: result.pass && result.exitCode === 0 ? result.plan?.digest || null : null,
+      gatedPlanDigest: gatePassed ? result.plan?.digest || null : null,
+      gatedChecksDigest: gatePassed ? checkSnapshot.digest : null,
+      gatedCheckCommands: gatePassed ? checkSnapshot.commands : [],
       lastGateAt: new Date().toISOString(),
-      gateStatus: result.pass && result.exitCode === 0 ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
+      gateStatus: gatePassed ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
       blockedReason: result.blockedReason,
     },
     flags.dryRun
@@ -980,7 +1004,11 @@ export async function cmdReport(argv) {
   if (base === null) base = loadReportEvents({ workspace });
 
   // Overlay real host usage (if any adapter has it) on top of harness estimates.
-  const merged = mergeHostUsage(base, collectHostUsage({ workspace, host: flags.host, copilotHome }));
+  const merged = mergeHostUsage(base, collectHostUsage({
+    workspace: flags.global ? undefined : workspace,
+    host: flags.host,
+    copilotHome,
+  }));
   const report = buildReport({ workspace, copilotHome, events: merged });
 
   if (flags.check) {

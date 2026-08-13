@@ -29,6 +29,7 @@ export function writeHookEvent(workspace, payload, fields) {
       session: payload.session_id || payload.sessionId || fields.session || null,
       host: payload.host || 'github-copilot-vscode',
       agent: payload.agent || payload.agent_name || payload.agentName || null,
+      skill: fields.skill || null,
       tool: fields.tool || null,
       mutation: Boolean(fields.mutation),
       targets: fields.targets || [],

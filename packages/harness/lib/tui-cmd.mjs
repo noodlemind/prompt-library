@@ -36,6 +36,7 @@ import {
 import { createQuestion, answerQuestion, questionLines, questionEvent } from './tui/question.mjs';
 import { gateActionRows, parseGateAction, gatePromptLines } from './tui/gate-actions.mjs';
 import { configSettingsRows, verbActionRows } from './tui/modals.mjs';
+import { resolveVSCodeExtensionsDir, VSCODE_BRIDGE_DIR, VSCODE_BRIDGE_ID } from './install-vscode-bridge.mjs';
 import {
   WALKTHROUGH_SEEN_KEY,
   attachWalkthroughOverlay,
@@ -1408,7 +1409,8 @@ export async function ensureFirstRunInstall({
   if (process.env.HARNESS_SKIP_FIRST_RUN_INSTALL === '1') return false;
   const lock = readLock(copilotHome);
   const currentVersion = packageVersion || readVersion();
-  if (lock && !isNewerPackageVersion(currentVersion, lock.version)) return false;
+  if (lock && isNewerPackageVersion(lock.version, currentVersion)) return false;
+  if (lock && !isNewerPackageVersion(currentVersion, lock.version) && hasInstalledVSCodeBridge(lock)) return false;
   const command = lock ? 'upgrade' : 'install';
   const runInstall = install || (await import('./commands.mjs')).cmdInstallOrUpgrade;
   const args = [
@@ -1423,7 +1425,34 @@ export async function ensureFirstRunInstall({
   if (exit !== 0) {
     throw Object.assign(new Error(`automatic harness ${command} failed with exit ${exit}`), { code: 'E_INSTALL', exit });
   }
-  return true;
+  return !dryRun;
+}
+
+function readBridgeIdentity(root) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    return `${manifest.publisher}.${manifest.name}`;
+  } catch {
+    return null;
+  }
+}
+
+function hasInstalledVSCodeBridge(lock) {
+  const bridge = lock?.vscodeBridge;
+  if (bridge?.id !== VSCODE_BRIDGE_ID || typeof bridge.path !== 'string') return false;
+  const expected = path.resolve(resolveVSCodeExtensionsDir(), VSCODE_BRIDGE_DIR);
+  if (path.resolve(bridge.path) !== expected) return false;
+  try {
+    const dir = fs.lstatSync(expected);
+    const entry = fs.lstatSync(path.join(expected, 'extension.cjs'));
+    return dir.isDirectory()
+      && !dir.isSymbolicLink()
+      && entry.isFile()
+      && !entry.isSymbolicLink()
+      && readBridgeIdentity(expected) === VSCODE_BRIDGE_ID;
+  } catch {
+    return false;
+  }
 }
 
 function isNewerPackageVersion(current, installed) {

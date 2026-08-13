@@ -1,23 +1,33 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import YAML from 'yaml';
 import { createStyle } from './style.mjs';
 import { redactedJson } from './redact.mjs';
+import { loadConfiguredChecks } from './plan-readiness.mjs';
+import { isPrimitivePath } from './primitive-governance.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
-const PRIMITIVE_RE = /^\.github\/(skills|agents|instructions|checks)\//;
-
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-function isPrimitivePath(p) {
-  return PRIMITIVE_RE.test(String(p || '').replace(/^\.\//, ''));
+function scalar(value, name, { multiline = false, required = false } = {}) {
+  if (value === undefined || value === null) {
+    if (required) throw new Error(`plan-new: --${name} is required`);
+    return undefined;
+  }
+  if (typeof value !== 'string' || value.includes('\0') || (!multiline && /[\r\n]/.test(value))) {
+    throw new Error(`plan-new: --${name} must be a ${multiline ? 'text' : 'single-line'} scalar`);
+  }
+  if (required && !value.trim()) throw new Error(`plan-new: --${name} is required`);
+  return value;
 }
 
 function classify(primitivePath) {
-  if (/\.github\/skills\//.test(primitivePath)) return 'skill';
+  if (/(?:^\.github|^enterprise)\/skills\//.test(primitivePath)) return 'skill';
   if (/\.github\/agents\//.test(primitivePath)) return 'agent';
   if (/\.github\/instructions\//.test(primitivePath)) return 'instruction';
   if (/\.github\/checks\//.test(primitivePath)) return 'check';
+  if (primitivePath === 'knowledge/capability-registry.yaml') return 'capability registry';
   return 'primitive';
 }
 
@@ -32,12 +42,25 @@ export function buildPlanSkeleton({
   gap = null,
   risk = 'green',
   status,
+  check,
 } = {}) {
+  scalar(slug, 'slug', { required: true });
+  scalar(title, 'title');
+  scalar(intent, 'intent', { multiline: true, required: true });
+  scalar(type, 'type', { required: true });
+  scalar(risk, 'risk', { required: true });
+  scalar(status, 'status');
+  scalar(check, 'check', { required: true });
   if (!slug || !SLUG_RE.test(slug)) throw new Error('plan-new: --slug is required and must be lowercase-hyphen (a-z0-9-)');
   if (!TYPES.includes(type)) throw new Error(`plan-new: --type must be one of ${TYPES.join('|')}`);
-  if (!intent || !intent.trim()) throw new Error('plan-new: --intent is required');
   if (!RISKS.includes(risk)) throw new Error(`plan-new: --risk must be one of ${RISKS.join('|')}`);
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('plan-new: date must be YYYY-MM-DD');
+  for (const value of impacted) scalar(value, 'impacted', { required: true });
+  for (const value of criteria) scalar(value, 'criteria', { multiline: true, required: true });
+  if (gap) {
+    scalar(gap.id, 'gap', { required: true });
+    scalar(gap.primitive, 'gap', { required: true });
+  }
 
   const rel = `docs/plans/${date}-${type}-${slug}-plan.md`;
   const impactedList = impacted.length ? impacted.slice() : gap?.primitive ? [gap.primitive] : [];
@@ -47,36 +70,37 @@ export function buildPlanSkeleton({
   const skills = primitive ? ['engineer', 'create-primitive'] : ['engineer'];
   const heading = title || slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
-  const criteriaMap = acs.map((ac) => `${ac.id}: [harness-tests]`).join(', ');
-  const gapBlock = gap
-    ? `capability_gaps:\n  - id: ${gap.id}\n    class: hard\n    fulfillment: proposed\n    primitive: ${gap.primitive}`
-    : 'capability_gaps: []';
+  const frontmatter = {
+    plan_schema: 1,
+    title: heading,
+    type,
+    status: finalStatus,
+    plan_lock: true,
+    phase: 1,
+    risk,
+    intent,
+    expected_outputs: [`${slug} delivered`],
+    success_criteria: [intent],
+    verification: {
+      required: [check],
+      criteria: Object.fromEntries(acs.map((ac) => [ac.id, [check]])),
+    },
+    reviews: { required: [], completed: [], critical_open: [] },
+    skills_used: skills,
+    capability_gaps: gap
+      ? [{ id: gap.id, class: 'hard', fulfillment: 'proposed', primitive: gap.primitive }]
+      : [],
+  };
 
   const governanceSection = primitive
-    ? `\n## Primitive Governance\n\n- Primitive classification: ${classify(impactedList.find(isPrimitivePath) || gap?.primitive || '')}\n- Existing-capability overlap analysis: reviewed existing primitives; none cover this need (refine with specifics).\n- Intended artifact structure: \`${impactedList.find(isPrimitivePath) || gap?.primitive}\` with frontmatter and body per the template.\n- Trigger and negative-trigger implications: triggers on this workflow; does not trigger for unrelated edits (refine).\n- Verification expectations: harness-tests confirm the artifact is well-formed.\n- Registry and documentation impact: update the inventory; no registry entry needed unless externally shared (refine).\n`
+    ? `\n## Primitive Governance\n\n- Primitive classification: ${classify(impactedList.find(isPrimitivePath) || gap?.primitive || '')}\n- Existing-capability overlap analysis: reviewed existing primitives; none cover this need (refine with specifics).\n- Intended artifact structure: \`${impactedList.find(isPrimitivePath) || gap?.primitive}\` with frontmatter and body per the template.\n- Trigger and negative-trigger implications: triggers on this workflow; does not trigger for unrelated edits (refine).\n- Verification expectations: ${check} confirms the artifact is well-formed.\n- Registry and documentation impact: update the inventory; no registry entry needed unless externally shared (refine).\n`
     : '';
 
   const impactedLines = impactedList.length ? impactedList.map((f) => `- \`${f}\``).join('\n') : '- `TODO: add the files this plan will change`';
   const acLines = acs.map((ac) => `- [ ] **${ac.id}** ${ac.text}`).join('\n');
 
   const content = `---
-plan_schema: 1
-title: "${heading}"
-type: ${type}
-status: ${finalStatus}
-plan_lock: true
-phase: 1
-risk: ${risk}
-intent: "${intent.replace(/"/g, "'")}"
-expected_outputs: ["${slug} delivered"]
-success_criteria: ["${intent.replace(/"/g, "'")}"]
-verification:
-  required: [harness-tests]
-  criteria: {${criteriaMap}}
-reviews: {required: [], completed: [], critical_open: []}
-skills_used: [${skills.join(', ')}]
-${gapBlock}
----
+${YAML.stringify(frontmatter, { lineWidth: 0 })}---
 
 # ${heading}
 
@@ -104,7 +128,7 @@ ${impactedLines}
 
 ## Verification Plan
 
-- Run the harness tests (\`harness-tests\`).
+- Run the configured check (\`${check}\`).
 
 ## Risk & Review Routing
 
@@ -149,6 +173,7 @@ export async function cmdPlanNew(argv) {
     else if (a === '--date') opts.date = next();
     else if (a === '--risk') opts.risk = next();
     else if (a === '--status') opts.status = next();
+    else if (a === '--verification-check') opts.check = next();
     else if (a === '--impacted') opts.impacted.push(...String(next() || '').split(',').map((s) => s.trim()).filter(Boolean));
     else if (a === '--criteria') opts.criteria.push(String(next() || '').trim());
     else if (a === '--gap') {
@@ -163,6 +188,26 @@ export async function cmdPlanNew(argv) {
   }
 
   if (!opts.date) opts.date = new Date().toISOString().slice(0, 10);
+
+  const configured = loadConfiguredChecks(workspace);
+  if (configured.error) throw new Error(`plan-new: ${configured.error}`);
+  const names = Object.entries(configured.checks || {})
+    .filter(([, config]) => Array.isArray(config?.command)
+      && config.command.length > 0
+      && config.command.every((part) => typeof part === 'string' && part.trim().length > 0))
+    .map(([name]) => name);
+  if (names.length === 0) {
+    throw new Error('plan-new: configure at least one named check in .github/harness/checks.yaml before generating a gate-ready plan');
+  }
+  if (opts.check) {
+    if (!names.includes(opts.check)) {
+      throw new Error(`plan-new: --verification-check ${opts.check} is not an executable configured check; choose one of: ${names.join(', ')}`);
+    }
+  } else if (names.length === 1) {
+    [opts.check] = names;
+  } else {
+    throw new Error(`plan-new: --verification-check is required when multiple checks are configured: ${names.join(', ')}`);
+  }
 
   const { path: rel, content } = buildPlanSkeleton(opts);
   const full = path.join(workspace, rel);

@@ -3,6 +3,7 @@
 CLI for the **Adaptive Engineer Harness**: install/hydrate Copilot assets, run the deterministic kernel (orient → gate → verify → compound), optional TUI, and opt-in headless agent.
 
 - Package name: **`@dev-kit/harness`** · command: **`harness`**
+- Primer: [docs/adaptive-engineering-primer.md](../../docs/adaptive-engineering-primer.md)
 - Concept: [docs/adaptive-engineer-harness.md](../../docs/adaptive-engineer-harness.md)
 - Tool contract: [.github/skills/references/harness-tool-contract.md](../../.github/skills/references/harness-tool-contract.md)
 
@@ -19,10 +20,10 @@ harness tui                    # first launch hydrates VS Code + CLI automatical
 harness doctor --host vscode
 ```
 
-`harness tui` runs the global hydration when no install lock exists and runs it
-once more after npm installs a newer package version. Same-version launches do
-nothing. Hydration also installs the Harness Copilot Bridge; reload VS Code
-after installation or upgrade. `harness install --configure-vscode` and
+`harness tui` hydrates when no install lock exists, upgrades when the running
+package is newer, and repairs a same-version lock whose VS Code bridge is
+missing. A current bridge install does nothing. Reload VS Code after
+installation or upgrade. `harness install --configure-vscode` and
 `harness upgrade` remain available for explicit/non-TUI setup.
 
 `prepare`/`prepack` build `assets/` so installs match published tarballs.
@@ -34,7 +35,7 @@ harness init-repo    # product repo stubs: plans, checks, policy
 ### Pin version (product repos)
 
 ```json
-{ "devDependencies": { "@dev-kit/harness": "0.8.8" } }
+{ "devDependencies": { "@dev-kit/harness": "0.8.15" } }
 ```
 
 Or root `.harness-version` with the same pin.
@@ -103,13 +104,24 @@ harness agent "task" --dry-run --json
 
 Profiles: `autonomous` (default) · `deliver` · `benchmark` (fixture). **Not** the Adaptive Engineering product runtime — host `@engineer` + kernel remain that.
 
-For the `github-copilot` provider, model discovery and completions prefer the
-signed-in editor through `vscode.lm`. This keeps Copilot authentication, proxy,
-and enterprise CA handling inside VS Code. Reload the editor after installing
-or upgrading, sign in to GitHub Copilot Chat, then run
-`harness model refresh github-copilot`. If no editor bridge is running, the provider retains the
-token/API path as a fallback for headless use. An editor permission, quota, or
-model error is returned as-is and never bypassed through that fallback.
+For the `github-copilot` provider, the signed-in VS Code editor is the only
+transport. Harness never reads Copilot credentials, exchanges OAuth tokens, or
+calls GitHub Copilot model/completion endpoints itself. The companion extension
+uses `vscode.lm`, keeping authentication, proxy policy, and enterprise CA
+handling inside VS Code.
+
+After installation or upgrade, reload the VS Code window and sign in to GitHub
+Copilot Chat. The extension starts automatically, opens an authenticated
+loopback bridge, and publishes its connection state under `~/.copilot/.harness/`.
+Confirm that `harness model` reports `VS Code language model bridge`, then run:
+
+```bash
+harness model refresh github-copilot
+```
+
+If the bridge is not running, Harness stops with install/reload guidance. It
+does not fall through to token-based HTTPS. A same-version legacy installation
+whose lock predates the bridge is repaired automatically on the next TUI launch.
 
 ### Knowledge
 

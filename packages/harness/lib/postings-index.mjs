@@ -2,6 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { tokenize, FIELD_BOOSTS } from './tokenize.mjs';
 
+// Persist tokenizer/shape compatibility, not only the manifest date.
+export const POSTINGS_INDEX_VERSION = 2;
+
 function countTokens(text) {
   return tokenize(text).length;
 }
@@ -70,8 +73,9 @@ export function loadPostingsIndex(indexDir) {
   if (!fs.existsSync(postingsPath) || !fs.existsSync(metaPath)) return null;
 
   try {
-    const postings = JSON.parse(fs.readFileSync(postingsPath, 'utf8'));
     const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    if (meta.version !== POSTINGS_INDEX_VERSION) return null;
+    const postings = JSON.parse(fs.readFileSync(postingsPath, 'utf8'));
     return { ...postings, meta };
   } catch {
     return null;
@@ -83,7 +87,7 @@ export function isIndexStale(indexDir, manifestUpdated) {
   if (!fs.existsSync(metaPath) || !manifestUpdated) return true;
   try {
     const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-    return meta.updated !== manifestUpdated;
+    return meta.version !== POSTINGS_INDEX_VERSION || meta.updated !== manifestUpdated;
   } catch {
     return true;
   }
@@ -98,7 +102,7 @@ export function runBuildPostingsIndex({ entries, indexDir, manifestUpdated, flag
     ? buildPostingsIndex(entries)
     : { N: 0, avgdl: 1, docLengths: Object.create(null), terms: Object.create(null), entries: Object.create(null) };
   const meta = {
-    version: 1,
+    version: POSTINGS_INDEX_VERSION,
     updated: manifestUpdated,
     entryCount: entries.length,
     algorithm: 'bm25',

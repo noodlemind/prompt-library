@@ -12,13 +12,26 @@ const RECOVERY_LOOP_MIN_BLOCKS = 2;
 const RECOVERY_LOOP_FLAT_COST = 2500; // baseline tokens per block→recover→retry cycle
 const TREND_DRIFT_RATIO = 1.2;
 
+function eventTime(event) {
+  const parsed = Date.parse(event?.ts || '');
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+function chronologicalCap(events) {
+  return events
+    .map((event, index) => ({ event, index, time: eventTime(event) }))
+    .sort((a, b) => a.time - b.time || a.index - b.index)
+    .slice(-REPORT_EVENT_CAP)
+    .map(({ event }) => event);
+}
+
 function estimateTokensLite(text) {
   return text ? Math.ceil(text.length / 4) : 0;
 }
 
 /** Read events for a report from an explicit list or a workspace log, capped. */
 export function loadReportEvents({ workspace, events }) {
-  if (Array.isArray(events)) return events.slice(-REPORT_EVENT_CAP);
+  if (Array.isArray(events)) return chronologicalCap(events);
   const file = eventPath(workspace);
   if (!fs.existsSync(file)) return [];
   const parsed = fs
@@ -33,7 +46,7 @@ export function loadReportEvents({ workspace, events }) {
       }
     })
     .filter(Boolean);
-  return parsed.slice(-REPORT_EVENT_CAP);
+  return chronologicalCap(parsed);
 }
 
 function rankSinks(events) {

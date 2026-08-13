@@ -47,6 +47,7 @@ Plan files in `docs/plans/` (product repos only) track state via YAML frontmatte
   mcp.json         — MCP server configuration
 knowledge/         — team-wide solutions + manifest (hydrated to ~/.copilot/knowledge/)
 docs/
+  adaptive-engineering-primer.md — Adaptive Engineering primer (concept, delivery, tokens, SDD/BMAD)
   adaptive-engineer-harness.md  — shared concept / practice doc
   plans/           — plan template; product repos use docs/plans/ for active work
 packages/harness/  — CLI package

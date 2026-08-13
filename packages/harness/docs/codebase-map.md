@@ -9,7 +9,7 @@
 - `lib/knowledge/overlay.mjs` — isProtectedFm, branchesRoot, isSafeBucketKey, bucketDirFor, safeBranchName, readBucketMeta
 - `lib/knowledge/store-io.mjs` — storePathParts, learningPathParts, storeFileState, readStoreFile, writeStoreFile, appendStoreFile
 - `lib/knowledge/store.mjs` — localRepoId, repoId, storeDirForId, storeDir, assertStoreSchemaSupported, ensureStore
-- `lib/provider.mjs` — isAutoModel, modelCatalog, resolveDefaultModel, resolveBaseUrl, resolveCopilotClient, providerEnv
+- `lib/provider.mjs` — isAutoModel, modelCatalog, resolveDefaultModel, resolveBaseUrl, providerEnv
 - `lib/providers/openai-compatible.mjs` — scrubCredential, toWireMessages, toWireTools, parseArguments, noProxyMatches, proxyFor
 - `lib/registry.mjs` — registerCommand, hasCommand, getCommand, listCommands, validateArgs, describeCommand
 - `lib/repo-map/treesitter-extractor.mjs` — branchComplexity, lexicalV2, loadGrammarsLock, packageGrammarRoots, grammarStatus, makeStructuralExtract
