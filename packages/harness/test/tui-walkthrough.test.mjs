@@ -21,6 +21,8 @@ import {
   shouldAutoOpenWalkthrough,
 } from '../lib/tui/walkthrough.mjs';
 import { createStyle } from '../lib/style.mjs';
+import { overlayBoxWidth } from '../lib/tui/overlay.mjs';
+import { displayWidth } from '../lib/tui/width.mjs';
 import { resolveConfig, setConfigValue } from '../lib/config.mjs';
 import { createInput } from '../lib/tui/input.mjs';
 import { fakeTty, plainUi } from './helpers/tty.mjs';
@@ -87,6 +89,19 @@ test('hydrated first-run adds the install status line only on beat 1', () => {
   wt.handleKey(null, { name: 'return' });
   const second = renderWalkthrough(wt, { ui, width: 80 }).join('\n');
   assert.doesNotMatch(second, /Copilot assets and the editor bridge were installed/);
+});
+
+test('walkthrough box rows fill the overlay width after display-width wrap', () => {
+  const wt = createWalkthrough({ hydrated: true });
+  const ui = createStyle({ argv: ['--no-color'] });
+  const width = 48;
+  const box = overlayBoxWidth(width);
+  for (let i = 0; i < WALKTHROUGH_BEATS.length; i += 1) {
+    for (const line of renderWalkthrough(wt, { ui, width })) {
+      assert.equal(displayWidth(ui.stripAnsi(line)), box, line);
+    }
+    if (i < WALKTHROUGH_BEATS.length - 1) wt.handleKey(null, { name: 'return' });
+  }
 });
 
 test('walkthrough paints a boxed card with progress and a stable height', () => {

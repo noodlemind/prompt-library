@@ -31,7 +31,7 @@ function walk(root, base = '') {
   for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
     const rel = base ? `${base}/${entry.name}` : entry.name;
     if (entry.isDirectory()) out.push(...walk(path.join(root, entry.name), rel));
-    else if (entry.isFile()) out.push(rel);
+    else if (entry.isFile() || entry.isSymbolicLink()) out.push(rel);
   }
   return out;
 }

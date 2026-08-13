@@ -327,7 +327,7 @@ test('registration pins the digest of the bytes that were validated', async () =
 });
 
 test('a symlinked primitive is refused, not followed', async () => {
-  const { readPrimitiveOnce } = await import('../lib/local-primitives.mjs');
+  const { readPrimitiveOnce, discardPrimitive } = await import('../lib/local-primitives.mjs');
   const home = tempDir('prim-symlink-');
   const rel = 'skills/demo/SKILL.md';
   fs.mkdirSync(path.join(home, 'skills', 'demo'), { recursive: true });
@@ -335,4 +335,9 @@ test('a symlinked primitive is refused, not followed', async () => {
   fs.writeFileSync(elsewhere, '---\nname: demo\ndescription: d\n---\n');
   fs.symlinkSync(elsewhere, path.join(home, rel));
   assert.throws(() => readPrimitiveOnce(home, rel), (e) => /symlink/.test(e.message));
+  assert.throws(
+    () => discardPrimitive({ copilotHome: home, rel }),
+    (error) => error.code === 'E_TARGET',
+  );
+  assert.equal(fs.lstatSync(path.join(home, rel)).isSymbolicLink(), true);
 });

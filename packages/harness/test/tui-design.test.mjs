@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createComposer } from '../lib/tui/composer.mjs';
@@ -1164,6 +1164,29 @@ test('VALUES: a closed set refuses an answer outside it; an open one accepts', a
     assert.equal(resolveValues({ source: 'scope', literal: null }, {}).free, false);
   // A file the bounded walk did not reach is still a real file.
   assert.equal(resolveValues({ source: 'path', literal: null }, { workspace: process.cwd(), query: 'lib/' }).free, true);
+});
+
+test('VALUES: the primitive picker does not import a CLI command module', () => {
+  const src = readFileSync(new URL('../lib/tui/values.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /from '\.\.\/[^']*-cmd\.mjs'/);
+  assert.match(src, /from '\.\.\/primitive-origins\.mjs'/);
+});
+
+test('VALUES: local primitives are offered invalid and stray first', async () => {
+  const { resolveValues } = await import('../lib/tui/values.mjs');
+  const { tempDir } = await import('./helpers/index.mjs');
+  const home = tempDir('prim-picker-');
+  mkdirSync(path.join(home, 'skills', 'broken'), { recursive: true });
+  writeFileSync(path.join(home, 'skills', 'broken', 'SKILL.md'), '# no frontmatter\n');
+  writeFileSync(path.join(home, 'skills', 'broken', 'notes.md'), 'leftover\n');
+  const picked = resolveValues({ source: 'primitive', literal: null }, { copilotHome: home });
+  assert.equal(picked.free, true);
+  assert.deepEqual(picked.items.map((i) => i.value), [
+    'skills/broken/SKILL.md',
+    'skills/broken/notes.md',
+  ]);
+  assert.match(picked.items[0].note, /^invalid ·/);
+  assert.match(picked.items[1].note, /^stray ·/);
 });
 
 test('VALUES: an unknown source name fails at registration, not in the picker', async () => {

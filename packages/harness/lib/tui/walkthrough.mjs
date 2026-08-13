@@ -1,7 +1,7 @@
 /** First-run / replay Adaptive Engineer story. Session chrome, not a kernel command. */
 
-import { overlayBoxWidth } from './overlay.mjs';
-import { clipTo, displayWidth, padTo } from './width.mjs';
+import { overlayBoxChrome, overlayBoxWidth } from './overlay.mjs';
+import { clipTo, displayWidth, wrapCells } from './width.mjs';
 
 export const WALKTHROUGH_SEEN_KEY = 'walkthrough.seen';
 
@@ -112,7 +112,7 @@ function beatBodyLines(spec, { hydrated = false, beat = 0, width = 80 } = {}) {
   const lines = [];
   for (const paragraph of spec.body) {
     if (!paragraph) { lines.push(''); continue; }
-    lines.push(...wrapLine(String(paragraph), width));
+    lines.push(...wrapCells(String(paragraph), width));
   }
   if (hydrated && beat === 0) {
     lines.push('');
@@ -139,16 +139,7 @@ export function renderWalkthrough(wt, { ui, width = 80 } = {}) {
   const height = stableBodyHeight({ hydrated: wt.hydrated, width: textWidth });
   while (body.length < height) body.push('');
 
-  const b = ui?.unicode === false
-    ? { tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|' }
-    : { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' };
-  const edge = (l, r) => paint('info', `${l}${b.h.repeat(inner)}${r}`);
-  const rowOf = (content) => {
-    const padded = padTo(content, inner);
-    const bodyRow = ui?.tintRow ? ui.tintRow('panel', padded) : padded;
-    return `${paint('info', b.v)}${bodyRow}${paint('info', b.v)}`;
-  };
-  const divider = () => paint('info', `${b.v}${paint('muted', b.h.repeat(inner))}${b.v}`);
+  const { b, edge, rowOf, divider } = overlayBoxChrome(ui, inner);
 
   const progress = `${(wt.beat ?? 0) + 1}/${WALKTHROUGH_BEATS.length}`;
   const titlePlain = String(spec.title);
@@ -172,22 +163,4 @@ export function shouldAutoOpenWalkthrough({ interactive = false, screenReader = 
   if (screenReader) return 'lines';
   if (interactive) return 'overlay';
   return null;
-}
-
-function wrapLine(text, width) {
-  const words = text.split(/\s+/).filter(Boolean);
-  if (!words.length) return [''];
-  const lines = [];
-  let current = '';
-  for (const word of words) {
-    const next = current ? `${current} ${word}` : word;
-    if (next.length > width && current) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = next;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
 }

@@ -5,10 +5,8 @@ import { resolveCopilotHome } from './paths.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
-import { readLock } from './lock.mjs';
-import { getAssetsRoot } from './commands.mjs';
-import { collectAllAssetFiles } from './sync.mjs';
-import { approvedBundleNames, placedFiles, readPlacements, syncBundles } from './bundle-sync.mjs';
+import { approvedBundleNames, readPlacements, syncBundles } from './bundle-sync.mjs';
+import { listLocalPrimitives, primitiveOrigins, shippedAssetFiles } from './primitive-origins.mjs';
 import { bundleDigest, discoverBundles, parseManifest, MANIFEST_FILE, resourcesRoot } from './resources.mjs';
 import {
   discardPrimitive,
@@ -55,30 +53,12 @@ function context(argv) {
   };
 }
 
-export function listLocalPrimitives(copilotHome) {
-  const { shippedFiles, lockFiles } = origins(copilotHome);
-  return localPrimitiveStatus({ copilotHome, shippedFiles, lockFiles });
-}
-
-function origins(copilotHome) {
-  let shippedFiles = new Set();
-  try {
-    shippedFiles = new Set(collectAllAssetFiles(getAssetsRoot()));
-  } catch {
-    /* assets unavailable — see the note above */
-  }
-    const lockFiles = new Set([...(readLock(copilotHome)?.files || []), ...placedFiles(copilotHome)]);
-  return { shippedFiles, lockFiles };
-}
+export { listLocalPrimitives };
 
 /** Re-place every enabled bundle. Shared by add/update/remove so the three
  * cannot drift about what "applied" means. */
 function applyBundles(copilotHome) {
-  let shippedFiles = new Set();
-  try {
-    shippedFiles = new Set(collectAllAssetFiles(getAssetsRoot()));
-  } catch { /* assets unavailable */ }
-  return syncBundles({ copilotHome, shippedFiles, trustedNames: approvedBundleNames(copilotHome) });
+  return syncBundles({ copilotHome, shippedFiles: shippedAssetFiles(), trustedNames: approvedBundleNames(copilotHome) });
 }
 
 /** Copy a bundle directory in, refusing anything whose manifest does not parse
@@ -129,7 +109,7 @@ export async function resourcesResultOf(argv, ctx = {}) {
   if (!RESOURCES_VERBS.includes(verb)) {
     throw usageError(`unknown resources verb: ${verb}`, `one of ${RESOURCES_VERBS.join(', ')}`);
   }
-  const { shippedFiles, lockFiles } = origins(copilotHome);
+  const { shippedFiles, lockFiles } = primitiveOrigins(copilotHome);
   const primitives = localPrimitiveStatus({ copilotHome, shippedFiles, lockFiles });
 
   if (verb === 'bundles') {

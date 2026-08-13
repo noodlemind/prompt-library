@@ -3,7 +3,7 @@ import { readModelCache } from '../model-cache.mjs';
 import { CONFIG_SCHEMA, CONFIG_KEYS, SCOPES } from '../config.mjs';
 import { readJournal, foldRuns } from '../run-journal.mjs';
 import { completePath } from './complete.mjs';
-import { listLocalPrimitives } from '../resources-cmd.mjs';
+import { listLocalPrimitives } from '../primitive-origins.mjs';
 
 /** How many rows a value picker offers before it stops being a glance. Paths
  * and runs are truncated to this; the filter is how you reach the rest. */
