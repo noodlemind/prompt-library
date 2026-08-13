@@ -114,6 +114,20 @@ test('team primer distinguishes change contracts from SDD/BMAD plans', () => {
   );
   assert.match(primer, /Handle gaps/, 'primer must name the nine-stage Deliver model');
   assert.match(primer, /\| 9 \| Report \|/, 'primer must list Report as stage 9');
+  assert.match(primer, /argv arrays/, 'primer must describe the named-check argv boundary');
+  assert.match(primer, /without a shell/, 'primer must say named checks run without a shell');
+  assert.match(primer, /referenced Spec Kit and BMAD pages/, 'primer must scope the SDD/BMAD absence claim to cited pages');
+});
+
+test('named checks execute argv from checks.yaml, not plan text', () => {
+  const verify = read('packages/harness/lib/verify.mjs');
+  assert.match(verify, /loadNamedChecks/, 'verify loads repository-owned named checks');
+  assert.match(verify, /runNamedCheck/, 'verify runs named checks, not plan command strings');
+  assert.doesNotMatch(verify, /verification_commands/, 'verify must not read plan command strings');
+  const checks = read('packages/harness/lib/checks.mjs');
+  assert.match(checks, /CHECKS_REL = '\.github\/harness\/checks\.yaml'/, 'named checks live in checks.yaml');
+  const runner = read('packages/harness/lib/runner.mjs');
+  assert.match(runner, /shell:\s*false/, 'named checks must not run through a shell');
 });
 
 test('engineer agent is frozen, thin, and owns the only normative nine-step delivery lifecycle', () => {

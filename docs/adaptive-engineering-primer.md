@@ -97,7 +97,7 @@ What the kernel actually enforces:
 | **Locked plan** | Goal, criteria, constraints, and a digest. Quiet goal drift during a long chat is a plan edit, not a side effect |
 | **Pre-mutation gate** | No recognized mutation without a fresh implement gate |
 | **Host hooks** | When installed and `enforcement: enforce`, deny mutation without a gate, invalidate authorization when the plan digest changes, and block a “done” claim until evidence is newer than the last edit. `observe` and `warn` do not block |
-| **Named checks** | Check IDs resolve through repository-owned `.github/harness/checks.yaml`. The model does not invent the validation command |
+| **Named checks** | The plan names check IDs only. Those IDs resolve to argv arrays in repository-owned `.github/harness/checks.yaml` and run without a shell |
 | **Fresh evidence** | `harness verify` binds the result to the plan digest, changed-file set, workspace digest, and base revision when provided |
 | **Risk-routed review** | Required review labels are recorded on the plan. They request independent perspectives; they do not prove a different human ran them |
 | **Governed memory** | Deliver compounding runs after passed verification. `harness compound --insight` is advisory. `harness agent --profile autonomous` is a separate track, not the Deliver contract. Promotion into a skill, agent, or instruction is a separate human-reviewed change |
@@ -225,7 +225,7 @@ flowchart LR
 
 They compose. Spec Kit or BMAD can produce the requirements and design. Adaptive Engineering turns the selected slice into a governed change contract. A BMAD story or a Spec Kit task list is upstream intent. It does not replace the gate, the named checks, or the evidence binding.
 
-The published Spec Kit and BMAD workflows do not document a repository-owned pre-mutation gate, trusted argv checks, or evidence bound to the current workspace. That is the layer Adaptive Engineering adds. A custom BMAT stack can invent similar controls; until they exist and run independently of the model, they are not this contract.
+The referenced Spec Kit and BMAD pages do not document a repository-owned pre-mutation gate, trusted argv checks, or evidence bound to the current workspace. That is the layer Adaptive Engineering adds. A custom BMAT stack can invent similar controls; until they exist and run independently of the model, they are not this contract.
 
 ## Common questions
 
