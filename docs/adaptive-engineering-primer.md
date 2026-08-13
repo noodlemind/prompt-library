@@ -91,13 +91,13 @@ What the kernel actually enforces:
 |---------|----------------|
 | **Locked plan** | Goal, criteria, constraints, and a digest. Quiet goal drift during a long chat is a plan edit, not a side effect |
 | **Pre-mutation gate** | No recognized mutation without a fresh implement gate |
-| **Host hooks** | Deny mutation without a gate; invalidate authorization when the plan digest changes; block a “done” claim until evidence is newer than the last edit |
+| **Host hooks** | When installed and `enforcement: enforce`, deny mutation without a gate, invalidate authorization when the plan digest changes, and block a “done” claim until evidence is newer than the last edit. `observe` and `warn` do not block |
 | **Named checks** | Check IDs resolve through repository-owned `.github/harness/checks.yaml`. The model does not invent the validation command |
 | **Fresh evidence** | `harness verify` binds the result to the plan digest, base revision, changed-file set, and workspace digest |
-| **Risk-routed review** | Independent perspectives required by risk. The implementer does not silently self-approve risky work |
-| **Governed memory** | Compounding runs after passed verification. Promotion into a skill, agent, or instruction is a separate human-reviewed change |
+| **Risk-routed review** | Required review labels are recorded on the plan. They request independent perspectives; they do not prove a different human ran them |
+| **Governed memory** | Deliver compounding runs after passed verification. `harness compound --insight` is advisory. `harness agent --profile autonomous` is a separate track, not the Deliver contract. Promotion into a skill, agent, or instruction is a separate human-reviewed change |
 
-CI can repeat the same contract independently of the chat session.
+CI can repeat the same gate and verify contract independently of the chat session.
 
 ## How it delivers
 
@@ -190,7 +190,7 @@ flowchart TB
     K --> E["Evidence bound to this workspace"]
 ```
 
-[Spec-Driven Development](https://github.github.com/spec-kit/concepts/sdd.html), using GitHub Spec Kit as the reference, treats specifications as the source that generates implementation. The published workflow moves through constitution, spec, plan, tasks, and implementation. Spec Kit [does not prescribe](https://github.github.com/spec-kit/concepts/spec-persistence.html) how `spec.md`, `plan.md`, and `tasks.md` are preserved or mutated after requirements change.
+[Spec-Driven Development](https://github.github.com/spec-kit/concepts/sdd.html), using GitHub Spec Kit as the reference, treats specifications as the source that generates implementation. Spec Kit’s [agentic command sequence](https://github.com/github/spec-kit/blob/main/docs/reference/agentic-sdd.md) is constitution → specify → plan → tasks → implement, with optional clarify, checklist, analyze, and converge steps. Spec Kit [does not prescribe](https://github.github.com/spec-kit/concepts/spec-persistence.html) how `spec.md`, `plan.md`, and `tasks.md` are preserved or mutated after requirements change.
 
 The [BMAD Method](https://docs.bmad-method.org/reference/workflow-map/) (Breakthrough Method for Agile AI-Driven Development; sometimes heard internally as “BMAT”) builds context across analysis, planning, solutioning, and implementation. Each phase produces documents that inform the next: briefs, PRDs, `SPEC.md`, architecture, epics, stories, then `bmad-build`. That is context engineering for *what to build and why*.
 
@@ -206,7 +206,7 @@ The [BMAD Method](https://docs.bmad-method.org/reference/workflow-map/) (Breakth
 
 They compose. Spec Kit or BMAD can produce the requirements and design. Adaptive Engineering turns the selected slice into a governed change contract. A BMAD story or a Spec Kit task list is upstream intent. It does not replace the gate, the named checks, or the evidence binding.
 
-Used alone, Spec Kit and BMAD do not guarantee runtime mutation authorization or repository-specific proof. That is not a criticism of those methods. It is the layer they do not claim.
+The published Spec Kit and BMAD workflows do not document a repository-owned pre-mutation gate, trusted argv checks, or evidence bound to the current workspace. That is the layer Adaptive Engineering adds. A custom BMAT stack can invent similar controls; until they exist and run independently of the model, they are not this contract.
 
 ## Common questions
 
@@ -259,5 +259,6 @@ Those workflows are good at turning structured intent into an implementation att
 | Optional headless loop | [agent-loop.md](./agent-loop.md) |
 | Install, TUI, CI | [packages/harness/README.md](../packages/harness/README.md) |
 | Spec Kit SDD concept | [What is Spec-Driven Development?](https://github.github.com/spec-kit/concepts/sdd.html) |
+| Spec Kit commands | [Agentic SDD](https://github.com/github/spec-kit/blob/main/docs/reference/agentic-sdd.md) |
 | Spec Kit persistence | [Spec Persistence Models](https://github.github.com/spec-kit/concepts/spec-persistence.html) |
 | BMAD workflow map | [Workflow Map](https://docs.bmad-method.org/reference/workflow-map/) |
