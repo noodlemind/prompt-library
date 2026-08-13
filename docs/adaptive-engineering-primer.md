@@ -66,13 +66,18 @@ flowchart TD
     C --> P["Report evidence"]
 ```
 
-A Deliver plan is executable governance metadata, not a long-form wish list. Frontmatter names outputs and trusted checks. The body records scope, reasoning, risks, and activity.
+A Deliver plan is executable governance metadata, not a long-form wish list. Frontmatter names outputs and trusted checks. The body records scope, reasoning, risks, and activity. The block below is an excerpt; a lockable plan also needs `intent`, `expected_outputs`, `success_criteria`, `## Intent Contract`, and `## Acceptance Criteria`.
 
 ```yaml
 plan_schema: 1
 status: planned
 plan_lock: true
 phase: 1
+intent: "Add the smallest change that satisfies AC1"
+expected_outputs:
+  - "the scoped files listed in the plan"
+success_criteria:
+  - "AC1 passes the named check"
 verification:
   required:
     - unit-tests
@@ -204,6 +209,20 @@ The [BMAD Method](https://docs.bmad-method.org/reference/workflow-map/) (Breakth
 | **Tokens** | Documents accumulate as next-phase context | Only a sliced pack and on-demand skills enter the model |
 | **Memory** | Prior phase docs are the next prompt | Provenance-bearing recall; unverified insights stay advisory |
 
+```mermaid
+flowchart LR
+    subgraph Spec["Spec Kit / BMAD plan"]
+        S1["What and why"]
+        S2["Optional how"]
+    end
+    subgraph Harness["Harness plan"]
+        H1["This mutation"]
+        H2["Named checks"]
+        H3["Lock and digest"]
+    end
+    Spec -->|"selected slice"| Harness
+```
+
 They compose. Spec Kit or BMAD can produce the requirements and design. Adaptive Engineering turns the selected slice into a governed change contract. A BMAD story or a Spec Kit task list is upstream intent. It does not replace the gate, the named checks, or the evidence binding.
 
 The published Spec Kit and BMAD workflows do not document a repository-owned pre-mutation gate, trusted argv checks, or evidence bound to the current workspace. That is the layer Adaptive Engineering adds. A custom BMAT stack can invent similar controls; until they exist and run independently of the model, they are not this contract.
@@ -216,7 +235,7 @@ A Spec Kit `plan.md` or a BMAD architecture/story set describes the work. A Harn
 
 ### Isn’t this just more ceremony?
 
-Ceremony is mode-dependent. Answer and Investigate have none of the Deliver gate. A small Deliver change uses the same contract with a short plan. The parts that never shrink are authorization and proof, because those are the parts that fail silently in a long agent session.
+Ceremony is mode-dependent. Answer and Investigate do not enter Deliver mode, so they do not use the Deliver gate. A small Deliver change uses the same contract with a short plan. The parts that never shrink are authorization and proof, because those are the parts that fail silently in a long agent session.
 
 ### Why not paste the whole spec into the agent?
 
