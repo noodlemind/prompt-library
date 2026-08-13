@@ -62,19 +62,37 @@ test('every provider resolves to an adapter that exists on disk', () => {
   for (const provider of Object.values(PROVIDERS)) {
     assert.ok(fs.existsSync(path.join(root, 'lib', provider.adapter)), `${provider.id} → ${provider.adapter}`);
     assert.ok(provider.defaultModel, `${provider.id} needs a default model or --provider alone is unusable`);
-    assert.ok(provider.baseUrl && provider.baseUrlVar, `${provider.id} needs a base URL and an override variable`);
+    if (provider.transport === 'vscode.lm') {
+      assert.equal(provider.id, 'github-copilot');
+    } else {
+      assert.ok(provider.baseUrl && provider.baseUrlVar, `${provider.id} needs a base URL and an override variable`);
+    }
   }
 });
 
-test('the OpenAI-compatible providers share ONE adapter, and copilot only adds auth', () => {
+test('editor-bridge transport, not the Copilot id, owns env and readiness', () => {
+  const fake = {
+    id: 'other-editor',
+    keyRequired: false,
+    transport: 'vscode.lm',
+    defaultModel: 'gpt-4.1',
+  };
+  const env = providerEnv(fake, { parentEnv: { PATH: '/usr/bin', GITHUB_COPILOT_TOKEN: 'secret' }, copilotHome: os.tmpdir() });
+  assert.equal(env.HARNESS_PROVIDER_ID, 'other-editor');
+  assert.ok(env.HARNESS_COPILOT_BRIDGE_STATE);
+  assert.equal('GITHUB_COPILOT_TOKEN' in env, false);
+  assert.equal('HARNESS_PROVIDER_BASE_URL' in env, false);
+});
+
+test('the OpenAI-compatible providers share ONE adapter, while Copilot is editor-only', () => {
   const shared = Object.values(PROVIDERS).filter((p) => !['anthropic', 'github-copilot'].includes(p.id)).map((p) => p.adapter);
   assert.equal(new Set(shared).size, 1,
     'near-identical files would guarantee a tool-call fix lands in one and the others keep the bug');
   assert.ok(shared.length >= 10, `the table rows all ride the shared adapter (${shared.length})`);
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const copilot = fs.readFileSync(path.join(root, 'lib', 'providers', 'github-copilot.mjs'), 'utf8');
-  assert.match(copilot, /from '\.\/openai-compatible\.mjs'/);
-  assert.doesNotMatch(copilot, /function toWireMessages/, 'shaping lives once');
+  assert.match(copilot, /requestEditorBridge/);
+  assert.doesNotMatch(copilot, /openai-compatible|node:https|authorization/i);
 });
 
 // --- the base URL is operator-controlled, within one rule ------------------
@@ -324,7 +342,7 @@ test('the provider table covers the round-one set, each with a distinct key vari
   ]) {
     assert.ok(ids.includes(expected), `${expected} is missing from the table`);
   }
-    const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar);
+    const keyVars = Object.values(PROVIDERS).map((p) => p.keyVar).filter(Boolean);
   assert.equal(new Set(keyVars).size, keyVars.length - 1,
     'only zen/zen-go intentionally share OPENCODE_API_KEY');
   assert.equal(PROVIDERS['github-models'].keyVar, 'GITHUB_MODELS_TOKEN');
@@ -345,28 +363,6 @@ test('github-models honours the ecosystem variables, and only the seam names the
   const env = providerEnv(PROVIDERS['github-models'], { parentEnv: { GITHUB_TOKEN: 'ghp_conventional' } });
   assert.equal(env.GITHUB_MODELS_TOKEN, 'ghp_conventional',
     'the conventional variable is accepted and normalized onto the provider key');
-});
-
-test('COPILOT: a subscription is a credential ladder, resolved by the seam', () => {
-  const copilot = PROVIDERS['github-copilot'];
-  assert.equal(copilot.keyRequired, false, 'the editor login is a valid rung — no key need be exported');
-
-  // Rung 1: a pre-minted bearer.
-  const bearer = providerEnv(copilot, { parentEnv: { GITHUB_COPILOT_TOKEN: 'tid=abc;exp=123' } });
-  assert.equal(bearer.HARNESS_COPILOT_BEARER, 'tid=abc;exp=123');
-  assert.equal(bearer.HARNESS_COPILOT_OAUTH, undefined);
-
-  // Rung 2: an OAuth token, recognized by shape and passed for exchange.
-  const oauth = providerEnv(copilot, { parentEnv: { GITHUB_COPILOT_TOKEN: 'gho_grant' } });
-  assert.equal(oauth.HARNESS_COPILOT_OAUTH, 'gho_grant');
-  assert.equal(oauth.HARNESS_COPILOT_BEARER, undefined, 'an oauth token is not a bearer');
-
-  const viaGh = providerEnv(copilot, { parentEnv: { GH_TOKEN: 'gho_from_cli' } });
-  assert.equal(viaGh.HARNESS_COPILOT_OAUTH, 'gho_from_cli');
-
-    const none = providerEnv(copilot, { parentEnv: { PATH: '/usr/bin' } });
-  assert.equal(none.HARNESS_PROVIDER_BASE_URL, 'https://api.githubcopilot.com');
-  assert.equal(none.HARNESS_COPILOT_OAUTH, undefined);
 });
 
 test('withRetry retries what the network broke and never what the request broke', async () => {

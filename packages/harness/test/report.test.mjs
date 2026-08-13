@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { buildReport, renderReport, recoveryLoops, trendRegression, budgetBreaches, hasBudgetBreach, knowledgeSlos } from '../lib/report.mjs';
+import { buildReport, loadReportEvents, renderReport, recoveryLoops, trendRegression, budgetBreaches, hasBudgetBreach, knowledgeSlos } from '../lib/report.mjs';
 import { usageFields } from '../lib/token-meter.mjs';
 
 const binPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'harness.mjs');
@@ -26,6 +26,41 @@ test('report ranks token sinks by event type descending', () => {
   assert.ok(report.sinks[0].tokens > report.sinks[1].tokens);
   assert.equal(report.sinks.find((s) => s.type === 'orient').count, 2);
   assert.ok(report.totals.tokens > 0);
+});
+
+test('chronological report cap preserves newer local lifecycle events after host usage is merged', () => {
+  const local = [
+    { id: 'local-1', type: 'pre_tool', session: 'local', ts: '2026-02-01T00:00:00Z', decision: 'block' },
+    { id: 'local-2', type: 'pre_tool', session: 'local', ts: '2026-02-01T00:01:00Z', decision: 'block' },
+  ];
+  const host = Array.from({ length: 2000 }, (_, index) => ({
+    id: `host-${index}`,
+    type: 'host_request',
+    session: `host-${index}`,
+    source: 'host',
+    ts: `2026-01-${String(1 + Math.floor(index / 80)).padStart(2, '0')}T00:${String(index % 60).padStart(2, '0')}:00Z`,
+    usage: { 'gen_ai.usage.total_tokens': 1 },
+  }));
+  const report = buildReport({ workspace: os.tmpdir(), events: [...local, ...host] });
+  assert.equal(report.totals.events, 2000);
+  assert.equal(report.flags.recoveryLoops.some((loop) => loop.session === 'local'), true);
+});
+
+test('chronological report cap keeps untimestamped tail events instead of treating them as epoch 0', () => {
+  const older = Array.from({ length: 2000 }, (_, index) => ({
+    id: `old-${index}`,
+    type: 'host_request',
+    session: `old-${index}`,
+    ts: `2026-01-01T00:00:${String(index % 60).padStart(2, '0')}Z`,
+  }));
+  const tail = [
+    { id: 'untimed-1', type: 'pre_tool', session: 'local' },
+    { id: 'untimed-2', type: 'pre_tool', session: 'local' },
+  ];
+  const kept = loadReportEvents({ events: [...older, ...tail] });
+  assert.equal(kept.length, 2000);
+  assert.ok(kept.some((event) => event.id === 'untimed-1'));
+  assert.ok(kept.some((event) => event.id === 'untimed-2'));
 });
 
 test('renderReport is answer-first and lists sinks', () => {

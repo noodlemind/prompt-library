@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import YAML from 'yaml';
 import { extractAcceptanceCriteria } from './plan-schema.mjs';
 
@@ -9,7 +10,7 @@ function result(id, pass, message) {
   return { id, pass, message };
 }
 
-function loadConfiguredChecks(workspace) {
+export function loadConfiguredChecks(workspace) {
   const full = path.join(workspace, CHECKS_REL);
   if (!fs.existsSync(full)) return { present: false, checks: null, error: null };
   try {
@@ -21,6 +22,25 @@ function loadConfiguredChecks(workspace) {
   } catch (error) {
     return { present: true, checks: null, error: `Invalid ${CHECKS_REL}: ${error.message}` };
   }
+}
+
+/** Bind the authoritative YAML parse to the gate session so hydrated hooks do
+ * not need package resolution or a second, weaker YAML parser. */
+export function configuredCheckSnapshot(workspace) {
+  const full = path.join(workspace, CHECKS_REL);
+  const loaded = loadConfiguredChecks(workspace);
+  if (loaded.error) return { digest: null, commands: [], error: loaded.error };
+  const source = fs.existsSync(full) ? fs.readFileSync(full, 'utf8') : null;
+  const commands = Object.entries(loaded.checks || {})
+    .filter(([, config]) => Array.isArray(config?.command)
+      && config.command.length > 0
+      && config.command.every((part) => typeof part === 'string' && part.length > 0))
+    .map(([name, config]) => ({ name, argv: config.command.slice() }));
+  return {
+    digest: source === null ? null : crypto.createHash('sha256').update(source).digest('hex'),
+    commands,
+    error: null,
+  };
 }
 
 function schemaFocused(name, config) {

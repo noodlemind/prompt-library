@@ -8,30 +8,6 @@ import {
   shapeResult,
 } from '../lib/providers/openai-compatible.mjs';
 import { foldAnthropicEvent, anthropicStreamToResponse } from '../lib/providers/anthropic.mjs';
-import { endpointFromBearer, initiatorFor } from '../lib/providers/github-copilot.mjs';
-
-// --- the Copilot request identity (learned from Pi, verified live) ----------
-
-test('the bearer names its own endpoint, and the parse honors it', () => {
-  assert.equal(
-    endpointFromBearer('tid=abc;proxy-ep=proxy.individual.githubcopilot.com;exp=123'),
-    'https://api.individual.githubcopilot.com',
-    'the token routes the account — Individual, Business and Enterprise each differently',
-  );
-  assert.equal(
-    endpointFromBearer('tid=abc;proxy-ep=proxy.enterprise.githubcopilot.com;rt=1'),
-    'https://api.enterprise.githubcopilot.com',
-  );
-  assert.equal(endpointFromBearer('tid=abc;exp=123'), null, 'no field, no claim — the generic default stands');
-  assert.equal(endpointFromBearer(null), null);
-});
-
-test('the initiator says who is asking: a person, or the loop feeding back tool results', () => {
-  assert.equal(initiatorFor([{ role: 'user', content: 'do it' }]), 'user');
-  assert.equal(initiatorFor([{ role: 'assistant' }, { role: 'tool', content: 'exit 0' }]), 'agent',
-    'an agent loop that reports everything as user-initiated is describing itself as a person typing very fast');
-  assert.equal(initiatorFor([]), 'user');
-});
 
 // --- the OpenAI-format fold -------------------------------------------------
 
@@ -147,35 +123,6 @@ test('streamCompletion consumes SSE, surfaces deltas, and returns the assembled 
     assert.equal(shaped.usage.outputTokens, 2);
   } finally {
     await close();
-  }
-});
-
-test('the copilot adapter completes against a stub, streaming end to end', async () => {
-  const { startProvider } = await import('../lib/provider.mjs');
-  const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'copilot says hi' } }] })}\n\n`);
-    res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
-    res.write('data: [DONE]\n\n');
-    res.end();
-  });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const handle = startProvider({
-    provider: 'github-copilot',
-    parentEnv: {
-      PATH: process.env.PATH,
-            GITHUB_COPILOT_TOKEN: 'stub-bearer-token',
-      GITHUB_COPILOT_BASE_URL: base,
-    },
-  });
-  try {
-    const result = await handle.complete({ messages: [{ role: 'user', text: 'hi' }] }, { timeout: 15_000 });
-    assert.equal(result.text, 'copilot says hi');
-    assert.equal(result.stopReason, 'stop');
-  } finally {
-    handle.close();
-    await new Promise((r) => server.close(r));
   }
 });
 

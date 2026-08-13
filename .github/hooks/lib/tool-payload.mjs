@@ -86,6 +86,130 @@ export function tokenizeShell(segment) {
   return [...segment.matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)].map((match) => cleanShellToken(match[0]));
 }
 
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=.*/;
+const POSIX_SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
+const POWERSHELLS = new Set(['powershell', 'powershell.exe', 'pwsh', 'pwsh.exe']);
+const PREFIX_UTILS = new Set(['timeout', 'nice', 'stdbuf', 'time', 'ionice', 'xargs']);
+const PREFIX_VALUE_FLAGS = new Set([
+  '-k', '--kill-after', '-s', '--signal',
+  '-n', '--adjustment',
+  '-c', '--class',
+  '-i', '-o', '-e',
+  '-I', '-J', '-L', '-P', '-E',
+  '--replace', '--max-lines', '--max-args', '--max-procs', '--eof',
+  '-a', '--arg-file',
+]);
+
+function takeEnvSplitString(normalized) {
+  const arg = normalized[0];
+  if (arg === '-S' || arg === '--split-string') {
+    const payload = normalized[1];
+    normalized.splice(0, 2);
+    if (payload) normalized.unshift(...tokenizeShell(payload));
+    return true;
+  }
+  if (arg.startsWith('--split-string=')) {
+    normalized.shift();
+    const payload = arg.slice('--split-string='.length);
+    if (payload) normalized.unshift(...tokenizeShell(payload));
+    return true;
+  }
+  return false;
+}
+
+/** Strip env/command/nohup/timeout wrappers and VAR=value prefixes from a token list. */
+export function unwrapLeadingWrappers(tokens) {
+  const normalized = tokens.slice();
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    while (normalized[0] && ASSIGNMENT.test(normalized[0])) {
+      normalized.shift();
+      progressed = true;
+    }
+    const base = path.basename(normalized[0] || '').toLowerCase();
+    if (base === 'env') {
+      normalized.shift();
+      while (normalized.length) {
+        if (ASSIGNMENT.test(normalized[0])) normalized.shift();
+        else if (normalized[0] === '--') {
+          normalized.shift();
+          break;
+        } else if (takeEnvSplitString(normalized)) break;
+        else if (normalized[0] === '-u' || normalized[0] === '--unset' || normalized[0] === '-C' || normalized[0] === '--chdir') {
+          normalized.splice(0, 2);
+        } else if (/^--(?:unset|chdir)=/.test(normalized[0]) || /^-(?:i|0)$/.test(normalized[0]) || normalized[0] === '--ignore-environment') {
+          normalized.shift();
+        } else break;
+      }
+      progressed = true;
+    } else if (base === 'command' || base === 'nohup') {
+      normalized.shift();
+      if (base === 'command') {
+        if (normalized[0] === '-p' || normalized[0] === '-v' || normalized[0] === '-V') normalized.shift();
+        if (normalized[0] === '--') normalized.shift();
+      } else {
+        while (normalized[0]?.startsWith('-')) normalized.shift();
+      }
+      progressed = true;
+    } else if (PREFIX_UTILS.has(base)) {
+      const util = base;
+      normalized.shift();
+      while (normalized.length) {
+        const arg = normalized[0];
+        if (arg === '--') {
+          normalized.shift();
+          break;
+        }
+        if (arg.startsWith('--') && arg.includes('=')) {
+          normalized.shift();
+          continue;
+        }
+        if (PREFIX_VALUE_FLAGS.has(arg)) {
+          normalized.splice(0, 2);
+          continue;
+        }
+        if (arg.startsWith('-')) {
+          normalized.shift();
+          continue;
+        }
+        break;
+      }
+      if (util === 'timeout' && /^\d/.test(normalized[0] || '')) normalized.shift();
+      if (util === 'nice' && /^[+-]?\d+$/.test(normalized[0] || '')) normalized.shift();
+      progressed = true;
+    }
+  }
+  return normalized;
+}
+
+/** Split a command into unwrapped argv segments, recursing into sh/bash/pwsh -c. */
+export function unwrapShellSegments(command) {
+  const out = [];
+  function collect(text) {
+    for (const segment of String(text || '').split(/(?:&&|\|\||[;|\n])/)) {
+      const tokens = unwrapLeadingWrappers(tokenizeShell(segment));
+      if (!tokens.length) continue;
+      const exe = path.basename(tokens[0] || '').toLowerCase();
+      if (POSIX_SHELLS.has(exe)) {
+        const flagIndex = tokens.findIndex((token, index) => index > 0 && /^-[A-Za-z]*c$/.test(token));
+        const nested = flagIndex > 0 ? tokens[flagIndex + 1] : null;
+        if (nested) collect(nested);
+        continue;
+      }
+      if (POWERSHELLS.has(exe)) {
+        const flagIndex = tokens.findIndex((token, index) => index > 0 && /^-c(?:ommand)?$/i.test(token));
+        const nested = flagIndex > 0 ? tokens[flagIndex + 1] : null;
+        if (nested) collect(nested);
+        continue;
+      }
+      out.push(tokens);
+    }
+  }
+  collect(command);
+  return out;
+}
+
 function withoutRedirections(args) {
   const result = [];
   for (let i = 0; i < args.length; i++) {
@@ -203,17 +327,7 @@ export function analyzeShellMutation(command) {
   }
 
   for (const segment of shellControlText.split(/(?:&&|\|\||[;|\n])/)) {
-    const tokens = tokenizeShell(segment);
-    let unwrapped = true;
-    while (unwrapped) {
-      unwrapped = false;
-      while (tokens[0]?.includes('=') && !tokens[0].startsWith('=')) tokens.shift();
-      if (['env', 'command', 'nohup'].includes(path.basename(tokens[0] || ''))) {
-        tokens.shift();
-        while (tokens[0]?.startsWith('-')) tokens.shift();
-        unwrapped = true;
-      }
-    }
+    const tokens = unwrapLeadingWrappers(tokenizeShell(segment));
     const executable = path.basename(tokens[0] || '').toLowerCase();
     const args = withoutRedirections(tokens.slice(1));
     const positional = args.filter((arg) => !arg.startsWith('-'));

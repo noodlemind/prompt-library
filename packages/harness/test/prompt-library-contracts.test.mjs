@@ -270,6 +270,20 @@ test('plan-producing primitives emit schema v1 and trusted named checks', () => 
   }
 });
 
+test('packaged hook assets stay byte-identical to .github/hooks security files', () => {
+  const files = [
+    'block-destructive-commands.mjs',
+    'require-plan-gate.mjs',
+    'lib/tool-payload.mjs',
+  ];
+  for (const rel of files) {
+    const source = read(`.github/hooks/${rel}`);
+    const shipped = read(`packages/harness/assets/hooks/${rel}`);
+    assert.equal(shipped, source, `${rel} must be rebuilt into packages/harness/assets/hooks`);
+    assert.match(shipped, /unwrapShellSegments/, `${rel} must ship the shared unwrap helper`);
+  }
+});
+
 test('prompt-library retains at most one non-terminal PR plan and documents cleanup', () => {
   const datedPlans = fs
     .readdirSync(path.join(repoRoot, 'docs', 'plans'))

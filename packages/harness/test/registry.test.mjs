@@ -534,6 +534,11 @@ test('CLI: a correctly-invoked recall/get/plan-new is unaffected by requireArgs'
   assert.match(getBody.excerpt, /hello/);
 
   const planWorkspace = tempDir('registry-requireargs-ok-plan-ws-');
+  fs.mkdirSync(path.join(planWorkspace, '.github', 'harness'), { recursive: true });
+  fs.writeFileSync(
+    path.join(planWorkspace, '.github', 'harness', 'checks.yaml'),
+    'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n'
+  );
   const planNew = runHarness([
     'plan-new', '--type', 'feat', '--slug', 'my-fine-slug', '--intent', 'do the thing',
     '--workspace', planWorkspace, '--dry-run', '--json',
