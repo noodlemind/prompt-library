@@ -93,7 +93,7 @@ What the kernel actually enforces:
 | **Pre-mutation gate** | No recognized mutation without a fresh implement gate |
 | **Host hooks** | When installed and `enforcement: enforce`, deny mutation without a gate, invalidate authorization when the plan digest changes, and block a “done” claim until evidence is newer than the last edit. `observe` and `warn` do not block |
 | **Named checks** | Check IDs resolve through repository-owned `.github/harness/checks.yaml`. The model does not invent the validation command |
-| **Fresh evidence** | `harness verify` binds the result to the plan digest, base revision, changed-file set, and workspace digest |
+| **Fresh evidence** | `harness verify` binds the result to the plan digest, changed-file set, workspace digest, and base revision when provided |
 | **Risk-routed review** | Required review labels are recorded on the plan. They request independent perspectives; they do not prove a different human ran them |
 | **Governed memory** | Deliver compounding runs after passed verification. `harness compound --insight` is advisory. `harness agent --profile autonomous` is a separate track, not the Deliver contract. Promotion into a skill, agent, or instruction is a separate human-reviewed change |
 
@@ -154,7 +154,7 @@ flowchart TB
         G4["Unfiltered memory"]
     end
     subgraph AE["Adaptive Engineering context"]
-        A1["Engineer body ≤ 900 tokens"]
+        A1["Engineer file 600-900 est. tokens"]
         A2["Context pack 2048 bytes"]
         A3["Skill loaded only if needed"]
         A4["Attributed recall, advisory"]
@@ -165,7 +165,7 @@ Mechanisms already in the kernel and prompt library:
 
 | Mechanism | Bound | Effect |
 |-----------|-------|--------|
-| Thin `@engineer` | Agent body ≤ 900 tokens (contract test) | Standing instructions stay a routing contract, not a procedure dump |
+| Thin `@engineer` | Agent file 600–900 estimated tokens (UTF-8 bytes ÷ 4; contract test) | Standing instructions stay a routing contract, not a procedure dump |
 | Context pack | Hard cap of 2048 bytes | Orient tells the model to read the pack, not re-ingest full plans and solution files |
 | Progressive disclosure | Skill frontmatter → body → references | Unused workflows do not occupy the prompt |
 | On-demand specialists | Narrow consultation packet | A reviewer or researcher does not inherit the whole delivery context |
