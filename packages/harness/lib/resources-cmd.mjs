@@ -159,7 +159,7 @@ export async function resourcesResultOf(argv, ctx = {}) {
 
   if (verb === 'remove') {
     if (!target) throw usageError('resources remove requires a bundle name', 'harness resources bundles');
-    if (/^(skills|agents|instructions)\//.test(target) || primitives.some((p) => p.path === target || p.name === target)) {
+    if (/^(skills|agents|instructions)\//.test(target) || primitives.some((p) => p.path === target)) {
       throw usageError(
         `resources remove uninstalls a bundle, not ${JSON.stringify(target)}`,
         `harness resources discard ${target}`,
@@ -203,7 +203,8 @@ export async function resourcesResultOf(argv, ctx = {}) {
     || p.name === target
     || p.path.split('/')[1] === target
     || path.basename(p.path).replace(/\.(agent|instructions)\.md$/, '') === target;
-  const found = primitives.find(matches);
+  const hits = primitives.filter(matches);
+  const found = hits[0] || null;
   if (verb === 'show') {
     if (!found) {
       throw Object.assign(new Error(`no locally-added primitive matching ${JSON.stringify(target)}`), {
@@ -219,6 +220,12 @@ export async function resourcesResultOf(argv, ctx = {}) {
     return { schema: 1, verb, primitive: { ...result, reason: 'registered' } };
   }
   if (verb === 'discard') {
+    if (hits.length > 1) {
+      throw usageError(
+        `ambiguous discard target ${JSON.stringify(target)} matches ${hits.length} files`,
+        hits.map((p) => p.path).sort().join(', '),
+      );
+    }
     const result = discardPrimitive({ copilotHome, rel, shippedFiles, lockFiles });
     return { schema: 1, verb, primitive: { ...result, reason: 'discarded' } };
   }

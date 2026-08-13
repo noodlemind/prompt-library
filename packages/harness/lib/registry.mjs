@@ -1108,7 +1108,7 @@ registerCommand({
     { verb: 'show', summary: 'one added primitive: its kind, name, digest, and why it is in that state', sideEffect: 'read', positionals: ['path'] },
     { verb: 'register', summary: 'validate an added primitive and record that this machine recognizes it', positionals: ['path'] },
     { verb: 'unregister', summary: 'withdraw recognition without deleting the file', positionals: ['path'] },
-    { verb: 'discard', summary: 'delete a locally-added skill, agent, or extra file the list called invalid', positionals: ['path'] },
+    { verb: 'discard', summary: 'delete a locally-added invalid, stray, or unused skill, agent, or extra file', positionals: ['path'] },
     { verb: 'bundles', summary: 'installed bundles, their state, and what each has placed', sideEffect: 'read' },
     { verb: 'add', summary: 'install a bundle directory and place its contributions', positionals: ['bundle'] },
     { verb: 'update', summary: 'replace an installed bundle and re-place its contributions', positionals: ['bundle'] },

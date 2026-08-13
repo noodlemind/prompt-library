@@ -305,6 +305,35 @@ test('an undecided access prompt is shown once per window, not once per agent tu
   assert.equal(context.globalState.get('harness.copilotLmAccessGranted'), true);
 });
 
+test('denying the Allow popup does not persist a grant and asks again', async (t) => {
+  const copilotHome = tempDir('bridge-deny-');
+  const prompts = { count: 0 };
+  const { vscode, context } = fakeVSCode({ access: undefined, prompts });
+  vscode.window.showInformationMessage = async () => {
+    prompts.count += 1;
+    return undefined;
+  };
+  const bridge = await startBridgeServer({ vscode, context, copilotHome });
+  t.after(async () => bridge.close());
+  const statePath = bridgeStatePath(copilotHome);
+  const payload = {
+    model: 'copilot/gpt-4.1',
+    messages: [{ role: 'user', text: 'hello' }],
+    tools: [],
+  };
+
+  await assert.rejects(
+    () => requestEditorBridge('complete', payload, { statePath }),
+    /not approved/i,
+  );
+  assert.equal(context.globalState.get('harness.copilotLmAccessGranted'), undefined);
+  await assert.rejects(
+    () => requestEditorBridge('complete', payload, { statePath }),
+    /not approved/i,
+  );
+  assert.equal(prompts.count, 2, 'a denial must not skip the next Allow prompt');
+});
+
 test('concurrent undecided complete() calls share one Allow popup', async (t) => {
   const copilotHome = tempDir('bridge-coalesce-');
   const prompts = { count: 0 };

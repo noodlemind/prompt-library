@@ -69,8 +69,9 @@ function primitiveKind(rel) {
 
 export function validatePrimitive(copilotHome, rel, snapshot = null) {
   const errors = [];
-  const kindKey = Object.keys(PRIMITIVE_KINDS).find((k) => rel.startsWith(`${PRIMITIVE_KINDS[k].dir}/`));
-  const kind = kindKey ? PRIMITIVE_KINDS[kindKey] : null;
+  const kindInfo = primitiveKind(rel);
+  const kindKey = kindInfo?.key ?? null;
+  const kind = kindInfo;
   if (!kind) return { valid: false, kind: null, name: null, errors: [`${rel}: not under a primitive directory`] };
   if (!kind.match.test(rel)) {
     errors.push(`${rel}: a ${kindKey.replace(/s$/, '')} must be ${kind.describe} — a file elsewhere is never discovered`);
@@ -168,7 +169,7 @@ export function localPrimitiveStatus({ copilotHome, shippedFiles = new Set(), lo
     let reason = 'found but not registered — `harness resources register` after reading it';
     if (!isCanonicalPrimitive(rel)) {
       state = 'stray';
-      reason = 'not a skill or agent file — `harness resources discard` removes it';
+      reason = 'not a canonical skill, agent, or instruction file — `harness resources discard` removes it';
     } else if (!validation.valid) {
       state = 'invalid';
       reason = validation.errors[0];

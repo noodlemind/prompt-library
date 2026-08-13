@@ -252,6 +252,44 @@ test('resources discard refuses harness-owned files and unregister of an invalid
   );
 });
 
+test('resources discard refuses a short name that matches more than one file', () => {
+  const home = installedHome();
+  addSkill(home, 'alpha');
+  addSkill(home, 'bravo');
+  fs.writeFileSync(path.join(home, 'skills', 'alpha', 'notes.md'), 'a\n');
+  fs.writeFileSync(path.join(home, 'skills', 'bravo', 'notes.md'), 'b\n');
+  const res = harness(['resources', 'discard', 'notes.md'], home);
+  assert.equal(res.status, EXIT.usage, res.stderr + res.stdout);
+  assert.match(res.stdout + res.stderr, /ambiguous discard target/);
+  assert.match(res.stdout + res.stderr, /skills\/alpha\/notes\.md/);
+  assert.match(res.stdout + res.stderr, /skills\/bravo\/notes\.md/);
+  assert.equal(fs.existsSync(path.join(home, 'skills', 'alpha', 'notes.md')), true);
+  assert.equal(fs.existsSync(path.join(home, 'skills', 'bravo', 'notes.md')), true);
+});
+
+test('resources remove still uninstalls a bundle whose name matches a local skill', () => {
+  const home = installedHome();
+  addSkill(home, 'demo');
+  const src = path.join(tempDir('lp-bundle-'), 'demo');
+  fs.mkdirSync(src, { recursive: true });
+  fs.writeFileSync(path.join(src, 'harness-resource.yaml'), [
+    'schema: 1',
+    'name: demo',
+    'version: 1.0.0',
+    'contributes:',
+    '  skills: ["team-tool/SKILL.md"]',
+    '',
+  ].join('\n'));
+  fs.mkdirSync(path.join(src, 'skills', 'team-tool'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'skills', 'team-tool', 'SKILL.md'), '---\nname: team-tool\n---\n# from demo\n');
+  assert.equal(harness(['resources', 'add', src], home).status, EXIT.ok);
+  const res = harness(['resources', 'remove', 'demo'], home);
+  assert.equal(res.status, EXIT.ok, res.stderr + res.stdout);
+  assert.equal(fs.existsSync(path.join(home, 'resources', 'demo')), false);
+  assert.equal(fs.existsSync(path.join(home, 'skills', 'demo', 'SKILL.md')), true,
+    'removing the bundle must not take the hand-added skill with it');
+});
+
 test('discard of a registered primitive unregisters it and deletes the file', () => {
   const home = installedHome();
   const rel = addSkill(home, 'keeper');
