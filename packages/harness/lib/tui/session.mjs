@@ -46,6 +46,8 @@ const SESSION_WORDS = Object.freeze({
   clear: 'clear',
   results: 'results',
   hits: 'results',
+  walkthrough: 'walkthrough',
+  tour: 'walkthrough',
 });
 
 /** Product verbs that compile to registry argv (host-first TUX). */

@@ -312,6 +312,7 @@ export const TUI_COMMON_NOUNS = Object.freeze([
   'gate',
   'verify',
   'init-repo',
+  'walkthrough',
   'doctor',
   'status',
 ]);
@@ -474,7 +475,9 @@ export function orderPaletteRows(rows, { query = '' } = {}) {
   const more = [];
   for (const row of rows) {
     if (row.session) {
-      more.push(row);
+      const sessionRank = commonRank.get(row.noun) ?? commonRank.get(row.session);
+      if (sessionRank !== undefined) common.push({ row, rank: sessionRank });
+      else more.push(row);
       continue;
     }
     const rank = commonRank.get(row.noun);

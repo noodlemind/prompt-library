@@ -73,7 +73,7 @@ Projection of the kernel — not a second Engineer.
 
 ```text
 / palette   ! shell   ? help   shift+tab  commands→assist→plan
-tree · learnings · agent on|off · config set · gate menu · runs
+tree · learnings · walkthrough · agent on|off · config set · gate menu · runs
 initialize this repo (`init-repo`) from the palette
 ```
 

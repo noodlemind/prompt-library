@@ -18,7 +18,7 @@ import { completePath } from './tui/complete.mjs';
 import { resolveValues } from './tui/values.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { readSession } from './session.mjs';
-import { resolveConfig } from './config.mjs';
+import { resolveConfig, setConfigValue } from './config.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { readLock } from './lock.mjs';
 import { isProjectTrusted } from './trust.mjs';
@@ -36,6 +36,13 @@ import {
 import { createQuestion, answerQuestion, questionLines, questionEvent } from './tui/question.mjs';
 import { gateActionRows, parseGateAction, gatePromptLines } from './tui/gate-actions.mjs';
 import { configSettingsRows, verbActionRows } from './tui/modals.mjs';
+import {
+  WALKTHROUGH_SEEN_KEY,
+  attachWalkthroughOverlay,
+  createWalkthrough,
+  shouldAutoOpenWalkthrough,
+  walkthroughLines,
+} from './tui/walkthrough.mjs';
 
 /** `/Users/me/x` reads better as `~/x`, and the header has one row. */
 const tildePath = (full) => {
@@ -76,6 +83,7 @@ export async function runLedger({
   dispatcher = dispatch,
   now = () => new Date().toISOString(),
   config = null,
+  hydrated = false,
 } = {}) {
   // Declared before `createInput`, which closes over it for `onInterrupt`.
   let activeController = null;
@@ -123,7 +131,7 @@ export async function runLedger({
   function classifyWord(word, { first = false, head = '' } = {}) {
     if (!word) return null;
     if (word.startsWith('--')) return 'flag';
-    if (['exit', 'quit', 'help', 'clear'].includes(word)) return 'session';
+    if (['exit', 'quit', 'help', 'clear', 'walkthrough', 'tour'].includes(word)) return 'session';
     if (first) return hasCommand(word) ? 'command' : null;
         if (!head || !hasCommand(head)) return null;
     return (getCommand(head)?.verbs || []).some((v) => v.verb === word) ? 'verb' : null;
@@ -289,6 +297,18 @@ export async function runLedger({
   }
   refreshStatus();
 
+  const startTour = shouldAutoOpenWalkthrough({
+    interactive,
+    screenReader,
+    seen: settings[WALKTHROUGH_SEEN_KEY] === true,
+  });
+  if (startTour === 'lines') {
+    emitWalkthrough({ hydratedJustNow: hydrated });
+    persistWalkthroughSeen();
+  } else if (startTour === 'overlay') {
+    showWalkthrough({ replay: false });
+  }
+
     const onSigint = () => { if (activeController) activeController.abort(); };
   process.on('SIGINT', onSigint);
 
@@ -419,6 +439,7 @@ export async function runLedger({
     { label: 'exit', session: 'exit', note: 'close the session · also ctrl+d', sideEffect: null },
     { label: 'clear', session: 'clear', note: 'clear the viewport · scrollback survives', sideEffect: null },
     { label: 'help', session: 'help', note: 'the sigils and the keys', sideEffect: null },
+    { label: 'Walkthrough', session: 'walkthrough', noun: 'walkthrough', note: 'what this harness is', sideEffect: null },
   ]);
 
   const paletteRows = (query) => {
@@ -433,7 +454,12 @@ export async function runLedger({
     }));
     if (!prefix) {
       const q = rest.trim().toLowerCase();
-      const matching = SESSION_ROWS.filter((r) => !q || r.label.includes(q) || (r.note || '').includes(q));
+      const matching = SESSION_ROWS.filter((r) => {
+        if (!q) return true;
+        return r.label.toLowerCase().includes(q)
+          || (r.note || '').toLowerCase().includes(q)
+          || (r.noun || r.session || '').toLowerCase().includes(q);
+      });
       for (const row of matching) {
         if (q && row.label.startsWith(q)) rows.unshift(row);
         else rows.push(row);
@@ -1062,6 +1088,7 @@ export async function runLedger({
         if (row.session === 'replay') { await rerun(ledger.lastCommand()); continue; }
         if (row.session === 'clear') { doClear(); continue; }
         if (row.session === 'help') { emitHelp(); continue; }
+        if (row.session === 'walkthrough') { showWalkthrough({ replay: true }); continue; }
         if (row.block) { emit({ ...row.block, folded: false }); continue; }
         if (row.node) continue; // a tree row is a view, not a command
         await beginSelection(row);
@@ -1166,6 +1193,7 @@ export async function runLedger({
         if (choice.session === 'replay') { await rerun(ledger.lastCommand()); continue; }
         if (choice.session === 'clear') { doClear(); continue; }
         if (choice.session === 'help') { emitHelp(); continue; }
+        if (choice.session === 'walkthrough') { showWalkthrough({ replay: true }); continue; }
         await beginSelection(choice);
         continue;
       }
@@ -1194,6 +1222,8 @@ export async function runLedger({
         openResults(null);
       } else if (parsed.kind === 'help') {
         emitHelp();
+      } else if (parsed.kind === 'walkthrough') {
+        showWalkthrough({ replay: true });
       } else if (parsed.kind === 'clear') {
         doClear();
       } else if (parsed.kind === 'agent-mode-set') {
@@ -1256,9 +1286,42 @@ export async function runLedger({
   return EXIT.ok;
 
   // ── helpers that need the closure ─────────────────────────────────────
+  function persistWalkthroughSeen() {
+    try {
+      setConfigValue({
+        scope: 'user',
+        key: WALKTHROUGH_SEEN_KEY,
+        value: true,
+        copilotHome: resolveCopilotHome(copilotHome),
+        workspace,
+      });
+    } catch {
+      // Dismiss still stands; the next launch may show the tour again.
+    }
+  }
+
+  function emitWalkthrough({ hydratedJustNow = false } = {}) {
+    const lines = walkthroughLines({ hydrated: Boolean(hydratedJustNow) });
+    say(lines.map((line) => (line ? ui.paint('muted', `  ${line}`) : '')));
+  }
+
+  function showWalkthrough({ replay = false } = {}) {
+    const hydratedJustNow = Boolean(hydrated) && !replay;
+    if (interactive && !screenReader) {
+      const wt = createWalkthrough({ hydrated: hydratedJustNow });
+      session.openOverlay(attachWalkthroughOverlay(wt, {
+        onClose: replay ? undefined : persistWalkthroughSeen,
+      }));
+      return;
+    }
+    emitWalkthrough({ hydratedJustNow });
+    if (!replay) persistWalkthroughSeen();
+  }
+
   function emitHelp() {
     const rows = [
       ['help / ?', 'this keymap and grammar'],
+      ['walkthrough', 'what this harness is'],
       ['/', 'open the command palette · common intents first'],
       ['/<text>', 'filter the palette (run: search: check: learn:)'],
       ['!', 'shell mode · esc leaves'],
@@ -1391,12 +1454,12 @@ export async function cmdTui(argv, ctx = {}) {
     throw usageError('tui has no JSON output', 'the ledger is a terminal surface; use the CLI for machine-readable output');
   }
   const copilotHome = resolveCopilotHome(flags.copilotHome);
-  await ensureFirstRunInstall({
+  const didHydrate = await ensureFirstRunInstall({
     copilotHome,
     workspace,
     install: ctx.install || null,
     verbose: flags.verbose,
     dryRun: flags.dryRun,
   });
-  return runLedger({ workspace, copilotHome, argv });
+  return runLedger({ workspace, copilotHome, argv, hydrated: didHydrate });
 }
