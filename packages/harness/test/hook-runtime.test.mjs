@@ -229,6 +229,8 @@ checks:
     'command -p node scripts/validate-schema.mjs',
     "bash -c 'node scripts/validate-schema.mjs'",
     'node ./scripts/validate-schema.mjs',
+    "env -S 'node scripts/validate-schema.mjs'",
+    'timeout node scripts/validate-schema.mjs',
   ]) {
     const wrapped = runHook('require-plan-gate.mjs', workspace, {
       tool_name: 'run_in_terminal',
@@ -909,6 +911,11 @@ test('destructive push guard blocks refspec force pushes without overblocking be
     'git push --mirror origin',
     'git push --force --all origin',
     'git push --force origin',
+    "env -S 'git push --force origin main'",
+    "timeout 5 bash -c 'git push --force origin main'",
+    "nice bash -c 'git push --force origin main'",
+    'xargs git push --force origin',
+    'xargs -I {} git push --force origin main',
   ]) {
     const blocked = runHook('block-destructive-commands.mjs', workspace, {
       tool_name: 'Bash',

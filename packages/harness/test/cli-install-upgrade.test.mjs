@@ -24,6 +24,7 @@ import { listCommands } from '../lib/registry.mjs';
 import { HELP_COMMAND_ORDER } from '../bin/harness.mjs';
 import YAML from 'yaml';
 import { approveProject } from '../lib/trust.mjs';
+import { getAssetsRoot } from '../lib/commands.mjs';
 import { tempDir, runHarness, writePlan, packageRoot, binPath } from './helpers/index.mjs';
 import {
   writeKnowledgeSolution,
@@ -181,6 +182,18 @@ test('install creates global harness shim', () => {
   );
   assert.equal(validate.status, 0, validate.stderr);
   assert.equal(JSON.parse(validate.stdout).pass, true);
+});
+
+test('getAssetsRoot rebuilds packaged hooks when the source tree is newer', () => {
+  const source = path.join(packageRoot, '../../.github/hooks/lib/tool-payload.mjs');
+  const shipped = path.join(packageRoot, 'assets/hooks/lib/tool-payload.mjs');
+  fs.writeFileSync(shipped, 'stale-hook-payload\n');
+  const past = new Date(Date.now() - 120_000);
+  fs.utimesSync(shipped, past, past);
+  const root = getAssetsRoot();
+  assert.equal(root, path.join(packageRoot, 'assets'));
+  assert.equal(fs.readFileSync(shipped, 'utf8'), fs.readFileSync(source, 'utf8'));
+  assert.match(fs.readFileSync(shipped, 'utf8'), /unwrapShellSegments/);
 });
 
 test('TUI launch installs or version-upgrades once with VS Code configuration enabled', async () => {
