@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { EXIT } from '../lib/style.mjs';
 import { findStaleOrphans } from '../lib/sync.mjs';
 import {
+  discardPrimitive,
   localPrimitiveStatus,
   registerPrimitive,
   registeredPath,
@@ -199,6 +200,66 @@ test('resources list exits non-zero when something added will never load', () =>
   const res = harness(['resources', 'list'], home);
   assert.equal(res.status, 1, 'an invalid primitive is a real problem someone should be told about');
   assert.match(res.stdout, /invalid/);
+});
+
+test('a companion file under a skill is stray, not invalid, and list still succeeds', () => {
+  const home = installedHome();
+  addSkill(home, 'fine');
+  fs.writeFileSync(path.join(home, 'skills', 'fine', 'notes.md'), 'leftover\n');
+  const res = harness(['resources', 'list', '--json'], home);
+  assert.equal(res.status, EXIT.ok, res.stderr);
+  const listed = JSON.parse(res.stdout);
+  const stray = listed.primitives.find((p) => p.path === 'skills/fine/notes.md');
+  assert.equal(stray?.state, 'stray');
+  assert.equal(listed.counts.invalid, 0);
+  assert.equal(listed.counts.stray, 1);
+});
+
+test('resources discard deletes a stray or invalid local file, including an empty skill dir', () => {
+  const home = installedHome();
+  addSkill(home, 'broken', '# no frontmatter\n');
+  fs.writeFileSync(path.join(home, 'skills', 'broken', 'notes.md'), 'leftover\n');
+  const discarded = harness(['resources', 'discard', 'notes.md'], home);
+  assert.equal(discarded.status, EXIT.ok, discarded.stderr + discarded.stdout);
+  assert.equal(fs.existsSync(path.join(home, 'skills', 'broken', 'notes.md')), false);
+
+  const gone = harness(['resources', 'discard', 'broken'], home);
+  assert.equal(gone.status, EXIT.ok, gone.stderr + gone.stdout);
+  assert.equal(fs.existsSync(path.join(home, 'skills', 'broken')), false);
+});
+
+test('resources discard refuses harness-owned files and unregister of an invalid file points at discard', () => {
+  const home = installedHome();
+  addSkill(home, 'broken', '# no frontmatter\n');
+  const unreg = harness(['resources', 'unregister', 'broken'], home);
+  assert.notEqual(unreg.status, EXIT.ok);
+  assert.match(unreg.stdout + unreg.stderr, /resources discard/);
+
+  const remove = harness(['resources', 'remove', 'skills/broken/SKILL.md'], home);
+  assert.notEqual(remove.status, EXIT.ok);
+  assert.match(remove.stdout + remove.stderr, /resources discard/);
+
+  const shipped = JSON.parse(harness(['resources', 'list', '--json'], home).stdout);
+  assert.equal(shipped.primitives.some((p) => p.path === 'skills/engineer/SKILL.md'), false);
+  assert.throws(
+    () => discardPrimitive({
+      copilotHome: home,
+      rel: 'skills/engineer/SKILL.md',
+      shippedFiles: new Set(['skills/engineer/SKILL.md']),
+      lockFiles: new Set(['skills/engineer/SKILL.md']),
+    }),
+    (error) => error.code === 'E_TARGET',
+  );
+});
+
+test('discard of a registered primitive unregisters it and deletes the file', () => {
+  const home = installedHome();
+  const rel = addSkill(home, 'keeper');
+  registerPrimitive({ copilotHome: home, rel });
+  const res = harness(['resources', 'discard', 'keeper'], home);
+  assert.equal(res.status, EXIT.ok, res.stderr + res.stdout);
+  assert.equal(fs.existsSync(path.join(home, rel)), false);
+  assert.equal(localPrimitiveStatus({ copilotHome: home }).some((p) => p.path === rel), false);
 });
 
 test('shipped primitives are never listed as locally added', () => {

@@ -11,6 +11,7 @@ import { collectAllAssetFiles } from './sync.mjs';
 import { approvedBundleNames, placedFiles, readPlacements, syncBundles } from './bundle-sync.mjs';
 import { bundleDigest, discoverBundles, parseManifest, MANIFEST_FILE, resourcesRoot } from './resources.mjs';
 import {
+  discardPrimitive,
   localPrimitiveStatus,
   registerPrimitive,
   registeredPath,
@@ -21,7 +22,7 @@ import {
 const ui = createStyle({ argv: process.argv.slice(2) });
 
 export const RESOURCES_VERBS = Object.freeze([
-  'list', 'show', 'register', 'unregister',
+  'list', 'show', 'register', 'unregister', 'discard',
     'add', 'update', 'remove', 'bundles',
 ]);
 
@@ -52,6 +53,11 @@ function context(argv) {
     target: positionals[1] ?? null,
     copilotHome: resolveCopilotHome(flags.copilotHome),
   };
+}
+
+export function listLocalPrimitives(copilotHome) {
+  const { shippedFiles, lockFiles } = origins(copilotHome);
+  return localPrimitiveStatus({ copilotHome, shippedFiles, lockFiles });
 }
 
 function origins(copilotHome) {
@@ -153,10 +159,16 @@ export async function resourcesResultOf(argv, ctx = {}) {
 
   if (verb === 'remove') {
     if (!target) throw usageError('resources remove requires a bundle name', 'harness resources bundles');
+    if (/^(skills|agents|instructions)\//.test(target) || primitives.some((p) => p.path === target || p.name === target)) {
+      throw usageError(
+        `resources remove uninstalls a bundle, not ${JSON.stringify(target)}`,
+        `harness resources discard ${target}`,
+      );
+    }
         const dir = resolveBundleDir(copilotHome, target);
     if (!fs.existsSync(dir)) {
       throw Object.assign(new Error(`no bundle named ${JSON.stringify(target)}`), {
-        code: 'E_NOT_FOUND', exit: EXIT.notFound, hint: 'harness resources bundles',
+        code: 'E_NOT_FOUND', exit: EXIT.notFound, hint: 'harness resources discard <path> deletes a local skill or extra file',
       });
     }
     fs.rmSync(dir, { recursive: true, force: true });
@@ -166,6 +178,7 @@ export async function resourcesResultOf(argv, ctx = {}) {
 
   if (verb === 'list') {
     const invalid = primitives.filter((p) => p.state === 'invalid').length;
+    const stray = primitives.filter((p) => p.state === 'stray').length;
     return {
       schema: 1,
       verb,
@@ -177,6 +190,7 @@ export async function resourcesResultOf(argv, ctx = {}) {
         registered: primitives.filter((p) => p.state === 'registered').length,
         pending: primitives.filter((p) => p.state === 'pending').length,
         stale: primitives.filter((p) => p.state === 'stale').length,
+        stray,
         invalid,
       },
       primitives,
@@ -204,10 +218,21 @@ export async function resourcesResultOf(argv, ctx = {}) {
     const result = registerPrimitive({ copilotHome, rel, shippedFiles, lockFiles });
     return { schema: 1, verb, primitive: { ...result, reason: 'registered' } };
   }
+  if (verb === 'discard') {
+    const result = discardPrimitive({ copilotHome, rel, shippedFiles, lockFiles });
+    return { schema: 1, verb, primitive: { ...result, reason: 'discarded' } };
+  }
+  if (found && (found.state === 'invalid' || found.state === 'stray' || found.state === 'pending')) {
+    throw Object.assign(new Error(`not registered: ${found.path}`), {
+      code: 'E_NOT_FOUND',
+      exit: EXIT.notFound,
+      hint: `unregister only withdraws recognition. To delete the file: harness resources discard ${found.path}`,
+    });
+  }
   return { schema: 1, verb, primitive: unregisterPrimitive({ copilotHome, rel }) };
 }
 
-const STATE_STYLE = { registered: 'ok', pending: 'warn', stale: 'warn', invalid: 'error' };
+const STATE_STYLE = { registered: 'ok', pending: 'warn', stale: 'warn', stray: 'warn', invalid: 'error' };
 
 export async function cmdResources(argv, ctx = {}) {
   const { flags } = context(argv);
@@ -221,7 +246,7 @@ export async function cmdResources(argv, ctx = {}) {
     console.log(ui.line({
       key: 'primitives',
       value: `${c.total} locally added`,
-      note: [`${c.registered} registered`, `${c.pending} pending`, c.stale ? `${c.stale} stale` : null, c.invalid ? `${c.invalid} invalid` : null].filter(Boolean).join(' · '),
+      note: [`${c.registered} registered`, `${c.pending} pending`, c.stale ? `${c.stale} stale` : null, c.stray ? `${c.stray} stray` : null, c.invalid ? `${c.invalid} invalid` : null].filter(Boolean).join(' · '),
       keyWidth,
     }));
     for (const p of result.primitives) {
@@ -270,8 +295,14 @@ export async function cmdResources(argv, ctx = {}) {
     for (const error of result.validation.errors) console.log(ui.paint('muted', `  ${inertLine(error)}`));
   } else {
     const p = result.primitive;
-    const keyWidth = keyWidthFor(['register', 'unregister']);
-    console.log(ui.line({ state: p.state === 'registered' ? 'ok' : 'warn', key: result.verb, value: inertLine(p.path), note: p.state, keyWidth }));
+    const keyWidth = keyWidthFor(['register', 'unregister', 'discard']);
+    console.log(ui.line({
+      state: p.state === 'registered' ? 'ok' : p.state === 'discarded' ? 'ok' : 'warn',
+      key: result.verb,
+      value: inertLine(p.path),
+      note: p.state,
+      keyWidth,
+    }));
   }
 
   return resourcesExitFor(result);
