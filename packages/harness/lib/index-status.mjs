@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { resolveIndexDir } from './recall-config.mjs';
+import { POSTINGS_INDEX_VERSION } from './postings-index.mjs';
 
 function git(workspace, args) {
   const r = spawnSync('git', ['-C', workspace, ...args], { encoding: 'utf8', timeout: 10_000 });
@@ -24,6 +25,19 @@ export function indexStatus({ workspace, copilotHome }) {
     meta = null;
   }
   if (!meta) return { indexed: false, recommendation: 'run `harness index` — no index built yet' };
+
+  if (meta.version !== POSTINGS_INDEX_VERSION) {
+    return {
+      indexed: true,
+      updated: meta.updated || null,
+      indexedHead: meta.headSha || null,
+      currentHead: git(workspace, ['rev-parse', 'HEAD']),
+      commitsSince: null,
+      filesChanged: null,
+      stale: true,
+      recommendation: `index format ${meta.version ?? 'unknown'} is obsolete — run \`harness index\` to rebuild format ${POSTINGS_INDEX_VERSION}`,
+    };
+  }
 
   const head = git(workspace, ['rev-parse', 'HEAD']);
 
@@ -52,7 +66,10 @@ export function indexStatus({ workspace, copilotHome }) {
     filesChanged = diff ? diff.split('\n').filter(Boolean).length : null;
   }
 
-  const stale = (commitsSince || 0) > 0;
+  // A baseline is current only when it exactly matches a resolvable HEAD.
+  // Commit counts are diagnostics, not proof of equivalence: checking out an
+  // ancestor yields zero for indexedHead..HEAD while still changing content.
+  const stale = !head || meta.headSha !== head;
   return {
     indexed: true,
     updated: meta.updated || null,

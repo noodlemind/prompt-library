@@ -3,7 +3,7 @@
  * Native eval runner (dev/CI tooling — not a shipped `harness` command).
  *
  * Usage:
- *   node evals/run.mjs [--task <substring>] [--json]
+ *   node evals/run.mjs [--task|--filter <substring>] [--json]
  *
  * Deterministic tasks need no model provider and run in CI with zero secrets.
  * Semantic tasks are labeled reconstructions and skip unless a judge key
@@ -15,7 +15,13 @@ import { runEvals, summarize } from './lib/runner.mjs';
 const argv = process.argv.slice(2);
 const json = argv.includes('--json');
 const taskIdx = argv.indexOf('--task');
-const filter = taskIdx >= 0 ? argv[taskIdx + 1] : null;
+const filterIdx = argv.indexOf('--filter');
+const selectedIdx = taskIdx >= 0 ? taskIdx : filterIdx;
+if (selectedIdx >= 0 && (!argv[selectedIdx + 1] || argv[selectedIdx + 1].startsWith('--'))) {
+  console.error(`${argv[selectedIdx]} requires a task substring`);
+  process.exit(2);
+}
+const filter = selectedIdx >= 0 ? argv[selectedIdx + 1] : null;
 
 const results = await runEvals({ filter });
 const summary = summarize(results);

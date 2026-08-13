@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { projectSlug } from '../telemetry-store.mjs';
 
 /**
  * Best-effort VS Code / GitHub Copilot Chat host-usage adapter.
@@ -41,6 +42,8 @@ function normalizeRecord(record) {
     type: record.type || 'host_request',
     ts: record.ts || record.timestamp || null,
     session: record.sessionId || record.session || null,
+    workspace: record.workspace || record.workspacePath || record.cwd || record.projectPath || null,
+    project: record.project || record.repository || record.repo || null,
     host: 'github-copilot-vscode',
     source: 'host',
     usage: {
@@ -52,8 +55,52 @@ function normalizeRecord(record) {
   };
 }
 
-export function collect() {
+function normalizedWorkspace(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  let raw = value.trim();
+  if (raw.startsWith('file://')) {
+    try {
+      raw = decodeURIComponent(new URL(raw).pathname);
+    } catch {
+      return null;
+    }
+  }
+  const windows = path.win32.isAbsolute(raw);
+  const normalized = windows ? path.win32.normalize(raw) : path.resolve(raw);
+  const portable = normalized.replace(/\\/g, '/').replace(/\/$/, '');
+  return windows ? portable.toLowerCase() : portable;
+}
+
+function normalizedProject(value) {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  const remote = raw.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/)?.[1];
+  return (remote || raw)
+    .replace(/\.git$/i, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase() || null;
+}
+
+function belongsToReport(record, { workspace, sessions, global, requestedProject }) {
+  if (global) return true;
+  const session = record.sessionId || record.session || null;
+  const knownSessions = sessions instanceof Set ? sessions : new Set(sessions || []);
+  if (session && knownSessions.has(session)) return true;
+  const requested = normalizedWorkspace(workspace);
+  if (!requested) return false;
+  const workspaceMatches = [record.workspace, record.workspacePath, record.cwd, record.projectPath, record.root]
+    .map(normalizedWorkspace)
+    .some((candidate) => candidate === requested);
+  if (workspaceMatches) return true;
+  return [record.project, record.repository, record.repo]
+    .map(normalizedProject)
+    .some((candidate) => candidate === requestedProject);
+}
+
+export function collect({ workspace, sessions = [], global = false } = {}) {
   const events = [];
+  const requestedProject = global || !workspace ? null : projectSlug(workspace).toLowerCase();
   for (const file of candidateLogs()) {
     try {
       const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
@@ -64,6 +111,7 @@ export function collect() {
         } catch {
           continue;
         }
+        if (!belongsToReport(record, { workspace, sessions, global, requestedProject })) continue;
         const normalized = normalizeRecord(record);
         if (normalized) events.push(normalized);
       }

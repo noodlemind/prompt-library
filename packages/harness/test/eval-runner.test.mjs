@@ -2,9 +2,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { runEvals, runTask, discoverTasks, summarize } from '../../../evals/lib/runner.mjs';
+import {
+  assessCapabilityGap,
+  assessPrimitiveCreation,
+  guidedLiveExitCode,
+} from '../../../evals/lib/guided-live-grade.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const tasksDir = path.join(repoRoot, 'evals', 'tasks');
@@ -87,4 +93,45 @@ test('runner discovers tasks and summarizes verdicts', async () => {
     { status: 'infrastructure_error' },
   ]);
   assert.deepEqual(summary, { total: 4, passed: 1, failed: 1, skipped: 1, infrastructureErrors: 1 });
+});
+
+test('documented --filter selects exactly one eval task', () => {
+  const result = spawnSync(process.execPath, [path.join(repoRoot, 'evals', 'run.mjs'), '--filter', 'fail-closed-mutation-detection', '--json'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.summary.total, 1);
+  assert.equal(body.results[0].id, 'fail-closed-mutation-detection');
+});
+
+test('guided-live grading requires the exact primitive, activation evidence, and target diff', () => {
+  const base = {
+    gatePasses: 2,
+    readCreatePrimitive: true,
+    activationRecorded: true,
+    primitivesCreated: ['.github/skills/unrelated/SKILL.md'],
+    changedFiles: ['.github/skills/unrelated/SKILL.md'],
+    controllerChanged: false,
+  };
+  assert.equal(assessPrimitiveCreation(base), false, 'an unrelated skill cannot satisfy payment-check');
+  assert.equal(assessPrimitiveCreation({
+    ...base,
+    primitivesCreated: ['.github/skills/payment-check/SKILL.md'],
+    changedFiles: ['.github/skills/payment-check/SKILL.md'],
+  }), true);
+  assert.equal(assessCapabilityGap({
+    ...base,
+    primitivesCreated: ['.github/skills/payment-audit/SKILL.md'],
+    changedFiles: ['.github/skills/payment-audit/SKILL.md'],
+  }), false, 'capability-gap delivery also requires the controller diff');
+  assert.equal(assessCapabilityGap({
+    ...base,
+    primitivesCreated: ['.github/skills/payment-audit/SKILL.md'],
+    changedFiles: ['.github/skills/payment-audit/SKILL.md', 'src/PaymentController.java'],
+    controllerChanged: true,
+  }), true);
+  assert.equal(guidedLiveExitCode([true, false]), 1);
+  assert.equal(guidedLiveExitCode([true, true]), 0);
 });

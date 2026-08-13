@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { run, grade } from '../../../evals/tasks/deliver-gated-edit-loop/task.mjs';
+import { runAgentLoop } from '../../../evals/lib/agent-loop.mjs';
 import { openAiToolDriver } from '../../../evals/lib/drivers.mjs';
 
 const PLAN = 'docs/plans/2026-07-20-feat-payment-override-role.md';
@@ -13,6 +18,74 @@ const PATCHED =
 function toolCall(name, input) {
   return { ok: true, json: async () => ({ choices: [{ message: { role: 'assistant', tool_calls: [{ id: `c${name}`, type: 'function', function: { name, arguments: JSON.stringify(input) } }] } }] }) };
 }
+
+function scriptedDriver(actions) {
+  let index = 0;
+  return {
+    async next() {
+      return actions[index++] || { type: 'finish', answer: 'done' };
+    },
+  };
+}
+
+test('live eval file tools reject traversal outside the fixture workspace', async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-eval-containment-'));
+  const workspace = path.join(parent, 'fixture');
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(parent, 'secret.txt'), 'host-secret-must-not-leak\n');
+  let symlinkAvailable = true;
+  try {
+    fs.symlinkSync(path.join(parent, 'secret.txt'), path.join(workspace, 'linked-secret.txt'));
+  } catch {
+    symlinkAvailable = false;
+  }
+
+  const actions = [{ type: 'tool', name: 'readFile', input: { path: '../secret.txt' } }];
+  if (symlinkAvailable) actions.push({ type: 'tool', name: 'readFile', input: { path: 'linked-secret.txt' } });
+  actions.push(
+    { type: 'tool', name: 'listDir', input: { path: '..' } },
+    { type: 'finish', answer: 'done' }
+  );
+
+  const loop = await runAgentLoop({
+    workspace,
+    system: 'test',
+    instruction: 'test',
+    driver: scriptedDriver(actions),
+  });
+
+  const toolSteps = loop.trajectory.filter((step) => step.type === 'tool');
+  const read = toolSteps[0];
+  const list = toolSteps.at(-1);
+  assert.match(read.result.error || read.result.content || '', /outside.*workspace/i);
+  assert.doesNotMatch(JSON.stringify(read.result), /host-secret-must-not-leak/);
+  if (symlinkAvailable) {
+    assert.match(toolSteps[1].result.error || '', /outside.*workspace/i);
+    assert.doesNotMatch(JSON.stringify(toolSteps[1].result), /host-secret-must-not-leak/);
+  }
+  assert.match(list.result.error || '', /outside.*workspace/i);
+  assert.equal(list.result.entries, undefined);
+});
+
+test('live eval terminal never evaluates shell programs or git aliases', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-eval-terminal-'));
+  spawnSync('git', ['init', '-q'], { cwd: workspace });
+  const loop = await runAgentLoop({
+    workspace,
+    system: 'test',
+    instruction: 'test',
+    driver: scriptedDriver([
+      { type: 'tool', name: 'runInTerminal', input: { command: 'awk \'BEGIN { system("touch shell-pwned") }\'' } },
+      { type: 'tool', name: 'runInTerminal', input: { command: "git -c alias.pwn='!touch git-pwned' pwn" } },
+      { type: 'finish', answer: 'done' },
+    ]),
+  });
+
+  const terminal = loop.trajectory.filter((step) => step.type === 'tool');
+  assert.ok(terminal.every((step) => step.result.code === 126));
+  assert.equal(fs.existsSync(path.join(workspace, 'shell-pwned')), false);
+  assert.equal(fs.existsSync(path.join(workspace, 'git-pwned')), false);
+});
 
 test('scripted (No-Model) driver: agentic loop delivers a gated edit through the real hooks', async () => {
   const prev = process.env.HARNESS_EVAL_AGENT;

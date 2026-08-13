@@ -4,6 +4,7 @@ tools: ["agent", "search/codebase", "search", "read", "search/changes", "read/te
 agents: ["architecture-strategist", "security-sentinel", "performance-oracle", "code-simplicity-reviewer", "pattern-recognition-specialist", "java-reviewer", "python-reviewer", "sql-reviewer", "aws-reviewer", "compounding-typescript-reviewer", "data-integrity-guardian", "spec-flow-analyzer"]
 handoffs:
   - label: "Document Learnings"
+    agent: "engineer"
     prompt: "The code review is complete. Document verified learnings from the findings above via /compound-learnings."
     send: false
 user-invocable: false

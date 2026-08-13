@@ -128,6 +128,13 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   assert.match(globalWorkflow, /check\/action\/mark[\s\S]{0,100}confirmed race\/retry defect/i);
 });
 
+test('code review learning handoff returns control to engineer', () => {
+  const coordinator = read('.github/agents/code-review-coordinator.agent.md');
+  const frontmatter = YAML.parse(coordinator.match(/^---\n([\s\S]*?)\n---/)?.[1] || '');
+  const handoff = (frontmatter.handoffs || []).find((item) => item.label === 'Document Learnings');
+  assert.equal(handoff?.agent, 'engineer');
+});
+
 test('existing skills own structured findings, proportional plans, and primitive governance', () => {
   const capture = read('.github/skills/capture-issue/SKILL.md');
   for (const field of [

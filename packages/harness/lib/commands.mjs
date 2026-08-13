@@ -25,6 +25,7 @@ import { resolveHarnessBin, agentHarnessCommand } from './resolve-harness-bin.mj
 import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy } from './policy.mjs';
+import { configuredCheckSnapshot } from './plan-readiness.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const pkgRoot = pkgRootFromImportMeta(import.meta.url);
@@ -343,15 +344,19 @@ export async function cmdGate(argv) {
   result.enforcement = policy.enforcement;
   result.policyExitCode = policyExitCode;
   const previous = readSession(workspace) || {};
+  const gatePassed = result.pass && result.exitCode === 0;
+  const checkSnapshot = gatePassed ? configuredCheckSnapshot(workspace) : null;
   writeSession(
     workspace,
     {
       ...previous,
       activePlan: result.plan?.path || previous.activePlan || null,
       gatedPlan: result.plan?.path || null,
-      gatedPlanDigest: result.pass && result.exitCode === 0 ? result.plan?.digest || null : null,
+      gatedPlanDigest: gatePassed ? result.plan?.digest || null : null,
+      gatedChecksDigest: gatePassed ? checkSnapshot.digest : null,
+      gatedCheckCommands: gatePassed ? checkSnapshot.commands : [],
       lastGateAt: new Date().toISOString(),
-      gateStatus: result.pass && result.exitCode === 0 ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
+      gateStatus: gatePassed ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
       blockedReason: result.blockedReason,
     },
     flags.dryRun
@@ -511,7 +516,11 @@ export async function cmdReport(argv) {
   if (base === null) base = loadReportEvents({ workspace });
 
   // Overlay real host usage (if any adapter has it) on top of harness estimates.
-  const merged = mergeHostUsage(base, collectHostUsage({ workspace, host: flags.host }));
+  const sessions = new Set(base.map((event) => event.session).filter(Boolean));
+  const merged = mergeHostUsage(
+    base,
+    collectHostUsage({ workspace, host: flags.host, sessions, global: Boolean(flags.global) })
+  );
   const report = buildReport({ workspace, copilotHome, events: merged });
 
   if (flags.check) {

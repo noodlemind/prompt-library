@@ -20,19 +20,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const hooksRoot = path.join(repoRoot, '.github', 'hooks');
 const harnessBin = path.join(repoRoot, 'packages', 'harness', 'bin', 'harness.mjs');
 
-// A `harness` shim on PATH lets the eval terminal run real host-style commands,
-// including pipes and redirects (`harness orient --query x --json | head`), the
-// way a live model naturally emits them.
-let shimDir = null;
-function ensureShim() {
-  if (shimDir) return shimDir;
-  shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-shim-'));
-  const shim = path.join(shimDir, 'harness');
-  fs.writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(harnessBin)} "$@"\n`);
-  fs.chmodSync(shim, 0o755);
-  return shimDir;
-}
-
 const HOOK_MAP = JSON.parse(fs.readFileSync(path.join(hooksRoot, 'hooks.json'), 'utf8')).hooks;
 
 // The tool menu the model chooses from — named after the VS Code tool families
@@ -113,35 +100,154 @@ export function runHookChain(event, workspace, payload) {
   return { denied: false };
 }
 
+function isWithin(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+/** Resolve a model-supplied path without trusting lexical containment alone.
+ * Existing targets are realpathed; missing edit targets are anchored through
+ * their nearest existing ancestor so a symlinked parent cannot escape. */
+function resolveWorkspacePath(workspace, value, { allowMissing = false } = {}) {
+  const raw = String(value ?? '').trim() || '.';
+  if (raw.includes('\0') || path.isAbsolute(raw) || path.win32.isAbsolute(raw)) {
+    throw new Error(`path is outside the fixture workspace: ${raw}`);
+  }
+  const root = fs.realpathSync(workspace);
+  const candidate = path.resolve(root, raw);
+  if (!isWithin(root, candidate)) throw new Error(`path is outside the fixture workspace: ${raw}`);
+
+  if (fs.existsSync(candidate)) {
+    const real = fs.realpathSync(candidate);
+    if (!isWithin(root, real)) throw new Error(`path is outside the fixture workspace: ${raw}`);
+    return real;
+  }
+  if (!allowMissing) throw new Error(`workspace path does not exist: ${raw}`);
+
+  let ancestor = path.dirname(candidate);
+  while (!fs.existsSync(ancestor)) {
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) throw new Error(`path is outside the fixture workspace: ${raw}`);
+    ancestor = parent;
+  }
+  const realAncestor = fs.realpathSync(ancestor);
+  if (!isWithin(root, realAncestor)) throw new Error(`path is outside the fixture workspace: ${raw}`);
+  return candidate;
+}
+
 function readSafe(workspace, rel) {
   try {
-    return fs.readFileSync(path.join(workspace, rel), 'utf8').slice(0, 4000);
+    const target = resolveWorkspacePath(workspace, rel);
+    return { content: fs.readFileSync(target, 'utf8').slice(0, 4000) };
   } catch (err) {
-    return `ERROR: ${err.message}`;
+    return { error: err.message };
   }
 }
 
-// Safe leading commands for each pipeline segment. The PreToolUse guards
-// (block-destructive-commands) already ran before this; this is defense in depth
-// so the eval terminal stays a read/inspect surface plus `harness`, not a shell.
-const SAFE_CMDS = new Set([
-  'harness', 'git', 'ls', 'cat', 'grep', 'head', 'tail', 'find', 'wc', 'pwd', 'echo', 'sed', 'awk', 'sort', 'uniq', 'tr', 'cut', 'true',
-]);
+const SAFE_HARNESS_COMMANDS = new Set(['orient', 'gate', 'validate-plan', 'plan-new', 'help']);
+const SAFE_GIT_COMMANDS = new Set(['status', 'diff', 'ls-files', 'log', 'show', 'rev-parse']);
+
+function parseArgv(command) {
+  const text = String(command || '').trim();
+  if (!text || /[\n\r;&|<>`]/.test(text) || /\$\(/.test(text)) return null;
+  const argv = [];
+  let token = '';
+  let quote = null;
+  let escaping = false;
+  let started = false;
+  for (const char of text) {
+    if (escaping) {
+      token += char;
+      escaping = false;
+      started = true;
+    } else if (char === '\\' && quote !== "'") {
+      escaping = true;
+      started = true;
+    } else if (quote) {
+      if (char === quote) quote = null;
+      else token += char;
+      started = true;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+    } else if (/\s/.test(char)) {
+      if (started) {
+        argv.push(token);
+        token = '';
+        started = false;
+      }
+    } else {
+      token += char;
+      started = true;
+    }
+  }
+  if (quote || escaping) return null;
+  if (started) argv.push(token);
+  return argv.length ? argv : null;
+}
+
+function evalEnv(workspace) {
+  const home = path.join(workspace, '.harness', 'eval-home');
+  fs.mkdirSync(home, { recursive: true });
+  return {
+    PATH: process.env.PATH || '',
+    HOME: home,
+    USERPROFILE: home,
+    COPILOT_HOME: path.join(home, '.copilot'),
+    TMPDIR: os.tmpdir(),
+    TEMP: os.tmpdir(),
+    TMP: os.tmpdir(),
+    LANG: process.env.LANG || 'C.UTF-8',
+    HARNESS_ENFORCEMENT: 'enforce',
+    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_SYSTEM: os.devNull,
+    GIT_PAGER: 'cat',
+    GIT_EXTERNAL_DIFF: '',
+  };
+}
 
 function runTerminal(workspace, command) {
   const trimmed = String(command || '').trim();
-  const segments = trimmed.split(/&&|\|\||[;|\n]/).map((s) => s.trim()).filter(Boolean);
-  const leads = segments.map((s) => path.basename(s.split(/\s+/)[0] || ''));
-  if (!leads.length || !leads.every((c) => SAFE_CMDS.has(c))) {
+  const argv = parseArgv(trimmed);
+  if (!argv) {
     return { code: 126, stdout: '', stderr: `command not permitted in eval terminal: ${trimmed}` };
   }
-  const res = spawnSync('sh', ['-c', trimmed], {
+  const program = path.basename(argv.shift() || '');
+  let executable;
+  let args;
+  if (program === 'harness' && SAFE_HARNESS_COMMANDS.has(argv[0])) {
+    if (argv.some((arg) => /^--(?:workspace|copilot-home)(?:=|$)/.test(arg))) {
+      return { code: 126, stdout: '', stderr: `command not permitted in eval terminal: ${trimmed}` };
+    }
+    executable = process.execPath;
+    args = [harnessBin, ...argv];
+  } else if (program === 'git' && SAFE_GIT_COMMANDS.has(argv[0])) {
+    const subcommand = argv.shift();
+    if (argv.some((arg) => path.isAbsolute(arg) || path.win32.isAbsolute(arg) || /(^|[\\/])\.\.([\\/]|$)/.test(arg)
+      || ['--no-index', '--ext-diff', '--textconv'].includes(arg) || arg.startsWith('--output'))) {
+      return { code: 126, stdout: '', stderr: `command not permitted in eval terminal: ${trimmed}` };
+    }
+    executable = 'git';
+    const safeOptions = subcommand === 'diff' || subcommand === 'show' || subcommand === 'log'
+      ? ['--no-ext-diff', '--no-textconv']
+      : [];
+    args = ['-c', 'core.pager=cat', '-c', 'core.fsmonitor=false', subcommand, ...safeOptions, ...argv];
+  } else {
+    return { code: 126, stdout: '', stderr: `command not permitted in eval terminal: ${trimmed}` };
+  }
+
+  const res = spawnSync(executable, args, {
     cwd: workspace,
     encoding: 'utf8',
     timeout: 30_000,
-    env: { ...process.env, PATH: `${ensureShim()}${path.delimiter}${process.env.PATH}` },
+    shell: false,
+    env: evalEnv(workspace),
   });
-  return { code: res.status ?? 0, stdout: (res.stdout || '').slice(0, 6000), stderr: (res.stderr || '').slice(0, 2000) };
+  return {
+    code: res.status ?? (res.error ? 1 : 0),
+    stdout: (res.stdout || '').slice(0, 6000),
+    stderr: (res.stderr || res.error?.message || '').slice(0, 2000),
+  };
 }
 
 // PostToolUse fires after every successful tool call in a real host — it is how
@@ -154,13 +260,14 @@ function firePost(workspace, toolName, toolInput) {
 function execTool(workspace, action, subagents) {
   const { name, input = {} } = action;
   if (name === 'readFile') {
-    const result = { readFile: input.path, content: readSafe(workspace, input.path) };
-    firePost(workspace, 'readFile', { filePath: input.path });
+    const result = { readFile: input.path, ...readSafe(workspace, input.path) };
+    if (!result.error) firePost(workspace, 'readFile', { filePath: input.path });
     return result;
   }
   if (name === 'listDir') {
     try {
-      return { listDir: input.path, entries: fs.readdirSync(path.join(workspace, input.path || '.')) };
+      const target = resolveWorkspacePath(workspace, input.path || '.');
+      return { listDir: input.path, entries: fs.readdirSync(target) };
     } catch (err) {
       return { listDir: input.path, error: err.message };
     }
@@ -188,11 +295,17 @@ function execTool(workspace, action, subagents) {
     return { runInTerminal: input.command, ...result };
   }
   if (name === 'editFiles') {
+    let target;
+    try {
+      target = resolveWorkspacePath(workspace, input.path, { allowMissing: true });
+    } catch (error) {
+      return { editFiles: input.path, applied: false, denied: true, reason: error.message };
+    }
     const payload = { tool_name: 'editFiles', tool_input: { filePath: input.path } };
     const pre = runHookChain('PreToolUse', workspace, payload);
     if (pre.denied) return { editFiles: input.path, applied: false, denied: true, reason: pre.reason };
-    fs.mkdirSync(path.dirname(path.join(workspace, input.path)), { recursive: true });
-    fs.writeFileSync(path.join(workspace, input.path), input.content ?? '', 'utf8');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, input.content ?? '', 'utf8');
     firePost(workspace, 'editFiles', { filePath: input.path });
     return { editFiles: input.path, applied: true };
   }

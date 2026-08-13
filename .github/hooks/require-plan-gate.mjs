@@ -136,29 +136,35 @@ function requiredChecks(planText) {
   return [];
 }
 
-function configuredCheckCommands(workspace) {
+function configuredChecksDigest(workspace) {
   const configPath = path.join(workspace, '.github', 'harness', 'checks.yaml');
-  if (!fs.existsSync(configPath)) return [];
-  const commands = [];
-  let name = null;
-  for (const line of fs.readFileSync(configPath, 'utf8').split(/\r?\n/)) {
-    const heading = line.match(/^\s{2}([^\s:#][^:]*):\s*$/);
-    if (heading) {
-      name = heading[1].trim();
-      continue;
-    }
-    const command = line.match(/^\s{4}command:\s*(\[.*\])\s*$/);
-    if (!name || !command) continue;
-    try {
-      const argv = JSON.parse(command[1]);
-      if (Array.isArray(argv) && argv.every((part) => typeof part === 'string') && argv.length) {
-        commands.push({ name, argv });
-      }
-    } catch {
-      // The CLI performs authoritative YAML validation; this hook only recognizes safe inline argv arrays.
+  if (!fs.existsSync(configPath)) return null;
+  return crypto.createHash('sha256').update(fs.readFileSync(configPath)).digest('hex');
+}
+
+function normalizeCommandTokens(tokens) {
+  const normalized = tokens.slice();
+  const assignment = /^[A-Za-z_][A-Za-z0-9_]*=.*/;
+  while (normalized[0] && assignment.test(normalized[0])) normalized.shift();
+  if (path.basename(normalized[0] || '') === 'env') {
+    normalized.shift();
+    while (normalized.length) {
+      if (assignment.test(normalized[0])) normalized.shift();
+      else if (normalized[0] === '--') {
+        normalized.shift();
+        break;
+      } else if (normalized[0] === '-u' || normalized[0] === '--unset') normalized.splice(0, 2);
+      else if (/^--unset=/.test(normalized[0]) || /^-(?:i|0)$/.test(normalized[0]) || normalized[0] === '--ignore-environment') normalized.shift();
+      else break;
     }
   }
-  return commands;
+  while (normalized[0] && assignment.test(normalized[0])) normalized.shift();
+  if (path.basename(normalized[0] || '') === 'command') {
+    normalized.shift();
+    if (normalized[0] === '-p') normalized.shift();
+    if (normalized[0] === '--') normalized.shift();
+  }
+  return normalized;
 }
 
 function commandMatches(actual, expected) {
@@ -169,13 +175,13 @@ function commandMatches(actual, expected) {
   });
 }
 
-function unplannedNamedChecks(workspace, command, planText) {
+function unplannedNamedChecks(commands, command, planText) {
   const required = new Set(requiredChecks(planText));
   const segments = String(command || '')
     .split(/(?:&&|\|\||[;|\n])/)
-    .map((segment) => tokenizeShell(String(segment)))
+    .map((segment) => normalizeCommandTokens(tokenizeShell(String(segment))))
     .filter((tokens) => tokens.length > 0);
-  return configuredCheckCommands(workspace)
+  return commands
     .filter(({ name, argv }) => !required.has(name) && segments.some((segment) => commandMatches(segment, argv)))
     .map(({ name }) => name);
 }
@@ -197,7 +203,16 @@ if (!normalized.mutation) {
       const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
       const activePlan = session.gatedPlan || session.activePlan;
       const planText = activePlan ? fs.readFileSync(path.join(normalized.workspace, activePlan), 'utf8') : '';
-      const unplanned = unplannedNamedChecks(normalized.workspace, normalized.command, planText);
+      const currentDigest = configuredChecksDigest(normalized.workspace);
+      if (session.gatedChecksDigest !== currentDigest && !/^\s*harness\s+gate\b/.test(normalized.command)) {
+        deny(
+          'changed-check-config',
+          'The configured check manifest changed after the implement gate. Rerun harness gate before running terminal commands',
+          'invalid'
+        );
+      }
+      const commands = Array.isArray(session.gatedCheckCommands) ? session.gatedCheckCommands : [];
+      const unplanned = unplannedNamedChecks(commands, normalized.command, planText);
       if (unplanned.length) {
         deny(
           'out-of-plan-verification',
