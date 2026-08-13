@@ -261,6 +261,12 @@ export const CONFIG_SCHEMA = Object.freeze({
       return value;
     },
   },
+  'walkthrough.seen': {
+    type: 'boolean',
+    default: false,
+    merge: 'user',
+    description: 'first-run Adaptive Engineer walkthrough has been dismissed',
+  },
 });
 
 export const CONFIG_KEYS = Object.freeze(Object.keys(CONFIG_SCHEMA));
@@ -369,7 +375,9 @@ export function resolveConfig({ copilotHome, workspace, projectTrusted = true } 
       note = 'ignored: project is not trusted';
     } else if (projectSets) {
       const projectValue = project.values[key];
-      if (spec.merge === 'restrictive') {
+      if (spec.merge === 'user') {
+        note = 'ignored: this key is user-scoped';
+      } else if (spec.merge === 'restrictive') {
                 const restricted = spec.restrict(value, projectValue);
         if (restricted !== value) {
           value = restricted;
@@ -412,6 +420,9 @@ export function resolveConfig({ copilotHome, workspace, projectTrusted = true } 
 export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
   if (!SCOPES.includes(scope)) {
     throw usageError(`unknown scope: ${scope}`, `scope must be one of: ${SCOPES.join(', ')}`);
+  }
+  if (CONFIG_SCHEMA[key]?.merge === 'user' && scope === 'project') {
+    throw usageError(`${key} is user-scoped`, 'use --scope user');
   }
   const coerced = coerceValue(key, value);
   const file = configPathFor(scope, { copilotHome, workspace });

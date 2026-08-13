@@ -2,6 +2,7 @@ import readline from 'node:readline';
 import { createComposer } from './composer.mjs';
 import { renderFooter, renderHint } from './chrome.mjs';
 import { renderOverlay, renderPaletteRows } from './overlay.mjs';
+import { renderWalkthrough } from './walkthrough.mjs';
 import { renderBlock, runningHeader } from './block.mjs';
 
 const ESC = '\x1b';
@@ -75,7 +76,11 @@ export function createInput({
       }
     }
     if (overlay) {
-      rows.push(...renderOverlay(overlay, { ui, width: w }));
+      if (overlay.kind === 'walkthrough') {
+        rows.push(...renderWalkthrough(overlay, { ui, width: w }));
+      } else {
+        rows.push(...renderOverlay(overlay, { ui, width: w }));
+      }
     } else {
             if (palette) rows.push(...renderPaletteRows(palette.overlay, { ui, width: w }));
       composer.setWidth(w);

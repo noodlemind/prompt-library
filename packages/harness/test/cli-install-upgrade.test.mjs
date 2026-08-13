@@ -259,6 +259,24 @@ test('TUI launch installs or version-upgrades once with VS Code configuration en
   }
 });
 
+test('TUI dry-run install does not report hydration for the walkthrough', async () => {
+  const copilotHome = tempDir('dry-tui-home-');
+  const workspace = tempDir('dry-tui-workspace-');
+  const calls = [];
+  const result = await ensureFirstRunInstall({
+    copilotHome,
+    workspace,
+    dryRun: true,
+    packageVersion: '1.0.0',
+    install: async (command, argv) => {
+      calls.push({ command, argv });
+      return 0;
+    },
+  });
+  assert.equal(result, false, 'a simulated install must not claim assets were written');
+  assert.ok(calls[0].argv.includes('--dry-run'));
+});
+
 test('TUI launch repairs a same-version legacy install that has no VS Code bridge', async () => {
   const copilotHome = tempDir('legacy-tui-home-');
   const workspace = tempDir('legacy-tui-workspace-');
