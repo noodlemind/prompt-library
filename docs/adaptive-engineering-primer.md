@@ -51,6 +51,8 @@ That is why the method is adaptive without being loose. Ceremony scales. Authori
 
 “Ensures” here means *constrains*, not *guarantees identical code from two model runs*. The permitted change envelope, the proof requirements, and the failure states stay consistent. Deviations are visible.
 
+The diagram is the kernel loop. Investigate and handle-gaps still sit in the nine-stage Deliver model below; they do not replace the gate or verify.
+
 ```mermaid
 flowchart TD
     O["Orient"] --> L["Lock intent"]
@@ -100,6 +102,18 @@ CI can repeat the same contract independently of the chat session.
 ## How it delivers
 
 The nine Deliver stages are a responsibility model, not a demand for nine documents or nine agents. Simple changes use the same contract with less detail. Larger work can enter through brainstorming, issue capture, planning, and optional plan deepening. `@engineer` routes to those workflows only when the work needs them.
+
+| # | Stage | What it produces |
+|---|-------|------------------|
+| 1 | Orient | Bounded context pack |
+| 2 | Establish intent | Locked plan or intent contract |
+| 3 | Investigate | Evidence against the current code |
+| 4 | Work | Gate pass, then the smallest scoped diff |
+| 5 | Handle gaps | Fact, skill, specialist, or explicit blocker |
+| 6 | Verify | Fresh evidence bound to this workspace |
+| 7 | Review | Closed critical findings or named residual risk |
+| 8 | Compound | Attributed learning after proof |
+| 9 | Report | Auditable handoff |
 
 ```mermaid
 flowchart LR
@@ -151,16 +165,16 @@ Mechanisms already in the kernel and prompt library:
 
 | Mechanism | Bound | Effect |
 |-----------|-------|--------|
-| Thin `@engineer` | Agent body ≤ 900 tokens (contract test) | Standing instructions stay a routing contract, not a second novel |
+| Thin `@engineer` | Agent body ≤ 900 tokens (contract test) | Standing instructions stay a routing contract, not a procedure dump |
 | Context pack | Hard cap of 2048 bytes | Orient tells the model to read the pack, not re-ingest full plans and solution files |
 | Progressive disclosure | Skill frontmatter → body → references | Unused workflows do not occupy the prompt |
 | On-demand specialists | Narrow consultation packet | A reviewer or researcher does not inherit the whole delivery context |
 | Model-free orientation | Repo map, recall index, pack assembly | Mapping the repo does not cost a model call |
-| Budgeted agent rendering | Text lane, not JSON envelopes | Unbounded arrays never enter model context |
+| Compact kernel results | Gate/verify `--json` is a small envelope | Host `@engineer` may read that result; it must not ingest unbounded command arrays or raw index JSON |
 | Mode selection | Answer / Investigate skip Deliver ceremony | A question does not pay for a plan, gate, or review |
 | Memory trust tiers | Advisory until promoted | Recalled text cannot authorize work or count as proof |
 
-This is not a claim of a measured “X% cheaper than Spec Kit.” It is a claim about *variance*: the context envelope is capped, attributed, and mode-dependent, so a Friday chat does not quietly become a 200K-token archaeology of every file the agent once opened.
+This is not a claim of a measured “X% cheaper than Spec Kit.” It is a claim about *variance*: the context envelope is capped, attributed, and mode-dependent, so a long chat does not quietly accumulate every file the agent once opened.
 
 The growth scoreboard measures verified delivery behavior (verify→compound, recall→cite, promotion yield). It does not treat tokens generated or lines written as quality.
 
@@ -218,7 +232,7 @@ Use `@engineer` in Answer mode. No plan, no gate, no edit. If the conversation t
 
 ### How does this limit token spend versus a generic agent?
 
-The standing prompt is thin, unused skills stay on disk, orientation is model-free, the pack is byte-capped, specialists get a packet rather than the whole transcript, and JSON command output is not fed back as model context. See [How it limits token deviation](#how-it-limits-token-deviation).
+The standing prompt is thin, unused skills stay on disk, orientation is model-free, the pack is byte-capped, and specialists get a packet rather than the whole transcript. Host `@engineer` may still read a compact gate or verify envelope. It must not paste full plans, solution files, or unbounded JSON arrays into context. See [How it limits token deviation](#how-it-limits-token-deviation).
 
 ### Who owns the outcome if specialists are involved?
 

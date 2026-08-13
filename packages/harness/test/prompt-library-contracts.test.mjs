@@ -107,6 +107,13 @@ test('team primer distinguishes change contracts from SDD/BMAD plans', () => {
     assert.match(primer, new RegExp(phrase), `primer missing ${phrase}`);
   }
   assert.doesNotMatch(primer, /next big thing/i, 'primer must stay factual, not a pitch');
+  assert.doesNotMatch(
+    primer,
+    /JSON command output is not fed back/i,
+    'primer must not claim host @engineer never reads kernel JSON',
+  );
+  assert.match(primer, /Handle gaps/, 'primer must name the nine-stage Deliver model');
+  assert.match(primer, /\| 9 \| Report \|/, 'primer must list Report as stage 9');
 });
 
 test('engineer agent is frozen, thin, and owns the only normative nine-step delivery lifecycle', () => {
