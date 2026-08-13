@@ -1,18 +1,21 @@
 /** First-run / replay Adaptive Engineer story. Session chrome, not a kernel command. */
 
+import { overlayBoxWidth } from './overlay.mjs';
+import { clipTo, displayWidth, padTo } from './width.mjs';
+
 export const WALKTHROUGH_SEEN_KEY = 'walkthrough.seen';
 
 export const WALKTHROUGH_BEATS = Object.freeze([
   {
     title: 'Adaptive Engineer Harness',
-    footer: 'Enter next · Esc skip',
+    footer: 'Enter next · ← → · Esc skip',
     body: Object.freeze([
       'This is the evidence-governed kernel behind @engineer. The model may be stochastic. Delivery is not: intent is locked, mutation is gated, "done" requires fresh proof, and only proven work is allowed to become team memory.',
     ]),
   },
   {
     title: 'The loop that compounds',
-    footer: 'Enter next · Esc skip',
+    footer: 'Enter next · ← → · Esc skip',
     body: Object.freeze([
       'Each Deliver pass runs the same contract:',
       '',
@@ -23,7 +26,7 @@ export const WALKTHROUGH_BEATS = Object.freeze([
   },
   {
     title: 'Almost none of this is yours to run',
-    footer: 'Enter start · Esc close',
+    footer: 'Enter start · ← · Esc close',
     body: Object.freeze([
       'In VS Code or GitHub Copilot Chat, open the agent dropdown and pick @engineer. Answer, Investigate, and Review stay read-only. Deliver is the only mode that mutates. Behind the scenes the kernel orients, gates, verifies, and auto-compounds after a green verify.',
       '',
@@ -79,6 +82,8 @@ export function createWalkthrough({ hydrated = false } = {}) {
 export function attachWalkthroughOverlay(wt, { onClose } = {}) {
   return {
     kind: 'walkthrough',
+    get title() { return ''; },
+    get query() { return ''; },
     get beat() { return wt.beat; },
     get hydrated() { return wt.hydrated; },
     handleKey(str, key) {
@@ -103,22 +108,62 @@ export function walkthroughLines({ hydrated = false } = {}) {
   return lines;
 }
 
+function beatBodyLines(spec, { hydrated = false, beat = 0, width = 80 } = {}) {
+  const lines = [];
+  for (const paragraph of spec.body) {
+    if (!paragraph) { lines.push(''); continue; }
+    lines.push(...wrapLine(String(paragraph), width));
+  }
+  if (hydrated && beat === 0) {
+    lines.push('');
+    lines.push(INSTALL_LINE);
+  }
+  return lines;
+}
+
+function stableBodyHeight({ hydrated = false, width = 80 } = {}) {
+  let max = 0;
+  for (const [i, spec] of WALKTHROUGH_BEATS.entries()) {
+    max = Math.max(max, beatBodyLines(spec, { hydrated, beat: i, width }).length);
+  }
+  return max;
+}
+
 export function renderWalkthrough(wt, { ui, width = 80 } = {}) {
   const spec = WALKTHROUGH_BEATS[wt.beat] || WALKTHROUGH_BEATS[0];
   const paint = ui?.paint ? (token, text) => ui.paint(token, text) : (_t, text) => text;
-  const max = Math.max(24, Number(width) || 80);
-  const wrap = (text) => wrapLine(String(text ?? ''), max);
-  const out = ['', paint('info', spec.title), ''];
-  for (const paragraph of spec.body) {
-    if (!paragraph) { out.push(''); continue; }
-    out.push(...wrap(paragraph).map((line) => paint('muted', line)));
+  const box = overlayBoxWidth(width);
+  const inner = box - 2;
+  const textWidth = Math.max(20, inner - 2);
+  const body = beatBodyLines(spec, { hydrated: wt.hydrated, beat: wt.beat, width: textWidth });
+  const height = stableBodyHeight({ hydrated: wt.hydrated, width: textWidth });
+  while (body.length < height) body.push('');
+
+  const b = ui?.unicode === false
+    ? { tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|' }
+    : { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' };
+  const edge = (l, r) => paint('info', `${l}${b.h.repeat(inner)}${r}`);
+  const rowOf = (content) => {
+    const padded = padTo(content, inner);
+    const bodyRow = ui?.tintRow ? ui.tintRow('panel', padded) : padded;
+    return `${paint('info', b.v)}${bodyRow}${paint('info', b.v)}`;
+  };
+  const divider = () => paint('info', `${b.v}${paint('muted', b.h.repeat(inner))}${b.v}`);
+
+  const progress = `${(wt.beat ?? 0) + 1}/${WALKTHROUGH_BEATS.length}`;
+  const titlePlain = String(spec.title);
+  const titleRoom = Math.max(8, inner - 2 - progress.length - 2);
+  const titleText = displayWidth(titlePlain) > titleRoom ? clipTo(titlePlain, titleRoom - 1).concat('…') : titlePlain;
+  const titleGap = Math.max(1, inner - 2 - displayWidth(titleText) - progress.length);
+  const titleRow = ` ${paint('info', titleText)}${' '.repeat(titleGap)}${paint('muted', progress)} `;
+
+  const out = [edge(b.tl, b.tr), rowOf(titleRow), divider()];
+  for (const line of body) {
+    out.push(rowOf(line ? ` ${paint('muted', clipTo(line, textWidth))}` : ''));
   }
-  if (wt.hydrated && wt.beat === 0) {
-    out.push('');
-    out.push(paint('muted', INSTALL_LINE));
-  }
-  out.push('');
-  out.push(paint('muted', spec.footer));
+  out.push(divider());
+  out.push(rowOf(` ${paint('muted', clipTo(spec.footer, textWidth))}`));
+  out.push(edge(b.bl, b.br));
   return out;
 }
 

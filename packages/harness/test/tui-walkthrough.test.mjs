@@ -14,6 +14,7 @@ import { tempDir } from './helpers/index.mjs';
 import {
   WALKTHROUGH_BEATS,
   WALKTHROUGH_SEEN_KEY,
+  attachWalkthroughOverlay,
   createWalkthrough,
   renderWalkthrough,
   walkthroughLines,
@@ -21,6 +22,8 @@ import {
 } from '../lib/tui/walkthrough.mjs';
 import { createStyle } from '../lib/style.mjs';
 import { resolveConfig, setConfigValue } from '../lib/config.mjs';
+import { createInput } from '../lib/tui/input.mjs';
+import { fakeTty, plainUi } from './helpers/tty.mjs';
 
 async function ledger(lines, { workspace, copilotHome, dispatcher, argv = ['--no-color', '--no-events'] } = {}) {
   const ws = workspace || tempDir('wt-ws-');
@@ -84,6 +87,44 @@ test('hydrated first-run adds the install status line only on beat 1', () => {
   wt.handleKey(null, { name: 'return' });
   const second = renderWalkthrough(wt, { ui, width: 80 }).join('\n');
   assert.doesNotMatch(second, /Copilot assets and the editor bridge were installed/);
+});
+
+test('walkthrough paints a boxed card with progress and a stable height', () => {
+  const wt = createWalkthrough({ hydrated: true });
+  const ui = createStyle({ argv: ['--no-color'] });
+  const heights = [];
+  for (let i = 0; i < WALKTHROUGH_BEATS.length; i += 1) {
+    const lines = renderWalkthrough(wt, { ui, width: 80 });
+    heights.push(lines.length);
+    assert.match(lines[0], /┌|^\+/);
+    assert.match(lines.join('\n'), new RegExp(`${i + 1}/${WALKTHROUGH_BEATS.length}`));
+    assert.doesNotMatch(lines.join('\n'), /undefined/);
+    if (i < WALKTHROUGH_BEATS.length - 1) wt.handleKey(null, { name: 'return' });
+  }
+  assert.equal(new Set(heights).size, 1, 'advancing a beat must not jump the card height');
+});
+
+test('walkthrough overlay replaces the composer and does not blink a caret in the title', async () => {
+  const output = fakeTty();
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+  const session = createInput({ input, output, ui: plainUi() });
+  const pending = session.next();
+  session.openOverlay(attachWalkthroughOverlay(createWalkthrough({ hydrated: true })));
+
+  assert.ok(output.lines.some((l) => l.includes('Adaptive Engineer Harness')));
+  assert.ok(output.lines.some((l) => l.includes('1/3')));
+  assert.equal(output.lines.filter((l) => l.includes('❯')).length, 0, 'the tour is not a prompt');
+  assert.equal(output.lines.some((l) => l.includes('undefined')), false);
+  const height = output.lines.filter((l) => /[┌┐└┘│]/.test(l)).length;
+
+  input.emit('keypress', null, { name: 'return' });
+  assert.ok(output.lines.some((l) => l.includes('The loop that compounds')));
+  assert.ok(output.lines.some((l) => l.includes('2/3')));
+  assert.equal(output.lines.filter((l) => /[┌┐└┘│]/.test(l)).length, height);
+
+  input.emit('keypress', null, { name: 'escape' });
+  await pending;
+  session.close();
 });
 
 test('linear walkthrough lines carry all three beats', () => {

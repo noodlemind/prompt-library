@@ -50,7 +50,9 @@ class CancellationTokenSource {
   dispose() {}
 }
 
-function fakeVSCode({ onRequest, access = true } = {}) {
+function fakeVSCode(opts = {}) {
+  const { onRequest, prompts } = opts;
+  const access = Object.hasOwn(opts, 'access') ? opts.access : true;
   const model = {
     id: 'copilot/gpt-4.1',
     vendor: 'copilot',
@@ -69,6 +71,8 @@ function fakeVSCode({ onRequest, access = true } = {}) {
       };
     },
   };
+  const store = new Map();
+  const languageModelAccessInformation = { canSendRequest: () => access };
   const vscode = {
     version: '1.132.1',
     lm: {
@@ -88,17 +92,24 @@ function fakeVSCode({ onRequest, access = true } = {}) {
     LanguageModelChatToolMode: { Auto: 1 },
     CancellationTokenSource,
     window: {
-      async showInformationMessage(_message, _options, action) { return action; },
+      async showInformationMessage(_message, _options, action) {
+        if (prompts) prompts.count += 1;
+        return action;
+      },
     },
   };
   const context = {
     extension: {
       packageJSON: { version: '0.1.0' },
-      languageModelAccessInformation: { canSendRequest: () => access },
+    },
+    languageModelAccessInformation,
+    globalState: {
+      get(key) { return store.get(key); },
+      async update(key, value) { store.set(key, value); },
     },
     subscriptions: [],
   };
-  return { vscode, context };
+  return { vscode, context, store };
 }
 
 test('VS Code extension installation is cross-platform, owned, and reversible', () => {
@@ -255,6 +266,71 @@ test('an editor permission denial is authoritative and never falls through to di
     () => provider.complete({ messages: [{ role: 'user', text: 'hello' }], tools: [] }),
     (error) => /denied.*access/i.test(error.message) && !/no GitHub Copilot credential/i.test(error.message),
   );
+});
+
+test('language-model access is read from ExtensionContext, not the Extension object', async (t) => {
+  const copilotHome = tempDir('bridge-context-access-');
+  const prompts = { count: 0 };
+  const { vscode, context } = fakeVSCode({ access: true, prompts });
+  assert.equal(context.extension.languageModelAccessInformation, undefined);
+  const bridge = await startBridgeServer({ vscode, context, copilotHome });
+  t.after(async () => bridge.close());
+
+  const result = await requestEditorBridge('complete', {
+    model: 'copilot/gpt-4.1',
+    messages: [{ role: 'user', text: 'hello' }],
+    tools: [],
+  }, { statePath: bridgeStatePath(copilotHome) });
+  assert.equal(result.text, 'editor response');
+  assert.equal(prompts.count, 0, 'granted access must not open the Allow popup');
+});
+
+test('an undecided access prompt is shown once per window, not once per agent turn', async (t) => {
+  const copilotHome = tempDir('bridge-once-');
+  const prompts = { count: 0 };
+  const { vscode, context } = fakeVSCode({ access: undefined, prompts });
+  const bridge = await startBridgeServer({ vscode, context, copilotHome });
+  t.after(async () => bridge.close());
+  const statePath = bridgeStatePath(copilotHome);
+  const payload = {
+    model: 'copilot/gpt-4.1',
+    messages: [{ role: 'user', text: 'hello' }],
+    tools: [],
+  };
+
+  await requestEditorBridge('complete', payload, { statePath });
+  await requestEditorBridge('complete', payload, { statePath });
+  await requestEditorBridge('complete', payload, { statePath });
+  assert.equal(prompts.count, 1, 'three complete() turns must not reopen the Allow popup');
+  assert.equal(context.globalState.get('harness.copilotLmAccessGranted'), true);
+});
+
+test('concurrent undecided complete() calls share one Allow popup', async (t) => {
+  const copilotHome = tempDir('bridge-coalesce-');
+  const prompts = { count: 0 };
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const { vscode, context } = fakeVSCode({ access: undefined, prompts });
+  vscode.window.showInformationMessage = async (_message, _options, action) => {
+    prompts.count += 1;
+    await held;
+    return action;
+  };
+  const bridge = await startBridgeServer({ vscode, context, copilotHome });
+  t.after(async () => bridge.close());
+  const statePath = bridgeStatePath(copilotHome);
+  const payload = {
+    model: 'copilot/gpt-4.1',
+    messages: [{ role: 'user', text: 'hello' }],
+    tools: [],
+  };
+
+  const first = requestEditorBridge('complete', payload, { statePath });
+  const second = requestEditorBridge('complete', payload, { statePath });
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  await Promise.all([first, second]);
+  assert.equal(prompts.count, 1);
 });
 
 test('bridge state rejects non-loopback hosts before opening a socket', async () => {
