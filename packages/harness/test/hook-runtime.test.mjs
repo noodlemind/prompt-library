@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import YAML from 'yaml';
 import { planContractText } from '../../../.github/hooks/lib/evidence-binding.mjs';
 import {
   activatedSkillFromPayload,
@@ -108,6 +109,9 @@ Fixture plan.
 
 function writePassedGate(workspace, plan) {
   fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+  const checksPath = path.join(workspace, '.github', 'harness', 'checks.yaml');
+  const checksText = fs.existsSync(checksPath) ? fs.readFileSync(checksPath, 'utf8') : null;
+  const configured = checksText ? YAML.parse(checksText)?.checks || {} : {};
   fs.writeFileSync(
     path.join(workspace, '.harness', 'session.json'),
     JSON.stringify({
@@ -121,6 +125,10 @@ function writePassedGate(workspace, plan) {
         .digest('hex'),
       gateStatus: 'pass',
       lastGateAt: new Date().toISOString(),
+      gatedChecksDigest: checksText ? crypto.createHash('sha256').update(checksText).digest('hex') : null,
+      gatedCheckCommands: Object.entries(configured)
+        .filter(([, config]) => Array.isArray(config?.command) && config.command.every((part) => typeof part === 'string' && part.length > 0))
+        .map(([name, config]) => ({ name, argv: config.command })),
     })
   );
 }
@@ -186,9 +194,11 @@ test('terminal hook blocks configured named checks outside plan verification.req
     `version: 1
 checks:
   harness-tests:
-    command: ["node", "scripts/run-harness-tests.mjs"]
+    command:
+      - node
+      - scripts/run-harness-tests.mjs
   schema-validation:
-    command: ["node", "scripts/validate-schema.mjs"]
+    command: [node, scripts/validate-schema.mjs]
 `,
     'utf8'
   );
@@ -211,6 +221,19 @@ checks:
   });
   assert.equal(allowed.status, 0, allowed.stderr);
   assert.equal(outputJson(allowed).continue, true);
+
+  for (const command of [
+    'CI=1 node scripts/validate-schema.mjs',
+    'env CI=1 node scripts/validate-schema.mjs',
+    'command node scripts/validate-schema.mjs',
+    'command -p node scripts/validate-schema.mjs',
+  ]) {
+    const wrapped = runHook('require-plan-gate.mjs', workspace, {
+      tool_name: 'run_in_terminal',
+      tool_input: { command },
+    });
+    assert.equal(outputJson(wrapped).hookSpecificOutput?.permissionDecision, 'deny', command);
+  }
 });
 
 test('non-mutation VS Code tools remain read-only even when their payload includes a path', () => {
@@ -402,6 +425,8 @@ test('passed gate allows scoped mutation and primitive target requires current-s
   assert.equal(activation.status, 0, activation.stderr);
   const recorded = JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8'));
   assert.equal(recorded.activatedSkills['create-primitive'].sessionId, 'vscode-session');
+  const events = fs.readFileSync(path.join(workspace, '.harness', 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events.findLast((event) => event.type === 'skill_activation')?.skill, 'create-primitive');
 
   const primitiveAllowed = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
@@ -811,7 +836,14 @@ test('safety guards fail closed on malformed payloads', () => {
 
 test('destructive push guard blocks refspec force pushes without overblocking benign flags', () => {
   const workspace = tempWorkspace();
-  for (const command of ['git push origin +main', 'git push origin +HEAD:main', 'git push origin :main']) {
+  for (const command of [
+    'git push origin +main',
+    'git push origin +HEAD:main',
+    'git push origin :main',
+    'git push --force origin feature:main',
+    'git push --repo origin +HEAD:main',
+    'git -C . push --force origin main',
+  ]) {
     const blocked = runHook('block-destructive-commands.mjs', workspace, {
       tool_name: 'Bash',
       tool_input: { command },
@@ -823,6 +855,8 @@ test('destructive push guard blocks refspec force pushes without overblocking be
     'git push --follow-tags origin main',
     'git push origin main',
     'git push origin HEAD:main',
+    'git push origin +main:feature',
+    'git push --force origin main:feature',
   ]) {
     const allowed = runHook('block-destructive-commands.mjs', workspace, {
       tool_name: 'Bash',

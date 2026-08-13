@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { resolveIndexDir } from './recall-config.mjs';
 import { structuralIndexDir, readStructuralIndex } from './repo-map/structural-index.mjs';
+import { POSTINGS_INDEX_VERSION } from './postings-index.mjs';
 
 function git(workspace, args) {
   const r = spawnSync('git', ['-C', workspace, ...args], { encoding: 'utf8', timeout: 10_000 });
@@ -21,7 +22,7 @@ function driftFromHead(workspace, indexedHead) {
   }
   // Any HEAD mismatch is stale — including checkouts of ancestors (commitsSince
   // is 0) and divergent histories where rev-list cannot count a range.
-  const stale = Boolean(head && indexedHead && indexedHead !== head);
+  const stale = !head || !indexedHead || indexedHead !== head;
   return { head, commitsSince, filesChanged, stale };
 }
 
@@ -51,6 +52,23 @@ export function knowledgeIndexStatus({ workspace, copilotHome }) {
       filesChanged: null,
       stale: false,
       recommendation: 'run `harness index` — knowledge index not built yet',
+      next: 'harness index',
+    };
+  }
+
+  if (meta.version !== POSTINGS_INDEX_VERSION) {
+    return {
+      plane: 'knowledge',
+      indexed: true,
+      empty: null,
+      entryCount: Number.isFinite(meta.entryCount) ? meta.entryCount : null,
+      updated: meta.updated || null,
+      indexedHead: meta.headSha || null,
+      currentHead: git(workspace, ['rev-parse', 'HEAD']),
+      commitsSince: null,
+      filesChanged: null,
+      stale: true,
+      recommendation: `knowledge index format ${meta.version ?? 'unknown'} is obsolete — run \`harness index\` to rebuild format ${POSTINGS_INDEX_VERSION}`,
       next: 'harness index',
     };
   }

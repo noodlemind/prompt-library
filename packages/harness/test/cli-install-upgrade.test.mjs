@@ -550,10 +550,14 @@ test('upgrade purges retired prompt wrappers and single-entry retirements from h
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, 'legacy\n');
   }
-  const previousLock = { files: ['prompts', ...oldFiles, 'skills/btw', 'agents/pipeline-navigator.agent.md'] };
+  const userPrompt = path.join(home, 'prompts', 'user-owned.prompt.md');
+  fs.writeFileSync(userPrompt, 'keep me\n');
+  // Real pre-0.5 locks recorded shipped leaves, not their parent directories.
+  const previousLock = { files: oldFiles };
   const stats = applyRetired(home, retired, previousLock, {}, () => {});
   assert.ok(stats.removed >= 3, `expected purge, removed=${stats.removed}`);
-  assert.equal(fs.existsSync(path.join(home, 'prompts')), false, 'hydrated prompts dir must be purged');
+  assert.equal(fs.existsSync(path.join(home, 'prompts', 'engineer.prompt.md')), false, 'lock-tracked wrapper must be purged');
+  assert.equal(fs.readFileSync(userPrompt, 'utf8'), 'keep me\n', 'untracked content under a directory tombstone must survive');
   assert.equal(fs.existsSync(path.join(home, 'skills', 'btw')), false);
   assert.equal(fs.existsSync(path.join(home, 'agents', 'pipeline-navigator.agent.md')), false);
 });

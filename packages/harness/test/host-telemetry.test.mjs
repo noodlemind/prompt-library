@@ -30,6 +30,38 @@ test('collectHostUsage returns [] safely when no host data exists', () => {
   }
 });
 
+test('report scopes host usage locally and includes every workspace only for --global', () => {
+  const workspace = temporaryWorkspace('harness-host-local-');
+  const otherWorkspace = temporaryWorkspace('harness-host-other-');
+  const copilotHome = temporaryWorkspace('harness-host-home-');
+  const harnessHome = temporaryWorkspace('harness-report-home-');
+  const log = path.join(temporaryWorkspace('harness-host-log-'), 'vscode.jsonl');
+  fs.writeFileSync(log, `${JSON.stringify({
+    id: 'other-workspace-request',
+    sessionId: 'other-session',
+    workspaceRoot: otherWorkspace,
+    ts: '2026-01-01T00:00:00Z',
+    inputTokens: 20,
+    outputTokens: 10,
+  })}\n`);
+  const env = {
+    ...process.env,
+    HARNESS_VSCODE_USAGE_LOG: log,
+    COPILOT_HOME: copilotHome,
+    HARNESS_HOME: harnessHome,
+  };
+
+  const local = spawnSync(process.execPath, [binPath, 'report', '--json', '--workspace', workspace], { encoding: 'utf8', env });
+  assert.equal(local.status, 0, local.stderr);
+  assert.equal(JSON.parse(local.stdout).hostBacked, false, 'another repository must not contaminate a local report');
+
+  const global = spawnSync(process.execPath, [binPath, 'report', '--global', '--json', '--workspace', workspace], { encoding: 'utf8', env });
+  assert.equal(global.status, 0, global.stderr);
+  const report = JSON.parse(global.stdout);
+  assert.equal(report.hostBacked, true);
+  assert.equal(report.totals.tokens, 30);
+});
+
 // Build a Copilot session-state store fixture: <copilotHome>/session-state/<id>/events.jsonl
 function writeSessionStore(copilotHome, sessions) {
   for (const s of sessions) {

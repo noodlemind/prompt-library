@@ -28,6 +28,7 @@ import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } f
 import { installVSCodeBridge, uninstallVSCodeBridge } from './install-vscode-bridge.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy } from './policy.mjs';
+import { configuredCheckSnapshot } from './plan-readiness.mjs';
 import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 
@@ -669,15 +670,19 @@ export async function cmdGate(argv) {
   result.projectPolicyError = policy.projectPolicyError ?? null;
   result.policyExitCode = policyExitCode;
   const previous = readSession(workspace) || {};
+  const gatePassed = result.pass && result.exitCode === 0;
+  const checkSnapshot = gatePassed ? configuredCheckSnapshot(workspace) : null;
   writeSession(
     workspace,
     {
       ...previous,
       activePlan: result.plan?.path || previous.activePlan || null,
       gatedPlan: result.plan?.path || null,
-      gatedPlanDigest: result.pass && result.exitCode === 0 ? result.plan?.digest || null : null,
+      gatedPlanDigest: gatePassed ? result.plan?.digest || null : null,
+      gatedChecksDigest: gatePassed ? checkSnapshot.digest : null,
+      gatedCheckCommands: gatePassed ? checkSnapshot.commands : [],
       lastGateAt: new Date().toISOString(),
-      gateStatus: result.pass && result.exitCode === 0 ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
+      gateStatus: gatePassed ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
       blockedReason: result.blockedReason,
     },
     flags.dryRun
@@ -980,7 +985,11 @@ export async function cmdReport(argv) {
   if (base === null) base = loadReportEvents({ workspace });
 
   // Overlay real host usage (if any adapter has it) on top of harness estimates.
-  const merged = mergeHostUsage(base, collectHostUsage({ workspace, host: flags.host, copilotHome }));
+  const merged = mergeHostUsage(base, collectHostUsage({
+    workspace: flags.global ? undefined : workspace,
+    host: flags.host,
+    copilotHome,
+  }));
   const report = buildReport({ workspace, copilotHome, events: merged });
 
   if (flags.check) {

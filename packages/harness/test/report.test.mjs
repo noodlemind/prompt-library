@@ -28,6 +28,24 @@ test('report ranks token sinks by event type descending', () => {
   assert.ok(report.totals.tokens > 0);
 });
 
+test('chronological report cap preserves newer local lifecycle events after host usage is merged', () => {
+  const local = [
+    { id: 'local-1', type: 'pre_tool', session: 'local', ts: '2026-02-01T00:00:00Z', decision: 'block' },
+    { id: 'local-2', type: 'pre_tool', session: 'local', ts: '2026-02-01T00:01:00Z', decision: 'block' },
+  ];
+  const host = Array.from({ length: 2000 }, (_, index) => ({
+    id: `host-${index}`,
+    type: 'host_request',
+    session: `host-${index}`,
+    source: 'host',
+    ts: `2026-01-${String(1 + Math.floor(index / 80)).padStart(2, '0')}T00:${String(index % 60).padStart(2, '0')}:00Z`,
+    usage: { 'gen_ai.usage.total_tokens': 1 },
+  }));
+  const report = buildReport({ workspace: os.tmpdir(), events: [...local, ...host] });
+  assert.equal(report.totals.events, 2000);
+  assert.equal(report.flags.recoveryLoops.some((loop) => loop.session === 'local'), true);
+});
+
 test('renderReport is answer-first and lists sinks', () => {
   const report = buildReport({ workspace: os.tmpdir(), events: [ev('orient', 's1', 400)] });
   const text = renderReport(report);

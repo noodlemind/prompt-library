@@ -9,7 +9,12 @@ import { extract } from '../lib/repo-map/lexical-extractor.mjs';
 import { buildRepoMap, writeCodebaseMap } from '../lib/repo-map/index.mjs';
 import { indexStatus } from '../lib/index-status.mjs';
 import { resolveIndexDir } from '../lib/recall-config.mjs';
-import { runBuildPostingsIndex, loadPostingsIndex } from '../lib/postings-index.mjs';
+import {
+  POSTINGS_INDEX_VERSION,
+  isIndexStale,
+  runBuildPostingsIndex,
+  loadPostingsIndex,
+} from '../lib/postings-index.mjs';
 
 function gitRepo(files) {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-repomap-'));
@@ -102,7 +107,7 @@ test('index --status reports drift deterministically', () => {
   const indexDir = resolveIndexDir(home, ws);
   fs.mkdirSync(indexDir, { recursive: true });
   const head = git(['rev-parse', 'HEAD']).stdout.trim();
-  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: 1, headSha: head, updated: '2026-01-01', entryCount: 1 }));
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: head, updated: '2026-01-01', entryCount: 1 }));
 
   const fresh = indexStatus({ workspace: ws, copilotHome: home });
   assert.equal(fresh.indexed, true);
@@ -119,6 +124,28 @@ test('index --status reports drift deterministically', () => {
   assert.equal(stale.commitsSince, 1);
   assert.ok(stale.filesChanged >= 1);
   assert.match(stale.knowledge.recommendation, /harness index/);
+
+  const newerHead = git(['rev-parse', 'HEAD']).stdout.trim();
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: newerHead, updated: '2026-01-01', entryCount: 1 }));
+  git(['checkout', '-q', head]);
+  const ancestorCheckout = indexStatus({ workspace: ws, copilotHome: home });
+  assert.equal(ancestorCheckout.stale, true, 'an unequal ancestor checkout cannot reuse a descendant index');
+  assert.equal(ancestorCheckout.commitsSince, 0);
+
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: 'f'.repeat(40), updated: '2026-01-01', entryCount: 1 }));
+  const missingBaseline = indexStatus({ workspace: ws, copilotHome: home });
+  assert.equal(missingBaseline.stale, true, 'an unresolved baseline must fail stale');
+
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: head, updated: '2026-01-01', entryCount: 1 }));
+  fs.renameSync(path.join(ws, '.git'), path.join(ws, '.git-hidden'));
+  const unresolvedHead = indexStatus({ workspace: ws, copilotHome: home });
+  assert.equal(unresolvedHead.stale, true, 'an unreadable current HEAD cannot prove index equivalence');
+  fs.renameSync(path.join(ws, '.git-hidden'), path.join(ws, '.git'));
+
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION - 1, headSha: head, updated: '2026-01-01', entryCount: 1 }));
+  const obsoleteFormat = indexStatus({ workspace: ws, copilotHome: home });
+  assert.equal(obsoleteFormat.stale, true);
+  assert.match(obsoleteFormat.knowledge.recommendation, /format 1 is obsolete.*harness index/i);
 
   fs.rmSync(ws, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
@@ -203,5 +230,10 @@ test('maintenance refresh: deterministic index rebuild works with no provider (A
   const loaded = loadPostingsIndex(indexDir);
   assert.ok(loaded && loaded.terms.override, 'rebuilt index has postings for tokenized terms');
   assert.equal(loaded.meta.algorithm, 'bm25');
+  assert.equal(loaded.meta.version, POSTINGS_INDEX_VERSION);
+
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION - 1, updated: '2026-07-23' }));
+  assert.equal(loadPostingsIndex(indexDir), null, 'postings created by the old tokenizer must be rejected');
+  assert.equal(isIndexStale(indexDir, '2026-07-23'), true);
   fs.rmSync(indexDir, { recursive: true, force: true });
 });
