@@ -3,7 +3,7 @@
 CLI for the **Adaptive Engineer Harness**: install/hydrate Copilot assets, run the deterministic kernel (orient → gate → verify → compound), optional TUI, and opt-in headless agent.
 
 - Package name: **`@dev-kit/harness`** · command: **`harness`**
-- Team primer: [docs/adaptive-engineering-primer.md](../../docs/adaptive-engineering-primer.md)
+- Primer: [docs/adaptive-engineering-primer.md](../../docs/adaptive-engineering-primer.md)
 - Concept: [docs/adaptive-engineer-harness.md](../../docs/adaptive-engineer-harness.md)
 - Tool contract: [.github/skills/references/harness-tool-contract.md](../../.github/skills/references/harness-tool-contract.md)
 

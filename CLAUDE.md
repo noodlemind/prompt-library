@@ -45,7 +45,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 .vscode/
   mcp.json             — MCP server configuration (Context7)
 docs/
-  adaptive-engineering-primer.md — team briefing (concept, delivery, tokens, SDD/BMAD)
+  adaptive-engineering-primer.md — Adaptive Engineering primer (concept, delivery, tokens, SDD/BMAD)
   adaptive-engineer-harness.md  — shared concept / practice doc
   plans/               — plan template; product repos hold live plans
 packages/harness/      — CLI package

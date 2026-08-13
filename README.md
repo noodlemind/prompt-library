@@ -8,7 +8,7 @@ Skill-driven AI engineering for teams on **GitHub Copilot** in VS Code and Intel
 
 The model may be stochastic; acceptance is not. Every product change is constrained by an explicit scope and trusted checks, then verified against the current workspace. Reusable lessons retain provenance and cannot promote themselves into team behavior.
 
-**Start with the [team primer](docs/adaptive-engineering-primer.md)** (concept, delivery, token bounds, and how a Harness plan differs from Spec Kit / BMAD). The operational contract is the [practice model](docs/adaptive-engineer-harness.md).
+**Start with the [Adaptive Engineering primer](docs/adaptive-engineering-primer.md)** (concept, delivery, token bounds, and how a Harness plan differs from Spec Kit / BMAD). The operational contract is the [practice model](docs/adaptive-engineer-harness.md).
 
 ---
 
@@ -80,7 +80,7 @@ Details: [docs/agent-loop.md](docs/agent-loop.md) · package CLI: [packages/harn
 .github/           agents, skills, instructions, hooks
 knowledge/         team solution episodes + capability registry
 docs/
-  adaptive-engineering-primer.md # team briefing: concept, delivery, tokens, SDD/BMAD
+  adaptive-engineering-primer.md # Adaptive Engineering primer: concept, delivery, tokens, SDD/BMAD
   adaptive-engineer-harness.md   # practice model and method comparison
   agent-loop.md                  # optional headless agent
   plans/                         # template + transient execution plans for this repo

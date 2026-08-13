@@ -1,8 +1,8 @@
-# Adaptive Engineering: team primer
+# Adaptive Engineering primer
 
-This briefing is for teammates who will be asked *why* we use Adaptive Engineering, especially when other teams are adopting spec-driven development and BMAD (sometimes heard as “BMAT”).
+Start here for Adaptive Engineering itself: what it is, how it authorizes and proves a change, how it bounds token spend, and how a Harness plan differs from Spec Kit or BMAD (sometimes heard as “BMAT”).
 
-It explains the idea, how delivery is authorized and proven, how token spend is bounded, and how a Harness plan differs from a Spec Kit or BMAD plan. The operational contract stays in the [practice model](./adaptive-engineer-harness.md).
+Install and host setup stay in the [README](../README.md). The operational contract is the [practice model](./adaptive-engineer-harness.md).
 
 > **Mode before action. Intent before mutation. Evidence before done. Learning after proof.**
 
@@ -273,7 +273,7 @@ Those workflows are good at turning structured intent into an implementation att
 
 | Need | Document |
 |------|----------|
-| This briefing | `docs/adaptive-engineering-primer.md` |
+| This primer | `docs/adaptive-engineering-primer.md` |
 | Operational contract | [adaptive-engineer-harness.md](./adaptive-engineer-harness.md) |
 | Optional headless loop | [agent-loop.md](./agent-loop.md) |
 | Install, TUI, CI | [packages/harness/README.md](../packages/harness/README.md) |

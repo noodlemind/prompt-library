@@ -94,7 +94,7 @@ test('docs surface is primer + concept + agent-loop + plan/solution scaffolding'
   assert.match(read('packages/harness/README.md'), /opt-in add-on/i);
 });
 
-test('team primer distinguishes change contracts from SDD/BMAD plans', () => {
+test('adaptive engineering primer distinguishes change contracts from SDD/BMAD plans', () => {
   const primer = read('docs/adaptive-engineering-primer.md');
   for (const phrase of [
     'Mode before action',
