@@ -13,7 +13,11 @@ import { setLearningStatus } from '../lib/knowledge/lifecycle.mjs';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
-const ctx = () => ({ ws: tempDir('cm-ws-'), home: tempDir('cm-home-'), harnessHome: tempDir('cm-hh-') });
+const ctx = () => {
+  const ws = tempDir('cm-ws-');
+  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
+  return { ws, home: tempDir('cm-home-'), harnessHome: tempDir('cm-hh-') };
+};
 const run = ({ ws, home, harnessHome }, args) =>
   spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home, '--json'], {
     encoding: 'utf8',

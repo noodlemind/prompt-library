@@ -190,6 +190,8 @@ test('getAssetsRoot rebuilds packaged hooks when the source tree is newer', () =
   fs.writeFileSync(shipped, 'stale-hook-payload\n');
   const past = new Date(Date.now() - 120_000);
   fs.utimesSync(shipped, past, past);
+  const now = new Date();
+  fs.utimesSync(source, now, now);
   const root = getAssetsRoot();
   assert.equal(root, path.join(packageRoot, 'assets'));
   assert.equal(fs.readFileSync(shipped, 'utf8'), fs.readFileSync(source, 'utf8'));

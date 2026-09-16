@@ -30,6 +30,7 @@ import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.
 import { listBuckets, branchesRoot, bucketDirFor } from './overlay.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
 import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained, readFileNoFollow } from '../fs-safe.mjs';
+import { projectStoreDir } from '../project-layout.mjs';
 import {
   readLearningFile,
   writeLearningFile,
@@ -569,7 +570,7 @@ export function absorbOrAbort({ workspace, home, log = () => {}, recordCheckpoin
   return result;
 }
 
-function refreshRecallAfterPurge({ workspace, copilotHome, target, log = () => {} }) {
+function refreshRecallAfterPurge({ workspace, copilotHome, target, log = () => {}, home }) {
   const posixTarget = String(target).split(/[\\/]+/).join('/');
     const roots = [];
   if (copilotHome) roots.push(path.join(copilotHome, 'knowledge'));
@@ -581,7 +582,7 @@ function refreshRecallAfterPurge({ workspace, copilotHome, target, log = () => {
   try {
     const knowledgeRoot =
       copilotHome && fs.existsSync(path.join(copilotHome, 'knowledge')) ? path.join(copilotHome, 'knowledge') : null;
-    runIndexKnowledge({ knowledgeRoot, workspace, copilotHome: copilotHome || '', flags: {}, log });
+    runIndexKnowledge({ knowledgeRoot, workspace, copilotHome: copilotHome || '', flags: {}, log, home });
   } catch (err) {
     rebuildError = err?.message || 'index rebuild failed';
   }
@@ -627,6 +628,10 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
   }
     const candidateRoots = [{ label: 'workspace', dir: path.resolve(workspace) }];
   if (copilotHome) candidateRoots.push({ label: 'copilotHome/knowledge', dir: path.resolve(copilotHome, 'knowledge') });
+  const overlay = path.resolve(projectStoreDir(workspace, { home }));
+  if (fs.existsSync(overlay) && !candidateRoots.some((r) => r.dir === overlay)) {
+    candidateRoots.push({ label: 'user-project', dir: overlay });
+  }
 
   const resolved = [];
   for (const { label, dir } of candidateRoots) {
@@ -671,7 +676,7 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
         };
       }
       fs.rmSync(safe, { force: true });
-            const recall = refreshRecallAfterPurge({ workspace, copilotHome, target, log });
+            const recall = refreshRecallAfterPurge({ workspace, copilotHome, target, log, home });
       if (!recall.ok) {
         return {
           pass: false,
@@ -874,7 +879,7 @@ export function purgeEpisode({ workspace, target, copilotHome, home, log = () =>
   // Post-state confirms the episode content is genuinely gone.
   const episodeRemoved = episodeExistsOnDisk || debrisBefore.length > 0;
 
-    const recall = refreshRecallAfterPurge({ workspace, copilotHome, target, log });
+    const recall = refreshRecallAfterPurge({ workspace, copilotHome, target, log, home });
   if (!recall.ok) {
     return {
       pass: false,

@@ -12,6 +12,7 @@ import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { assertNoSymlinkAncestors, realpathParentContained } from './fs-safe.mjs';
+import { solutionsWriteTarget } from './project-layout.mjs';
 
 function snapshotFile(p) {
   try {
@@ -38,19 +39,19 @@ function snapshotRestored(p, snap) {
   }
 }
 
-function reserveEpisodePath(workspace, dirRel, base, doc) {
-  const dirFull = assertNoSymlinkAncestors(workspace, dirRel);
+function reserveEpisodePath(baseRoot, dirRel, base, doc) {
+  const dirFull = assertNoSymlinkAncestors(baseRoot, dirRel);
   if (!dirFull) return { ok: false };
   fs.mkdirSync(dirFull, { recursive: true });
   let candidate = `${base}.md`;
   let n = 2;
     for (let attempt = 0; attempt < 100000; attempt++) {
     const rel = path.join(dirRel, candidate);
-    const full = assertNoSymlinkAncestors(workspace, rel);
+    const full = assertNoSymlinkAncestors(baseRoot, rel);
     if (!full) return { ok: false };
     try {
             const fd = fs.openSync(full, 'wx');
-            if (!realpathParentContained(workspace, full)) {
+            if (!realpathParentContained(baseRoot, full)) {
         try {
           fs.closeSync(fd);
         } catch {
@@ -187,17 +188,12 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   // Never silently overwrite an earlier capture: same-day same-title collisions
   // get a deterministic numeric suffix.
   const base = `${date}-${slugify(title)}`;
-  const dirRel = path.join('docs', 'solutions', category);
-  // Physical containment (sweep-completeness finding, probe C): this is the
-  // PRIMARY episode write path for both `harness compound --insight` and
-  // `harness remember` (remember.mjs calls this with kind: 'human-teaching')
-  // — a symlinked docs/solutions (or category) directory must never let it
-  // land outside the workspace. Checked BEFORE the collision-avoidance loop
-  // below even probes existence through it, and fails loudly (a blocked
-  // result, not a silent no-op) rather than writing outside — unlike
-  // admin.mjs's absorb-snapshot writer (a best-effort side channel that can
-  // afford to skip), this IS the write the caller asked for.
-  if (!assertNoSymlinkAncestors(workspace, dirRel)) {
+  const target = solutionsWriteTarget(workspace, { home });
+  const dirRel = path.join(target.dirRel, category);
+  // Physical containment: a symlinked docs/solutions (or category) directory
+  // must never let the write land outside the chosen base (workspace or the
+  // user-level project store).
+  if (!assertNoSymlinkAncestors(target.base, dirRel)) {
     return {
       pass: false,
       exitCode: 1,
@@ -214,7 +210,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
     // representative would-be name (no reservation, no file created).
     rel = path.join(dirRel, `${base}.md`);
     let n = 2;
-    while (fs.existsSync(path.join(workspace, rel))) {
+    while (fs.existsSync(path.join(target.base, rel))) {
       rel = path.join(dirRel, `${base}-${n}.md`);
       n += 1;
     }
@@ -222,7 +218,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
     // Atomic exclusive-create reservation (P1#1): claims a unique suffix with
     // O_EXCL so concurrent captures of the same title can never overwrite each
     // other. Containment is re-validated before each create.
-    const reserved = reserveEpisodePath(workspace, dirRel, base, doc);
+    const reserved = reserveEpisodePath(target.base, dirRel, base, doc);
     if (!reserved.ok) {
       return {
         pass: false,
@@ -262,14 +258,14 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   ];
   let indexed;
   try {
-    indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log });
+    indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log, home });
   } catch (err) {
     // Rollback WITH verified postconditions (P2): the prior code swallowed
     // every recovery error yet always reported "episode rolled back" /
     // `path: null` — so a rollback that left the episode on disk or failed to
     // restore retrieval state was indistinguishable from a clean one. Now each
     // step is verified against disk and any residue is named in the result.
-    const episodeFull = path.join(workspace, rel);
+    const episodeFull = path.join(target.base, rel);
     let episodeRemains = false;
     const unrestored = [];
     if (!flags.dryRun) {
@@ -321,7 +317,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
 }
 
 export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
-  if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log });
+  if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log, home: flags.home });
   const session = readSession(workspace);
   const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true });
   if (!selected.plan) {
@@ -365,6 +361,7 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     copilotHome,
     flags,
     log,
+    home: flags?.home,
   });
 
   const telemetry = recordSkillUsage({

@@ -24,11 +24,12 @@ function gitWorkspace() {
   return ws;
 }
 
-test('init-repo writes a committed codebase map with no timestamps', () => {
+test('init-repo writes a session codebase map with no timestamps', () => {
   const ws = gitWorkspace();
   const res = run(['init-repo', '--workspace', ws, '--copilot-home', tempDir('cbmap-h-')]);
   assert.equal(res.status, 0, res.stderr);
-  const map = fs.readFileSync(path.join(ws, 'docs', 'codebase-map.md'), 'utf8');
+  assert.equal(fs.existsSync(path.join(ws, 'docs', 'codebase-map.md')), false);
+  const map = fs.readFileSync(path.join(ws, '.harness', 'codebase-map.md'), 'utf8');
   assert.match(map, /^# Codebase Map/);
   assert.match(map, /orders\.mjs/);
   assert.match(map, /format\.mjs/);
@@ -39,7 +40,7 @@ test('index refreshes the codebase map but --status never touches it', () => {
   const ws = gitWorkspace();
   const home = tempDir('cbmap-idx-h-');
   assert.equal(run(['init-repo', '--workspace', ws, '--copilot-home', home]).status, 0);
-  const mapPath = path.join(ws, 'docs', 'codebase-map.md');
+  const mapPath = path.join(ws, '.harness', 'codebase-map.md');
 
   fs.writeFileSync(path.join(ws, 'billing.mjs'), 'export function charge() {}\n');
   git(ws, ['add', '-A']);

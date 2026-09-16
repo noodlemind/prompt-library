@@ -30,6 +30,7 @@ export const EVENT_TYPES = new Set([
   'knowledge',
   'session_end',
     'init_repo',
+  'migrate_layout',
   'recall',
   'validate_plan',
   'index',

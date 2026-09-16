@@ -15,7 +15,11 @@ const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
 const TRIGGER = 'adding NOT NULL columns to hot tables';
 
-const ctx = () => ({ ws: tempDir('sgm-ws-'), home: tempDir('sgm-home-'), harnessHome: tempDir('sgm-hh-') });
+const ctx = () => {
+  const ws = tempDir('sgm-ws-');
+  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
+  return { ws, home: tempDir('sgm-home-'), harnessHome: tempDir('sgm-hh-') };
+};
 
 const run = ({ ws, home, harnessHome }, args) =>
   spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home, '--json'], {

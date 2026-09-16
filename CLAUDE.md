@@ -25,12 +25,12 @@ Issues flow through a state machine tracked in YAML frontmatter:
 
 Key fields: `status`, `plan_lock` (must be `true` before coding), `phase` (current phase number).
 
-Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes` (from planning), `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes` (from work), `## Review Findings` (from review). Treat each plan file as the local context pack for the issue.
+Plan files live in `.harness/plans/` by default (gitignored), or committed `docs/plans/` when that directory already exists. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes` (from planning), `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes` (from work), `## Review Findings` (from review). Treat each plan file as the local context pack for the issue.
 
 ### Knowledge Compounding
 
 - **Accumulated knowledge**: `.github/agent-context.md` — prompt-library repo knowledge, not a global Copilot primitive.
-- **Team solutions**: `knowledge/solutions/` (hydrated globally). Product repos may use optional `docs/solutions/` for repo-private learnings. Use `/recall` before similar work.
+- **Team solutions**: `knowledge/solutions/` (hydrated globally). Product repos write private episodes to `~/.harness/projects/<repo-id>/docs/solutions/` unless committed `docs/solutions/` already exists. Use `/recall` before similar work.
 
 ## Directory Structure
 
@@ -47,7 +47,7 @@ Plan files live in `docs/plans/`. Activity logs in `## Activity` sections provid
 docs/
   adaptive-engineering-primer.md — Adaptive Engineering primer (concept, delivery, tokens, SDD/BMAD)
   adaptive-engineer-harness.md  — shared concept / practice doc
-  plans/               — plan template; product repos hold live plans
+  plans/               — plan template; product repos default to `.harness/plans/`
 packages/harness/      — CLI package
 AGENTS.md              — primary cross-host guidance
 CLAUDE.md              — optional compatibility guidance
@@ -97,7 +97,7 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 4. **/triage-issues**: Analyze and prioritize backlog
 
 ### Engineer-Internal (loaded on demand) — Connected Pipeline
-5. **/capture-issue**: Create initial plan file under `docs/plans/` from bug/feature/task
+5. **/capture-issue**: Create initial plan file under `.harness/plans/` (or committed `docs/plans/` if that directory already exists)
 6. **/plan-issue**: Generate phased implementation plan with research
 7. **/code-review**: Confidence-scored, persona-based code review with action routing
 8. **/compound-learnings**: Document solved problems with tagged solution templates

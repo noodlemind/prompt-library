@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { storeDir, readLedger, listLearnings, readStoreConfig, readGovernance, inertLine } from './store.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
+import { solutionsScanRoots } from '../project-layout.mjs';
 import { resolveWriteLayer, episodeEligibleForLayer, storeHasBuckets } from './layer.mjs';
 import { bucketDirFor } from './overlay.mjs';
 
@@ -74,14 +75,13 @@ function excerpt(text) {
  * root, skipped BEFORE any directory listing is ever read, so not even a
  * category/filename can leak through it.
  */
-export function collectEpisodes({ workspace, copilotHome }) {
+export function collectEpisodes({ workspace, copilotHome, home }) {
   const roots = [];
   const globalSol = copilotHome ? path.join(copilotHome, 'knowledge', 'solutions') : null;
   if (globalSol && fs.existsSync(globalSol)) {
     roots.push({ dir: globalSol, base: path.join(copilotHome, 'knowledge') });
   }
-  const productSol = path.join(workspace, 'docs', 'solutions');
-  if (fs.existsSync(productSol)) roots.push({ dir: productSol, base: workspace });
+  roots.push(...solutionsScanRoots(workspace, { home }));
 
   const episodes = [];
   for (const { dir, base } of roots) {
@@ -210,7 +210,7 @@ function layerView({ workspace, home, dir }) {
 export function consolidateStatus({ workspace, copilotHome, home }) {
     const dir = storeDir(workspace, { home });
   const { mode } = readStoreConfig(workspace, { home });
-  const episodes = collectEpisodes({ workspace, copilotHome });
+  const episodes = collectEpisodes({ workspace, copilotHome, home });
   const view = layerView({ workspace, home, dir });
   const { consumed, quarantined } = splitLedger(readLedger(dir));
   let layerQuarantined = [];
@@ -247,7 +247,7 @@ export function consolidateStatus({ workspace, copilotHome, home }) {
 
 export function consolidateCandidates({ workspace, copilotHome, home }) {
   const status = consolidateStatus({ workspace, copilotHome, home });
-  const episodes = collectEpisodes({ workspace, copilotHome });
+  const episodes = collectEpisodes({ workspace, copilotHome, home });
   const bySha = new Map(episodes.map((e) => [`${e.path}@${e.sha256}`, e]));
 
     const fullUnconsolidated = [];

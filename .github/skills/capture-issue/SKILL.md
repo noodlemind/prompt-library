@@ -1,6 +1,6 @@
 ---
 name: capture-issue
-description: Create the initial docs/plans plan file from a bug, feature, or task. Power-user pipeline step; @engineer uses internal /ensure-plan. Not for implementation planning -- use /plan-issue after capture.
+description: Create the initial plan file from a bug, feature, or task. Power-user pipeline step; @engineer uses internal /ensure-plan. Not for implementation planning -- use /plan-issue after capture.
 argument-hint: "[issue description or URL]"
 user-invocable: false
 ---
@@ -11,7 +11,7 @@ user-invocable: false
 
 **Step 1** of the connected pipeline: Capture → Plan → Work → Review → Compound.
 
-This skill creates the initial local plan file that all subsequent skills operate on. It stores the file under `docs/plans/`, sets the initial state machine values, and ensures enough context is captured to plan effectively.
+This skill creates the initial local plan file that all subsequent skills operate on. It stores the file under `.harness/plans/` by default (gitignored), or under `docs/plans/` when that directory already exists, sets the initial state machine values, and ensures enough context is captured to plan effectively.
 
 ## Mode Detection
 
@@ -58,11 +58,11 @@ If the user provides a code selection or error output, extract context automatic
 
 ### 2. Deduplicate
 
-Scan `docs/plans/*.md` for existing issues with similar titles or descriptions. If a likely duplicate is found, inform the user and ask whether to proceed or update the existing issue.
+Scan `.harness/plans/*.md` and `docs/plans/*.md` for existing issues with similar titles or descriptions. If a likely duplicate is found, inform the user and ask whether to proceed or update the existing issue.
 
 ### 3. Create Initial Plan File
 
-**Path**: `docs/plans/YYYY-MM-DD-<type>-<descriptive-slug>-plan.md`
+**Path**: `.harness/plans/YYYY-MM-DD-<type>-<descriptive-slug>-plan.md`, or `docs/plans/YYYY-MM-DD-<type>-<descriptive-slug>-plan.md` when that directory already exists.
 
 This is intentionally a plan file from the start, even while `status: open`. `/plan-issue` later fills in the implementation plan and locks it for work.
 
@@ -127,9 +127,9 @@ If any required information is missing, set `status: needs-info` and add a `## M
 
 ### 5. Print Summary
 
-List all files created with their paths. Confirm the path under `docs/plans/` and state: `status: open, plan_lock: false, phase: 0`.
+List all files created with their paths. Confirm the path under `.harness/plans/` or `docs/plans/` and state: `status: open, plan_lock: false, phase: 0`.
 
-Suggest next step: "Run `/plan-issue docs/plans/<filename>.md` to generate an implementation plan."
+Suggest next step: "Run `/plan-issue <plan-path>` to generate an implementation plan."
 
 ## Guardrails
 

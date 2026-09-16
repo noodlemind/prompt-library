@@ -62,7 +62,7 @@ export function evalKnowledge({ workspace, copilotHome, home, negativeQueries = 
     return { pass: false, exitCode: 2, blockedReason: 'no knowledge store — nothing to evaluate' };
   }
 
-  const episodes = collectEpisodes({ workspace, copilotHome });
+  const episodes = collectEpisodes({ workspace, copilotHome, home });
   const dated = episodes.filter((e) => e.date).sort((a, b) => a.date.localeCompare(b.date));
   const undated = episodes.length - dated.length;
   if (dated.length < 4) {

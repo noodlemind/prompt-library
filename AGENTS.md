@@ -31,7 +31,7 @@ Deliver-mode internal skill chain:
 
 Harness architecture: `docs/adaptive-engineer-harness.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
 
-Plan files in `docs/plans/` (product repos only) track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/adaptive-engineer-harness.md`.
+Plan files live in `.harness/plans/` (product repos, gitignored) or committed `docs/plans/` when that directory already exists. They track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/adaptive-engineer-harness.md`.
 
 ## Directory Structure
 
@@ -49,7 +49,7 @@ knowledge/         — team-wide solutions + manifest (hydrated to ~/.copilot/kn
 docs/
   adaptive-engineering-primer.md — Adaptive Engineering primer (concept, delivery, tokens, SDD/BMAD)
   adaptive-engineer-harness.md  — shared concept / practice doc
-  plans/           — plan template; product repos use docs/plans/ for active work
+  plans/           — plan template; product repos default to `.harness/plans/`
 packages/harness/  — CLI package
 ```
 
@@ -60,7 +60,7 @@ packages/harness/  — CLI package
 - **Primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; prompt wrappers are retired.
 - **Testing**: TDD mandatory — failing test → minimal fix → cleanup
 - **Diffs**: Surgical changes only. No drive-by refactoring.
-- **Knowledge compounding**: Team learnings in `knowledge/solutions/` (hydrated globally). Product repos use `docs/plans/` for issues and optional `docs/solutions/` for repo-private learnings. Run `/recall` before similar work.
+- **Knowledge compounding**: Team learnings in `knowledge/solutions/` (hydrated globally). Product repos use `.harness/plans/` for issues (or committed `docs/plans/` if present) and `~/.harness/projects/<repo-id>/docs/solutions/` for private episodes (or committed `docs/solutions/` if present). Run `/recall` before similar work.
 
 ## Coding Standards
 

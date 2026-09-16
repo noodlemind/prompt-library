@@ -14,10 +14,26 @@ let payload = {};
 let normalized = null;
 let policy = { enforcement: process.env.HARNESS_ENFORCEMENT || 'enforce', ttl: 30 };
 const RECOVER_MISSING_GATE = 'Read ~/.copilot/skills/ensure-plan/SKILL.md and follow it exactly; create or lock only the canonical plan in a standalone mutation containing no product paths, run the implement gate as its own non-mutating tool call, wait for pass, then retry this mutation in a later tool call';
-const NEW_PLAN_PATH = /^docs\/plans\/\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.md$/;
+const NEW_PLAN_PATH = /^(?:docs|\.harness)\/plans\/\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.md$/;
 
 function output(value) {
   console.log(JSON.stringify(value));
+}
+
+function isPlanRelative(relative) {
+  return relative === 'docs/plans' || relative.startsWith('docs/plans/')
+    || relative === '.harness/plans' || relative.startsWith('.harness/plans/');
+}
+
+function resolvePlanFile(workspace, rel) {
+  const joined = path.join(workspace, rel);
+  if (fs.existsSync(joined)) return joined;
+  const base = path.basename(rel);
+  for (const dir of ['docs/plans', '.harness/plans']) {
+    const candidate = path.join(workspace, dir, base);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return joined;
 }
 
 function record(fields) {
@@ -185,7 +201,7 @@ if (!normalized.mutation) {
     try {
       const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
       const activePlan = session.gatedPlan || session.activePlan;
-      const planText = activePlan ? fs.readFileSync(path.join(normalized.workspace, activePlan), 'utf8') : '';
+      const planText = activePlan ? fs.readFileSync(resolvePlanFile(normalized.workspace, activePlan), 'utf8') : '';
       const currentDigest = configuredChecksDigest(normalized.workspace);
       if (Object.hasOwn(session, 'gatedChecksDigest')
         && session.gatedChecksDigest !== currentDigest
@@ -224,16 +240,18 @@ const relatives = normalized.targets.map((target) => {
   return relative;
 });
 for (const relative of relatives) {
-  if (!relative.startsWith('docs/plans/') || fs.existsSync(path.join(normalized.workspace, relative))) continue;
+  if (relative === 'docs/plans' || relative === '.harness/plans') continue;
+  if (!relative.startsWith('docs/plans/') && !relative.startsWith('.harness/plans/')) continue;
+  if (fs.existsSync(path.join(normalized.workspace, relative))) continue;
   if (!NEW_PLAN_PATH.test(relative)) {
     deny(
       'invalid-plan-path',
-      'New plans must use docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md with type feat|fix|docs|refactor|chore; read ~/.copilot/skills/ensure-plan/SKILL.md and do not create an undated shortcut',
+      'New plans must use docs/plans/ or .harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md with type feat|fix|docs|refactor|chore; read ~/.copilot/skills/ensure-plan/SKILL.md and do not create an undated shortcut',
       'invalid'
     );
   }
 }
-const mutatesPlan = relatives.some((relative) => relative === 'docs/plans' || relative.startsWith('docs/plans/'));
+const mutatesPlan = relatives.some((relative) => isPlanRelative(relative));
 if (mutatesPlan && /\bharness\s+(?:validate-plan|gate)\b/.test(normalized.command || '')) {
   deny(
     'mixed-plan-command',
@@ -277,15 +295,20 @@ if (Date.now() - lastGateAt > policy.ttl * 60 * 1000) {
 
 const lexicalPlanPath = path.resolve(normalized.workspace, session.gatedPlan);
 let planPath = null;
-try {
-  const plansRoot = fs.realpathSync(path.join(normalized.workspace, 'docs', 'plans'));
-  const candidate = fs.realpathSync(lexicalPlanPath);
-  const relative = path.relative(plansRoot, candidate);
-  if (!relative.startsWith('..') && !path.isAbsolute(relative)) planPath = candidate;
-} catch {
-  // The fail-closed check below reports the missing or escaping plan.
+for (const dir of ['docs/plans', '.harness/plans']) {
+  try {
+    const plansRoot = fs.realpathSync(path.join(normalized.workspace, dir));
+    const candidate = fs.realpathSync(lexicalPlanPath);
+    const relative = path.relative(plansRoot, candidate);
+    if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+      planPath = candidate;
+      break;
+    }
+  } catch {
+    // Try the other plans directory.
+  }
 }
-if (!planPath) deny('invalid-implement-gate', 'Gated plan is missing or outside docs/plans; next: rerun `harness gate --phase implement --plan <plan> --workspace . --json`', 'invalid');
+if (!planPath) deny('invalid-implement-gate', 'Gated plan is missing or outside docs/plans or .harness/plans; next: rerun `harness gate --phase implement --plan <plan> --workspace . --json`', 'invalid');
 
 const planText = fs.readFileSync(planPath, 'utf8');
 // Digest the Activity-stripped contract text so routine session logging does

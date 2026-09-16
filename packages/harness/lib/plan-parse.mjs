@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import YAML from 'yaml';
+import { isPlanRel, listPlanRels as listLayoutPlanRels, normalizePlanRel as normalizeLayoutPlanRel } from './project-layout.mjs';
 
 const ACTIVE_STATUSES = new Set(['planned', 'in-progress', 'review']);
 
@@ -12,9 +13,12 @@ function isWithin(root, candidate) {
 function canonicalPlanPath(workspace, normalized) {
   try {
     const root = fs.realpathSync(path.resolve(workspace));
-    const plansRoot = fs.realpathSync(path.join(workspace, 'docs', 'plans'));
-    if (!isWithin(root, plansRoot)) return null;
     const full = fs.realpathSync(path.join(workspace, normalized));
+    if (!isWithin(root, full)) return null;
+    if (!isPlanRel(normalized.replace(/\\/g, '/'))) return null;
+    const dirRel = path.posix.dirname(normalized.replace(/\\/g, '/'));
+    const plansRoot = fs.realpathSync(path.join(workspace, dirRel));
+    if (!isWithin(root, plansRoot)) return null;
     return isWithin(plansRoot, full) ? full : null;
   } catch {
     return null;
@@ -26,12 +30,7 @@ function isActivePlan(plan) {
 }
 
 export function listPlanRels(workspace) {
-  const plansDir = path.join(workspace, 'docs', 'plans');
-  if (!fs.existsSync(plansDir)) return [];
-  return fs
-    .readdirSync(plansDir)
-    .filter((f) => f.endsWith('.md') && !f.startsWith('_') && f !== 'README.md')
-    .map((f) => `docs/plans/${f}`);
+  return listLayoutPlanRels(workspace);
 }
 
 export function parsePlanFrontmatter(text) {
@@ -80,13 +79,7 @@ export function loadPlan(workspace, relPath) {
 }
 
 export function normalizePlanRel(workspace, planPath) {
-  if (!planPath || typeof planPath !== 'string') return null;
-  const root = path.resolve(workspace);
-  const full = path.resolve(root, planPath);
-  const plansRoot = path.join(root, 'docs', 'plans');
-  if (full !== plansRoot && !full.startsWith(`${plansRoot}${path.sep}`)) return null;
-  const rel = path.relative(root, full).replace(/\\/g, '/');
-  return rel.endsWith('.md') ? rel : null;
+  return normalizeLayoutPlanRel(workspace, planPath);
 }
 
 export function selectPlan(workspace, { planPath = null, session = null, requireUnique = false } = {}) {
@@ -94,7 +87,7 @@ export function selectPlan(workspace, { planPath = null, session = null, require
     const plan = loadPlan(workspace, planPath);
     return plan
       ? { plan, error: null }
-      : { plan: null, error: `Plan not found or outside docs/plans/: ${planPath}` };
+      : { plan: null, error: `Plan not found or outside docs/plans/ or .harness/plans/: ${planPath}` };
   }
 
   if (session?.activePlan) {

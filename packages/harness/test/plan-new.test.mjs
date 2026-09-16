@@ -11,6 +11,7 @@ const binPath = path.resolve(import.meta.dirname, '..', 'bin', 'harness.mjs');
 
 function workspace() {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-plannew-'));
+  fs.mkdirSync(path.join(ws, 'docs', 'plans'), { recursive: true });
   fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'policy.yaml'), 'version: 1\nenforcement: enforce\ngate_ttl_minutes: 30\nevidence_ttl_hours: 24\n');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
@@ -92,7 +93,7 @@ test('CLI: plan-new slices at the `--` boundary — no value flag swallows it, n
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /plan-new/, 'the human ledger renders');
   assert.throws(() => JSON.parse(r.stdout), 'the post-boundary --json must be inert content, not the output selector');
-  const content = fs.readFileSync(path.join(ws, 'docs/plans/2026-07-21-feat-boundary-demo-plan.md'), 'utf8');
+  const content = fs.readFileSync(path.join(ws, '.harness/plans/2026-07-21-feat-boundary-demo-plan.md'), 'utf8');
   const frontmatter = YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]);
   assert.equal(frontmatter.title, 'Boundary Demo', 'the boundary token must never become the --title value');
   fs.rmSync(ws, { recursive: true, force: true });
@@ -122,7 +123,7 @@ test('cmdPlanNew CLI writes the dated plan file', () => {
   const r = harness(ws, ['plan-new', '--type', 'feat', '--slug', 'demo-thing', '--intent', 'Do the demo', '--date', '2026-07-21', '--impacted', 'src/A.java,src/B.java', '--json']);
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout);
-  assert.equal(out.path, 'docs/plans/2026-07-21-feat-demo-thing-plan.md');
+  assert.equal(out.path, '.harness/plans/2026-07-21-feat-demo-thing-plan.md');
   assert.ok(fs.existsSync(path.join(ws, out.path)));
   const content = fs.readFileSync(path.join(ws, out.path), 'utf8');
   assert.deepEqual(YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]).verification.required, ['unit-tests']);

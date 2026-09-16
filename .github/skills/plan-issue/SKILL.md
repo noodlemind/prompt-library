@@ -60,8 +60,8 @@ Otherwise, run research tasks sequentially within this session.
 Delegated research must use the shared subagent context packet contract; see `.github/skills/references/subagent-context-packet.md` and `plan-coordinator.agent.md` `### 3. Delegate Research` for the dispatch shape and field mapping.
 
 Run these research tasks:
-- **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo) for accumulated knowledge.
-- **Solution history**: Run `/recall` or read `knowledge/manifest.yaml` (hydrated) and optional product `docs/solutions/` per `knowledge-locations.md`.
+- **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read available repository context (`README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, `.harness/codebase-map.md`, and `.github/agent-context.md` only when working in this prompt-library repo) for accumulated knowledge.
+- **Solution history**: Run `/recall` or read `knowledge/manifest.yaml` (hydrated) and product episodes per `knowledge-locations.md`.
 - **Best practices**: Research industry best practices for the specific technology and pattern involved.
 - **Risk routing**: Identify security, performance, architecture, data integrity, or language-specific review needs.
 
@@ -94,7 +94,7 @@ Create missing sections or update existing sections in place. Do not create dupl
 **`## Research Notes`** — key findings from research:
 - Relevant codebase patterns found
 - Best practices that apply
-- Past solutions from `docs/solutions/` that inform this work
+- Past solutions from `knowledge-locations.md` that inform this work
 
 **`## Verification Plan`** — evidence required before completion:
 ```markdown
@@ -129,7 +129,7 @@ updated: YYYY-MM-DD
 ### 5. Print Summary
 
 Confirm: "Plan generated with [N] phases and [M] tasks. Plan is locked."
-Suggest next step: "Hand `docs/plans/<filename>.md` to `@engineer` Deliver mode to start Phase 1."
+Suggest next step: "Hand the locked plan to `@engineer` Deliver mode to start Phase 1."
 
 ## Error Handling
 

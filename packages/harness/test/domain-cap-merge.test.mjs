@@ -15,6 +15,7 @@ const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
 function ctx() {
   const ws = tempDir('domcap-ws-');
+  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
   const home = tempDir('domcap-home-');
   const harnessHome = tempDir('domcap-hh-');
   return { ws, home, harnessHome };

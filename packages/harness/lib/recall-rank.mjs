@@ -13,6 +13,7 @@ import {
 import { loadPostingsIndex, isIndexStale } from './postings-index.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors, DEFAULT_MAX_BYTES } from './fs-safe.mjs';
+import { plansReadRels, projectStoreDir } from './project-layout.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -169,41 +170,44 @@ export function rankRecall(query, { copilotHome, workspace, limit = 3, collectio
 }
 
 export function findMatchingPlans(workspace, query, limit = 3) {
-  const plansDirRel = path.join('docs', 'plans');
-    if (!assertNoSymlinkAncestors(workspace, plansDirRel)) return [];
-  const plansDir = path.join(workspace, plansDirRel);
-  if (!fs.existsSync(plansDir)) return [];
   const queryTokens = new Set(tokenize(query));
   const results = [];
+  const seen = new Set();
 
-  for (const f of fs.readdirSync(plansDir)) {
-    if (!f.endsWith('.md')) continue;
-    const fileRel = path.join(plansDirRel, f);
-    const full = assertNoSymlinkAncestors(workspace, fileRel);
-    if (!full) continue; // symlinked leaf — never follow
-        const raw = readFileNoFollow(full, { root: workspace });
-    if (raw === null) continue; // missing/oversized — skip, same as before
-    const text = raw.slice(0, 4000);
-    const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    let status = 'unknown';
-    let plan_lock = false;
-    if (fm) {
-      const sl = fm[1].match(/status:\s*(\S+)/);
-      const pl = fm[1].match(/plan_lock:\s*(\S+)/);
-      if (sl) status = sl[1];
-      if (pl) plan_lock = pl[1] === 'true';
-    }
-    const tokens = new Set(tokenize(text));
-    let hit = 0;
-    for (const t of queryTokens) if (tokens.has(t)) hit++;
-    const score = hit / Math.max(queryTokens.size, 1);
-    if (score > 0.1) {
-      results.push({
-        path: `docs/plans/${f}`,
-        score,
-        status,
-        plan_lock,
-      });
+  for (const plansDirRel of plansReadRels(workspace)) {
+    if (!assertNoSymlinkAncestors(workspace, plansDirRel)) continue;
+    const plansDir = path.join(workspace, plansDirRel);
+    if (!fs.existsSync(plansDir)) continue;
+    for (const f of fs.readdirSync(plansDir)) {
+      if (!f.endsWith('.md') || seen.has(f)) continue;
+      const fileRel = path.join(plansDirRel, f);
+      const full = assertNoSymlinkAncestors(workspace, fileRel);
+      if (!full) continue;
+      const raw = readFileNoFollow(full, { root: workspace });
+      if (raw === null) continue;
+      seen.add(f);
+      const text = raw.slice(0, 4000);
+      const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      let status = 'unknown';
+      let plan_lock = false;
+      if (fm) {
+        const sl = fm[1].match(/status:\s*(\S+)/);
+        const pl = fm[1].match(/plan_lock:\s*(\S+)/);
+        if (sl) status = sl[1];
+        if (pl) plan_lock = pl[1] === 'true';
+      }
+      const tokens = new Set(tokenize(text));
+      let hit = 0;
+      for (const t of queryTokens) if (tokens.has(t)) hit++;
+      const score = hit / Math.max(queryTokens.size, 1);
+      if (score > 0.1) {
+        results.push({
+          path: `${plansDirRel.replace(/\\/g, '/')}/${f}`,
+          score,
+          status,
+          plan_lock,
+        });
+      }
     }
   }
   return results.sort((a, b) => b.score - a.score).slice(0, limit);
@@ -215,6 +219,7 @@ export function resolveDocPath(copilotHome, workspace, entry) {
     path.join(copilotHome, 'knowledge'),
     path.join(workspace, 'knowledge'),
     workspace,
+    projectStoreDir(workspace),
   ];
   for (const root of knowledgeRoots) {
     const full = safeResolveUnderRoot(root, entry.path);

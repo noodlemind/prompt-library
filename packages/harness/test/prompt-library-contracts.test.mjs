@@ -625,6 +625,7 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   assert.match(events, /'remember'/, 'EVENT_TYPES includes remember');
   assert.match(events, /'learning'/, 'EVENT_TYPES includes learning');
   assert.match(events, /'knowledge'/, 'EVENT_TYPES includes knowledge');
+  assert.match(events, /'migrate_layout'/, 'EVENT_TYPES includes migrate_layout');
     const store = read('packages/harness/lib/knowledge/store.mjs');
   assert.match(store, /KNOWLEDGE_MODES = new Set\(\[[^\]]*'suggest'[^\]]*\]\)/, 'store.mjs KNOWLEDGE_MODES includes suggest');
   const commands = read('packages/harness/lib/commands.mjs');

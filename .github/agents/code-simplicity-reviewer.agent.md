@@ -45,7 +45,7 @@ Ensure code is as simple as possible while still meeting requirements. The best 
 ## Protected Artifacts
 
 Do not suggest removing or simplifying:
-- `docs/plans/` — plan files are living documents that track implementation state
+- `.harness/plans/` or committed `docs/plans/` — plan files are living documents that track implementation state
 - `docs/solutions/` — accumulated learnings that compound team knowledge
 
 ## The Simplicity Test

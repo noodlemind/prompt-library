@@ -12,7 +12,8 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 
 ## Plans and knowledge
 
-- Product **`docs/plans/`** — per-issue context pack (`status`, `plan_lock`, `phase`, `## Memory Cards`).
+- Product **`.harness/plans/`** (gitignored) or committed **`docs/plans/`** when that directory already exists — per-issue context pack (`status`, `plan_lock`, `phase`, `## Memory Cards`).
+- Repo-private episodes **`~/.harness/projects/<repo-id>/docs/solutions/`** (or committed `docs/solutions/` if present).
 - Team **`knowledge/solutions/`** — cross-repo learnings (hydrated to `~/.copilot/knowledge/`).
 - Lookup order: `.github/skills/references/knowledge-locations.md`.
 

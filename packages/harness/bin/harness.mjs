@@ -21,7 +21,7 @@ const out = createStyle({ argv: args });
 
 export const HELP_COMMAND_ORDER = [
   'install', 'upgrade', 'doctor', 'status', 'uninstall',
-  'init-repo', 'index', 'plan-new', 'config',
+  'init-repo', 'migrate', 'index', 'plan-new', 'config',
   'model', 'trust', 'resources',
     'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'agent', 'validate-plan', 'compound', 'recall', 'get', 'edit', 'write', 'apply', 'todo', 'undo', 'search', 'lookup', 'tree', 'run', 'inspect', 'tui', 'events', 'report',
   'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',

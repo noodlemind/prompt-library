@@ -16,7 +16,7 @@ Read-only diagnostics. **No** product code edits.
 | H2 | Profile | `profile.md` exists with `autonomy` set |
 | H3 | Engineer agent | `~/.copilot/agents/engineer.agent.md` or `.github/agents/engineer.agent.md` in library |
 | H4 | Capture gate ref | `capture-gate.md` present in hydrated skills |
-| H5 | Product plans dir | `docs/plans/` exists (create if missing — report only) |
+| H5 | Product plans dir | `.harness/plans/` or committed `docs/plans/` exists (create if missing — report only) |
 | H6 | Enterprise overlay | `~/.copilot/enterprise/capability-registry.enterprise.yaml` OR repo `enterprise/` (optional) |
 | H7 | Internal support skills | `ensure-plan`, `auto-compound`, `ensure-capability`, and `auto-skill-draft` are hydrated |
 | H8 | Package asset bundle | Versioned installation assets exist |
@@ -29,6 +29,7 @@ Read-only diagnostics. **No** product code edits.
 | H15 | Global harness shim | `~/.copilot/bin/harness` (optional when H12 passes via monorepo) |
 | H16 | harness on PATH | `which harness` succeeds (optional) |
 | H17 | No stale orphaned primitives | No hydrated agent/skill/instruction/prompt/hook remains that current assets no longer ship and `retired.json` does not cover; the hint lists any to tombstone or delete (optional) |
+| H18 | Gitignored docs artifacts migrated | No leftover untracked `docs/plans`, `docs/solutions`, `docs/agent-context.md`, or `docs/codebase-map.md` in the product tree (optional; fix with `harness migrate`) |
 
 With `harness doctor --host vscode`, also require:
 

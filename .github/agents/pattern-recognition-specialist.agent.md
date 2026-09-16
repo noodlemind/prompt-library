@@ -44,7 +44,7 @@ Ensure new code is consistent with the patterns already established in the codeb
 ## Protected Artifacts
 
 Do not suggest removing or simplifying:
-- `docs/plans/` — plan files are living documents that track implementation state
+- `.harness/plans/` or committed `docs/plans/` — plan files are living documents that track implementation state
 - `docs/solutions/` — accumulated learnings that compound team knowledge
 
 ## Severity Criteria

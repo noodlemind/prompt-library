@@ -3,6 +3,7 @@ import path from 'path';
 import { runBuildPostingsIndex } from './postings-index.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { solutionsScanRoots } from './project-layout.mjs';
 
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -98,7 +99,7 @@ function collectSolutions(dir, scope, base) {
   return entries;
 }
 
-export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log }) {
+export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log, home }) {
   const roots = [];
   if (knowledgeRoot) {
     roots.push({
@@ -107,9 +108,12 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
       base: knowledgeRoot,
     });
   }
-  const productSol = path.join(workspace, 'docs', 'solutions');
-  if (fs.existsSync(productSol)) {
-    roots.push({ dir: productSol, scope: 'product', base: workspace });
+  for (const scanned of solutionsScanRoots(workspace, { home: home ?? flags?.home })) {
+    roots.push({
+      dir: scanned.dir,
+      scope: scanned.kind === 'user' ? 'product-user' : 'product',
+      base: scanned.base,
+    });
   }
 
   let entries = [];

@@ -11,7 +11,11 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
-const ctx = () => ({ ws: tempDir('sse-ws-'), home: tempDir('sse-home-'), harnessHome: tempDir('sse-hh-') });
+const ctx = () => {
+  const ws = tempDir('sse-ws-');
+  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
+  return { ws, home: tempDir('sse-home-'), harnessHome: tempDir('sse-hh-') };
+};
 
 const run = ({ ws, home, harnessHome }, args) =>
   spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home, '--json'], {

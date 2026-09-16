@@ -9,6 +9,7 @@ import { ensureStore, listLearnings, readLedger, readGovernance, storeDir } from
 import { consolidateStatus } from '../lib/knowledge/consolidate.mjs';
 import { runRemember } from '../lib/knowledge/remember.mjs';
 import { rebuildIndex } from '../lib/knowledge/apply.mjs';
+import { projectStoreDir } from '../lib/project-layout.mjs';
 
 function seedActiveLearning(dir, domain, slug) {
   const lines = [
@@ -28,7 +29,11 @@ function seedActiveLearning(dir, domain, slug) {
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
-const ctx = () => ({ ws: tempDir('rem-ws-'), home: tempDir('rem-home-'), harnessHome: tempDir('rem-hh-') });
+const ctx = () => {
+  const ws = tempDir('rem-ws-');
+  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
+  return { ws, home: tempDir('rem-home-'), harnessHome: tempDir('rem-hh-') };
+};
 const run = ({ ws, home, harnessHome }, args) =>
   spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home, '--json'], {
     encoding: 'utf8', env: { ...process.env, HARNESS_HOME: harnessHome },
@@ -172,6 +177,39 @@ test('remember refuses secret-shaped claims', () => {
   assert.match(res.stdout + res.stderr, /secret/i);
 });
 
+test('remember in a fresh repo writes the episode under ~/.harness/projects, not workspace docs/', () => {
+  const c = { ws: tempDir('rem-overlay-ws-'), home: tempDir('rem-overlay-cop-'), harnessHome: tempDir('rem-overlay-hh-') };
+  const res = run(c, [
+    'remember',
+    'Keep product trees free of session episodes.',
+    '--trigger',
+    'a fresh-repo remember overlay trigger',
+    '--domain',
+    'sql',
+  ]);
+  assert.equal(res.status, 0, res.stderr + res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.learningId, 'sql/a-fresh-repo-remember-overlay-trigger');
+  assert.ok(out.episodePath.startsWith('docs/solutions/teachings/'));
+  assert.equal(fs.existsSync(path.join(c.ws, 'docs', 'solutions')), false, 'must not create workspace docs/solutions');
+  const overlay = projectStoreDir(c.ws, { home: c.harnessHome });
+  assert.ok(fs.existsSync(path.join(overlay, out.episodePath)), `expected overlay episode at ${path.join(overlay, out.episodePath)}`);
+  const { dir } = ensureStore(c.ws, { home: c.harnessHome });
+  assert.ok(listLearnings(dir).some((l) => l.id === out.learningId), 'learning materialized from overlay episode');
+});
+
+test('remember overlay rollback does not leave an episode in the user project store', () => {
+  const c = { ws: tempDir('rem-ov-rb-ws-'), home: tempDir('rem-ov-rb-cop-'), harnessHome: tempDir('rem-ov-rb-hh-') };
+  const res = run(c, ['remember', 'x'.repeat(2000), '--trigger', 'an oversized overlay claim that blows the learning byte cap']);
+  assert.equal(res.status, 1, res.stderr + res.stdout);
+  const overlayTeachings = path.join(projectStoreDir(c.ws, { home: c.harnessHome }), 'docs', 'solutions', 'teachings');
+  const remaining = fs.existsSync(overlayTeachings)
+    ? fs.readdirSync(overlayTeachings).filter((f) => f.endsWith('.md'))
+    : [];
+  assert.deepEqual(remaining, [], 'rejected overlay remember must not leave an orphaned episode');
+  assert.equal(fs.existsSync(path.join(c.ws, 'docs', 'solutions')), false);
+});
+
 test('remember --dry-run writes neither episode nor learning', () => {
   const c = ctx();
   const res = run(c, ['remember', 'Use two-step default+backfill for NOT NULL adds.',
@@ -180,7 +218,9 @@ test('remember --dry-run writes neither episode nor learning', () => {
   const out = JSON.parse(res.stdout);
   assert.equal(out.dryRun, true);
   assert.equal(out.learningId, 'sql/adding-not-null-columns-to-hot-tables');
-  assert.ok(!fs.existsSync(path.join(c.ws, 'docs', 'solutions')), 'dry-run must not write the episode file');
+  const teachings = path.join(c.ws, 'docs', 'solutions', 'teachings');
+  const md = fs.existsSync(teachings) ? fs.readdirSync(teachings).filter((f) => f.endsWith('.md')) : [];
+  assert.deepEqual(md, [], 'dry-run must not write the episode file');
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   assert.equal(listLearnings(dir).length, 0, 'dry-run must not write a learning');
 });
@@ -215,6 +255,7 @@ test('remember --dry-run does not absorb a dirty store hand edit (no new store c
 
 test('runRemember (direct lib import) threads its own home into every store write, not the ambient HARNESS_HOME', () => {
   const ws = tempDir('rem-direct-ws-');
+  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
   const copilotHome = tempDir('rem-direct-home-');
   const explicitHome = tempDir('rem-direct-hh-');
   const decoyHome = tempDir('rem-direct-decoy-'); // stands in for a stale/unrelated ambient HARNESS_HOME

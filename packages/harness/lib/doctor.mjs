@@ -25,6 +25,7 @@ import { loadReportEvents, knowledgeSlos } from './report.mjs';
 import { readStructuralIndex } from './repo-map/structural-index.mjs';
 import { grammarStatus, packageGrammarRoots } from './repo-map/treesitter-extractor.mjs';
 import { assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { leftoverWorkspaceArtifacts } from './migrate-layout.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -627,8 +628,10 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
 
   checks.push({
     id: 'H5',
-    name: 'Product docs/plans (cwd)',
-    pass: fs.existsSync(path.join(flags.workspace, 'docs', 'plans')),
+    name: 'Product plans dir (cwd)',
+    pass:
+      fs.existsSync(path.join(flags.workspace, 'docs', 'plans')) ||
+      fs.existsSync(path.join(flags.workspace, '.harness', 'plans')),
     hint: 'harness init-repo',
   });
 
@@ -782,6 +785,17 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
       : orphans.length
         ? `Hydrated but no longer shipped and not retired (${orphans.length}): ${orphans.join(', ')}. Add each to packages/harness/retired.json so upgrade purges it, or delete it from ${copilotHome}.`
         : 'No orphaned agents/skills/instructions/prompts/hooks in the Copilot home',
+    optional: true,
+  });
+
+  const leftovers = leftoverWorkspaceArtifacts(flags.workspace);
+  checks.push({
+    id: 'H18',
+    name: 'Gitignored docs artifacts migrated',
+    pass: leftovers.length === 0,
+    hint: leftovers.length
+      ? `harness migrate  # ${leftovers.map((item) => item.from).join(', ')}`
+      : 'No leftover gitignored docs/plans or docs/solutions in the product tree',
     optional: true,
   });
 

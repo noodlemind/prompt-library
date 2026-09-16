@@ -30,6 +30,7 @@ installation or upgrade. `harness install --configure-vscode` and
 
 ```bash
 harness init-repo    # product repo stubs: plans, checks, policy
+harness migrate      # move gitignored docs/plans and docs/solutions out of the product tree
 ```
 
 ### Pin version (product repos)
@@ -66,7 +67,8 @@ Same registry tools; autonomous does **not** require plans or compound. See [doc
 | `install` / `upgrade` | Hydrate `~/.copilot/` and install the VS Code bridge; upgrade retires lock paths |
 | `doctor` | Health; `--host vscode` runs hook probes |
 | `status` / `uninstall` | Version/lock; remove tracked files only |
-| `init-repo` | Plan/session paths + checks/policy stubs |
+| `init-repo` | Plan/session paths + checks/policy stubs; migrates leftover gitignored `docs/` artifacts |
+| `migrate` | Move gitignored `docs/plans` and `docs/solutions` to `.harness/plans` and `~/.harness/projects/<repo-id>/` |
 
 ### Session Ledger (`tui`)
 

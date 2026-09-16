@@ -36,6 +36,7 @@ test('runInsightCompound (compound --insight) refuses to write through a symlink
 test('runInsightCompound still writes normally when docs/solutions is a plain directory (no false-positive refusal)', () => {
   const ws = tempDir('probeC-ok-ws-');
   const copilotHome = tempDir('probeC-ok-ch-');
+  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
 
   const result = runInsightCompound({
     workspace: ws,

@@ -76,7 +76,11 @@ function paths({ workspace, query }) {
 /** Plan files, newest name first — plans are date-prefixed, so a reverse sort
  * on the name is a reverse sort on the date without reading any of them. */
 function plans({ workspace }) {
-    return completePath('docs/plans/', { workspace, limit: Number.MAX_SAFE_INTEGER })
+    const hits = [
+    ...completePath('docs/plans/', { workspace, limit: Number.MAX_SAFE_INTEGER }),
+    ...completePath('.harness/plans/', { workspace, limit: Number.MAX_SAFE_INTEGER }),
+  ];
+  return hits
     .filter((hit) => hit.kind === 'file' && hit.path.endsWith('.md'))
     .sort((a, b) => b.path.localeCompare(a.path))
     .slice(0, MAX_VALUES)

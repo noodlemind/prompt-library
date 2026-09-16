@@ -24,6 +24,6 @@ After merge, remove the completed plan (plan-only cleanup) unless unresolved wor
 
 ## Product repositories
 
-Track issues under **`docs/plans/` in each product repo**. Same promote-then-delete rule after merge.
+Track issues under **`.harness/plans/`** (gitignored) by default. Use committed `docs/plans/` only when that directory already exists. Same promote-then-delete rule after merge.
 
 Plans use `plan_schema: 1` with `status`, `plan_lock`, `phase`, `intent`, acceptance criteria, named `verification.required` checks, and review state. Executable commands live only in trusted `.github/harness/checks.yaml` — never shell strings in the plan body.

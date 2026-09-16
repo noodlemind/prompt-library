@@ -128,7 +128,7 @@ test('init-repo --dry-run counts a failure ledger entry as debt (splitLedger sem
   assert.match(res.stdout, /armed 1/, 'only the failure-only episode counts as debt — the consumed one does not');
 });
 
-test('upgrade prints an init-repo arming hint when docs/solutions exists under cwd', () => {
+test('upgrade prints a migrate hint when leftover gitignored docs/solutions exists under cwd', () => {
   const cwd = tempDir('seed-cwd-');
   fs.mkdirSync(path.join(cwd, 'docs', 'solutions', 'perf'), { recursive: true });
   const home = tempDir('seed-uhome-');
@@ -137,7 +137,7 @@ test('upgrade prints an init-repo arming hint when docs/solutions exists under c
     encoding: 'utf8',
   });
   assert.equal(res.status, 0, res.stderr || res.stdout);
-  assert.match(res.stdout, /harness init-repo\s+# arm existing docs\/solutions as consolidation debt/);
+  assert.match(res.stdout, /harness migrate\s+# move gitignored docs\/plans and docs\/solutions out of the product tree/);
 });
 
 test('upgrade prints no arming hint when docs/solutions is absent', () => {
@@ -149,6 +149,7 @@ test('upgrade prints no arming hint when docs/solutions is absent', () => {
   });
   assert.equal(res.status, 0, res.stderr || res.stdout);
   assert.doesNotMatch(res.stdout, /arm existing docs\/solutions/);
+  assert.doesNotMatch(res.stdout, /harness migrate/);
 });
 
 test('install never prints the arming hint, even when docs/solutions exists', () => {
@@ -161,4 +162,5 @@ test('install never prints the arming hint, even when docs/solutions exists', ()
   });
   assert.equal(res.status, 0, res.stderr || res.stdout);
   assert.doesNotMatch(res.stdout, /arm existing docs\/solutions/);
+  assert.doesNotMatch(res.stdout, /harness migrate/);
 });

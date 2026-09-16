@@ -9,9 +9,9 @@ Where agents and skills load context. Do not duplicate this list elsewhere — l
 3. **Global team solutions** — `~/.copilot/knowledge/solutions/**/*.md` or repo `knowledge/solutions/`
 4. **User preferences** — `~/.copilot/knowledge/profile.md` or repo `knowledge/profile.md`
 5. **Enterprise capability** — `~/.copilot/enterprise/capability-registry.enterprise.yaml` or repo `enterprise/`
-6. **Product active plans** — `docs/plans/*.md` in the **current workspace**
-7. **Product repo-private solutions** — `docs/solutions/**/*.md` (optional)
-8. **Product repo context** — `docs/agent-context.md`, `README.md`, `docs/codebase-snapshot.md`
+6. **Product active plans** — `.harness/plans/*.md` (default, gitignored) or committed `docs/plans/*.md` when that directory is git-tracked
+7. **Repo-private solution episodes** — `~/.harness/projects/<repo-id>/docs/solutions/` (default) or committed `docs/solutions/` when that directory is git-tracked
+8. **Product repo context** — `.harness/agent-context.md` (default) or committed `docs/agent-context.md`, plus `README.md`
 9. **Prompt-library repo only** — `.github/agent-context.md`
 
 ## Write targets
@@ -20,9 +20,10 @@ Where agents and skills load context. Do not duplicate this list elsewhere — l
 |---------------|----------|
 | Cross-repo verified fix | `knowledge/solutions/<category>/<slug>.md` + `/index-memory` |
 | Consolidated semantic learning | `~/.harness/knowledge/<repo-id>/` via `/consolidate`; `consolidate --apply` is the sole writer of learning content, and human retire/dispute/confirm/promote decisions land in the same store's governance ledger |
-| Repo-specific only | Product `docs/solutions/` (optional) |
-| Repo convention one-liner | Product `docs/agent-context.md` |
-| Active issue | Product `docs/plans/` via `/ensure-plan` or `/capture-issue` |
+| Repo-specific only | `~/.harness/projects/<repo-id>/docs/solutions/` (or committed `docs/solutions/` if git-tracked) |
+| Repo convention one-liner | `.harness/agent-context.md` (or committed `docs/agent-context.md` if git-tracked) |
+| Active issue | `.harness/plans/` via `/ensure-plan` (or committed `docs/plans/` if git-tracked) |
+| Existing gitignored leftovers | `harness migrate` (also runs from `harness init-repo`) |
 | New skill/agent | `/create-primitive` + `knowledge/capability-registry.yaml` |
 
 ## This repository (prompt-library)
