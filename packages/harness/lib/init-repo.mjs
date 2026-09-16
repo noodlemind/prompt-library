@@ -5,6 +5,8 @@ import { writeHarnessRunner } from './resolve-harness-bin.mjs';
 import { writeCodebaseMap } from './repo-map/index.mjs';
 import { ensureStore, storeDir, readLedger } from './knowledge/store.mjs';
 import { collectEpisodes, consolidateStatus, splitLedger } from './knowledge/consolidate.mjs';
+import { SESSION_AGENT_CTX_REL, WORKSPACE_PLANS_REL, plansWriteRel } from './project-layout.mjs';
+import { runMigrateLayout } from './migrate-layout.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
@@ -16,7 +18,7 @@ _Add project-specific notes here._
 
 ## Related
 
-- Plans: \`docs/plans/\`
+- Plans: \`.harness/plans/\` (or committed \`docs/plans/\` when git tracks files there)
 - Run \`harness doctor\` after global harness install.
 `;
 
@@ -38,17 +40,36 @@ waivers: []
 
 export function runInitRepo({ workspace, flags, log, copilotHome }) {
   const stats = { created: [] };
-  const plansDir = path.join(workspace, 'docs', 'plans');
-  const agentCtx = path.join(workspace, 'docs', 'agent-context.md');
-  const knowledgeDir = path.join(workspace, 'knowledge');
+  const migrated = runMigrateLayout({
+    workspace,
+    dryRun: flags.dryRun,
+    log,
+    home: flags?.home,
+  });
+  stats.migrate = migrated;
+  if (migrated.moved.length) {
+    stats.migrated = migrated.moved;
+  }
+  if (migrated.conflicts.length) {
+    log(`migrate left ${migrated.conflicts.length} conflict(s) — new plans still go under .harness/plans unless docs/plans is git-tracked`);
+  }
+  const plansRel = plansWriteRel(workspace);
+  const plansDir = path.join(workspace, plansRel);
+  const agentRel = plansRel === WORKSPACE_PLANS_REL ? 'docs/agent-context.md' : SESSION_AGENT_CTX_REL;
+  const agentCtx = path.join(workspace, agentRel);
   const harnessConfigDir = path.join(workspace, '.github', 'harness');
 
-  if (!flags.dryRun) fs.mkdirSync(plansDir, { recursive: true });
+  if (!flags.dryRun) {
+    ensureHarnessDir(workspace, false);
+    fs.mkdirSync(plansDir, { recursive: true });
+  } else {
+    ensureHarnessDir(workspace, true);
+  }
   const gitkeep = path.join(plansDir, '.gitkeep');
   if (!fs.existsSync(gitkeep)) {
     if (!flags.dryRun) fs.writeFileSync(gitkeep, '', 'utf8');
-    stats.created.push('docs/plans/.gitkeep');
-    log('created docs/plans/');
+    stats.created.push(`${plansRel}/.gitkeep`);
+    log(`created ${plansRel}/`);
   }
 
   if (!fs.existsSync(agentCtx)) {
@@ -56,16 +77,14 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
       fs.mkdirSync(path.dirname(agentCtx), { recursive: true });
       fs.writeFileSync(agentCtx, AGENT_CONTEXT_STUB, 'utf8');
     }
-    stats.created.push('docs/agent-context.md');
-    log('created docs/agent-context.md');
+    stats.created.push(agentRel);
+    log(`created ${agentRel}`);
   } else {
-    log('skip docs/agent-context.md (exists)');
+    log(`skip ${agentRel} (exists)`);
   }
 
-  if (!flags.dryRun) ensureHarnessDir(workspace, false);
-  else ensureHarnessDir(workspace, true);
   stats.created.push('.harness/.gitignore');
-  log('ensured .harness/ (session + context-pack)');
+  log('ensured .harness/ (session + context-pack + local plans)');
 
   const runner = writeHarnessRunner(workspace, flags.dryRun);
   if (runner.created) {
@@ -101,37 +120,21 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
       log(`wrote ${map.path} (committed orientation map, ~${map.tokens} tokens)`);
     }
   } catch {
-    log('skip docs/codebase-map.md (map generation failed)');
-  }
-
-  const manifest = path.join(knowledgeDir, 'manifest.yaml');
-  if (!fs.existsSync(manifest)) {
-    if (!flags.dryRun) {
-      fs.mkdirSync(knowledgeDir, { recursive: true });
-      fs.writeFileSync(
-        manifest,
-        '# Local knowledge fallback (cloud/Linux)\nversion: 1\nupdated: ' +
-          new Date().toISOString().slice(0, 10) +
-          '\nentries: []\n',
-        'utf8'
-      );
-    }
-    stats.created.push('knowledge/manifest.yaml');
-    log('created knowledge/manifest.yaml (optional fallback)');
+    log('skip codebase map (map generation failed)');
   }
 
     try {
-    const episodes = collectEpisodes({ workspace, copilotHome });
+    const episodes = collectEpisodes({ workspace, copilotHome, home: flags?.home });
     if (episodes.length > 0) {
       if (flags.dryRun) {
-                const { consumed } = splitLedger(readLedger(storeDir(workspace)));
+                const { consumed } = splitLedger(readLedger(storeDir(workspace, { home: flags?.home })));
         const debt = episodes.filter((e) => !consumed.has(`${e.path}@${e.sha256}`)).length;
         if (debt > 0) {
           log(`armed ${debt} existing solution doc(s) as consolidation debt — drains at first session start`);
         }
       } else {
-        const store = ensureStore(workspace);
-        const { debt } = consolidateStatus({ workspace, copilotHome });
+        const store = ensureStore(workspace, { home: flags?.home });
+        const { debt } = consolidateStatus({ workspace, copilotHome, home: flags?.home });
         if (debt > 0) {
           if (store.created) stats.created.push('knowledge store');
           log(`armed ${debt} existing solution doc(s) as consolidation debt — drains at first session start`);

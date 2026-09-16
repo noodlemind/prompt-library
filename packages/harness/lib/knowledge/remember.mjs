@@ -8,6 +8,7 @@ import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTrans
 import { absorbOrAbort } from './admin.mjs';
 import { resolveWriteLayer } from './layer.mjs';
 import { bucketDirFor } from './overlay.mjs';
+import { episodeAbsPath } from '../project-layout.mjs';
 
 export function runRemember({ workspace, copilotHome, flags, argv, log = () => {}, home }) {
     const { mode } = readStoreConfig(workspace, { home });
@@ -91,7 +92,8 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     };
   }
 
-  const text = fs.readFileSync(path.join(workspace, episode.path), 'utf8');
+  const episodeFull = episodeAbsPath(workspace, episode.path, { home });
+  const text = fs.readFileSync(episodeFull, 'utf8');
   const sha256 = crypto.createHash('sha256').update(text).digest('hex');
 
     const newEpisode = { path: episode.path, sha256, kind: 'human-teaching', plan: null };
@@ -110,7 +112,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     fs.rmSync(opsPath, { force: true });
   }
   if (applied.exitCode !== 0) {
-        fs.rmSync(path.join(workspace, episode.path), { force: true });
+        fs.rmSync(episodeFull, { force: true });
         try {
       withStoreTransaction(workspace, { home, label: `remember: clear failure bookkeeping for ${episode.path}` }, ({ dir, recordCheckpoint }) => {
         try {
@@ -135,7 +137,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
       const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
         ? path.join(copilotHome, 'knowledge')
         : null;
-      runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log });
+      runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log, home });
     } catch {
       // advisory reindex — the rollback itself already succeeded
     }

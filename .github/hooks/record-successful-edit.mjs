@@ -64,6 +64,7 @@ const governed = relatives.filter(
     !relative.startsWith('../') &&
     !path.isAbsolute(relative) &&
     !relative.startsWith('docs/plans/') &&
+    !relative.startsWith('.harness/plans/') &&
     !relative.startsWith('.harness/')
 );
 let session = readSessionState(normalized.workspace);

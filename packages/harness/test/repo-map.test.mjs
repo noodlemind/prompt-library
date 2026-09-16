@@ -182,13 +182,15 @@ test('empty knowledge rebuild writes meta so status is empty not not-built', () 
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('writeCodebaseMap refuses to write through a symlinked docs/ directory', () => {
+test('writeCodebaseMap does not follow a symlinked docs/ directory', () => {
   const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-repomap-outside-'));
     fs.symlinkSync(outside, path.join(ws, 'docs'));
 
   const result = writeCodebaseMap({ workspace: ws });
-  assert.equal(result, null, 'a symlinked docs/ must refuse the write, not follow it');
+  assert.ok(result);
+  assert.equal(result.path, '.harness/codebase-map.md');
+  assert.ok(fs.existsSync(path.join(ws, '.harness', 'codebase-map.md')));
   assert.ok(!fs.existsSync(path.join(outside, 'codebase-map.md')), 'nothing written through the symlink');
 
   fs.rmSync(ws, { recursive: true, force: true });
@@ -209,12 +211,12 @@ test('writeCodebaseMap refuses to write when the target itself is a pre-existing
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-test('writeCodebaseMap writes normally when docs/ is a plain directory', () => {
+test('writeCodebaseMap writes to session map when docs/plans is absent', () => {
   const { ws } = gitRepo({ 'a.js': 'export const a = 1;' });
   const result = writeCodebaseMap({ workspace: ws });
   assert.ok(result);
-  assert.equal(result.path, 'docs/codebase-map.md');
-  assert.ok(fs.existsSync(path.join(ws, 'docs', 'codebase-map.md')));
+  assert.equal(result.path, '.harness/codebase-map.md');
+  assert.ok(fs.existsSync(path.join(ws, '.harness', 'codebase-map.md')));
   fs.rmSync(ws, { recursive: true, force: true });
 });
 

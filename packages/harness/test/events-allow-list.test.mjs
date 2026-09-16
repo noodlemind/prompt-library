@@ -21,7 +21,7 @@ function runHarness(args, options = {}) {
 }
 
 test('EVENT_TYPES accepts the four formerly dropped lifecycle types', () => {
-  for (const type of ['init_repo', 'recall', 'validate_plan', 'index']) {
+  for (const type of ['init_repo', 'recall', 'validate_plan', 'index', 'migrate_layout']) {
     assert.ok(EVENT_TYPES.has(type), `${type} must be allow-listed`);
   }
 });

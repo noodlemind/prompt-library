@@ -65,7 +65,7 @@ Combine all research findings into a structured plan:
 
 ### 5. Write Plan File
 
-Write the plan to `docs/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md` with:
+Write the plan to `.harness/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md` (default, gitignored), or `docs/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md` when git tracks files there. Prefer `harness plan-new` for the path. Frontmatter:
 
 **YAML frontmatter:**
 ```yaml

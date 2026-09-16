@@ -19,9 +19,17 @@ function isWithin(root, candidate) {
 function canonicalPlan(workspace, planPath) {
   try {
     const root = fs.realpathSync(workspace);
-    const plans = fs.realpathSync(path.join(workspace, 'docs', 'plans'));
     const full = fs.realpathSync(path.resolve(workspace, planPath));
-    return isWithin(root, plans) && isWithin(plans, full) ? full : null;
+    if (!isWithin(root, full)) return null;
+    for (const dir of ['docs/plans', '.harness/plans']) {
+      try {
+        const plans = fs.realpathSync(path.join(workspace, dir));
+        if (isWithin(root, plans) && isWithin(plans, full)) return full;
+      } catch {
+        // Directory may not exist.
+      }
+    }
+    return null;
   } catch {
     return null;
   }

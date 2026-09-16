@@ -30,6 +30,7 @@ import { resolveWriteLayer, ensureBucket, migrateRenamedBucket, episodeEligibleF
 import { bucketDirFor, readBucketMeta, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 import { readLearningFile, writeLearningFile, writeStoreFile } from './store-io.mjs';
+import { episodeResolveRoots } from '../project-layout.mjs';
 
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
 
@@ -101,50 +102,58 @@ export function todayClamped() {
 /**
  * Every containment-valid candidate full path for an episode's declared
  * relative path — workspace root FIRST, then (when a copilotHome is given)
- * `copilotHome/knowledge` SECOND. These are the exact same two roots
+ * `copilotHome/knowledge` SECOND, then the user-level project store
+ * (`~/.harness/projects/<repo-id>/`). These are the same roots
  * consolidate.mjs's `collectEpisodes` scans (product-repo-private
- * `docs/solutions/` and the global `~/.copilot/knowledge/solutions/`), so a
- * global episode's candidates-emitted path (relative to
- * `copilotHome/knowledge`, e.g. `solutions/perf/team-fix.md`) resolves the
- * same way it was collected from — a model asserting the path verbatim (as
- * instructed) must not have its evidence rejected purely because apply.mjs
- * only ever checked the workspace root. Each root gets its OWN PHYSICAL
- * containment guard (`assertNoSymlinkAncestors`, fs-safe.mjs — the same
- * helper purgeEpisode uses, closing the asymmetry an adversarial review
- * found: a path escaping ONE root lexically (a `../` climb) OR resolving
- * through a symlinked intermediate directory (e.g. `docs/solutions` itself
- * being a symlink — probe A2) is simply excluded from the candidate list for
- * THAT root — it is never allowed to "borrow" containment from the other
- * root. A plain lexical resolve+startsWith check here previously let a
- * symlinked `docs/solutions` verify an OUTSIDE file as genuine episode
- * evidence, since only the leaf was ever checked for being a symlink.
- * Returns an empty array when `p` is falsy or escapes/is unsafe under every
- * configured root. Existence is NOT checked here — callers try each
- * candidate in order (workspace first) and decide what "exists" means for
- * their own read (readFileNoFollow, fs.existsSync, ...). Each candidate
- * carries the `root` it resolved under so the reader can hand that exact root
- * to readFileNoFollow for a canonicalize-after-acquire containment verify —
- * the read must be checked against the SAME root the candidate came from.
+ * `docs/solutions/`, the global `~/.copilot/knowledge/solutions/`, and the
+ * off-repo overlay), so a global or overlay episode's candidates-emitted
+ * path resolves the same way it was collected from — a model asserting the
+ * path verbatim (as instructed) must not have its evidence rejected purely
+ * because apply.mjs only ever checked the workspace root. Each root gets
+ * its OWN PHYSICAL containment guard (`assertNoSymlinkAncestors`,
+ * fs-safe.mjs — the same helper purgeEpisode uses, closing the asymmetry an
+ * adversarial review found: a path escaping ONE root lexically (a `../`
+ * climb) OR resolving through a symlinked intermediate directory (e.g.
+ * `docs/solutions` itself being a symlink — probe A2) is simply excluded
+ * from the candidate list for THAT root — it is never allowed to "borrow"
+ * containment from the other root. A plain lexical resolve+startsWith check
+ * here previously let a symlinked `docs/solutions` verify an OUTSIDE file as
+ * genuine episode evidence, since only the leaf was ever checked for being
+ * a symlink. Returns an empty array when `p` is falsy or escapes/is unsafe
+ * under every configured root. Existence is NOT checked here — callers try
+ * each candidate in order (workspace first) and decide what "exists" means
+ * for their own read (readFileNoFollow, fs.existsSync, ...). Each candidate
+ * carries the `root` it resolved under so the reader can hand that exact
+ * root to readFileNoFollow for a canonicalize-after-acquire containment
+ * verify — the read must be checked against the SAME root the candidate
+ * came from.
  */
-function resolveEpisodeFile(workspace, copilotHome, p) {
+function resolveEpisodeFile(workspace, copilotHome, p, home) {
   if (!p) return [];
-  const roots = [path.resolve(workspace)];
-  if (copilotHome) roots.push(path.resolve(copilotHome, 'knowledge'));
   const candidates = [];
-  for (const root of roots) {
+  for (const root of episodeResolveRoots(workspace, { home, copilotHome })) {
     const full = assertNoSymlinkAncestors(root, p);
     if (full) candidates.push({ full, root });
   }
   return candidates;
 }
 
-/** The first candidate (workspace root first, then the global root) that
+/** The first candidate (workspace, then the global root, then overlay) that
  * actually exists on disk — as a `{ full, root }` pair so the caller can
  * containment-verify the read against the matched root — or null if the path
  * escapes every root or exists in none of them. */
-function firstExistingEpisodeFile(workspace, copilotHome, p) {
-  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, p)) {
-    if (fs.existsSync(full)) return { full, root };
+function episodeHashMatches(full, root, sha256) {
+  if (!sha256) return true;
+  const text = readFileNoFollow(full, { root });
+  if (text === null) return false;
+  return crypto.createHash('sha256').update(text).digest('hex') === sha256;
+}
+
+function firstExistingEpisodeFile(workspace, copilotHome, p, home, sha256) {
+  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, p, home)) {
+    if (!fs.existsSync(full)) continue;
+    if (!episodeHashMatches(full, root, sha256)) continue;
+    return { full, root };
   }
   return null;
 }
@@ -162,7 +171,7 @@ function firstExistingEpisodeFile(workspace, copilotHome, p) {
  * files is still workspace-anchored, not two-rooted. Dedupe, sort, cap at 8
  * (module-private; only `renderLearning` writes the result).
  */
-function extractAnchors({ workspace, copilotHome, episodes }) {
+function extractAnchors({ workspace, copilotHome, episodes, home }) {
   const found = new Set();
   const root = path.resolve(workspace);
   // Containment guard (same root/startsWith idiom this module uses
@@ -175,7 +184,7 @@ function extractAnchors({ workspace, copilotHome, episodes }) {
   };
   for (const e of episodes || []) {
     if (!e.path) continue;
-    const hit = firstExistingEpisodeFile(workspace, copilotHome, e.path);
+    const hit = firstExistingEpisodeFile(workspace, copilotHome, e.path, home, e.sha256);
     if (!hit) continue;
     // Never follow a symlinked episode file — its target's content must
     // never be scanned for anchor text either. `root: hit.root` runs the
@@ -402,9 +411,9 @@ function verifiedFixLinks(fm) {
  * + sha256 match + kind agreement). Fails closed (false) only when every
  * candidate fails — never throws.
  */
-function verifyEpisodeKind(workspace, copilotHome, e) {
+function verifyEpisodeKind(workspace, copilotHome, e, home) {
   if (!e || !e.path || !e.sha256) return false;
-  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, e.path)) {
+  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, e.path, home)) {
     // Never follow a symlinked candidate — a symlink's target content must
     // never verify (or hash-match) as this episode's evidence. `root` runs the
     // canonicalize-after-acquire containment verify against the matched root.
@@ -427,8 +436,8 @@ function verifyEpisodeKind(workspace, copilotHome, e) {
  * specific question answered, not "does this episode verify as whatever it
  * claims", so a non-human-teaching assertion still short-circuits to false
  * without touching disk. */
-function verifyHumanTeachingEpisode(workspace, copilotHome, e) {
-  return Boolean(e) && e.kind === 'human-teaching' && verifyEpisodeKind(workspace, copilotHome, e);
+function verifyHumanTeachingEpisode(workspace, copilotHome, e, home) {
+  return Boolean(e) && e.kind === 'human-teaching' && verifyEpisodeKind(workspace, copilotHome, e, home);
 }
 
 /**
@@ -455,9 +464,9 @@ function verifyHumanTeachingEpisode(workspace, copilotHome, e) {
  * human-teaching episode to disk BEFORE applyOps runs, so it verifies here
  * like any other genuine episode.
  */
-function verifyAdmittedEpisodeKinds(workspace, copilotHome, episodes, opIndex) {
+function verifyAdmittedEpisodeKinds(workspace, copilotHome, episodes, opIndex, home) {
   for (const e of episodes) {
-    if (!verifyEpisodeKind(workspace, copilotHome, e)) {
+    if (!verifyEpisodeKind(workspace, copilotHome, e, home)) {
       const asserted = e.kind === 'insight' ? 'insight' : e.kind === 'human-teaching' ? 'human-teaching' : 'fix';
       return fail(
         'E_SCHEMA',
@@ -478,9 +487,9 @@ function verifyAdmittedEpisodeKinds(workspace, copilotHome, episodes, opIndex) {
  * candidate — true only when some contained candidate exists and its CURRENT
  * content hashes to the asserted sha256. Fails closed (false); never throws.
  */
-function episodeShaVerifies(workspace, copilotHome, e) {
+function episodeShaVerifies(workspace, copilotHome, e, home) {
   if (!e || !e.path || !e.sha256) return false;
-  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, e.path)) {
+  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, e.path, home)) {
     const text = readFileNoFollow(full, { root });
     if (text === null) continue;
     if (crypto.createHash('sha256').update(text).digest('hex') === e.sha256) return true;
@@ -488,9 +497,9 @@ function episodeShaVerifies(workspace, copilotHome, e) {
   return false;
 }
 
-function verifyNoopEpisodes(workspace, copilotHome, episodes, opIndex) {
+function verifyNoopEpisodes(workspace, copilotHome, episodes, opIndex, home) {
   for (const e of episodes) {
-    if (!episodeShaVerifies(workspace, copilotHome, e)) {
+    if (!episodeShaVerifies(workspace, copilotHome, e, home)) {
       return fail(
         'E_SCHEMA',
         `op ${opIndex}: NOOP episode ${e.path} does not exist on disk or its sha256 does not match — cannot clear debt for a fabricated or edited episode`
@@ -511,13 +520,14 @@ function verifyNoopEpisodes(workspace, copilotHome, episodes, opIndex) {
  * shared reader isn't worth factoring out for two short, independently-
  * failing checks.
  */
-function episodeDate(workspace, copilotHome, e) {
+function episodeDate(workspace, copilotHome, e, home) {
   if (!e.path) return null;
-  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, e.path)) {
+  for (const { full, root } of resolveEpisodeFile(workspace, copilotHome, e.path, home)) {
     // Never follow a symlinked candidate here either — same reasoning as
     // verifyEpisodeKind above; `root` runs the containment verify.
     const text = readFileNoFollow(full, { root });
     if (text === null) continue;
+    if (e.sha256 && crypto.createHash('sha256').update(text).digest('hex') !== e.sha256) continue;
     const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!m) continue;
     const dateLine = m[1].split('\n').find((l) => /^date:\s*/.test(l));
@@ -566,7 +576,7 @@ function episodeDate(workspace, copilotHome, e) {
  *     fails closed either way — never counts as recent enough to override a
  *     recorded human decision.
  */
-function overridesGovernanceRecency(workspace, copilotHome, episodes, record, { humanPresent = false } = {}) {
+function overridesGovernanceRecency(workspace, copilotHome, episodes, record, { humanPresent = false, home } = {}) {
   if (humanPresent) return true;
   if (!record) return true;
   const recordAt = String(record.at ?? '');
@@ -583,7 +593,7 @@ function overridesGovernanceRecency(workspace, copilotHome, episodes, record, { 
   if (!/^\d{4}-\d{2}-\d{2}/.test(recordAt)) return false;
   const recordDay = recordAt.slice(0, 10);
   return episodes.every((e) => {
-    const d = episodeDate(workspace, copilotHome, e);
+    const d = episodeDate(workspace, copilotHome, e, home);
     return d != null && d > recordDay;
   });
 }
@@ -870,7 +880,7 @@ export function applyOps({
 
         const candidateKeys = new Set();
     {
-      const onDisk = collectEpisodes({ workspace, copilotHome });
+      const onDisk = collectEpisodes({ workspace, copilotHome, home });
             const { consumed } = splitLedger(readLedger(dir));
       if (layerRoot !== dir) {
         for (const key of splitLedger(readLedger(layerRoot)).consumed) consumed.add(key);
@@ -927,7 +937,7 @@ export function applyOps({
       if (op.op === 'NOOP') {
         const bad = validateEpisodes(op.episodes, i);
         if (bad) return rejectOp(bad.code, bad.reason, op.episodes);
-                const badNoop = verifyNoopEpisodes(workspace, copilotHome, op.episodes, i);
+                const badNoop = verifyNoopEpisodes(workspace, copilotHome, op.episodes, i, home);
         if (badNoop) return rejectOp(badNoop.code, badNoop.reason, op.episodes);
         planned.push({ ...op });
         continue;
@@ -1055,7 +1065,7 @@ export function applyOps({
           });
         }
       } else {
-                const badKind = verifyAdmittedEpisodeKinds(workspace, copilotHome, op.episodes, i);
+                const badKind = verifyAdmittedEpisodeKinds(workspace, copilotHome, op.episodes, i, home);
         if (badKind) return rejectOp(badKind.code, badKind.reason, op.episodes);
                 const notCandidate = assertCandidacy(op, i);
         if (notCandidate) return rejectOp(notCandidate.code, notCandidate.reason, op.episodes);
@@ -1083,8 +1093,8 @@ export function applyOps({
         allHumanTeaching =
           isReteachShape &&
           op.episodes.length > 0 &&
-          op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
-                    overridesGovernanceRecency(workspace, copilotHome, op.episodes, governance.get(op.target), { humanPresent });
+          op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e, home)) &&
+                    overridesGovernanceRecency(workspace, copilotHome, op.episodes, governance.get(op.target), { humanPresent, home });
                 if (!allHumanTeaching && !isActiveFm(existing.get(op.target).fm)) {
           return {
             kind: 'reject',
@@ -1345,7 +1355,7 @@ export function applyOps({
       const domain = normalizeSlug(op.domain);
       const slug = normalizeSlug(op.slug);
       const id = `${domain}/${slug}`;
-            let source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) ? 'human' : 'auto';
+            let source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e, home)) ? 'human' : 'auto';
       let status = source === 'human' ? 'active' : 'provisional';
       let provenance = writeProvenance;
       if (promotionMode) {
@@ -1358,7 +1368,7 @@ export function applyOps({
         trigger: op.trigger,
         body: op.body,
         episodes: op.episodes,
-        anchors: extractAnchors({ workspace, copilotHome, episodes: op.episodes }),
+        anchors: extractAnchors({ workspace, copilotHome, episodes: op.episodes, home }),
         origin,
         status,
         source,
@@ -1376,7 +1386,7 @@ export function applyOps({
     for (const op of planned) {
       if (op.op !== 'STRENGTHEN') continue;
       const target = existing.get(op.target);
-      const content = composeStrengthenedLearning(target, op.episodes, workspace, copilotHome);
+      const content = composeStrengthenedLearning(target, op.episodes, workspace, copilotHome, home);
       if (content === null) {
         return rejectOp('E_TARGET', `op ${op.target}: learning file could not be read safely from the store`, op.episodes);
       }
@@ -1444,8 +1454,8 @@ export function applyOps({
       if (!entry || !['retire', 'dispute', 'promote'].includes(entry.action)) continue;
       const isReteach =
         op.episodes.length > 0 &&
-        op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e)) &&
-        overridesGovernanceRecency(workspace, copilotHome, op.episodes, entry, { humanPresent });
+        op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e, home)) &&
+        overridesGovernanceRecency(workspace, copilotHome, op.episodes, entry, { humanPresent, home });
             if (isReteach && layerRoot === dir) {
         appendGovernance(dir, { id, action: 'confirm', reason: 'superseded by re-teach', to: null, at: governanceAt });
         continue;
@@ -1633,7 +1643,7 @@ export function updateFrontmatterField(file, field, value) {
   return writeLearningFile(file, next);
 }
 
-function composeStrengthenedLearning(target, episodes, workspace, copilotHome) {
+function composeStrengthenedLearning(target, episodes, workspace, copilotHome, home) {
     const text = readLearningFile(target.file);
   if (text === null) return null;
   const { fm, body } = parseLearningFrontmatter(text);
@@ -1651,7 +1661,7 @@ function composeStrengthenedLearning(target, episodes, workspace, copilotHome) {
     trigger: fm.trigger || '',
     body,
     episodes: merged,
-    anchors: extractAnchors({ workspace, copilotHome, episodes: merged }),
+    anchors: extractAnchors({ workspace, copilotHome, episodes: merged, home }),
     origin: fm.origin || 'unknown',
     status,
     source: fm.source || 'auto',

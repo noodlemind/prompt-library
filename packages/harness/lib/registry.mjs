@@ -10,6 +10,7 @@ import {
   cmdInstallOrUpgrade,
   cmdDoctor,
   cmdInitRepo,
+  cmdMigrate,
   cmdIndex,
   cmdGate,
   cmdVerify,
@@ -738,6 +739,16 @@ registerCommand({
     surfaces: ['cli', 'tui'],
   args: { positionals: [], flags: [] },
   handler: cmdInitRepo,
+});
+
+registerCommand({
+  name: 'migrate',
+  summary: 'move gitignored docs/plans and docs/solutions out of a product tree',
+  group: 'workspace',
+  sideEffect: 'mutate',
+  surfaces: ['cli', 'tui'],
+  args: { positionals: [], flags: [] },
+  handler: cmdMigrate,
 });
 
 registerCommand({

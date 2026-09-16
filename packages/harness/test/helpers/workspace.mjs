@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { tempDir } from './temp.mjs';
+import { git } from './store.mjs';
 
 /**
  * @param {{ prefix?: string, workspacePrefix?: string, homePrefix?: string }} [opts]
@@ -34,4 +35,28 @@ export function ensureWorkspaceLayout(workspace, opts = {}) {
     fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
   }
   return workspace;
+}
+
+/**
+ * Make `docs/solutions` a git-tracked write root. Also points origin/HEAD at
+ * the current branch so knowledge writes stay on the golden layer instead of
+ * a branch bucket (no origin/HEAD → resolveDefaultBranch is null).
+ */
+export function trackWorkspaceSolutions(ws) {
+  const keep = path.join(ws, 'docs', 'solutions', '.gitkeep');
+  fs.mkdirSync(path.dirname(keep), { recursive: true });
+  if (!fs.existsSync(keep)) fs.writeFileSync(keep, '');
+  if (!fs.existsSync(path.join(ws, '.git'))) {
+    git(ws, ['init', '-q', '-b', 'main']);
+    git(ws, ['config', 'user.email', 't@t']);
+    git(ws, ['config', 'user.name', 't']);
+  }
+  git(ws, ['add', 'docs/solutions/.gitkeep']);
+  if (git(ws, ['diff', '--cached', '--quiet']).status !== 0) {
+    git(ws, ['commit', '-qm', 'track solutions']);
+  }
+  const branch = (git(ws, ['symbolic-ref', '--quiet', '--short', 'HEAD']).stdout || 'main').trim() || 'main';
+  git(ws, ['update-ref', `refs/remotes/origin/${branch}`, 'HEAD']);
+  git(ws, ['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`]);
+  return ws;
 }

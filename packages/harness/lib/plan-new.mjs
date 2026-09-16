@@ -5,6 +5,8 @@ import { createStyle } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { loadConfiguredChecks } from './plan-readiness.mjs';
 import { isPrimitivePath } from './primitive-governance.mjs';
+import { plansWriteRel } from './project-layout.mjs';
+import { ensureHarnessDir } from './session.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
@@ -43,6 +45,7 @@ export function buildPlanSkeleton({
   risk = 'green',
   status,
   check,
+  plansRel = 'docs/plans',
 } = {}) {
   scalar(slug, 'slug', { required: true });
   scalar(title, 'title');
@@ -62,7 +65,7 @@ export function buildPlanSkeleton({
     scalar(gap.primitive, 'gap', { required: true });
   }
 
-  const rel = `docs/plans/${date}-${type}-${slug}-plan.md`;
+  const rel = `${plansRel}/${date}-${type}-${slug}-plan.md`;
   const impactedList = impacted.length ? impacted.slice() : gap?.primitive ? [gap.primitive] : [];
   const primitive = impactedList.some(isPrimitivePath) || isPrimitivePath(gap?.primitive);
   const finalStatus = status || (gap ? 'blocked-capability' : 'in-progress');
@@ -188,6 +191,8 @@ export async function cmdPlanNew(argv) {
   }
 
   if (!opts.date) opts.date = new Date().toISOString().slice(0, 10);
+  opts.plansRel = plansWriteRel(workspace);
+  if (!toStdout) ensureHarnessDir(workspace, dryRun);
 
   const configured = loadConfiguredChecks(workspace);
   if (configured.error) throw new Error(`plan-new: ${configured.error}`);

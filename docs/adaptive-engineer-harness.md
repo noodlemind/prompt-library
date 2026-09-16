@@ -241,7 +241,10 @@ For explicit or non-TUI setup, use `harness install --configure-vscode`. See the
 | Deterministic command contract | `.github/skills/references/harness-tool-contract.md` |
 | Reusable workflows and specialists | `.github/skills/` and `.github/agents/` |
 | Team episodes | `knowledge/solutions/` |
-| Product change contracts | `docs/plans/` in each product repository |
+| Product change contracts | `.harness/plans/` in the product workspace (gitignored). Committed `docs/plans/` is still used when that directory is git-tracked |
+| Product private episodes | `~/.harness/projects/<repo-id>/docs/solutions/` (default). Committed `docs/solutions/` is still used when that directory is git-tracked |
+| Existing leftovers | `harness migrate` (also runs from `harness init-repo`) moves gitignored `docs/plans` and `docs/solutions` to those locations |
+| Session map / conventions | `.harness/codebase-map.md` and `.harness/agent-context.md` unless committed `docs/` copies already exist |
 
 ## Comparison references
 

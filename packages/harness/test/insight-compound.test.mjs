@@ -7,10 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { collectEpisodes } from '../lib/knowledge/consolidate.mjs';
 import { runInsightCompound } from '../lib/compound.mjs';
+import { trackWorkspaceSolutions } from './helpers/workspace.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
+function keepSolutionsInWorkspace(ws) {
+  return trackWorkspaceSolutions(ws);
+}
 const run = (args, env = {}) =>
   spawnSync(process.execPath, [binPath, ...args], {
     encoding: 'utf8',
@@ -27,7 +31,7 @@ const runAsync = (args, env = {}) =>
   });
 
 test('compound --insight writes a kind: insight doc without any plan or evidence', () => {
-  const ws = tempDir('insight-ws-');
+  const ws = keepSolutionsInWorkspace(tempDir('insight-ws-'));
   const home = tempDir('insight-home-');
   const res = run([
     'compound', '--insight', '--title', 'Orders pool exhaustion under bulk load',
@@ -46,7 +50,7 @@ test('compound --insight writes a kind: insight doc without any plan or evidence
 });
 
 test('runInsightCompound rolls back the just-written episode (no orphan) and reports a clean recoverable failure when indexing throws', () => {
-  const ws = tempDir('insight-idxfail-ws-');
+  const ws = keepSolutionsInWorkspace(tempDir('insight-idxfail-ws-'));
   const copilotHome = tempDir('insight-idxfail-ch-');
   const home = tempDir('insight-idxfail-hh-');
     fs.mkdirSync(path.join(ws, 'knowledge', 'manifest.yaml'), { recursive: true });
@@ -68,7 +72,7 @@ test('runInsightCompound rolls back the just-written episode (no orphan) and rep
 });
 
 test('P2: runInsightCompound reports PARTIAL recovery (not a false clean rollback) when the episode cannot be removed on rollback', () => {
-  const ws = tempDir('insight-partial-ws-');
+  const ws = keepSolutionsInWorkspace(tempDir('insight-partial-ws-'));
   const copilotHome = tempDir('insight-partial-ch-');
   const home = tempDir('insight-partial-hh-');
   // Force runIndexKnowledge to throw (manifest path is a directory → EISDIR).
@@ -107,7 +111,7 @@ test('P2: runInsightCompound reports PARTIAL recovery (not a false clean rollbac
 });
 
 test('runInsightCompound --dry-run logs "would write" (never "wrote") and creates no file', () => {
-  const ws = tempDir('insight-dry-ws-');
+  const ws = keepSolutionsInWorkspace(tempDir('insight-dry-ws-'));
   const copilotHome = tempDir('insight-dry-ch-');
   const home = tempDir('insight-dry-hh-');
   const logs = [];
@@ -149,7 +153,7 @@ test('compound --insight requires --title and body', () => {
 });
 
 test('compound --insight reads body from --body-file and indexes the doc', () => {
-  const ws = tempDir('insight-bf-');
+  const ws = keepSolutionsInWorkspace(tempDir('insight-bf-'));
   const home = tempDir('insight-bfh-');
   const bodyFile = path.join(ws, 'note.md');
   fs.writeFileSync(bodyFile, 'Retry storms amplify 429s when jitter is missing.\n');
@@ -166,7 +170,7 @@ test('compound --insight reads body from --body-file and indexes the doc', () =>
 });
 
 test('P1#1: N concurrent same-title captures never overwrite — N distinct files and N distinct reported paths', async () => {
-  const ws = tempDir('insight-race-ws-');
+  const ws = keepSolutionsInWorkspace(tempDir('insight-race-ws-'));
   const home = tempDir('insight-race-home-');
   const N = 16;
   const args = [
@@ -186,7 +190,7 @@ test('P1#1: N concurrent same-title captures never overwrite — N distinct file
 });
 
 test('P1#1: a pre-existing file at the chosen suffix forces the next suffix (exclusive-create, never overwrite)', () => {
-  const ws = tempDir('insight-excl-ws-');
+  const ws = keepSolutionsInWorkspace(tempDir('insight-excl-ws-'));
   const home = tempDir('insight-excl-home-');
   const args = ['compound', '--insight', '--title', 'Exclusive suffix lesson', '--body', 'One.', '--workspace', ws, '--copilot-home', home, '--json'];
 
@@ -206,7 +210,7 @@ test('P1#1: a pre-existing file at the chosen suffix forces the next suffix (exc
 });
 
 test('same-day same-title insights never overwrite — deterministic suffix', () => {
-  const ws = tempDir('insight-dup-');
+  const ws = keepSolutionsInWorkspace(tempDir('insight-dup-'));
   const home = tempDir('insight-duph-');
   const args = [
     'compound', '--insight', '--title', 'Duplicate lesson', '--body', 'First observation.',
@@ -222,10 +226,11 @@ test('same-day same-title insights never overwrite — deterministic suffix', ()
 
 test('category input is confined to one safe path segment', () => {
   const ws = tempDir('insight-cat-');
+  const harnessHome = tempDir('insight-cathh-');
   const res = run([
     'compound', '--insight', '--title', 'Escape attempt', '--body', 'body text',
     '--category', '../../outside', '--workspace', ws, '--copilot-home', tempDir('insight-cath-'), '--json',
-  ]);
+  ], { HARNESS_HOME: harnessHome });
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
   assert.match(out.path, /^docs\/solutions\/outside\//);
@@ -233,7 +238,7 @@ test('category input is confined to one safe path segment', () => {
 });
 
 test('an embedded newline in the title cannot break the line-oriented frontmatter', () => {
-  const ws = tempDir('insight-nl-');
+  const ws = keepSolutionsInWorkspace(tempDir('insight-nl-'));
   const home = tempDir('insight-nlh-');
   const res = run([
     'compound', '--insight', '--title', 'Title line one\nline two: fake-key',
@@ -245,8 +250,9 @@ test('an embedded newline in the title cannot break the line-oriented frontmatte
 
     const fmBlock = doc.match(/^---\n([\s\S]*?)\n---/)[1];
   const fmLines = fmBlock.split('\n');
-  assert.equal(fmLines.length, 3, 'title/kind/date — no extra line injected');
+  assert.ok(fmLines.length >= 3, 'title/kind/date (plus optional git provenance) present');
   assert.ok(fmLines.every((l) => /^[\w-]+:/.test(l)), 'every frontmatter line is still a key: value line');
+  assert.equal(fmLines.filter((l) => /^fake-key:/.test(l)).length, 0, 'embedded newline must not inject a new key');
   assert.match(doc, /title: "Title line one\\nline two: fake-key"/);
 
     const episodes = collectEpisodes({ workspace: ws, copilotHome: home });

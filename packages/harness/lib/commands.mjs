@@ -17,6 +17,7 @@ import {
 import { approvedBundleNames, syncBundles } from './bundle-sync.mjs';
 import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
+import { leftoverWorkspaceArtifacts, runMigrateLayout } from './migrate-layout.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
@@ -240,8 +241,14 @@ export async function cmdInstallOrUpgrade(command, argv) {
     if (flags.dryRun) console.log(ui.paint('muted', '  dry-run — no files written'));
     else {
       printNext('harness doctor');
-            if (command === 'upgrade' && fs.existsSync(path.join(process.cwd(), 'docs', 'solutions'))) {
-        printNext('harness init-repo  # arm existing docs/solutions as consolidation debt');
+            if (command === 'upgrade') {
+        const workspace = path.resolve(flags.workspace);
+        const leftovers = leftoverWorkspaceArtifacts(workspace);
+        if (leftovers.length) {
+          printNext('harness migrate  # move gitignored docs/plans and docs/solutions out of the product tree');
+        } else if (fs.existsSync(path.join(workspace, 'docs', 'solutions'))) {
+          printNext('harness init-repo  # arm existing docs/solutions as consolidation debt');
+        }
       }
     }
   }
@@ -323,29 +330,80 @@ export async function cmdStatus(argv) {
   return 0;
 }
 
+export async function cmdMigrate(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const logger = (m) => log(flags, m);
+  const result = runMigrateLayout({
+    workspace,
+    dryRun: flags.dryRun,
+    log: logger,
+    home: flags.home,
+  });
+  writeEvent(workspace, flags, {
+    type: 'migrate_layout',
+    command: 'migrate',
+    result: result.conflicts.length ? 'fail' : 'pass',
+    exitCode: result.conflicts.length ? EXIT.syncConflict : 0,
+  });
+  if (flags.json) {
+    emitJson(flags, result);
+  } else {
+    const moved = result.moved.length;
+    const value = flags.dryRun
+      ? `would move ${moved} file${moved === 1 ? '' : 's'}`
+      : moved
+        ? `moved ${moved} file${moved === 1 ? '' : 's'}`
+        : result.kept.length
+          ? 'nothing to migrate (committed docs/ paths kept)'
+          : 'nothing to migrate';
+    console.log(
+      ui.line({
+        state: result.conflicts.length ? 'warn' : 'ok',
+        key: 'migrate',
+        value,
+      })
+    );
+    if (result.conflicts.length) printNext('resolve destination conflicts, then re-run harness migrate');
+  }
+  return result.conflicts.length ? EXIT.syncConflict : 0;
+}
+
 export async function cmdInitRepo(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
-  runInitRepo({ workspace, flags, log: logger, copilotHome });
+  flags.home = flags.home || process.env.HARNESS_HOME;
+  const stats = runInitRepo({ workspace, flags, log: logger, copilotHome });
+  const migrateConflicts = stats.migrate?.conflicts?.length || 0;
+  const exitCode = migrateConflicts ? EXIT.syncConflict : 0;
   writeEvent(workspace, flags, {
     type: 'init_repo',
     command: 'init-repo',
-    result: 'pass',
-    exitCode: 0,
+    result: exitCode ? 'fail' : 'pass',
+    exitCode,
   });
-  if (!flags.json) {
-    console.log(ui.line({ state: 'ok', key: 'init-repo', value: 'done' }));
+  if (flags.json) {
+    emitJson(flags, { ...stats, exitCode });
+  } else {
+    console.log(
+      ui.line({
+        state: exitCode ? 'warn' : 'ok',
+        key: 'init-repo',
+        value: exitCode ? `seeded with ${migrateConflicts} migrate conflict(s)` : 'done',
+      })
+    );
     console.log(
       ui.paint(
         'muted',
         '  run `harness index` now, and again after a major pull from main or a docs rewrite · drift: harness index --status'
       )
     );
-    printNext('harness index');
+    if (exitCode) printNext('harness migrate  # resolve leftover docs/ conflicts');
+    else printNext('harness index');
   }
-  return 0;
+  return exitCode;
 }
 
 export async function cmdIndex(argv) {
@@ -501,6 +559,7 @@ export async function cmdIndex(argv) {
     copilotHome,
     flags: { ...flags, headSha: head },
     log: logger,
+    home: flags?.home,
   });
   // Refresh the committed codebase map alongside the knowledge index.
   try {
@@ -1190,7 +1249,7 @@ export async function cmdConsolidate(argv) {
 
   // Default: --status (deterministic debt gauge, zero model cost).
   const { consolidateStatus } = await import('./knowledge/consolidate.mjs');
-  const status = consolidateStatus({ workspace, copilotHome });
+  const status = consolidateStatus({ workspace, copilotHome, home: flags.home || process.env.HARNESS_HOME });
   writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
   if (flags.json) {
     emitJson(flags, status);
@@ -1386,7 +1445,12 @@ export async function cmdEvalKnowledge(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
-  const result = evalKnowledge({ workspace, copilotHome, negativeQueries: DEFAULT_NEGATIVE_QUERIES });
+  const result = evalKnowledge({
+    workspace,
+    copilotHome,
+    home: flags.home || process.env.HARNESS_HOME,
+    negativeQueries: DEFAULT_NEGATIVE_QUERIES,
+  });
 
   if (flags.json) {
     emitJson(flags, result);
@@ -1445,7 +1509,15 @@ export async function cmdKnowledge(argv) {
     const isAll = rawTarget === '--all';
         const target = !isAll && rawTarget && !rawTarget.startsWith('--') ? rawTarget : null;
     const logger = (m) => log(flags, m);
-        const result = isAll ? purgeAll({ workspace, log: logger }) : purgeEpisode({ workspace, target, copilotHome, log: logger });
+        const result = isAll
+      ? purgeAll({ workspace, log: logger, home: flags.home || process.env.HARNESS_HOME })
+      : purgeEpisode({
+          workspace,
+          target,
+          copilotHome,
+          log: logger,
+          home: flags.home || process.env.HARNESS_HOME,
+        });
     writeEvent(workspace, flags, {
       type: 'knowledge',
       command: 'knowledge',
@@ -1778,7 +1850,8 @@ export async function cmdGet(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
-  const result = runGet({ workspace, copilotHome, flags });
+  flags.home = flags.home || process.env.HARNESS_HOME;
+  const result = runGet({ workspace, copilotHome, flags, home: flags.home });
 
   if (flags.json) {
     emitJson(flags, result);

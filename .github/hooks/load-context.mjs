@@ -12,13 +12,16 @@ function readStdin() {
 }
 
 function listPlanRels(workspace) {
-  const plansDir = path.join(workspace, 'docs', 'plans');
-  if (!fs.existsSync(plansDir)) return [];
-  return fs
-    .readdirSync(plansDir)
-    .filter((f) => f.endsWith('.md') && !f.startsWith('_') && f !== 'README.md')
-    .sort()
-    .map((f) => path.join('docs', 'plans', f).replace(/\\/g, '/'));
+  const out = [];
+  for (const dirRel of ['docs/plans', '.harness/plans']) {
+    const plansDir = path.join(workspace, dirRel);
+    if (!fs.existsSync(plansDir)) continue;
+    for (const f of fs.readdirSync(plansDir)) {
+      if (!f.endsWith('.md') || f.startsWith('_') || f === 'README.md') continue;
+      out.push(`${dirRel}/${f}`);
+    }
+  }
+  return out.sort();
 }
 
 function parsePlanFrontmatter(text) {
@@ -90,9 +93,12 @@ const plan = findActivePlan(workspace);
 if (plan) {
   parts.push(`Active plan candidate: ${plan}`);
 }
-const agentCtx = path.join(workspace, 'docs', 'agent-context.md');
-if (fs.existsSync(agentCtx)) {
-  parts.push(`Project conventions: docs/agent-context.md`);
+const agentCtx = [
+  path.join(workspace, 'docs', 'agent-context.md'),
+  path.join(workspace, '.harness', 'agent-context.md'),
+].find((p) => fs.existsSync(p));
+if (agentCtx) {
+  parts.push(`Project conventions: ${path.relative(workspace, agentCtx).replace(/\\/g, '/')}`);
 }
 
 const message = `[harness hooks] Session context:\n- ${parts.join('\n- ')}`;

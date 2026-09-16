@@ -28,7 +28,7 @@ export const LOOKUP_KIND_SUMMARIES = Object.freeze({
   file: 'a tracked workspace file by relative path',
   symbol: 'a declaration by name, from the structural index',
   document: 'a knowledge doc by manifest docid',
-  plan: 'a plan under docs/plans by filename',
+  plan: 'a plan under .harness/plans or docs/plans by filename',
   skill: 'a skill by its directory name under .github/skills',
   check: 'a named check from the trusted check config',
   run: 'a recorded run (Phase 4a)',
@@ -133,10 +133,10 @@ function symbolEntity({ workspace, identifier, home }) {
   };
 }
 
-function documentEntity({ workspace, copilotHome, identifier }) {
+function documentEntity({ workspace, copilotHome, identifier, home }) {
   const entry = findEntryByDocid(copilotHome, workspace, identifier);
   if (!entry) throw notFound({ kind: 'document', identifier, hint: 'a docid from the knowledge manifest' });
-  const resolved = resolveDocPath(copilotHome, workspace, entry);
+  const resolved = resolveDocPath(copilotHome, workspace, entry, { home });
   const raw = resolved?.full ? readFileNoFollow(resolved.full, { root: resolved.root }) : null;
   return {
     kind: 'document',
@@ -151,14 +151,31 @@ function documentEntity({ workspace, copilotHome, identifier }) {
 }
 
 function planEntity({ workspace, identifier }) {
-    const rel = identifier.startsWith('docs/plans/') ? identifier : path.posix.join('docs/plans', identifier);
-  const { escaped, raw } = readUnderWorkspace(workspace, rel);
+  const candidates = identifier.startsWith('docs/plans/') || identifier.startsWith('.harness/plans/')
+    ? [identifier]
+    : [`docs/plans/${identifier}`, `.harness/plans/${identifier}`];
+  let rel = candidates[0];
+  let raw = null;
+  let escaped = false;
+  for (const candidate of candidates) {
+    const read = readUnderWorkspace(workspace, candidate);
+    escaped = read.escaped;
+    if (!read.escaped && read.raw !== null) {
+      rel = candidate;
+      raw = read.raw;
+      break;
+    }
+  }
   if (escaped || raw === null) {
-    const dir = path.join(path.resolve(workspace), 'docs', 'plans');
-    const near = fs.existsSync(dir)
-      ? fs.readdirSync(dir).filter((f) => f.endsWith('.md')).slice(0, 5).map((f) => ({ kind: 'plan', id: f, location: `docs/plans/${f}` }))
-      : [];
-    throw notFound({ kind: 'plan', identifier, hint: 'a plan filename under docs/plans/', related: near });
+    const near = [];
+    for (const dirRel of ['docs/plans', '.harness/plans']) {
+      const dir = path.join(path.resolve(workspace), dirRel);
+      if (!fs.existsSync(dir)) continue;
+      for (const f of fs.readdirSync(dir).filter((name) => name.endsWith('.md')).slice(0, 5)) {
+        near.push({ kind: 'plan', id: f, location: `${dirRel}/${f}` });
+      }
+    }
+    throw notFound({ kind: 'plan', identifier, hint: 'a plan filename under docs/plans/ or .harness/plans/', related: near });
   }
   const fm = raw.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
   const field = (name) => fm.match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1]?.trim().replace(/^["']|["']$/g, '') ?? null;
@@ -254,8 +271,8 @@ function learningEntity({ workspace, identifier, home }) {
   };
 }
 
-function episodeEntity({ workspace, copilotHome, identifier }) {
-  const episodes = collectEpisodes({ workspace, copilotHome });
+function episodeEntity({ workspace, copilotHome, identifier, home }) {
+  const episodes = collectEpisodes({ workspace, copilotHome, home });
   // `path@sha256` is the whole key, but addressing by bare path is the common
   // case and unambiguous whenever one episode holds that path.
   const byKey = episodes.find((e) => `${e.path}@${e.sha256}` === identifier);

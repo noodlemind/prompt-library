@@ -54,7 +54,8 @@ export function ensureHarnessDir(workspace, dryRun) {
   const dir = harnessDir(workspace);
     if (harnessDirEscapes(workspace)) return null;
   const gitignore = path.join(dir, '.gitignore');
-    const content = '# Ephemeral per-turn artifacts\nsession.json\ncontext-pack.md\nevents.jsonl\nruns.jsonl\nevidence/\nundo.jsonl\nundo/\nlocks/\n';
+    const content =
+      '# Ephemeral per-turn artifacts\nsession.json\ncontext-pack.md\nevents.jsonl\nruns.jsonl\nevidence/\nundo.jsonl\nundo/\nlocks/\nplans/\ncodebase-map.md\nagent-context.md\n';
   if (!fs.existsSync(gitignore)) {
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
@@ -63,7 +64,19 @@ export function ensureHarnessDir(workspace, dryRun) {
   } else if (!dryRun) {
     const current = fs.readFileSync(gitignore, 'utf8');
     const lines = current.split(/\r?\n/);
-    const missing = ['session.json', 'context-pack.md', 'events.jsonl', 'runs.jsonl', 'evidence/', 'undo.jsonl', 'undo/', 'locks/'].filter((entry) => !lines.includes(entry));
+    const missing = [
+      'session.json',
+      'context-pack.md',
+      'events.jsonl',
+      'runs.jsonl',
+      'evidence/',
+      'undo.jsonl',
+      'undo/',
+      'locks/',
+      'plans/',
+      'codebase-map.md',
+      'agent-context.md',
+    ].filter((entry) => !lines.includes(entry));
     if (missing.length) {
       const separator = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
       fs.appendFileSync(gitignore, `${separator}${missing.join('\n')}\n`, 'utf8');

@@ -3,6 +3,7 @@ import { tokenize } from '../tokenize.mjs';
 import { estimateTokens } from '../token-meter.mjs';
 import { extract as lexicalExtract } from './lexical-extractor.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
+import { codebaseMapWriteRel } from '../project-layout.mjs';
 import { trackedSourceFiles, readFileSafe } from './scan.mjs';
 import { readStructuralIndexIfCurrent } from './structural-index.mjs';
 
@@ -75,18 +76,18 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
 }
 
 /**
- * Write the committed, query-less codebase map to docs/codebase-map.md.
- * Deterministic and timestamp-free so the committed file only changes when
- * the code structure changes — a durable cold-start orientation for agents.
+ * Write the query-less codebase map. Committed docs/codebase-map.md is kept
+ * when that file or docs/plans already exists; otherwise the map lives under
+ * gitignored .harness/codebase-map.md.
  */
 export function writeCodebaseMap({ workspace, dryRun = false, maxTokens = 2500 }) {
-  // The COMMITTED map stays lexical-only (preferStructural: false): it must
+  // The map stays lexical-only (preferStructural: false): it must
   // be byte-identical across hosts for the same tree, and whether a given
   // host has built a structural index is host-local state that must never
   // leak into a committed artifact.
   const map = buildRepoMap({ workspace, query: '', maxTokens, title: 'Codebase Map', preferStructural: false });
   if (map.empty) return null;
-  const rel = path.join('docs', 'codebase-map.md');
+  const rel = codebaseMapWriteRel(workspace);
   if (!dryRun) {
     // Refuse to write through a symlinked `docs/` (or a pre-planted symlink
     // at the target itself) — a naive mkdir+write would otherwise follow

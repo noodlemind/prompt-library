@@ -18,9 +18,10 @@ knowledge/
 
 | Artifact | Location |
 |----------|----------|
-| Active issues / plans | Product repo `docs/plans/` only |
+| Active issues / plans | `.harness/plans/` (gitignored) or committed `docs/plans/` |
 | Reusable fixes / patterns | Here (`knowledge/solutions/`) |
-| Repo-specific conventions | Product `docs/agent-context.md` |
+| Repo-private episodes | `~/.harness/projects/<repo-id>/docs/solutions/` or committed `docs/solutions/` |
+| Repo-specific conventions | `.harness/agent-context.md` or committed `docs/agent-context.md` |
 
 Do not put secrets, customer PII, or proprietary code blocks in global solutions — use symptoms, patterns, and safe snippets only.
 

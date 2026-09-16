@@ -12,7 +12,7 @@ Read-only tools are allowed before the gate for classification, recall, investig
 
 - Bug fix, feature, refactor, or enhancement (not review-only / Q&A)
 - Multi-file or multi-step work
-- No matching `docs/plans/*.md` yet
+- No matching `.harness/plans/*.md` or `docs/plans/*.md` yet
 - Plan `status: open` without `plan_lock: true`
 
 ## Exemptions
@@ -29,7 +29,7 @@ Read-only tools are allowed before the gate for classification, recall, investig
 
 | ID | Check |
 |----|-------|
-| **C1** | Plan file exists under `docs/plans/` |
+| **C1** | Plan file exists under `.harness/plans/` or `docs/plans/` |
 | **C2** | Plan created via **`/ensure-plan`** or **`/capture-issue`** (same schema — not ad-hoc engineer freeform) |
 | **C3** | `plan_lock: true` before implement (from **`/ensure-plan`** / **`/plan-issue`**) |
 | **C4** | Route in `## Activity` |
@@ -51,7 +51,7 @@ Engineer **must not** ask the user to run `/capture-issue` or `/plan-issue` manu
 
 ## Forbidden
 
-- Ad-hoc `docs/plans/*.md` with `plan_lock: true` without plan steps
+- Ad-hoc `.harness/plans/*.md` or `docs/plans/*.md` with `plan_lock: true` without plan steps
 - Ad-hoc quick planning as substitute for capture on new work — use `/ensure-plan` or `/capture-issue` → `/plan-issue`
 - Implement before C3 (unless exemption)
 

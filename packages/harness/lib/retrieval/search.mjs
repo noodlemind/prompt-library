@@ -15,6 +15,7 @@ import { loadLayeredLearnings } from '../knowledge/overlay.mjs';
 import { trackedSourceFiles, readFileSafe } from '../repo-map/scan.mjs';
 import { readStructuralIndex } from '../structural/shape.mjs';
 import { SOURCES, createRetrievalResult, federate } from './kernel.mjs';
+import { plansReadRels } from '../project-layout.mjs';
 
 /** The settled mode list, in the order the architecture doc states it. */
 export const MATCH_MODES = Object.freeze(['ranked', 'literal', 'regex', 'path', 'symbol']);
@@ -32,7 +33,6 @@ const MATCHED_LINE_CAP = 1000;
 const SNIPPET_MAX = 160;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
-const PLANS_DIR_REL = 'docs/plans';
 
 const PLAN_RANK_HEAD = 4000;
 
@@ -509,17 +509,24 @@ function learningsSource({ mode, query, workspace, home, explain, queryTokens })
 // --------------------------------------------------------------- plans
 
 function loadPlans(workspace) {
-    const root = assertNoSymlinkAncestors(workspace, PLANS_DIR_REL);
-  if (!root) return { ok: false, reason: `${PLANS_DIR_REL} resolves through a symlink — refusing to enumerate it`, plans: [] };
-  if (!fs.existsSync(root)) return { ok: false, reason: `no ${PLANS_DIR_REL} directory in this workspace`, plans: [] };
   const plans = [];
+  const seen = new Set();
+  let anyRoot = false;
+  for (const dirRel of plansReadRels(workspace)) {
+    const root = assertNoSymlinkAncestors(workspace, dirRel);
+    if (!root) return { ok: false, reason: `${dirRel} resolves through a symlink — refusing to enumerate it`, plans: [] };
+    if (!fs.existsSync(root)) continue;
+    anyRoot = true;
     for (const name of fs.readdirSync(root).sort()) {
-    if (!name.endsWith('.md')) continue;
-    const rel = `${PLANS_DIR_REL}/${name}`;
-    const text = readFileSafe(workspace, rel);
-    if (!text) continue;
-    plans.push({ rel, name, text });
+      if (!name.endsWith('.md') || seen.has(name)) continue;
+      const rel = `${dirRel}/${name}`;
+      const text = readFileSafe(workspace, rel);
+      if (!text) continue;
+      seen.add(name);
+      plans.push({ rel, name, text });
+    }
   }
+  if (!anyRoot) return { ok: false, reason: 'no docs/plans or .harness/plans directory in this workspace', plans: [] };
   return { ok: true, reason: null, plans };
 }
 

@@ -23,10 +23,7 @@ export function runValidatePlan({ workspace, flags, planPath = null }) {
 
   if (planPath) {
     const normalized = planPath.replace(/\\/g, '/');
-    const rel = normalized.includes('docs/plans/')
-      ? normalized.slice(normalized.indexOf('docs/plans/'))
-      : `docs/plans/${normalized.split('/').pop()}`;
-    plan = loadPlan(workspace, rel);
+    plan = loadPlan(workspace, normalized);
   } else {
     plan = pickActivePlan(workspace, session, [], listPlanRels(workspace));
   }
@@ -35,7 +32,7 @@ export function runValidatePlan({ workspace, flags, planPath = null }) {
     addCheck(checks, {
       id: 'P0',
       pass: false,
-      message: 'No plan found — pass --plan docs/plans/<file>.md or run orient',
+      message: 'No plan found — pass --plan <file>.md or run orient',
       severity: 'fail',
     });
     return buildResult({ pass: false, exitCode: 1, plan: null, checks });

@@ -14,9 +14,9 @@ This repository is a skill-driven prompt library containing AI agent systems:
 - `.github/instructions/` — scoped instructions (TypeScript, Python, Java, PostgreSQL); Spring Boot and AWS SDK guidance live as on-demand skill references under `.github/skills/java/` and `.github/skills/aws/`
 - `.github/skills/code-review/references/checks/` — bundled review checks discovered by `/code-review`
 - `.github/checks/` — optional product-specific review check examples
-- `docs/plans/` — issue and plan files with state machine tracking
+- `docs/plans/` — this library's committed plan template; product repos default to `.harness/plans/`
 - `docs/architecture/` — canonical Engineer Harness architecture and primitive standard
-- `knowledge/solutions/` — team-wide compounded learnings (hydrated to `~/.copilot/knowledge/`); product repos may use optional `docs/solutions/` for repo-private learnings only
+- `knowledge/solutions/` — team-wide compounded learnings (hydrated to `~/.copilot/knowledge/`); product repos write private episodes to `~/.harness/projects/<repo-id>/docs/solutions/` unless committed `docs/solutions/` already exists
 - `docs/brainstorms/` — brainstorm documents from `/brainstorming` skill
 
 ## Conventions
