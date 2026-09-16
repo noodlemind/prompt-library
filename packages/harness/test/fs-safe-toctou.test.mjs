@@ -179,6 +179,25 @@ test('copyFileContainedExclusive preserves bytes and refuses to replace an exist
   assert.deepEqual(fs.readFileSync(written), bytes, 'existing destination must be left intact');
 });
 
+test('copyFileContainedExclusive retries short writes until the full source is copied', () => {
+  const srcRoot = tmp('copy-short-src-');
+  const destRoot = tmp('copy-short-dest-');
+  const bytes = Buffer.from('abcdefghij');
+  fs.writeFileSync(path.join(srcRoot, 'a.bin'), bytes);
+  const orig = fs.writeSync;
+  fs.writeSync = (fd, buf, offset, length, position) => {
+    const n = Math.min(1, length ?? buf.length);
+    return orig.call(fs, fd, buf, offset, n, position);
+  };
+  try {
+    const written = copyFileContainedExclusive(srcRoot, 'a.bin', destRoot, 'a.bin');
+    assert.equal(written, path.join(destRoot, 'a.bin'));
+    assert.deepEqual(fs.readFileSync(written), bytes);
+  } finally {
+    fs.writeSync = orig;
+  }
+});
+
 test('copyFileContainedExclusive refuses a symlinked source and copies an empty file', () => {
   const srcRoot = tmp('copy-link-src-');
   const destRoot = tmp('copy-link-dest-');

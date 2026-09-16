@@ -339,7 +339,15 @@ export function copyFileContainedExclusive(srcRoot, srcRel, destRoot, destRel) {
       while (offset < srcStat.size) {
         const n = fs.readSync(srcFd, chunk, 0, Math.min(chunk.length, srcStat.size - offset), offset);
         if (n <= 0) break;
-        fs.writeSync(destFd, chunk, 0, n);
+        let wrote = 0;
+        while (wrote < n) {
+          const w = fs.writeSync(destFd, chunk, wrote, n - wrote);
+          if (w <= 0) {
+            abortDest(destFd);
+            return null;
+          }
+          wrote += w;
+        }
         offset += n;
       }
       if (offset !== srcStat.size) {
