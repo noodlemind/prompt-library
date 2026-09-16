@@ -31,7 +31,7 @@ Deliver-mode internal skill chain:
 
 Harness architecture: `docs/adaptive-engineer-harness.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
 
-Plan files live in `.harness/plans/` (product repos, gitignored) or committed `docs/plans/` when that directory already exists. They track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/adaptive-engineer-harness.md`.
+Plan files live in `.harness/plans/` (product repos, gitignored) or committed `docs/plans/` when git tracks files there. They track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/adaptive-engineer-harness.md`.
 
 ## Directory Structure
 

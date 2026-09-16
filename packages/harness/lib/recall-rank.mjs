@@ -213,17 +213,23 @@ export function findMatchingPlans(workspace, query, limit = 3) {
   return results.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
-export function resolveDocPath(copilotHome, workspace, entry) {
+export function resolveDocPath(copilotHome, workspace, entry, { home } = {}) {
   if (!entry?.path) return null;
-  const knowledgeRoots = [
-    path.join(copilotHome, 'knowledge'),
-    path.join(workspace, 'knowledge'),
-    workspace,
-    projectStoreDir(workspace),
-  ];
-  for (const root of knowledgeRoots) {
+  const overlay = path.resolve(projectStoreDir(workspace, { home }));
+  const globalRoot = copilotHome ? path.resolve(copilotHome, 'knowledge') : null;
+  const wsKnowledge = path.join(workspace, 'knowledge');
+  const ws = path.resolve(workspace);
+  let knowledgeRoots;
+  if (entry.scope === 'product-user') {
+    knowledgeRoots = [overlay, ws, wsKnowledge, globalRoot];
+  } else if (entry.scope === 'global') {
+    knowledgeRoots = [globalRoot, wsKnowledge, ws, overlay];
+  } else {
+    knowledgeRoots = [ws, wsKnowledge, overlay, globalRoot];
+  }
+  for (const root of knowledgeRoots.filter(Boolean)) {
     const full = safeResolveUnderRoot(root, entry.path);
-        if (full && fs.existsSync(full)) return { full, root };
+    if (full && fs.existsSync(full)) return { full, root };
   }
   return null;
 }

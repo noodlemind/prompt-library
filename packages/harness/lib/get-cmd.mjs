@@ -21,7 +21,7 @@ function truncateUtf8(text, maxBytes) {
   return `${excerpt}\n…(truncated)`;
 }
 
-export function runGet({ workspace, copilotHome, flags }) {
+export function runGet({ workspace, copilotHome, flags, home }) {
   const docid = flags.docid;
   const relPath = flags.path;
   const maxLines = flags.lines || GET_DEFAULT_LINES;
@@ -36,7 +36,9 @@ export function runGet({ workspace, copilotHome, flags }) {
   if (docid) {
     entry = findEntryByDocid(copilotHome, workspace, docid);
     if (!entry) throw new Error(`docid not found in manifest: ${docid}`);
-    const resolved = resolveDocPath(copilotHome, workspace, entry);
+    const resolved = resolveDocPath(copilotHome, workspace, entry, {
+      home: home || flags.home,
+    });
     fullPath = resolved?.full ?? null;
     readRoot = resolved?.root ?? null;
   } else if (relPath) {

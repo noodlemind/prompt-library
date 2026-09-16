@@ -37,9 +37,10 @@ function gitWorkspace(branch = 'feature/prov') {
   git(ws, ['config', 'user.email', 'test@example.test']);
   git(ws, ['config', 'user.name', 'Test']);
   fs.writeFileSync(path.join(ws, 'seed.txt'), 'seed\n');
+  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
+  fs.writeFileSync(path.join(ws, 'docs', 'solutions', '.gitkeep'), '');
   git(ws, ['add', '.']);
   git(ws, ['commit', '-qm', 'seed']);
-  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
   return ws;
 }
 

@@ -18,7 +18,7 @@ _Add project-specific notes here._
 
 ## Related
 
-- Plans: \`.harness/plans/\` (or committed \`docs/plans/\` when that directory already exists)
+- Plans: \`.harness/plans/\` (or committed \`docs/plans/\` when git tracks files there)
 - Run \`harness doctor\` after global harness install.
 `;
 

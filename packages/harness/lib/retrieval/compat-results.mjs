@@ -17,9 +17,11 @@ export async function recallResultOf(argv) {
 export async function getResultOf(argv) {
   const { runGet } = await import('../get-cmd.mjs');
   const flags = parseFlags(argv);
+  flags.home = flags.home || process.env.HARNESS_HOME;
   return runGet({
     workspace: path.resolve(flags.workspace),
     copilotHome: resolveCopilotHome(flags.copilotHome),
     flags,
+    home: flags.home,
   });
 }

@@ -25,7 +25,7 @@ Issues flow through a state machine tracked in YAML frontmatter:
 
 Key fields: `status`, `plan_lock` (must be `true` before coding), `phase` (current phase number).
 
-Plan files live in `.harness/plans/` by default (gitignored), or committed `docs/plans/` when that directory already exists. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes` (from planning), `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes` (from work), `## Review Findings` (from review). Treat each plan file as the local context pack for the issue.
+Plan files live in `.harness/plans/` by default (gitignored), or committed `docs/plans/` when git tracks files there. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes` (from planning), `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes` (from work), `## Review Findings` (from review). Treat each plan file as the local context pack for the issue.
 
 ### Knowledge Compounding
 
@@ -97,7 +97,7 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 4. **/triage-issues**: Analyze and prioritize backlog
 
 ### Engineer-Internal (loaded on demand) — Connected Pipeline
-5. **/capture-issue**: Create initial plan file under `.harness/plans/` (or committed `docs/plans/` if that directory already exists)
+5. **/capture-issue**: Create initial plan file under `.harness/plans/` (or committed `docs/plans/` when git tracks files there)
 6. **/plan-issue**: Generate phased implementation plan with research
 7. **/code-review**: Confidence-scored, persona-based code review with action routing
 8. **/compound-learnings**: Document solved problems with tagged solution templates

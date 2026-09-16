@@ -272,3 +272,93 @@ export function writeFileContained(root, rel, content) {
   }
   return full;
 }
+
+/** Copy bytes from srcRel under srcRoot to destRel under destRoot. Fails if
+ * dest already exists (exclusive create) or any ancestor is a symlink. */
+export function copyFileContainedExclusive(srcRoot, srcRel, destRoot, destRel) {
+  const srcBase = path.resolve(srcRoot);
+  const destBase = path.resolve(destRoot);
+  const srcFull = assertNoSymlinkAncestors(srcBase, srcRel);
+  const destFull = assertNoSymlinkAncestors(destBase, destRel);
+  if (!srcFull || !destFull) return null;
+
+  const srcFlags = O_NOFOLLOW != null ? fs.constants.O_RDONLY | O_NOFOLLOW : fs.constants.O_RDONLY;
+  let srcFd;
+  try {
+    srcFd = fs.openSync(srcFull, srcFlags);
+  } catch {
+    return null;
+  }
+
+  const abortDest = (destFd) => {
+    if (destFd != null) {
+      try {
+        fs.closeSync(destFd);
+      } catch {
+        /* already closed */
+      }
+    }
+    try {
+      fs.unlinkSync(destFull);
+    } catch {
+      /* best effort — a swapped-away dest is not ours to chase */
+    }
+  };
+
+  try {
+    const srcStat = fs.fstatSync(srcFd);
+    if (!srcStat.isFile() || srcStat.size > DEFAULT_MAX_BYTES) return null;
+    const srcRealRoot = canonicalRoot(srcBase);
+    if (srcRealRoot === null || !fdMatchesCanonicalUnderRoot(srcFull, srcStat, srcRealRoot)) return null;
+
+    try {
+      fs.mkdirSync(path.dirname(destFull), { recursive: true });
+    } catch {
+      return null;
+    }
+    if (!realpathParentContained(destBase, destFull)) return null;
+
+    const destFlags = O_NOFOLLOW != null
+      ? fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW
+      : 'wx';
+    let destFd;
+    try {
+      destFd = fs.openSync(destFull, destFlags, 0o644);
+    } catch {
+      return null;
+    }
+    try {
+      const destStat = fs.fstatSync(destFd);
+      const destRealRoot = canonicalRoot(destBase);
+      if (destRealRoot === null || !fdMatchesCanonicalUnderRoot(destFull, destStat, destRealRoot)) {
+        abortDest(destFd);
+        return null;
+      }
+      const chunk = Buffer.alloc(Math.min(64 * 1024, Math.max(srcStat.size, 1)));
+      let offset = 0;
+      while (offset < srcStat.size) {
+        const n = fs.readSync(srcFd, chunk, 0, Math.min(chunk.length, srcStat.size - offset), offset);
+        if (n <= 0) break;
+        fs.writeSync(destFd, chunk, 0, n);
+        offset += n;
+      }
+      if (offset !== srcStat.size) {
+        abortDest(destFd);
+        return null;
+      }
+      fs.closeSync(destFd);
+      return destFull;
+    } catch {
+      abortDest(destFd);
+      return null;
+    }
+  } catch {
+    return null;
+  } finally {
+    try {
+      fs.closeSync(srcFd);
+    } catch {
+      /* already closed */
+    }
+  }
+}

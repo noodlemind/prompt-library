@@ -1850,7 +1850,8 @@ export async function cmdGet(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
-  const result = runGet({ workspace, copilotHome, flags });
+  flags.home = flags.home || process.env.HARNESS_HOME;
+  const result = runGet({ workspace, copilotHome, flags, home: flags.home });
 
   if (flags.json) {
     emitJson(flags, result);

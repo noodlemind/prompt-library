@@ -98,6 +98,22 @@ test('migrate leaves git-tracked docs/plans and docs/solutions in place', () => 
   assert.equal(out.moved.length, 0);
 });
 
+test('migrate copies binary attachments without UTF-8 round-trip', () => {
+  const ws = gitWs();
+  const home = temp('mig-bin-cop-');
+  const harnessHome = temp('mig-bin-hh-');
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00]);
+  const src = path.join(ws, 'docs/solutions/perf/chart.png');
+  fs.mkdirSync(path.dirname(src), { recursive: true });
+  fs.writeFileSync(src, bytes);
+  const res = run(['migrate'], { ws, home, harnessHome });
+  assert.equal(res.status, 0, res.stderr + res.stdout);
+  const dest = path.join(projectStoreDir(ws, { home: harnessHome }), 'docs/solutions/perf/chart.png');
+  assert.ok(fs.existsSync(dest));
+  assert.deepEqual(fs.readFileSync(dest), bytes);
+  assert.equal(fs.existsSync(src), false);
+});
+
 test('migrate --dry-run writes nothing', () => {
   const ws = gitWs();
   const home = temp('mig-dry-cop-');

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { readFileNoFollow, writeFileContained, assertRealpathContained, realpathParentContained } from '../lib/fs-safe.mjs';
+import { readFileNoFollow, writeFileContained, assertRealpathContained, realpathParentContained, copyFileContainedExclusive } from '../lib/fs-safe.mjs';
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const SENTINEL = 'OUTSIDE_SECRET_SENTINEL must never be read through a swapped ancestor.\n';
@@ -163,4 +163,32 @@ test('Windows posture: O_NOFOLLOW is feature-detected — POSIX takes the atomic
   } else {
     assert.equal(typeof fs.constants.O_NOFOLLOW, 'number', 'POSIX exposes O_NOFOLLOW → atomic branch is active');
   }
+});
+
+test('copyFileContainedExclusive preserves bytes and refuses to replace an existing destination', () => {
+  const srcRoot = tmp('copy-excl-src-');
+  const destRoot = tmp('copy-excl-dest-');
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00]);
+  fs.writeFileSync(path.join(srcRoot, 'chart.png'), bytes);
+  const written = copyFileContainedExclusive(srcRoot, 'chart.png', destRoot, 'docs/chart.png');
+  assert.equal(written, path.join(destRoot, 'docs/chart.png'));
+  assert.deepEqual(fs.readFileSync(written), bytes);
+
+  fs.writeFileSync(path.join(srcRoot, 'chart.png'), Buffer.from([0x01, 0x02]));
+  assert.equal(copyFileContainedExclusive(srcRoot, 'chart.png', destRoot, 'docs/chart.png'), null);
+  assert.deepEqual(fs.readFileSync(written), bytes, 'existing destination must be left intact');
+});
+
+test('copyFileContainedExclusive refuses a symlinked source and copies an empty file', () => {
+  const srcRoot = tmp('copy-link-src-');
+  const destRoot = tmp('copy-link-dest-');
+  fs.writeFileSync(path.join(srcRoot, 'real.bin'), Buffer.from([1, 2, 3]));
+  fs.symlinkSync(path.join(srcRoot, 'real.bin'), path.join(srcRoot, 'link.bin'));
+  assert.equal(copyFileContainedExclusive(srcRoot, 'link.bin', destRoot, 'out.bin'), null);
+  assert.equal(fs.existsSync(path.join(destRoot, 'out.bin')), false);
+
+  fs.writeFileSync(path.join(srcRoot, 'empty.bin'), Buffer.alloc(0));
+  const empty = copyFileContainedExclusive(srcRoot, 'empty.bin', destRoot, 'empty.bin');
+  assert.equal(empty, path.join(destRoot, 'empty.bin'));
+  assert.equal(fs.readFileSync(empty).length, 0);
 });

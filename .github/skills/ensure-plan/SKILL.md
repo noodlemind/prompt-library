@@ -13,7 +13,7 @@ Apply `/capture-issue` and `/plan-issue` logic without asking the user to run sl
 - Never run the implement gate until the referenced plan exists and `harness validate-plan --plan <path> --workspace . --json` has accepted its schema.
 - Never write a header-only or ad-hoc plan. A locked plan requires YAML frontmatter plus every canonical section below; if you cannot produce that plan, stop without a product edit.
 - Prefer scaffolding the skeleton with `harness plan-new --type <t> --slug <slug> --intent "..." --impacted <files>` — it emits a valid, gate-ready plan (correct dated path, frontmatter, and every canonical section) so you fill content, not structure. Add `--gap <id>:<primitive-path>` for a capability gap (sets `status: blocked-capability` and the `capability_gaps` entry), and it auto-adds the `## Primitive Governance` block plus `create-primitive` to `skills_used` when an Impacted File is a primitive path. Then refine the generated sections before locking.
-- New paths use `.harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md` (default, gitignored) or `docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md` when that directory already exists. Do not invent an undated shortcut path.
+- New paths use `.harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md` (default, gitignored) or `docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md` when git tracks files there. Prefer `harness plan-new` so the CLI chooses the root. Do not invent an undated shortcut path.
 - Before populating `verification.required`, read `.github/harness/checks.yaml`; never invent a check. Inspect each candidate command/assertion and choose only a trusted check relevant to the expected outputs; for example, `schema-validation` is forbidden when no schema output is planned. If no check exercises a documentation/primitive artifact and adding one is unjustified, use the generic product smoke check and record that limitation. New acceptance criteria and phase tasks start unchecked.
 - Create or lock the canonical plan in a standalone mutation that targets only that plan file. Never batch plan bootstrap with product files, directories, checks, or scripts. After a blocked compound attempt, retry with a plan-only edit.
 - Run the implement gate as a standalone terminal tool call with no file mutation in the same command. Wait for its explicit pass, then retry the original mutation in a later tool call.
@@ -121,7 +121,7 @@ List `.harness/plans/*.md` and `docs/plans/*.md`. Fuzzy-match titles/Overview ag
 
 Follow **`/capture-issue`** exactly:
 
-- Path: `.harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md` (or `docs/plans/…` when that directory already exists)
+- Path: `.harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md` (or `docs/plans/…` when git tracks files there; `harness plan-new` chooses)
 - Frontmatter: `plan_schema: 1`, `status: open`, `plan_lock: false`, `phase: 0`, `risk`, `intent` when known, `expected_outputs: []`, `success_criteria: []`, `verification`, `reviews`, `skills_used`, `org_objectives: []`, `domains`, `specialists`, and encountered `capability_gaps`
 - Body minimum (create every heading; use pending markers for planning-owned content):
   - `## Overview`, `## Context`, `## Intent Contract` (goal stub from user message), `## Memory Cards`

@@ -7,13 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { collectEpisodes } from '../lib/knowledge/consolidate.mjs';
 import { runInsightCompound } from '../lib/compound.mjs';
+import { trackWorkspaceSolutions } from './helpers/workspace.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 function keepSolutionsInWorkspace(ws) {
-  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
-  return ws;
+  return trackWorkspaceSolutions(ws);
 }
 const run = (args, env = {}) =>
   spawnSync(process.execPath, [binPath, ...args], {
@@ -226,10 +226,11 @@ test('same-day same-title insights never overwrite — deterministic suffix', ()
 
 test('category input is confined to one safe path segment', () => {
   const ws = tempDir('insight-cat-');
+  const harnessHome = tempDir('insight-cathh-');
   const res = run([
     'compound', '--insight', '--title', 'Escape attempt', '--body', 'body text',
     '--category', '../../outside', '--workspace', ws, '--copilot-home', tempDir('insight-cath-'), '--json',
-  ]);
+  ], { HARNESS_HOME: harnessHome });
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
   assert.match(out.path, /^docs\/solutions\/outside\//);
@@ -249,8 +250,9 @@ test('an embedded newline in the title cannot break the line-oriented frontmatte
 
     const fmBlock = doc.match(/^---\n([\s\S]*?)\n---/)[1];
   const fmLines = fmBlock.split('\n');
-  assert.equal(fmLines.length, 3, 'title/kind/date — no extra line injected');
+  assert.ok(fmLines.length >= 3, 'title/kind/date (plus optional git provenance) present');
   assert.ok(fmLines.every((l) => /^[\w-]+:/.test(l)), 'every frontmatter line is still a key: value line');
+  assert.equal(fmLines.filter((l) => /^fake-key:/.test(l)).length, 0, 'embedded newline must not inject a new key');
   assert.match(doc, /title: "Title line one\\nline two: fake-key"/);
 
     const episodes = collectEpisodes({ workspace: ws, copilotHome: home });

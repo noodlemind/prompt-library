@@ -10,6 +10,7 @@ import { consolidateStatus } from '../lib/knowledge/consolidate.mjs';
 import { runRemember } from '../lib/knowledge/remember.mjs';
 import { rebuildIndex } from '../lib/knowledge/apply.mjs';
 import { projectStoreDir } from '../lib/project-layout.mjs';
+import { trackWorkspaceSolutions } from './helpers/workspace.mjs';
 
 function seedActiveLearning(dir, domain, slug) {
   const lines = [
@@ -30,8 +31,7 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ctx = () => {
-  const ws = tempDir('rem-ws-');
-  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
+  const ws = trackWorkspaceSolutions(tempDir('rem-ws-'));
   return { ws, home: tempDir('rem-home-'), harnessHome: tempDir('rem-hh-') };
 };
 const run = ({ ws, home, harnessHome }, args) =>
@@ -254,8 +254,7 @@ test('remember --dry-run does not absorb a dirty store hand edit (no new store c
 });
 
 test('runRemember (direct lib import) threads its own home into every store write, not the ambient HARNESS_HOME', () => {
-  const ws = tempDir('rem-direct-ws-');
-  fs.mkdirSync(path.join(ws, 'docs', 'solutions'), { recursive: true });
+  const ws = trackWorkspaceSolutions(tempDir('rem-direct-ws-'));
   const copilotHome = tempDir('rem-direct-home-');
   const explicitHome = tempDir('rem-direct-hh-');
   const decoyHome = tempDir('rem-direct-decoy-'); // stands in for a stale/unrelated ambient HARNESS_HOME

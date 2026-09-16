@@ -11,7 +11,7 @@ user-invocable: false
 
 **Step 1** of the connected pipeline: Capture → Plan → Work → Review → Compound.
 
-This skill creates the initial local plan file that all subsequent skills operate on. It stores the file under `.harness/plans/` by default (gitignored), or under `docs/plans/` when that directory already exists, sets the initial state machine values, and ensures enough context is captured to plan effectively.
+This skill creates the initial local plan file that all subsequent skills operate on. It stores the file under `.harness/plans/` by default (gitignored), or under `docs/plans/` when git tracks files there. Prefer `harness plan-new` so the CLI chooses the root. It sets the initial state machine values and ensures enough context is captured to plan effectively.
 
 ## Mode Detection
 
@@ -62,7 +62,7 @@ Scan `.harness/plans/*.md` and `docs/plans/*.md` for existing issues with simila
 
 ### 3. Create Initial Plan File
 
-**Path**: `.harness/plans/YYYY-MM-DD-<type>-<descriptive-slug>-plan.md`, or `docs/plans/YYYY-MM-DD-<type>-<descriptive-slug>-plan.md` when that directory already exists.
+**Path**: `.harness/plans/YYYY-MM-DD-<type>-<descriptive-slug>-plan.md`, or `docs/plans/YYYY-MM-DD-<type>-<descriptive-slug>-plan.md` when git tracks files there. Prefer `harness plan-new`.
 
 This is intentionally a plan file from the start, even while `status: open`. `/plan-issue` later fills in the implementation plan and locks it for work.
 

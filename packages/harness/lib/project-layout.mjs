@@ -176,7 +176,12 @@ export function codebaseMapWriteRel(workspace) {
  * working tree is not polluted.
  */
 export function solutionsWriteTarget(workspace, { home } = {}) {
-  if (dirExists(workspace, WORKSPACE_SOLUTIONS_REL)) {
+  const listed = gitLsFiles(workspace, WORKSPACE_SOLUTIONS_REL);
+  if (!listed.ok) {
+    if (dirExists(workspace, WORKSPACE_SOLUTIONS_REL)) {
+      return { base: path.resolve(workspace), dirRel: WORKSPACE_SOLUTIONS_REL, kind: 'workspace' };
+    }
+  } else if (listed.files.length > 0) {
     return { base: path.resolve(workspace), dirRel: WORKSPACE_SOLUTIONS_REL, kind: 'workspace' };
   }
   const overlay = projectStoreDir(workspace, { home });

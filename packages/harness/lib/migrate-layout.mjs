@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { readFileNoFollow, writeFileContained, assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { copyFileContainedExclusive, assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import {
   WORKSPACE_PLANS_REL,
@@ -54,14 +54,25 @@ function listRelFiles(base, rel) {
 }
 
 function pruneEmptyAncestors(workspace, rel) {
+  const root = path.resolve(workspace);
   let cur = path.resolve(workspace, rel);
   try {
-    if (fs.lstatSync(cur).isFile()) cur = path.dirname(cur);
+    const st = fs.lstatSync(cur);
+    if (st.isSymbolicLink() || !st.isDirectory()) cur = path.dirname(cur);
   } catch {
     cur = path.dirname(cur);
   }
-  const root = path.resolve(workspace);
   while (cur.startsWith(root + path.sep)) {
+    const relFromRoot = path.relative(root, cur);
+    if (!relFromRoot || path.isAbsolute(relFromRoot) || relFromRoot.startsWith('..')) break;
+    if (!assertNoSymlinkAncestors(root, relFromRoot)) break;
+    let st;
+    try {
+      st = fs.lstatSync(cur);
+    } catch {
+      break;
+    }
+    if (st.isSymbolicLink() || !st.isDirectory()) break;
     try {
       if (fs.readdirSync(cur).length) break;
       fs.rmdirSync(cur);
@@ -110,17 +121,29 @@ function migrateItem({ workspace, kind, fromRel, destRoot, destRel, dryRun }) {
       files.push({ from: srcRel, to: destPathRel });
       continue;
     }
-    const text = readFileNoFollow(path.join(workspace, srcRel), { root: workspace });
-    if (text === null) {
-      conflicts.push({ from: srcRel, to: destPathRel, reason: 'unreadable' });
-      continue;
-    }
-    const written = writeFileContained(destRoot, destPathRel, text);
+    const written = copyFileContainedExclusive(workspace, srcRel, destRoot, destPathRel);
     if (!written) {
-      conflicts.push({ from: srcRel, to: destPathRel, reason: 'write-refused' });
+      conflicts.push({
+        from: srcRel,
+        to: destPathRel,
+        reason: fs.existsSync(destFull) ? 'exists' : 'write-refused',
+      });
       continue;
     }
-    fs.rmSync(path.join(workspace, srcRel), { force: true });
+    const srcPath = path.join(workspace, srcRel);
+    try {
+      const st = fs.lstatSync(srcPath);
+      if (st.isSymbolicLink() || !st.isFile()) throw new Error('source-changed');
+      fs.unlinkSync(srcPath);
+    } catch {
+      try {
+        fs.unlinkSync(written);
+      } catch {
+        /* dest may remain as a duplicate the next run will conflict on */
+      }
+      conflicts.push({ from: srcRel, to: destPathRel, reason: 'source-delete-failed' });
+      continue;
+    }
     pruneEmptyAncestors(workspace, srcRel);
     files.push({ from: srcRel, to: destPathRel });
   }
