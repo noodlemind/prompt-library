@@ -109,6 +109,38 @@ Evidence: `cmdPlanNew` is in [`plan-new.mjs`](../../packages/harness/lib/plan-ne
 
 **Disposition:** configure a valid check in the no-init fixture, reuse existing index setup, await each selected build, catch failures per plane, and assert readable indexed artifacts at the plan-write boundary. Preserve dry-run/stdout immutability and existing init migration failures. Add seed packaging to planned scope. Existing stale planes remain unchanged at plan-new; orient only reports.
 
+## Antigravity comparison — 2026-09-19 addendum
+
+The owner supplied timestamped takeaways from Google Cloud Tech's [Harness Engineering Explained](https://www.youtube.com/watch?v=F8EZJAm9iO8). Video metadata was accessible; its full transcript was not. The timestamp descriptions below come from the owner, while the linked product documentation and repository code were checked independently. This is architectural comparison, not a benchmark or a claim that Google reviewed this proposal.
+
+| Lesson from the supplied video notes | Present at the inspected baseline | Planning consequence |
+|---|---|---|
+| Deliver useful context before execution (5:00–9:03) | [`orient`](../../packages/harness/lib/orient.mjs), context packs, recall, skills/instructions, and knowledge/structural indexes exist. Their existence does not bind the relevant procedure to a task or initialize missing indexes automatically. | Phase 1a–1c directly addresses this gap: bind before lock, project pointers before work, initialize at the two approved call sites. This remains proposed work. |
+| Keep tools and context stable across models (15:57–16:24) | [`registry.mjs`](../../packages/harness/lib/registry.mjs) centralizes commands; [`provider.mjs`](../../packages/harness/lib/provider.mjs) separates optional-runtime providers from kernel tools. Engineer's model is selected by the host. | Preserve these boundaries. Model replacement still needs tool-contract and task-outcome evaluation; an adapter alone does not prove equivalent behavior. |
+| Use a feedback loop for coding (21:30–23:25) | Host Engineer owns an adaptive work/verify lifecycle. The optional [`agent-loop.mjs`](../../packages/harness/lib/agent-loop.mjs) has budgeted iteration and verifier feedback after mutations, with a distinct final-check stop described below. | Deterministic authorization/proof can surround adaptive problem solving. Fixed gates do not require a fixed sequence of reasoning or deterministic model output. |
+| Separate model, harness, and knowledge (25:27 onward) | Host-selected model or optional provider; Harness tools/gates/evidence; skills, scoped instructions, plans, and retrieved solutions. | The three layers already exist. The missing connection is reliable delivery of selected knowledge into the active task. |
+| Delegate difficult work and audit the combined result (27:16) | [`engineer.agent.md`](../../.github/agents/engineer.agent.md) allows bounded specialist consultation and requires named checks, verify, and risk review. This is host-directed delegation, not an integrated isolated-worker runtime. | Google's [Boost documentation](https://antigravity.google/docs/boost/) describes an optional escalation with isolated workstreams and repeated combined verification. Retain bounded host consultation; Phase 1 needs no kernel worker pool. |
+| Ground platform work in focused knowledge (28:31–29:51) | Domain skills, references, instructions, and compounded solutions already serve this purpose. | [Google Skills](https://github.com/google/skills) supplies product-specific procedures. Evaluate relevant upstream material when a real platform gap appears; catalog size is not evidence of useful task context. |
+
+Google's [skill documentation](https://antigravity.google/docs/skills/) describes metadata discovery followed by reading the body when the agent judges a skill relevant. That supports progressive disclosure, but is not a deterministic selection guarantee. Installing more skills alone would leave our reported reminder loop possible. Phase 1 makes the kernel **name a file to read**; observing and recording the actual read remains a separate contract.
+
+### Concrete follow-up: failure feedback in the optional loop
+
+At `2833c4a5`, autonomous execution with a configured verifier has two different paths:
+
+- After a mutation, a failed check sends the model the exit code/reason and a retry instruction. The automatic feedback message does not include the verifier's stdout/stderr diagnostics.
+- When the model returns without tool calls, a failed final check terminates with `verifier-failed`, even if iteration budget remains. [`agent-profile.test.mjs`](../../packages/harness/test/agent-profile.test.mjs) explicitly asserts this failure outcome. It correctly prevents a false success; it does not automatically repair that final failure.
+
+Boost's documented feedback from failed combined checks suggests a separate experiment: return bounded, relevant diagnostics and permit a limited repair attempt after model-done when the failure is actionable. Preserve time/turn budgets, explicit stops, permissions, and failure reporting. This is a potential change to the optional autonomous profile, which is exempt from routing; it is **not** a Phase 1 acceptance criterion or authorization to edit that runtime. Host-first Deliver must be evaluated through its actual host trace separately.
+
+### Model choice and evaluation
+
+[Gemini 3.8 Flash is documented by Google](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash), but no comparison against our tasks was run. The optional runtime's checked-in Gemini fallback and built-in catalog still name 2.5 models; explicit model selection and fetched catalogs are separate mechanisms. That observation does not establish 3.8 incompatibility or justify changing Engineer's host-controlled model.
+
+Use completed, freshly verified tasks as the unit of comparison: success rate, human corrections, elapsed time, and total model cost including retries. First hold the model and task constant while comparing baseline versus routed context; only then compare models. Record whether the required pointer arrived and whether the host actually read it before the first edit. Those are evaluation observations, not new Phase 1 cite enforcement. Existing read-only modes, legacy plans, and autonomous exemptions remain separate regression checks.
+
+**Effect on the decision:** this comparison strengthens the context-delivery rationale and adds a bounded follow-up experiment. It does not resolve D1, change the Phase 1 scope, or fill the Human Decision.
+
 ## Evaluation and approval recommendation
 
 Recommend approving the thin Phase 1a–1c release **with the documented reconciliations**, after selecting D1's enrollment guarantee and callable relock seam. Keep cite tracking and specialist execution scheduling deferred.
