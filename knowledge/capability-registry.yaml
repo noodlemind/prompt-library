@@ -1,6 +1,6 @@
 # Discoverable capability inventory. Skill metadata remains the primary trigger surface.
 version: 2
-updated: 2026-08-06
+updated: 2026-09-19
 lifecycle_states: [candidate, experimental, active, deprecated, retired]
 
 engineer:
@@ -78,6 +78,15 @@ capabilities:
     triggers: [create skill, create agent, promote procedure, retire capability]
     usage_count: 0
   deepen-plan: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  delivery-routing:
+    type: cli
+    status: candidate
+    owner: developer-experience
+    version: 1
+    origin: delivery-routing
+    proposal: knowledge/proposals/delivery-routing.md
+    triggers: [Deliver procedure binding, plan routing snapshot, host classification validation, principle index, index initialization]
+    usage_count: 0
   document-review: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   engineer-skill:
     name: engineer
