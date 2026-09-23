@@ -6,7 +6,7 @@
 
 **Decision owner:** Krish / noodlemind
 
-**Status:** Recommendation with explicit conditions; Human Decision remains blank
+**Status:** Recommendation incorporated. Human Decision Approved 2026-09-23 in the proposal.
 
 The deterministic binder is a reasonable response to the reported reminder loop. Phase 1 can guarantee selected procedure pointers and index invocation. It cannot guarantee the model opened or followed those procedures. The [proposal](delivery-routing.md) and [implementation plan](../../docs/plans/2026-09-18-feat-delivery-routing-plan.md) make that boundary explicit.
 
@@ -115,7 +115,7 @@ The owner supplied timestamped takeaways from Google Cloud Tech's [Harness Engin
 
 | Lesson from the supplied video notes | Present at the inspected baseline | Planning consequence |
 |---|---|---|
-| Deliver useful context before execution (5:00–9:03) | [`orient`](../../packages/harness/lib/orient.mjs), context packs, recall, skills/instructions, and knowledge/structural indexes exist. Their existence does not bind the relevant procedure to a task or initialize missing indexes automatically. | Phase 1a–1c directly addresses this gap: bind before lock, project pointers before work, initialize at the two approved call sites. This remains proposed work. |
+| Deliver useful context before execution (5:00–9:03) | [`orient`](../../packages/harness/lib/orient.mjs), context packs, recall, skills/instructions, and knowledge/structural indexes exist. Their existence does not bind the relevant procedure to a task or initialize missing indexes automatically. | Phase 1a–1d addresses this gap: bind before lock, accept host classification when prose names no path, project pointers before work, and initialize at the two approved call sites. Implementation is approved and not yet written. |
 | Keep tools and context stable across models (15:57–16:24) | [`registry.mjs`](../../packages/harness/lib/registry.mjs) centralizes commands; [`provider.mjs`](../../packages/harness/lib/provider.mjs) separates optional-runtime providers from kernel tools. Engineer's model is selected by the host. | Preserve these boundaries. Model replacement still needs tool-contract and task-outcome evaluation; an adapter alone does not prove equivalent behavior. |
 | Use a feedback loop for coding (21:30–23:25) | Host Engineer owns an adaptive work/verify lifecycle. The optional [`agent-loop.mjs`](../../packages/harness/lib/agent-loop.mjs) has budgeted iteration and verifier feedback after mutations, with a distinct final-check stop described below. | Deterministic authorization/proof can surround adaptive problem solving. Fixed gates do not require a fixed sequence of reasoning or deterministic model output. |
 | Separate model, harness, and knowledge (25:27 onward) | Host-selected model or optional provider; Harness tools/gates/evidence; skills, scoped instructions, plans, and retrieved solutions. | The three layers already exist. The missing connection is reliable delivery of selected knowledge into the active task. |
@@ -139,12 +139,20 @@ Boost's documented feedback from failed combined checks suggests a separate expe
 
 Use completed, freshly verified tasks as the unit of comparison: success rate, human corrections, elapsed time, and total model cost including retries. First hold the model and task constant while comparing baseline versus routed context; only then compare models. Record whether the required pointer arrived and whether the host actually read it before the first edit. Those are evaluation observations, not new Phase 1 cite enforcement. Existing read-only modes, legacy plans, and autonomous exemptions remain separate regression checks.
 
-**Effect on the decision:** this comparison strengthens the context-delivery rationale and adds a bounded follow-up experiment. It does not resolve D1, change the Phase 1 scope, or fill the Human Decision.
+**Effect on the decision:** this comparison strengthens the context-delivery rationale and adds a bounded follow-up experiment. It does not pull the optional autonomous loop into Phase 1.
+
+## Addendum — 2026-09-23
+
+`main` was still `2833c4a5`. The baseline findings F1–F8 still match the tree. The VS Code hooks article, read the same day, still shows SessionStart context under `hookSpecificOutput` and also documents `UserPromptSubmit`, `SubagentStart`, and `SubagentStop`. Those newer events are not classification or binding hooks in this release.
+
+Laya and Jev were reviewed as typed-decision contracts: one state, closed questions, and answers that code consumes. The harness does not call either service, and it does not call any model. `@engineer` may dispatch one read-only sub-agent whose object `plan-new` validates. A glob match wins a disagreement. High uncertainty abstains.
+
+pstack was reviewed from the Cursor plugin README and `poteto-mode`. The mechanism worth adapting is a short principle index whose leaves already exist, read by the implementer before work. The plugin's playbooks, second user entry, model-per-role pins, and `never-block-on-the-human` are not adopted. Destructive approval and gate denial still stop.
+
+The Human Decision in the proposal records the 2026-09-23 approval of Phase 1a–1d. This review is not that approval, and it does not mark the later architecture, simplicity, or security implementation reviews complete.
 
 ## Evaluation and approval recommendation
 
-Recommend approving the thin Phase 1a–1c release **with the documented reconciliations**, after selecting D1's enrollment guarantee and callable relock seam. Keep cite tracking and specialist execution scheduling deferred.
+The recorded decision approves Phase 1a–1d with D1 writer-enforced enrollment, `plan-new --from`, host-only classification, and the eight-name principle index. Cite tracking and specialist execution scheduling stay deferred.
 
-The highest-leverage test is whether a Java Deliver request supplies the correct skill pointer without a human reminder. Compare the same task on baseline/candidate, record required-pointer presence, actual host read before first edit, and correction count. Index success needs separate before-write evidence. A pointer-only pass does not justify saying the model complied; a failure should lead to debugging projection or host integration before expanding the standing prompt.
-
-No Human Decision is recorded here. Architecture/simplicity/security implementation reviews remain required later and are not marked completed by this planning review.
+The highest-leverage test is whether a Java Deliver request supplies the correct skill pointer without a human reminder. Compare the same task on baseline and candidate, and record whether the pointer arrived and whether the host read it before the first edit. Index success needs the before-write evidence in Demo B, including a non-stale empty corpus when HEAD is known. Demo C proves the CLI can consume a host classification file without contacting a provider. A pointer-only pass does not mean the model complied.

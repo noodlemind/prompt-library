@@ -1,6 +1,6 @@
 ---
 plan_schema: 1
-title: "Bind Deliver procedures and initialize both index planes"
+title: "Bind Deliver procedures, accept host classification, and initialize indexes"
 type: feat
 status: planned
 plan_lock: true
@@ -8,15 +8,18 @@ phase: 1
 priority: P1
 risk: amber
 autonomy: balanced
-intent: "Remove repeated human reminders to load delivery procedures and initialize indexes by binding existing primitives to the plan before lock and invoking the existing index builders at two entry points."
+intent: "Remove repeated human reminders to load delivery procedures and initialize indexes by binding existing primitives to the plan before lock, accepting a host classification object when prose names no files, and invoking the existing index builders at two entry points."
 expected_outputs:
   - "Phase 0 decision package and candidate delivery-routing registry entry"
   - "Deterministic routing policy, evaluator, pre-lock snapshot, R1, and diagnostics"
   - "Bounded snapshot projections in orient, nextTools, and the session hook"
   - "Both existing index planes initialized by init-repo and missing planes by plan-new before writing the plan"
+  - "plan-new validation of a host classification object, with no harness model call"
+  - "A short principle index the code-implementer reads from disk"
 success_criteria:
   - "A Java-shaped Deliver plan binds java and orients with a real java/SKILL.md read pointer without a human reminder"
-  - "A workspace with configured checks but no prior init-repo builds both index planes before its new plan is written"
+  - "A workspace with configured checks but no prior init-repo builds both index planes before its new plan is written, and those planes are not stale when HEAD is known"
+  - "A host classification file can name an existing Java path, and plan-new binds java without contacting a provider"
   - "Legacy plans, non-Deliver modes, autonomous/bench, context budgets, and authorization/evidence boundaries retain their contracts"
 verification:
   required: [harness-tests, prompt-contracts, build-assets]
@@ -45,6 +48,12 @@ verification:
     AC22: [prompt-contracts, harness-tests]
     AC23: [prompt-contracts, build-assets]
     AC24: [harness-tests, prompt-contracts]
+    AC25: [harness-tests]
+    AC26: [prompt-contracts, harness-tests]
+    AC27: [harness-tests]
+    AC28: [harness-tests]
+    AC29: [prompt-contracts]
+    AC30: [prompt-contracts]
 reviews:
   required: [architecture-strategist, code-simplicity-reviewer, security-sentinel]
   completed: []
@@ -55,26 +64,24 @@ domains: [harness, developer-experience, security]
 specialists: [architecture-strategist, code-simplicity-reviewer, security-sentinel]
 capability_gaps: []
 created: 2026-09-18
-updated: 2026-09-19
+updated: 2026-09-23
 ---
 
 # Delivery routing implementation plan
 
 ## Overview
 
-Keep host-first `@engineer` and the deterministic Harness. Add procedure binding inside the existing plan lifecycle, then project file pointers and invoke the two existing index builders. Phase 1a–1c are one release unless the owner explicitly slices them.
+Keep host-first `@engineer` and the deterministic Harness. Bind procedures inside the existing plan lifecycle, accept a host classification object when a request names no files, project file pointers, and invoke the two existing index builders. The harness never calls a model. Phase 1a–1d are one release unless the owner slices them.
 
-**Execution hold:** this plan locks the proposed scope, not the Human Decision. Only the four Phase 0 documents/inventory changes are authorized now. Do not create `route.mjs`, `ensure-indexes.mjs`, policy, hook, gate, or other implementation changes until the [proposal's Human Decision](../../knowledge/proposals/delivery-routing.md#human-decision) is Approved. The kernel does not currently enforce this narrative approval hold; the executing agent must honor it.
-
-Keep `status: planned` so the live dual-track `in-progress` plan retains priority. All acceptance criteria and implementation tasks remain unchecked. Merging a documentation PR does not imply implementation approval.
+The [Human Decision](../../knowledge/proposals/delivery-routing.md#human-decision) was Approved on 2026-09-23 for that release. This revision is still documentation. Implementation follows the unchecked tasks below. Keep `status: planned` so the live dual-track `in-progress` plan retains priority.
 
 ## Context
 
-- Owner's conclusion: 2026-09-18, revised 2026-09-19; inspected `noodlemind/prompt-library` at `2833c4a5f90c58e97887025b7599e612089c788b`.
+- Owner's conclusion: 2026-09-18, revised 2026-09-23; inspected `noodlemind/prompt-library` at `2833c4a5f90c58e97887025b7599e612089c788b`. Main had not moved by the 2026-09-23 review.
 - Owner-reported pain: repeated reminders to load Java/domain skills, instructions, reviewers, and indexes during Deliver.
 - Baseline confirms: `buildPlanSkeleton` writes a locked plan immediately, manufactures the `create-primitive` cite for primitive paths, and never evaluates delivery rules. `orient` names generic next steps. `load-context` reads only flat frontmatter. `cmdInitRepo` prints an index command.
 - The [proposal](../../knowledge/proposals/delivery-routing.md) owns the contract and approval. The [review](../../knowledge/proposals/delivery-routing-expert-review.md) separates supplied research lenses, independently checked sources, and repository findings.
-- Spec Kit and EarlyCheck are out of scope. No new routing skill, user entry, specialist pool, index plane, or state file.
+- Spec Kit, EarlyCheck, Laya, Jev, and the pstack plugin are out of scope as dependencies. The host may classify. The principle index names rules this repository already enforces. No new routing skill, user entry, specialist pool, index plane, or state file.
 
 ## Intent Contract
 
@@ -117,7 +124,13 @@ Keep `status: planned` so the live dual-track `in-progress` plan retains priorit
 - [ ] **AC21** `orient` and SessionStart disclose missing/stale state for both planes without rebuilding. Host Deliver and the existing optional deliver profile are eligible; Answer/Investigate/Review and autonomous/bench do not inherit Deliver routing or automatic index requirements. Explicit caller context, not the global optional-agent default, determines the exemption.
 - [ ] **AC22** AC61 is rewritten as behavioral index-invocation evidence; successful init points to `harness index --status`. No test treats a printed instruction to index as proof that indexing occurred.
 - [ ] **AC23** The seed is included in a built package, hooks remain in parity, Engineer stays in its existing token band, no domain skill disables model invocation, and `routing` is absent from schema v1 `required_frontmatter`.
-- [ ] **AC24** Both demos pass through real command entry points; negative cases and regression tests pass; independent architecture/simplicity/security findings close before Phase 1 delivery is claimed. No test or read pointer is represented as proof of a host-model read.
+- [ ] **AC24** Demos A, B, and C pass through real command entry points; negative cases and regression tests pass; independent architecture/simplicity/security findings close before Phase 1 delivery is claimed. No test or read pointer is represented as proof of a host-model read.
+- [ ] **AC25** With no `--classification` file, `plan-new` uses declared impacted files and policy only. The command, `harness route`, index builders, orient, and hooks perform zero provider, agent-loop, and model-client calls.
+- [ ] **AC26** The classifier agent is internal, read-only, and unable to spawn. Its only output is the classification object. `engineer.agent.md` lists it and adds one dispatch sentence, with no routing table, playbook list, or principle bodies.
+- [ ] **AC27** `plan-new --classification` accepts version 1, `source: host-subagent`, `mode: deliver`, and closed domain keys. An existing repository-relative path is kept. A missing path is kept only when the same path was passed separately as impacted-file input. The classification file does not prove the user named a path. Extra keys, unknown domains, a non-deliver mode, and absolute paths fail closed. Other paths are dropped. `uncertainty: high` writes a skipped snapshot with reason `classification-abstain` and ignores classification risk and domains.
+- [ ] **AC28** Declared risk and classification risk resolve to the higher of the two. Declared domains union with classification domains set to true, and a false flag removes nothing. A glob match still binds when its domain flag is false. A Java path with `security: true` at amber or red binds `java` and `security-sentinel`. Classification never writes `routing.skills.required`, `skills_used`, or `reviews.required`.
+- [ ] **AC29** `.github/skills/references/delivery-principles.md` contains the eight names from the proposal and points at their existing leaves. The code-implementer packet tells the implementer to read that file before the first edit. A report may name a principle only after that read. No kernel check parses principle names.
+- [ ] **AC30** The release does not add `/poteto-mode`, pstack playbooks, model-role pins, arena, swarm, autopilot, or a rule that destructive actions and gate denial proceed without the owner.
 
 ## Technical Notes
 
@@ -131,10 +144,10 @@ Keep the generator's no-init prerequisite: it still requires at least one config
 
 ## Plan
 
-### Phase 0 — Decision package (current scope)
+### Phase 0 — Decision package
 
-- [ ] Prepare the proposal, research/repository review, this planned locked contract, and candidate inventory entry; validate documents without claiming implementation acceptance.
-- [ ] Record the owner's Human Decision in the proposal, including the recommended R1 enrollment guarantee and existing-command `--from` relock entry, before Phase 1 code.
+- [x] Prepare the proposal, research/repository review, this planned locked contract, and candidate inventory entry.
+- [x] Record the owner's Human Decision: writer-enforced R1, `plan-new --from`, host-only classification, and the principle index. Phase 1 code remains unchecked.
 
 ### Phase 1a — Binder and lock-time readiness
 
@@ -155,7 +168,14 @@ Keep the generator's no-init prerequisite: it still requires at least one config
 - [ ] Add failing builder/integration tests for AC15–AC22, including before-write order, isolated roots, empty knowledge, one-plane failure, stale nonrebuild, and dry-run/stdout immutability.
 - [ ] Add `ensure-indexes.mjs` and exactly two automatic call sites. Await structural work; make per-plane failure advisory while preserving unrelated errors.
 - [ ] Rewrite AC61, document the debug/init behavior in existing CLI/tool references, and prove packaged seed/hook parity.
-- [ ] Run the two real-command demos, then the three named checks; reconcile independent review findings and collect fresh Phase 1 verification evidence.
+- [ ] Run demos A and B, then the three named checks.
+
+### Phase 1d — Host classification and principle index
+
+- [ ] Add failing tests for AC25–AC30: missing classification file, valid host object, invented path, a missing path kept only when also passed as impacted input, higher-risk merge, Java-plus-security binding, glob override, high uncertainty, and a spy that fails if a provider or agent loop starts.
+- [ ] Validate `--classification` inside `plan-new` before routing and before index side effects. Reject or drop input as AC27 specifies. Do not import a model client.
+- [ ] Add `delivery-classifier.agent.md` with read and search tools, `user-invocable: false`, and `agents: []`. Add it to the Engineer allowlist with one dispatch sentence.
+- [ ] Add `delivery-principles.md` with the eight names and leaf pointers. Point the code-implementer packet at that file. Do not copy pstack playbooks or principle bodies.
 
 ### Deferred — Separate approval/scope
 
@@ -215,12 +235,16 @@ No new kernel behavior has been tested in Phase 0. The live dual-track plan has 
 - `packages/harness/test/prompt-library-contracts.test.mjs`
 - `packages/harness/test/host-contracts.test.mjs`
 - `packages/harness/test/delivery-routing-integration.test.mjs`
+- `.github/agents/delivery-classifier.agent.md`
+- `.github/agents/engineer.agent.md`
+- `.github/agents/code-implementer.agent.md`
+- `.github/skills/references/delivery-principles.md`
 
 Generated assets under `packages/harness/assets/` are build outputs, not an independent source. Existing test names are reused where a focused suite exists; new narrowly scoped tests are allowed at the named paths. The hooks/lib allowance covers only a shared routing projection/parser helper if needed, not unrelated hook changes. If the adopted relock/enrollment design needs another path, amend this contract before implementation and rerun the gate.
 
 The two optional-agent files are scoped solely to passing existing execution context into orient; they do not acquire routing, index, or ceremony requirements on autonomous/bench.
 
-Explicit exclusions: `packages/harness/config/plan-schema.v1.yaml` required fields, `.github/agents/engineer.agent.md`, `.harness/route.json`, user-facing routing skills, changes to autonomous loop behavior, unrelated live-plan repairs.
+`.github/agents/engineer.agent.md` and `code-implementer.agent.md` are in scope only for the classifier allowlist, one dispatch sentence, and a pointer to the principle index. Explicit exclusions: `packages/harness/config/plan-schema.v1.yaml` required fields, `.harness/route.json`, user-facing routing skills, pstack plugin files, model clients, changes to autonomous loop behavior, and unrelated live-plan repairs.
 
 ## Verification Plan
 
@@ -228,13 +252,15 @@ Explicit exclusions: `packages/harness/config/plan-schema.v1.yaml` required fiel
 
 **Demo A:** in an isolated workspace with a valid checks config and resolved Java primitives, create and lock a plan for a new `src/Example.java`. Orient that explicit plan through the existing active-plan/session mechanism. Require `routing.skills.required` to include `java`, empty domain cites, the Java skill pointer in the bounded Routing section, and both skill/source read pointers in `nextTools`. Change live policy; the locked names remain the same.
 
-**Demo B:** use a separate committed Git workspace with a named check and no prior init, no index artifacts, and an empty solution corpus. Create a plan through the real CLI. Instrument the plan write seam to assert both index status planes are already readable and indexed before the plan file appears. Check emitted outcomes and artifacts, then repeat with one stale plane, a failed builder, and dry-run.
+**Demo B:** use a separate committed Git workspace with a named check and no prior init, no index artifacts, and an empty solution corpus. Create a plan through the real CLI. Instrument the plan write seam to assert both index status planes are already readable, `indexed: true`, and not stale before the plan file appears. Check emitted outcomes and artifacts, then repeat with one stale plane, a failed builder, and dry-run.
+
+**Demo C:** pass a host classification file that names an existing Java path and sets `source: host-subagent`. Require `routing.skills.required` to include `java`, and require the test process to show no provider or agent-loop call. Repeat with `uncertainty: high` and expect a skipped snapshot with reason `classification-abstain`.
 
 Phase 0 validation is narrower: schema/readiness validation of this plan, YAML/relative-link/scope review, existing prompt contracts, and asset build parity. These checks validate the planning package, not the future acceptance criteria. Do not tick Phase 1 boxes or run a misleading completion claim for unimplemented work.
 
 ## Verification Evidence
 
-Phase 0 results are recorded in the documentation PR. Phase 1 evidence is pending implementation and Human Decision. No passed Phase 1 evidence is claimed.
+Phase 0 results are recorded in the documentation PR. The Human Decision is Approved. Phase 1a–1d evidence is pending implementation. No passed Phase 1 evidence is claimed.
 
 ## Risk & Review Routing
 
@@ -244,18 +270,18 @@ Pivotal assumption: deterministic pointers in host context materially reduce the
 
 ## Primitive Governance
 
-- Primitive classification: candidate CLI capability registration plus a future narrow amendment to the existing `ensure-plan` support skill; no new skill or agent.
+- Primitive classification: candidate CLI capability registration, one internal read-only classifier agent, a principle-index reference, and a future narrow amendment to the existing `ensure-plan` support skill. No new user-facing skill.
 - Existing-capability overlap analysis: intake stays in Engineer; `ensure-plan` owns planning; named checks remain proof; existing index builders remain the only two planes.
 - Intended artifact structure: the four Phase 0 files now, then the approved Phase 1 paths above.
 - Trigger and negative-trigger implications: routing applies only to Deliver; Answer/Investigate/Review discovery stays available and autonomous/bench remains exempt.
 - Verification expectations: use the three existing named checks and behavioral acceptance cases; never populate a cite from a route selection.
-- Registry and documentation impact: register `delivery-routing` as `type: cli`, `status: candidate`; no public primitive count or Engineer prompt change.
+- Registry and documentation impact: keep `delivery-routing` as `type: cli`, `status: candidate`. The Engineer prompt gains one dispatch sentence and the classifier allowlist entry. It does not gain a public primitive or a routing table.
 
 The Phase 0 `skills_used` list records files actually read during planning. `create-primitive/SKILL.md` was inspected to understand the existing PR1 requirement for editing the registry; no creator workflow was invoked and no new primitive was minted. Future routing must never manufacture an equivalent read record.
 
 ## Implementation Notes
 
-Pending explicit Human Decision. The thin revision is the scope ceiling, not a starting point for a router product.
+The Human Decision is Approved for 1a–1d. The three targets are routing, host classification, and the principle index. That scope is the ceiling.
 
 ## Review Findings
 
@@ -265,3 +291,4 @@ See the companion review for evidence and proposed dispositions. The R1 historic
 
 - 2026-09-19 — Compared the supplied research with `main` at `2833c4a5`; inspected current plan, gate, hook, trust, inventory, packaging, and index implementations.
 - 2026-09-19 — Prepared the Phase 0 contract as planned and locked with unchecked implementation work. Preserved the owner's approval hold and the live dual-track plan.
+- 2026-09-23 — Rechecked `main` at `2833c4a5` and the VS Code SessionStart hook article. Recorded D1, host-only classification, and the pstack principle-index adaptation. Left pstack playbooks and model pins out.

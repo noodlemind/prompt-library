@@ -6,7 +6,7 @@
 
 **Created:** 2026-09-18 · **Revised:** 2026-09-19
 
-**Status:** Ready for Human Decision; Phase 0 documentation only
+**Status:** Human Decision Approved on 2026-09-23 for Phase 1a–1d. This revision is still documentation.
 
 Keep host-first `@engineer` and kernel-always `harness`. Add a deterministic binder inside the existing planning path and invoke the existing index builders. The kernel **names a file to read**; it does not invoke a Skill tool or spawn a specialist.
 
@@ -128,7 +128,7 @@ All seed matches are required in Phase 1; optional/consult-if arrays are reserve
 
 ## Reconciliation decisions
 
-These conditions turn the conclusion into a buildable plan. **D1 needs an explicit owner choice; D2–D8 are proposed implementation clarifications included in approval.**
+These conditions turn the conclusion into a buildable plan. D1, D9, and D10 were selected on 2026-09-23. D2–D8 and D11 are included in that approval.
 
 | ID | Finding | Recommended decision |
 |---|---|---|
@@ -140,6 +140,9 @@ These conditions turn the conclusion into a buildable plan. **D1 needs an explic
 | D6 | SessionStart precedes per-request mode selection | Treat routing as conditional Deliver context; do not infer host mode from optional-agent profile defaults |
 | D7 | Adding a pinned path changes trust digests even if the file is absent | Disclose and test one-time trust invalidation; never auto-approve or downgrade invalid policy to missing |
 | D8 | Direct index calls need current command setup; new seed is not packaged today | Preserve HEAD/home/extractor setup; package the seed; isolate fixture state and configure a named check before the no-init demo |
+| D9 | Prose requests have no concrete path, so globs cannot bind a domain | Host `@engineer` may dispatch one read-only classifier sub-agent. `plan-new` validates the resulting object. The harness never calls a model to produce it |
+| D10 | pstack routes by playbook and carries a named principle index | Adopt the index mechanism for existing harness rules. Do not add `/poteto-mode`, pstack playbooks, or model-role pins |
+| D11 | VS Code SessionStart context shape was rechecked on 2026-09-23 | Keep projection on SessionStart. Support `hookSpecificOutput` and the repo's current top-level `additionalContext` until the installed host is shown to require only one |
 
 ### D1 — R1 adoption and existing-plan re-lock
 
@@ -175,7 +178,7 @@ The hook is a reader with a 10-second repo configuration budget. Its flat parser
 
 Host mode and the optional `agent.profile` setting are different: that setting defaults to autonomous and must not exempt normal host Deliver work. Thread the optional caller's already-resolved profile through `agent-cmd.mjs` → `agent-loop.mjs` → orient, solely to preserve the exemption while keeping its existing deliver profile eligible. Where SessionStart cannot know the request mode, label routing pointers as conditional on choosing Deliver, with no instruction to load them in read-only modes. Test that boundary explicitly.
 
-Current VS Code documentation shows a SessionStart `hookSpecificOutput` object containing `hookEventName` and `additionalContext`. The repo currently emits top-level `additionalContext`. Verify the intended supported host version and provide a valid envelope without claiming local JSON fixtures prove host consumption. [VS Code hooks](https://code.visualstudio.com/docs/agent-customization/hooks)
+Rechecked 2026-09-23. The VS Code hooks article still shows SessionStart context as `hookSpecificOutput.hookEventName` plus `additionalContext`, and it also lists `UserPromptSubmit`, `SubagentStart`, and `SubagentStop`. This release projects routing only from SessionStart. It does not classify or bind from the newer events. The repo currently emits top-level `additionalContext`, so the hook keeps that shape and adds the documented `hookSpecificOutput` envelope. Local fixtures do not prove the installed host consumed either shape. Hooks remain Preview. [VS Code hooks](https://code.visualstudio.com/docs/copilot/customization/hooks)
 
 ## Index invocation
 
@@ -202,33 +205,99 @@ Replace AC61's assertion about printing an instruction with behavioral proof tha
 | 0 | This proposal, companion review, planned locked plan, candidate registry entry | Human Decision recorded; no kernel code before approval |
 | 1a | Strict policy/evaluator, inventory resolution, create/relock writer, R1, doctor/trust/debug surface | Java is bound before lock; compatibility and invalid-input tests pass |
 | 1b | Reserved pack section, nextTools, snapshot-only hook | Java skill/source pointers appear without manual instruction; budget/host tests pass |
-| 1c | Thin index helper at two sites, AC61 rewrite, packaged seed/hooks | No-init demo proves both planes are built before plan write |
+| 1c | Thin index helper at two sites, AC61 rewrite, packaged seed/hooks | No-init demo proves both planes are built before plan write. A current empty corpus is indexed and not stale |
+| 1d | Host classification schema, read-only classifier agent, principle index | `plan-new` validates a host object and never contacts a provider. The implementer reads the index from disk |
 | 2, deferred | Observable cites, `route --cite`, R2 warning, TUI card | Read attribution evaluated before any stronger enforcement |
 | 3, deferred | Fill `reviews.required`, name reviewers after verify | Host performs specialist work; no kernel spawning |
 
-Ship 1a–1c together after approval unless the owner explicitly changes the release slice. They remain separate work packages so their cost and integration risk are visible.
+Ship 1a–1d as one release unless the owner slices it. The packages stay separate so their cost and integration risk stay visible.
 
 Falsifiable acceptance:
 
 1. Create and lock a plan containing an intended Java path; orient names the real Java skill and target source in `nextTools`, without the user saying to load Java. The snapshot remains stable after live policy changes.
 2. Create a plan in an isolated, never-initialized fixture with a valid check; assert both `indexStatus` planes are indexed **at the plan-write boundary**, then prove the plan exists. Final-state existence alone is insufficient ordering evidence.
 
-The [plan](../../docs/plans/2026-09-18-feat-delivery-routing-plan.md#acceptance-criteria) supplies 24 unchecked criteria, exact file scope, negative cases, and mappings to the three existing named checks. Required future review lenses are architecture, simplicity, and security. Phase 0 checks validate planning artifacts only.
+3. Pass a host classification file for a prose request whose path already exists. `plan-new` binds that path's domain with zero provider or agent-loop calls. High uncertainty, an unknown domain, or a path the user did not name and that does not exist produces a skipped snapshot or a rejection, and does not invent a skill name.
+
+The [plan](../../docs/plans/2026-09-18-feat-delivery-routing-plan.md#acceptance-criteria) supplies the acceptance criteria, exact file scope, negative cases, and mappings to the three existing named checks. Required future review lenses are architecture, simplicity, and security. Phase 0 checks validate planning artifacts only.
+
+## Host classification
+
+This capability never calls a model. `plan-new`, `harness route`, orient, hooks, and the index builders do not start `provider.mjs`, the agent loop, or a classifier client. Enabling `agent.enabled` is outside this release.
+
+`@engineer` owns the only classification step. It dispatches one internal sub-agent when a Deliver plan needs impacted files and the request names none. The sub-agent is `user-invocable: false`, cannot spawn, and has read and search tools only. It returns one object and stops. The request text is evidence, not instructions.
+
+`harness plan-new --classification <path>` is the only intake. A missing file means the declared impacted files and the policy are the whole input. The command validates and then runs `evaluateRouting`. It does not spawn the sub-agent and does not fill a missing file.
+
+```yaml
+classification:
+  version: 1
+  source: host-subagent
+  mode: deliver
+  risk: amber
+  domains:
+    java: true
+    python: false
+    sql: false
+    typescript: false
+    aws: false
+    security: false
+    performance: false
+  primitive: false
+  uncertainty: low
+  paths:
+    - src/OrderService.java
+```
+
+`source` must be the literal `host-subagent`. `mode` must be `deliver` on this command. Domain keys are the closed inventory stems. `uncertainty` is `low`, `medium`, or `high`. Paths are repository-relative. Extra keys, unknown domains, absolute paths, and paths outside the repository fail closed.
+
+A path is kept when it exists on disk. A path that does not exist is kept only when the same path was passed separately as impacted-file input. The classification file is not evidence that the user named a path. Any other path is dropped.
+
+Risk becomes the higher of the plan's declared risk and the classification risk, ordered green < amber < red. The classifier cannot lower risk. Domains are the union of domains already declared on the plan and classification domains set to true. A false flag removes nothing. `uncertainty: high` drops paths, domain flags, and the classification risk, then writes `skipped: true` with reason `classification-abstain`.
+
+A glob match still binds when the classification flag for that domain is false. A true domain flag can add a `when` match the globs did not cover. A Java path plus `security: true` at amber or red binds both `java` and `security-sentinel`. Binding still comes only from the routing policy.
+
+`plan-new` remains a Deliver writer, so a non-deliver mode is rejected rather than turned into an Answer plan. The object never contains skill bodies, procedure text, shell, or reviewer assignments.
+
+Instructions that already declare `applyTo` remain the host's path attachment. Classification points at a file that already exists when the prose did not name one. It does not reimplement `applyTo`.
+
+## Principle index
+
+pstack, Lauren Tan's Cursor plugin, routes one task to one playbook and reads a short index of one-line principles at task start. The leaf file holds the full rule. A delegate re-reads that index before work, and a reply names a principle only after reading its leaf. The source checked on 2026-09-23 is the [pstack README](https://github.com/cursor/plugins/blob/main/pstack/README.md) and [poteto-mode](https://github.com/cursor/plugins/blob/main/pstack/skills/poteto-mode/SKILL.md).
+
+The adaptable piece is that index, not the plugin. This repository already has one router: `@engineer` mode selection. Domain routing is the second axis and stays deterministic. The principle index names rules this harness already enforces:
+
+| Name | Rule in force | Leaf |
+|---|---|---|
+| smallest-change | Surgical diff | `AGENTS.md` coding standards |
+| prove-with-evidence | Named checks and `harness verify` | `docs/adaptive-engineer-harness.md` |
+| behavior-not-implementation | Tests assert observed behavior | repository TDD convention |
+| bind-before-lock | The snapshot is the contract | this proposal |
+| classify-inputs-only | Classification proposes inputs; policy binds names | this proposal |
+| pointers-not-bodies | Pack and hook carry paths | binding constraint 1 |
+| harness-never-calls-a-model | Routing, plan-new, indexing, and projection start no model client. The optional agent runtime is a separate switch and is outside this release | this decision |
+| legacy-stays-valid | A locked plan without routing gains no new R1 failure | D1 |
+
+The index file is `.github/skills/references/delivery-principles.md`. `@engineer` does not embed the table. The code-implementer packet points at the file, the implementer reads it before the first edit, and a report names a principle only after that read. The kernel does not parse those names as proof.
+
+pstack's playbook catalog, `/poteto-mode`, sticky mode, model-per-role setup, arena, swarm, autopilot, and Comment Sicko are not part of this release. `never-block-on-the-human` is not adopted: destructive actions, gate denial, and this Human Decision still stop for the owner. A locked plan remains the Deliver contract.
 
 ## Binding constraints
 
 1. Paths only in pack/hook; Routing directly after Gate; reserved 2048-byte budget and at most six path lines.
-2. No routing tables or new lifecycle step in `engineer.agent.md`; preserve its 600–900 estimated-token band.
+2. `engineer.agent.md` may add the classifier to its `agents` allowlist and one dispatch sentence. It gains no routing table, playbook list, or principle bodies, and stays in its 600–900 estimated-token band.
 3. Snapshot written before lock; no `.harness/route.json`; consumers never re-match live rules.
 4. Domain cites start empty; no new domain cite enforcement in Phase 1; preserve honest existing PR1 behavior.
-5. Kernel names files; no Skill-tool force API dependency, model classifier, or specialist spawn.
+5. The harness never calls a model. The kernel names files from the snapshot. Host classification is validated input. There is no Skill-tool force API and no specialist spawn.
 6. Strict names/globs/conditions, contained inventory lookup, unknown IDs fail closed, policy pinned in trust.
 7. Replace the primitive-selection special case with a policy rule; never manufacture its actual-read record.
 8. Do not add routing to schema v1 required fields or fail legacy plans solely for its absence.
 9. Deliver-only; autonomous/bench and read-only modes retain their contracts.
 10. No new user entry, `/route` skill, restored `/start`/`work-on-task`, pool, or `/create-primitive` implementation handoff.
 11. `evaluateRouting` owns decisions; `harness route` is diagnostics only, excluded from TUI and Deliver prompts.
-12. Two automatic index invocation sites; empty corpus succeeds; no stale rebuild on plan-new/orient; AC61 proves invocation.
+12. Two automatic index invocation sites; empty corpus succeeds; no stale rebuild on plan-new/orient; AC61 proves invocation. Demo B requires readable, indexed, non-stale planes when HEAD is known.
+13. `plan-new --classification` validates the host object and never starts a provider, agent loop, or model client. `harness route` does not classify.
+14. The principle index names existing rules. It does not import pstack playbooks, pin a model, or become a gate.
 
 ## Scope and rollout
 
@@ -240,14 +309,16 @@ Roll out with routing-aware plan creation/relock and explicit degraded legacy di
 
 ## Human Decision
 
-- **Decision:** _(Approved / Needs changes / Rejected)_
-- **Reviewer:**
-- **Date:**
-- **D1 enrollment choice:** _(Recommended writer-enforced enrollment / Require stronger gate-observable provenance)_
-- **D1 existing-plan relock entry:** _(Accept plan-new --from as described / Specify alternative)_
-- **Conditions or required edits:**
+- **Decision:** Approved
+- **Reviewer:** Krish / noodlemind
+- **Date:** 2026-09-23
+- **D1 enrollment choice:** Writer-enforced enrollment. The gate validates a snapshot when present. Legacy locked plans without `routing:` stay valid. A hand-edited lock can still bypass the writer.
+- **D1 existing-plan relock entry:** `plan-new --from <path>`
+- **D9 classification:** Host sub-agent only. The harness validates the object and never calls a model.
+- **D10 principles:** Ship the eight-name index of existing harness rules. Do not import pstack.
+- **Conditions or required edits:** Ship 1a–1d as one release under the binding constraints. Phase 2 cites, Phase 3 specialist scheduling, pstack playbooks, model-role pins, and `never-block-on-the-human` stay out. Demo B must show both planes readable, indexed, and not stale before the plan file appears.
 
-**Approved:** implement Phase 1a–1c under the binding constraints, including the selected D1 enrollment guarantee and writer entry. Read this approval together with the existing plan; do not invoke `/create-primitive` to create a workflow.
+**Approved:** implement Phase 1a–1d under the binding constraints, including this D1 enrollment guarantee, `plan-new --from`, host-only classification, and the principle index. Read this approval together with the plan. Do not invoke `/create-primitive` to create a workflow.
 
 **Needs changes:** update this proposal and plan, then re-present.
 

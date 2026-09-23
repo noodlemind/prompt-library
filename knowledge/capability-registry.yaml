@@ -85,7 +85,7 @@ capabilities:
     version: 1
     origin: delivery-routing
     proposal: knowledge/proposals/delivery-routing.md
-    triggers: [Deliver procedure binding, plan routing snapshot, index initialization]
+    triggers: [Deliver procedure binding, plan routing snapshot, host classification validation, principle index, index initialization]
     usage_count: 0
   document-review: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   engineer-skill:
