@@ -376,6 +376,18 @@ export async function cmdInitRepo(argv) {
   const logger = (m) => log(flags, m);
   flags.home = flags.home || process.env.HARNESS_HOME;
   const stats = runInitRepo({ workspace, flags, log: logger, copilotHome });
+  try {
+    const { ensureIndexes } = await import('./ensure-indexes.mjs');
+    stats.indexes = await ensureIndexes({
+      workspace,
+      copilotHome,
+      mode: 'missing-or-stale',
+      dryRun: Boolean(flags.dryRun),
+      log: logger,
+    });
+  } catch (error) {
+    stats.indexes = { error: error.message };
+  }
   const migrateConflicts = stats.migrate?.conflicts?.length || 0;
   const exitCode = migrateConflicts ? EXIT.syncConflict : 0;
   writeEvent(workspace, flags, {
@@ -397,11 +409,11 @@ export async function cmdInitRepo(argv) {
     console.log(
       ui.paint(
         'muted',
-        '  run `harness index` now, and again after a major pull from main or a docs rewrite · drift: harness index --status'
+        '  index status: harness index --status'
       )
     );
     if (exitCode) printNext('harness migrate  # resolve leftover docs/ conflicts');
-    else printNext('harness index');
+    else printNext('harness index --status');
   }
   return exitCode;
 }

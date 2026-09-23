@@ -5,6 +5,7 @@ import { writeHarnessRunner } from './resolve-harness-bin.mjs';
 import { writeCodebaseMap } from './repo-map/index.mjs';
 import { ensureStore, storeDir, readLedger } from './knowledge/store.mjs';
 import { collectEpisodes, consolidateStatus, splitLedger } from './knowledge/consolidate.mjs';
+import { fileURLToPath } from 'node:url';
 import { SESSION_AGENT_CTX_REL, WORKSPACE_PLANS_REL, plansWriteRel } from './project-layout.mjs';
 import { runMigrateLayout } from './migrate-layout.mjs';
 
@@ -109,6 +110,19 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
       }
       stats.created.push(`.github/harness/${name}`);
       log(`created .github/harness/${name}`);
+    }
+  }
+
+  const routingPath = path.join(harnessConfigDir, 'routing.yaml');
+  if (!fs.existsSync(routingPath)) {
+    const seed = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config', 'routing.seed.yaml');
+    if (fs.existsSync(seed)) {
+      if (!flags.dryRun) {
+        fs.mkdirSync(harnessConfigDir, { recursive: true });
+        fs.copyFileSync(seed, routingPath);
+      }
+      stats.created.push('.github/harness/routing.yaml');
+      log('created .github/harness/routing.yaml');
     }
   }
 

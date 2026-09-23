@@ -29,6 +29,7 @@ import {
   cmdResolve,
 } from './commands.mjs';
 import { cmdPlanNew } from './plan-new.mjs';
+import { cmdRoute } from './route.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
 import { cmdChecks, checksResultOf, checksExitFor, CHECKS_VERBS } from './checks-cmd.mjs';
@@ -517,6 +518,7 @@ function planNewFlagValue(rest, name) {
 }
 
 function planNewRequireArgs(rest) {
+  if (planNewFlagValue(rest, '--from')) return undefined;
   const slug = planNewFlagValue(rest, '--slug');
   if (!slug || !PLAN_NEW_SLUG_RE.test(slug)) {
     return 'plan-new: --slug is required and must be lowercase-hyphen (a-z0-9-)';
@@ -796,6 +798,21 @@ registerCommand({
 });
 
 registerCommand({
+  name: 'route',
+  summary: 'show a plan routing snapshot without writing',
+  group: 'engineer loop',
+  sideEffect: 'read',
+  surfaces: ['cli'],
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'plan file', required: true, default: null, tui: 'cli-only' },
+    ],
+  },
+  handler: cmdRoute,
+});
+
+registerCommand({
   name: 'plan-new',
   summary: 'scaffold a gate-ready plan',
   group: 'workspace',
@@ -815,6 +832,8 @@ registerCommand({
       { name: '--date', type: 'string', valueName: 'yyyy-mm-dd', description: 'override the plan filename date (default: today)', required: false, default: null, tui: 'prompt' },
             { name: '--risk', type: 'string', valueName: 'green|amber|red', description: 'risk rating (default green)', required: false, default: null, tui: 'prompt' },
             { name: '--status', type: 'string', valueName: 'name', description: 'open|planned|in-progress|review|done|blocked-capability|needs-info (default in-progress, or blocked-capability with --gap)', required: false, default: null, tui: 'cli-only' },
+      { name: '--from', type: 'string', valueName: 'path', description: 'relock an unlocked plan in place', required: false, default: null, tui: 'cli-only' },
+      { name: '--classification', type: 'string', valueName: 'path', description: 'host classification JSON to validate', required: false, default: null, tui: 'cli-only' },
     ],
   },
   handler: cmdPlanNew,

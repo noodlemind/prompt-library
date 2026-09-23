@@ -8,6 +8,7 @@ import { planDigest, readEvidence, validateEvidence } from './evidence.mjs';
 import { loadPolicy } from './policy.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { primitivePlanGovernance } from './primitive-governance.mjs';
+import { validateRoutingSnapshot } from './route.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
 
 export function runGate({ workspace, flags, query = '' }) {
@@ -153,6 +154,16 @@ export function runGate({ workspace, flags, query = '' }) {
         pass = false;
       } else {
         checks.push({ id: 'C3', pass: true, message: 'plan_lock: true', severity: 'ok' });
+      }
+      const routingCheck = validateRoutingSnapshot(plan.fm.routing);
+      if (!routingCheck.legacy) {
+        checks.push({
+          id: 'R1',
+          pass: routingCheck.ok,
+          message: routingCheck.ok ? 'routing snapshot is valid' : routingCheck.errors.join('; '),
+          severity: routingCheck.ok ? 'ok' : 'fail',
+        });
+        if (!routingCheck.ok) pass = false;
       }
       const primitive = primitivePlanGovernance(plan);
       if (primitive.required) {

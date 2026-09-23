@@ -53,6 +53,7 @@ export function buildContextPack({
   gatePreview,
   nextTools,
   gitContext,
+  routingLines = null,
 }) {
     const lines = [
     '# Harness Context Pack',
@@ -101,6 +102,12 @@ export function buildContextPack({
     lines.push(`- pass: ${gatePreview.pass}`);
     if (gatePreview.blockedReason) lines.push(`- blocked: ${gatePreview.blockedReason}`);
   }
+  if (Array.isArray(routingLines)) {
+    lines.push('', '## Routing');
+    const visible = routingLines.slice(0, 6);
+    if (routingLines.length > 6) visible[5] = `+${routingLines.length - 5} more in the plan routing snapshot`;
+    for (const line of visible) lines.push(`- ${inertLine(line)}`);
+  }
 
   if (repoMapRef) {
     lines.push(
@@ -142,7 +149,19 @@ export function buildContextPack({
   lines.push('', '---', `_Turn context — query: ${query || '(none)'}._`);
 
   let body = lines.join('\n');
-  if (Buffer.byteLength(body, 'utf8') > MAX_BYTES) {
+  const gateAt = body.indexOf('\n## Gate (preview)');
+  const routingAt = body.indexOf('\n## Routing');
+  if (Array.isArray(routingLines) && gateAt !== -1 && Buffer.byteLength(body, 'utf8') > MAX_BYTES) {
+    const protectedEnd = routingAt === -1 ? body.length : nextSectionAfter(body, routingAt + 1);
+    const marker = `\n\n${TRUNCATION_MARKER}\n`;
+    const markerBytes = Buffer.byteLength(marker, 'utf8');
+    const nextTools = extractNamedSection(body, '## Next tools');
+    const protectedBudget = Math.max(0, MAX_BYTES - markerBytes - Buffer.byteLength(nextTools, 'utf8'));
+    const protectedBlock = clipUtf8(body.slice(gateAt, protectedEnd).trimStart(), protectedBudget);
+    const prefixBudget = MAX_BYTES - Buffer.byteLength(protectedBlock, 'utf8') - markerBytes - Buffer.byteLength(nextTools, 'utf8') - 1;
+    const prefix = prefixBudget > 0 ? clipUtf8(body.slice(0, gateAt), prefixBudget) : '';
+    body = `${prefix}${marker}${protectedBlock}${nextTools}\n`;
+  } else if (Buffer.byteLength(body, 'utf8') > MAX_BYTES) {
         const budget = MAX_BYTES - 80;
     const buf = Buffer.from(body, 'utf8').subarray(0, budget);
         let leadIdx = buf.length - 1;
@@ -157,4 +176,30 @@ export function buildContextPack({
     body = buf.subarray(0, end).toString('utf8') + '\n\n…(truncated to 2KB budget)\n';
   }
   return body;
+}
+
+function extractNamedSection(body, heading) {
+  const start = body.indexOf(`\n${heading}`);
+  if (start === -1) return '';
+  const end = nextSectionAfter(body, start + heading.length + 1);
+  return body.slice(start, end);
+}
+
+function nextSectionAfter(body, from) {
+  const next = body.indexOf('\n## ', from);
+  return next === -1 ? body.length : next;
+}
+
+function clipUtf8(text, budget) {
+  if (budget <= 0) return '';
+  const buf = Buffer.from(text, 'utf8').subarray(0, budget);
+  let leadIdx = buf.length - 1;
+  while (leadIdx >= 0 && (buf[leadIdx] & 0xc0) === 0x80) leadIdx--;
+  let end = buf.length;
+  if (leadIdx >= 0 && leadIdx < buf.length) {
+    const lead = buf[leadIdx];
+    const seqLen = (lead & 0x80) === 0x00 ? 1 : (lead & 0xe0) === 0xc0 ? 2 : (lead & 0xf0) === 0xe0 ? 3 : (lead & 0xf8) === 0xf0 ? 4 : 1;
+    if (leadIdx + seqLen > buf.length) end = leadIdx;
+  }
+  return buf.subarray(0, end).toString('utf8');
 }

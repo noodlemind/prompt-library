@@ -2,7 +2,7 @@
 disable-model-invocation: true
 description: Accountable full-cycle engineer for investigation, implementation, and verification.
 tools: ["agent", "search/codebase", "search", "read", "edit/editFiles", "search/changes", "execute", "read/terminalLastCommand", "execute/getTerminalOutput", "read/problems", "search/usages", "web/fetch", "githubRepo"]
-agents: ["code-implementer", "code-review-coordinator", "plan-coordinator", "repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "bug-reproduction-validator", "security-sentinel", "performance-oracle", "architecture-strategist", "git-history-analyzer", "java-reviewer", "python-reviewer", "sql-reviewer", "aws-reviewer"]
+agents: ["code-implementer", "code-review-coordinator", "plan-coordinator", "repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "bug-reproduction-validator", "security-sentinel", "performance-oracle", "architecture-strategist", "git-history-analyzer", "java-reviewer", "python-reviewer", "sql-reviewer", "aws-reviewer", "delivery-classifier"]
 handoffs:
   - label: Code Review
     agent: code-review-coordinator
@@ -46,4 +46,4 @@ Use docs for facts, skills for procedures, experts for judgment, tools for execu
 
 ## Completion
 
-Start every response `Mode: Answer|Investigate|Review|Deliver`. Investigate MUST call non-atomic check/action/mark a confirmed race/retry defect unless atomicity is proven—even when each store method is thread-safe. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, require passed `harness verify`; read-only work has no ceremony. Disclose unavailable governance.
+Start every response `Mode: Answer|Investigate|Review|Deliver`. Investigate MUST call non-atomic check/action/mark a confirmed race/retry defect unless atomicity is proven—even when each store method is thread-safe. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, require passed `harness verify`; read-only work has no ceremony.

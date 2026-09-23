@@ -198,6 +198,7 @@ capabilities:
     reason: Unreachable after starter-kit retirement; codification belongs to compounding.
   framework-docs-researcher: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
   git-history-analyzer: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  delivery-classifier: {type: agent, status: active, owner: developer-experience, version: 1, origin: delivery-routing}
   java-reviewer: {type: agent, status: active, owner: application-platform, version: 1, origin: starter}
   pattern-recognition-specialist: {type: agent, status: active, owner: architecture, version: 1, origin: starter}
   performance-oracle: {type: agent, status: active, owner: reliability-engineering, version: 1, origin: starter}

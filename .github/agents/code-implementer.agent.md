@@ -30,7 +30,7 @@ When invoked as a subagent, your task prompt will include:
 
 ### 1. Read Context
 
-Read the files listed in the task. Understand the existing code before modifying anything. Note patterns: naming conventions, error handling style, test structure.
+Read `.github/skills/references/delivery-principles.md` before the first edit. Read the files listed in the task. Understand the existing code before modifying anything. Note patterns: naming conventions, error handling style, test structure. Name a principle only after reading its section.
 
 ### 2. Write Failing Test
 

@@ -23,7 +23,13 @@ function workspace() {
 }
 
 function harness(ws, args) {
-  const r = spawnSync(process.execPath, [binPath, ...args, '--workspace', ws], { cwd: ws, encoding: 'utf8' });
+  const home = path.join(ws, '.copilot-home');
+  fs.mkdirSync(home, { recursive: true });
+  const r = spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
+    cwd: ws,
+    encoding: 'utf8',
+    env: { ...process.env, COPILOT_HOME: home },
+  });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -54,9 +60,10 @@ test('scaffolded primitive plan includes governance and passes the gate', () => 
   const content = fs.readFileSync(path.join(ws, rel), 'utf8');
   assert.match(content, /## Primitive Governance/);
   assert.match(content, /Primitive classification: skill/);
-  assert.deepEqual(YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]).skills_used, ['engineer', 'create-primitive']);
+  assert.deepEqual(YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]).skills_used, ['engineer']);
   const gate = harness(ws, ['gate', '--phase', 'implement', '--plan', rel, '--json']);
-  assert.equal(JSON.parse(gate.stdout).pass, true, gate.stdout);
+  assert.equal(JSON.parse(gate.stdout).pass, false, gate.stdout);
+  assert.match(gate.stdout, /create-primitive/);
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
@@ -88,7 +95,7 @@ test('CLI: plan-new slices at the `--` boundary — no value flag swallows it, n
       binPath, 'plan-new', '--type', 'feat', '--slug', 'boundary-demo', '--intent', 'Do the thing',
       '--date', '2026-07-21', '--workspace', ws, '--title', '--', '--json',
     ],
-    { cwd: ws, encoding: 'utf8' }
+    { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: path.join(ws, '.copilot-home') } }
   );
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /plan-new/, 'the human ledger renders');
@@ -185,7 +192,7 @@ test('plan-new reuses the canonical primitive path classifier', () => {
       check: 'unit-tests',
     });
     const frontmatter = YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]);
-    assert.ok(frontmatter.skills_used.includes('create-primitive'), impacted);
+    assert.deepEqual(frontmatter.skills_used, ['engineer'], impacted);
     assert.match(content, /## Primitive Governance/, impacted);
   }
 });

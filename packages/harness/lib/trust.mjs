@@ -11,6 +11,7 @@ export const PINNED_FILES = Object.freeze([
   path.join('.github', 'harness', 'config.yaml'),
   path.join('.github', 'harness', 'policy.yaml'),
   path.join('.github', 'harness', 'checks.yaml'),
+  path.join('.github', 'harness', 'routing.yaml'),
 ]);
 
 export const TRUST_STATES = Object.freeze(['trusted', 'untrusted', 'stale', 'revoked']);

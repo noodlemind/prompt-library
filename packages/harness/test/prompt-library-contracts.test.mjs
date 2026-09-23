@@ -525,9 +525,10 @@ test('deterministic retrieval: repo map, tokenizer, and staleness require no mod
   // The extractor is a seam with a documented tree-sitter tier (AC62).
   assert.match(read('packages/harness/lib/repo-map/lexical-extractor.mjs'), /tree-sitter tier/i);
   assert.match(read('.github/skills/references/harness-tool-contract.md'), /lexical fallback for SQL\/HCL|SQL and HCL/i);
-  // init-repo documents the manual refresh + staleness check (AC61).
+  // init-repo invokes both index planes and points at status (AC61).
   const commands = read('packages/harness/lib/commands.mjs');
-  assert.match(commands, /run `harness index`[\s\S]{0,140}harness index --status/i);
+  assert.match(commands, /ensureIndexes/);
+  assert.match(commands, /harness index --status/);
 });
 
 test('enforcement is query-independent (deterministic-first invariant)', () => {

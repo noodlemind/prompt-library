@@ -18,6 +18,7 @@ import { resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
 import { storeDir, storeDirForId, repoId, localRepoId, listLearnings } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
+import { loadRoutingPolicy } from './routing-policy.mjs';
 import { listBuckets } from './knowledge/overlay.mjs';
 import { branchExists } from './knowledge/layer.mjs';
 import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
@@ -582,6 +583,22 @@ export function structuralChecks({ workspace, grammarRoots = packageGrammarRoots
   return checks;
 }
 
+function routingPolicyCheck(workspace) {
+  const loaded = workspace ? loadRoutingPolicy(workspace) : { missing: true, errors: [] };
+  const invalid = !loaded.missing && loaded.errors.length > 0;
+  return {
+    id: 'H-route',
+    name: 'Delivery routing policy',
+    pass: !invalid,
+    optional: true,
+    hint: loaded.missing
+      ? 'No .github/harness/routing.yaml — new plans record a skipped snapshot'
+      : invalid
+        ? loaded.errors.join('; ')
+        : 'routing.yaml parsed',
+  };
+}
+
 export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
   const checks = [];
 
@@ -799,6 +816,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     optional: true,
   });
 
+  checks.push(routingPolicyCheck(workspace));
   checks.push(...knowledgeChecks({ workspace, copilotHome }));
   checks.push(...structuralChecks({ workspace }));
 
