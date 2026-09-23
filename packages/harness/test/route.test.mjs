@@ -201,3 +201,64 @@ test('plan-new binds java from a host classification file and does not import a 
   assert.equal(fs.readFileSync(path.join(ws, planPath), 'utf8'), before);
   fs.rmSync(ws, { recursive: true, force: true });
 });
+
+test('plan-new --from relocks an unlocked plan and refuses a second lock', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'relock-'));
+  const home = path.join(ws, 'home');
+  fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
+  fs.mkdirSync(path.join(ws, 'docs', 'plans'), { recursive: true });
+  fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
+  fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
+  inventory(path.join(ws, '.github'));
+  const rel = 'docs/plans/2026-09-23-feat-order-plan.md';
+  fs.writeFileSync(path.join(ws, rel), `---
+plan_schema: 1
+title: Order
+type: feat
+status: open
+plan_lock: false
+phase: 1
+risk: green
+intent: Add token checks
+expected_outputs: [done]
+success_criteria: [checks pass]
+verification:
+  required: [unit-tests]
+  criteria:
+    AC1: [unit-tests]
+reviews:
+  required: []
+  completed: []
+  critical_open: []
+capability_gaps: []
+---
+
+# Order
+
+Keep this body.
+
+## Impacted Files
+
+- \`src/OrderService.java\`
+`);
+  const git = (args) => spawnSync('git', args, { cwd: ws, encoding: 'utf8' });
+  git(['init', '-q']);
+  git(['config', 'user.email', 'e@x.test']);
+  git(['config', 'user.name', 'T']);
+  const run = (args) => spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
+    cwd: ws,
+    encoding: 'utf8',
+    env: { ...process.env, COPILOT_HOME: home },
+  });
+  const first = run(['plan-new', '--from', rel, '--json']);
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const text = fs.readFileSync(path.join(ws, rel), 'utf8');
+  assert.match(text, /Keep this body/);
+  const frontmatter = YAML.parse(text.match(/^---\n([\s\S]*?)\n---/)[1]);
+  assert.equal(frontmatter.plan_lock, true);
+  assert.deepEqual(frontmatter.routing.skills.required, ['java', 'ensure-plan']);
+  const second = run(['plan-new', '--from', rel]);
+  assert.notEqual(second.status, 0);
+  assert.match(`${second.stderr}${second.stdout}`, /unlocked/);
+  fs.rmSync(ws, { recursive: true, force: true });
+});
