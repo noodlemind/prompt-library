@@ -70,6 +70,7 @@ export function entryMatchesCollection(entry, collectionName, collections) {
 }
 
 export function resolveIndexDir(copilotHome, workspace) {
+  if (copilotHome) return path.join(copilotHome, 'knowledge', '.harness-index');
   for (const root of resolveKnowledgePaths(copilotHome, workspace)) {
     return path.join(root, '.harness-index');
   }

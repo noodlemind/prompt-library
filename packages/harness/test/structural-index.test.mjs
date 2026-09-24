@@ -70,6 +70,52 @@ const FIXTURE = {
   'svc.py': 'class PaymentService:\n    def run(self):\n        pass\n',
 };
 
+test('one file that throws is recorded and the rest of the index is still published', async () => {
+  const { ws } = gitRepo(FIXTURE);
+  const home = tempHome();
+  const extractor = countingExtractor();
+  const original = extractor.extract;
+  extractor.extract = (rel, content) => {
+    if (rel === 'svc.py') throw new Error('parser blew up');
+    return original(rel, content);
+  };
+  const result = await buildStructuralIndex({ workspace: ws, home, extractor, log: () => {} });
+  assert.equal(result.written, true);
+  const index = readStructuralIndex(ws, { home });
+  assert.equal(index.files['svc.py'].errors, true);
+  assert.ok(index.files['src/pay.mjs']);
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('a structural build without git HEAD does not publish an index', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-structidx-nogit-'));
+  fs.writeFileSync(path.join(ws, 'a.mjs'), 'export const a = 1;\n');
+  const home = tempHome();
+  const result = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor(), log: () => {} });
+  assert.equal(result.written, false);
+  assert.equal(fs.existsSync(path.join(structuralIndexDir(ws, { home }), 'meta.json')), false);
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('an abandoned staging directory from a crashed build is removed on the next publish', async () => {
+  const { ws } = gitRepo({ 'src/pay.mjs': 'export const pay = 1;\n' });
+  const home = tempHome();
+  const first = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor(), log: () => {} });
+  const parent = path.dirname(first.dir);
+  const junk = path.join(parent, `.staging-${path.basename(first.dir)}-old`);
+  fs.mkdirSync(junk);
+  fs.writeFileSync(path.join(junk, 'meta.json'), '{}\n');
+  const old = new Date(Date.now() - 120_000);
+  fs.utimesSync(junk, old, old);
+  await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor(), log: () => {} });
+  assert.equal(fs.existsSync(junk), false);
+  assert.equal(fs.existsSync(path.join(first.dir, 'meta.json')), true);
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('build + read round-trip: four tables, generation stamp, HARNESS_HOME-style override', async () => {
   const { ws, git } = gitRepo(FIXTURE);
   const home = tempHome();

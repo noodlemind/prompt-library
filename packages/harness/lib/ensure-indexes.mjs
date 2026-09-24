@@ -50,7 +50,13 @@ export async function ensureIndexes({ workspace, copilotHome, mode = 'missing', 
         const { buildStructuralIndex } = await import('./repo-map/structural-index.mjs');
         const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
         const extractor = await createTreesitterExtract();
-        await buildStructuralIndex({ workspace, extractor, dryRun, log });
+        await buildStructuralIndex({
+          workspace,
+          home: process.env.HARNESS_HOME,
+          extractor,
+          dryRun,
+          log,
+        });
       } catch (error) {
         report.structural.ok = false;
         report.structural.error = error.message;

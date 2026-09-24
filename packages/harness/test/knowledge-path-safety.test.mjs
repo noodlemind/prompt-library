@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { assertNoSymlinkAncestors } from '../lib/fs-safe.mjs';
 import { runGet } from '../lib/get-cmd.mjs';
 import { runIndexKnowledge } from '../lib/index-knowledge.mjs';
+import { resolveIndexDir } from '../lib/recall-config.mjs';
 import { absorbHandEdits, purgeEpisode } from '../lib/knowledge/admin.mjs';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { collectEpisodes, consolidateCandidates } from '../lib/knowledge/consolidate.mjs';
@@ -117,6 +118,8 @@ test('knowledge index writes the manifest in the copilot home, never in the repo
   assert.equal(path.dirname(result.manifestPath), path.join(copilotHome, 'knowledge'));
   assert.equal(fs.existsSync(path.join(ws, 'knowledge')), false);
   assert.match(fs.readFileSync(result.manifestPath, 'utf8'), /same/);
+  fs.mkdirSync(path.join(ws, 'knowledge'), { recursive: true });
+  assert.equal(resolveIndexDir(copilotHome, ws), path.join(copilotHome, 'knowledge', '.harness-index'));
 });
 
 // title/tags control chars → packet clean -----------------------------------
