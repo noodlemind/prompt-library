@@ -248,7 +248,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   // just-written episode and restore all of it so retrieval state is exactly
   // pre-write, then return a clean, recoverable failure the caller handles.
   const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
-  const indexDir = resolveIndexDir(copilotHome || '', workspace);
+  const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
   const snapshots = [
     [manifestPath, snapshotFile(manifestPath)],
     [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],

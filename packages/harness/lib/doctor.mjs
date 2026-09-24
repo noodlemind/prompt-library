@@ -716,7 +716,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     optional: manifestEntries.length === 0,
   });
 
-  const indexDir = resolveIndexDir(copilotHome, flags.workspace);
+  const indexDir = resolveIndexDir(copilotHome, flags.workspace, flags.harnessHome || flags.home);
   const indexFresh =
     manifestEntries.length === 0 || !fs.existsSync(path.join(indexDir, 'meta.json'))
       ? false
@@ -725,7 +725,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     id: 'H11',
     name: 'BM25 postings index fresh',
     pass: indexFresh,
-    hint: 'Run: harness index — rebuild .harness-index/postings.json',
+    hint: 'Run: harness index — rebuild the knowledge postings index',
     optional: manifestEntries.length === 0,
   });
 

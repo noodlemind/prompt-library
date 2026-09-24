@@ -19,7 +19,8 @@ function needsBuild(plane, mode) {
  * does not cancel the other. Callers decide whether a failure is advisory.
  */
 export async function ensureIndexes({ workspace, copilotHome, mode = 'missing', dryRun = false, log = () => {} }) {
-  const before = indexStatus({ workspace, copilotHome });
+  const home = process.env.HARNESS_HOME;
+  const before = indexStatus({ workspace, copilotHome, home });
   const report = {
     knowledge: { attempted: false, ok: true, error: null },
     structural: { attempted: false, ok: true, error: null },
@@ -34,9 +35,9 @@ export async function ensureIndexes({ workspace, copilotHome, mode = 'missing', 
         knowledgeRoot,
         workspace,
         copilotHome,
-        flags: { dryRun, headSha: head, home: process.env.HARNESS_HOME },
+        flags: { dryRun, headSha: head, home },
         log,
-        home: process.env.HARNESS_HOME,
+        home,
       });
     } catch (error) {
       report.knowledge.ok = false;
@@ -52,7 +53,7 @@ export async function ensureIndexes({ workspace, copilotHome, mode = 'missing', 
         const extractor = await createTreesitterExtract();
         await buildStructuralIndex({
           workspace,
-          home: process.env.HARNESS_HOME,
+          home,
           extractor,
           dryRun,
           log,
@@ -63,6 +64,6 @@ export async function ensureIndexes({ workspace, copilotHome, mode = 'missing', 
       }
     }
   }
-  report.after = dryRun ? before : indexStatus({ workspace, copilotHome });
+  report.after = dryRun ? before : indexStatus({ workspace, copilotHome, home });
   return report;
 }

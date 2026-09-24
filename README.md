@@ -18,4 +18,4 @@ Select `@engineer` in Copilot Chat.
            Review      → independent assessment
 ```
 
-Product plans and private solutions live under `~/.harness/projects/<repo-id>/`. They are not committed in the product repository.
+Product plans and private solutions live under `~/.harness/projects/<repo-id>/`. They are not committed in the product repository. `--harness-home <path>` moves that root for one command. `HARNESS_HOME` moves it for every command. The flag wins.

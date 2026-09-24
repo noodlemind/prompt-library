@@ -94,6 +94,7 @@ export const GLOBAL_FLAGS = [
   },
   { name: '--workspace', type: 'string', valueName: 'path', description: 'repo root (default: cwd)', required: false, default: null, tui: 'cli-only' },
   { name: '--copilot-home', type: 'string', valueName: 'path', description: 'override ~/.copilot', required: false, default: null, tui: 'cli-only' },
+  { name: '--harness-home', type: 'string', valueName: 'path', description: 'override ~/.harness for this command', required: false, default: null, tui: 'cli-only' },
   {
     name: '--no-events',
     type: 'boolean',

@@ -7,6 +7,7 @@ import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
 import { dispatch as dispatchRegistered, hasCommand, describeCommand, getCommand } from '../lib/registry.mjs';
 import { createProcessEventRegistry, detectActor } from '../lib/event-registry.mjs';
 import { parseFlags, hasFlag } from '../lib/flags.mjs';
+import { applyHarnessHomeFlag } from '../lib/paths.mjs';
 import { commandIndexEnvelope } from '../lib/command-index.mjs';
 import { createRedactor, redactedJson } from '../lib/redact.mjs';
 import { readPkgVersion } from '../lib/commands.mjs';
@@ -36,6 +37,7 @@ const GLOBAL_OPTIONS = [
   ['--no-color', 'plain ascii output (also honors NO_COLOR; auto when piped)'],
   ['--workspace <path>', 'repo root (default: cwd)'],
   ['--copilot-home <path>', 'override ~/.copilot'],
+  ['--harness-home <path>', 'override ~/.harness for this command'],
   ['--no-events', 'do not write any local record: .harness/events.jsonl or runs.jsonl'],
 ];
 
@@ -160,6 +162,7 @@ async function main() {
   // What the command said happened, if it said. Preferred over the exit map.
   let reportedStatus = null;
   try {
+    applyHarnessHomeFlag(args);
         if (command === '--version' || command === '-V') {
       console.log(readPkgVersion());
     } else if (command === 'help' || command === '--help' || command === '-h') {

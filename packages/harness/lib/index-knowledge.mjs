@@ -165,7 +165,7 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
   const body = lines.join('\n') + '\n';
   if (flags.dryRun) {
     log(`would write ${manifestPath} (${entries.length} entries)`);
-    const indexDir = resolveIndexDir(copilotHome || '', workspace);
+    const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
     runBuildPostingsIndex({ entries, indexDir, manifestUpdated: today, flags });
     log(`would write ${indexDir} (${entries.length} postings)`);
     return { entries: entries.length, manifestPath, indexDir };
@@ -174,7 +174,7 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
   writeManifestAtomic(manifestPath, body);
   log(`wrote ${manifestPath} (${entries.length} entries)`);
 
-  const indexDir = resolveIndexDir(copilotHome || '', workspace);
+  const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
   let indexResult;
   try {
     indexResult = runBuildPostingsIndex({

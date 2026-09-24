@@ -44,12 +44,14 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     gitContext = null;
   }
 
+  const home = flags.harnessHome || flags.home;
   const recall = rankRecall(q, {
     copilotHome,
     workspace,
     limit: flags.limit || 3,
     collection: flags.collection,
     minScore: flags.minScore ?? 0.15,
+    home,
       }).map((e) => redactRecallEntry({
     docid: e.docid || e.id,
     path: e.path,
@@ -123,7 +125,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
 
     try {
-    const status = indexStatus({ workspace, copilotHome });
+    const status = indexStatus({ workspace, copilotHome, home });
     if (status.stale) nextTools.push('harness index --status  # knowledge index is behind HEAD');
     if (status.structural && !status.structural.indexed) nextTools.push('harness index --status  # code index is not built');
     else if (status.structural?.stale) nextTools.push('harness index --status  # code index is behind HEAD');

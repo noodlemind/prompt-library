@@ -1,6 +1,7 @@
 const FLAGS_WITH_VALUES = new Set([
   '--autonomy',
   '--copilot-home',
+  '--harness-home',
   '--limit',
   '--phase',
   '--query',

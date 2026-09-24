@@ -103,13 +103,14 @@ test('a symlinked ancestor (src/ swapped for an outside symlink) never leaks out
 test('index --status reports drift deterministically', () => {
   const { ws, git } = gitRepo({ 'a.js': 'export const a = 1;' });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-idx-'));
+  const harnessHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-idx-hh-'));
   fs.mkdirSync(path.join(home, 'knowledge'), { recursive: true });
-  const indexDir = resolveIndexDir(home, ws);
+  const indexDir = resolveIndexDir(home, ws, harnessHome);
   fs.mkdirSync(indexDir, { recursive: true });
   const head = git(['rev-parse', 'HEAD']).stdout.trim();
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: head, updated: '2026-01-01', entryCount: 1 }));
 
-  const fresh = indexStatus({ workspace: ws, copilotHome: home });
+  const fresh = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(fresh.indexed, true);
   assert.equal(fresh.stale, false);
   assert.equal(fresh.knowledge.indexed, true);
@@ -119,7 +120,7 @@ test('index --status reports drift deterministically', () => {
   fs.writeFileSync(path.join(ws, 'b.js'), 'export const b = 2;');
   git(['add', '.']);
   git(['commit', '-qm', 'second']);
-  const stale = indexStatus({ workspace: ws, copilotHome: home });
+  const stale = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(stale.stale, true);
   assert.equal(stale.commitsSince, 1);
   assert.ok(stale.filesChanged >= 1);
@@ -128,34 +129,36 @@ test('index --status reports drift deterministically', () => {
   const newerHead = git(['rev-parse', 'HEAD']).stdout.trim();
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: newerHead, updated: '2026-01-01', entryCount: 1 }));
   git(['checkout', '-q', head]);
-  const ancestorCheckout = indexStatus({ workspace: ws, copilotHome: home });
+  const ancestorCheckout = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(ancestorCheckout.stale, true, 'an unequal ancestor checkout cannot reuse a descendant index');
   assert.equal(ancestorCheckout.commitsSince, 0);
 
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: 'f'.repeat(40), updated: '2026-01-01', entryCount: 1 }));
-  const missingBaseline = indexStatus({ workspace: ws, copilotHome: home });
+  const missingBaseline = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(missingBaseline.stale, true, 'an unresolved baseline must fail stale');
 
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: head, updated: '2026-01-01', entryCount: 1 }));
   fs.renameSync(path.join(ws, '.git'), path.join(ws, '.git-hidden'));
-  const unresolvedHead = indexStatus({ workspace: ws, copilotHome: home });
+  const unresolvedHead = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(unresolvedHead.stale, true, 'an unreadable current HEAD cannot prove index equivalence');
   fs.renameSync(path.join(ws, '.git-hidden'), path.join(ws, '.git'));
 
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION - 1, headSha: head, updated: '2026-01-01', entryCount: 1 }));
-  const obsoleteFormat = indexStatus({ workspace: ws, copilotHome: home });
+  const obsoleteFormat = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(obsoleteFormat.stale, true);
   assert.match(obsoleteFormat.knowledge.recommendation, /format 1 is obsolete.*harness index/i);
 
   fs.rmSync(ws, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(harnessHome, { recursive: true, force: true });
 });
 
 test('empty knowledge rebuild writes meta so status is empty not not-built', () => {
   const { ws, git } = gitRepo({ 'a.js': 'export const a = 1;' });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-idx-empty-'));
+  const harnessHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-idx-empty-hh-'));
   fs.mkdirSync(path.join(home, 'knowledge', 'solutions'), { recursive: true });
-  const indexDir = resolveIndexDir(home, ws);
+  const indexDir = resolveIndexDir(home, ws, harnessHome);
   const head = git(['rev-parse', 'HEAD']).stdout.trim();
 
   const built = runBuildPostingsIndex({
@@ -171,7 +174,7 @@ test('empty knowledge rebuild writes meta so status is empty not not-built', () 
   assert.equal(meta.entryCount, 0);
   assert.equal(meta.headSha, head);
 
-  const status = indexStatus({ workspace: ws, copilotHome: home });
+  const status = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(status.indexed, true, 'empty is still "built"');
   assert.equal(status.empty, true);
   assert.equal(status.stale, false);
@@ -180,6 +183,7 @@ test('empty knowledge rebuild writes meta so status is empty not not-built', () 
 
   fs.rmSync(ws, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(harnessHome, { recursive: true, force: true });
 });
 
 test('writeCodebaseMap does not follow a symlinked docs/ directory', () => {

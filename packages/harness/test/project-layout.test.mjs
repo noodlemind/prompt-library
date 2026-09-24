@@ -93,6 +93,27 @@ test('plan-new in a fresh repo creates .harness/plans and validate-plan accepts 
   assert.equal(validated.status, 0, validated.stderr + validated.stdout);
 });
 
+test('--harness-home overrides HARNESS_HOME for that command', () => {
+  const ws = gitWs();
+  const home = temp('proj-flag-cop-');
+  const envHome = temp('proj-flag-env-');
+  const flagHome = temp('proj-flag-hh-');
+  fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
+  fs.writeFileSync(
+    path.join(ws, '.github', 'harness', 'checks.yaml'),
+    'version: 1\nchecks:\n  unit-tests:\n    command: [node, -e, process.exit(0)]\n'
+  );
+  const created = spawnSync(process.execPath, [
+    binPath, 'plan-new', '--type', 'feat', '--slug', 'custom-home', '--intent', 'Use the flag',
+    '--date', '2026-09-24', '--verification-check', 'unit-tests', '--json',
+    '--workspace', ws, '--copilot-home', home, '--harness-home', flagHome,
+  ], { encoding: 'utf8', env: { ...process.env, HARNESS_HOME: envHome } });
+  assert.equal(created.status, 0, created.stderr + created.stdout);
+  const written = JSON.parse(created.stdout).path;
+  assert.ok(written.startsWith(flagHome), written);
+  assert.equal(written.startsWith(envHome), false);
+});
+
 test('untracked leftover docs/solutions does not win new episode writes', () => {
   const ws = gitWs();
   fs.mkdirSync(path.join(ws, 'docs', 'solutions', 'perf'), { recursive: true });

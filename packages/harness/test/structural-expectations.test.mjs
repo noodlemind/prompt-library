@@ -239,7 +239,7 @@ function structuralWorkspace({ policy = null } = {}) {
   writeChecks(workspace, { 'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] } });
   if (policy) writePolicy(workspace, policy);
   const sha = commitAll(workspace, 'baseline');
-    approveProject({ workspace, copilotHome: copilotHomeFor(home) });
+    approveProject({ workspace, copilotHome: copilotHomeFor(home), home });
   return { workspace, home, plan, sha };
 }
 

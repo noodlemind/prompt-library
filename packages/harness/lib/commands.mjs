@@ -439,7 +439,11 @@ export async function cmdIndex(argv) {
   // (`harness index --structural`). Historical top-level fields are knowledge-only.
   if (hasFlag(argv, '--status')) {
     const { indexStatus } = await import('./index-status.mjs');
-    const status = indexStatus({ workspace, copilotHome });
+    const status = indexStatus({
+      workspace,
+      copilotHome,
+      home: flags.harnessHome || flags.home || process.env.HARNESS_HOME,
+    });
     if (flags.json) emitJson(flags, status);
     else {
       const k = status.knowledge || status;
@@ -566,13 +570,14 @@ export async function cmdIndex(argv) {
 
   // Stamp the current git HEAD so `index --status` can measure drift later.
   const head = spawnSyncHead(workspace);
+  const home = flags.harnessHome || flags.home || process.env.HARNESS_HOME;
   const result = runIndexKnowledge({
     knowledgeRoot,
     workspace,
     copilotHome,
-    flags: { ...flags, headSha: head },
+    flags: { ...flags, headSha: head, home },
     log: logger,
-    home: flags?.home,
+    home,
   });
   // Refresh the committed codebase map alongside the knowledge index.
   try {
@@ -640,7 +645,7 @@ export async function cmdIndex(argv) {
     );
     try {
       const { structuralIndexStatus } = await import('./index-status.mjs');
-      const structural = structuralIndexStatus(workspace);
+      const structural = structuralIndexStatus(workspace, { home });
       if (!structural.indexed || structural.stale || (structural.unreadable || []).length) {
         console.log(ui.line({
           state: structural.indexed ? 'warn' : 'pending',
@@ -1301,7 +1306,14 @@ export async function cmdRemember(argv) {
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
-  const result = runRemember({ workspace, copilotHome, flags, argv, log: logger });
+  const result = runRemember({
+    workspace,
+    copilotHome,
+    flags,
+    argv,
+    log: logger,
+    home: flags.harnessHome || flags.home || process.env.HARNESS_HOME,
+  });
   writeEvent(workspace, flags, {
     type: 'remember',
     command: 'remember',

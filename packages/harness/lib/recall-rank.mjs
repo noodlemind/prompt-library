@@ -134,7 +134,7 @@ function rankWithOverlap(queryTokens, entries, minScore) {
     .sort((a, b) => b.score - a.score);
 }
 
-export function rankRecall(query, { copilotHome, workspace, limit = 3, collection = null, minScore = 0.15 }) {
+export function rankRecall(query, { copilotHome, workspace, limit = 3, collection = null, minScore = 0.15, home } = {}) {
   const { entries, updated, path: manifestPath, error } = loadManifest(copilotHome, workspace);
   if (error && manifestPath) {
     throw new Error(
@@ -150,7 +150,7 @@ export function rankRecall(query, { copilotHome, workspace, limit = 3, collectio
   const entryKey = (e) => e.docid || e.id;
   const entriesById = new Map(filtered.map((e) => [entryKey(e), e]));
 
-  const indexDir = resolveIndexDir(copilotHome, workspace);
+  const indexDir = resolveIndexDir(copilotHome, workspace, home);
   const index = loadPostingsIndex(indexDir);
   const useBm25 = index && !isIndexStale(indexDir, updated) && index.N > 0;
 
