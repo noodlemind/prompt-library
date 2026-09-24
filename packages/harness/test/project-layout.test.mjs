@@ -46,8 +46,9 @@ test('fresh product repo writes plans under .harness/plans, not docs/', () => {
   assert.equal(fs.existsSync(path.join(ws, 'docs', 'plans')), false, 'must not create docs/plans');
   assert.equal(fs.existsSync(path.join(ws, 'docs', 'agent-context.md')), false, 'must not create docs/agent-context.md');
   assert.equal(fs.existsSync(path.join(ws, 'knowledge', 'manifest.yaml')), false, 'must not create knowledge/');
-  assert.ok(fs.existsSync(path.join(ws, '.harness', 'plans')));
-  assert.equal(plansWriteRel(ws), SESSION_PLANS_REL);
+  const externalPlans = path.join(projectStoreDir(ws, { home: harnessHome }), 'plans');
+  assert.ok(fs.existsSync(externalPlans), externalPlans);
+  assert.equal(fs.existsSync(path.join(ws, '.harness', 'plans')), false);
 });
 
 test('committed docs/plans still wins when git tracks that directory', () => {
@@ -56,7 +57,6 @@ test('committed docs/plans still wins when git tracks that directory', () => {
   fs.writeFileSync(path.join(ws, 'docs', 'plans', '2026-09-16-feat-legacy-plan.md'), '---\ntitle: legacy\n---\n');
   spawnSync('git', ['add', 'docs/plans'], { cwd: ws });
   spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'track plans'], { cwd: ws });
-  assert.equal(plansWriteRel(ws), WORKSPACE_PLANS_REL);
   assert.deepEqual(listPlanRels(ws), ['docs/plans/2026-09-16-feat-legacy-plan.md']);
 });
 
@@ -64,7 +64,7 @@ test('untracked leftover docs/plans does not win new plan writes', () => {
   const ws = gitWs();
   fs.mkdirSync(path.join(ws, 'docs', 'plans'), { recursive: true });
   fs.writeFileSync(path.join(ws, 'docs', 'plans', '2026-09-16-feat-legacy-plan.md'), '---\ntitle: leftover\n---\n');
-  assert.equal(plansWriteRel(ws), SESSION_PLANS_REL);
+  assert.equal(fs.existsSync(path.join(ws, '.harness', 'plans')), false);
 });
 
 test('plan-new in a fresh repo creates .harness/plans and validate-plan accepts it', () => {
@@ -85,12 +85,10 @@ test('plan-new in a fresh repo creates .harness/plans and validate-plan accepts 
     { ws, home, harnessHome }
   );
   assert.equal(created.status, 0, created.stderr + created.stdout);
-  const rel = '.harness/plans/2026-09-16-feat-off-repo-plan.md';
-  assert.ok(fs.existsSync(path.join(ws, rel)));
-  assert.ok(fs.existsSync(path.join(ws, '.harness', '.gitignore')));
-  assert.match(fs.readFileSync(path.join(ws, '.harness', '.gitignore'), 'utf8'), /^plans\/$/m);
+  const rel = path.join(projectStoreDir(ws, { home: harnessHome }), 'plans', '2026-09-16-feat-off-repo-plan.md');
+  assert.ok(fs.existsSync(rel), rel);
   assert.equal(fs.existsSync(path.join(ws, 'docs', 'plans')), false);
-  assert.equal(normalizePlanRel(ws, '2026-09-16-feat-off-repo-plan.md'), rel);
+  assert.equal(normalizePlanRel(ws, '2026-09-16-feat-off-repo-plan.md', { home: harnessHome }), rel);
   const validated = run(['validate-plan', '--plan', rel], { ws, home, harnessHome });
   assert.equal(validated.status, 0, validated.stderr + validated.stdout);
 });
@@ -110,8 +108,9 @@ test('git-tracked docs/solutions still wins episode writes', () => {
   spawnSync('git', ['add', 'docs/solutions/.gitkeep'], { cwd: ws });
   spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'track solutions'], { cwd: ws });
   const target = solutionsWriteTarget(ws, { home: temp('proj-sol-track-hh-') });
-  assert.equal(target.kind, 'workspace');
+  assert.equal(target.kind, 'user');
   assert.equal(target.dirRel, 'docs/solutions');
+  assert.equal(target.base.startsWith(ws), false);
 });
 
 test('resolveDocPath prefers overlay for product-user and workspace for product', () => {

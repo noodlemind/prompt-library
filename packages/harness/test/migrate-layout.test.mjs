@@ -64,18 +64,20 @@ test('migrate moves gitignored docs/plans, solutions, and session files out of t
   const out = JSON.parse(res.stdout);
   assert.equal(out.conflicts.length, 0);
   assert.ok(out.moved.some((m) => m.from === 'docs/plans/2026-09-16-feat-legacy-plan.md'));
-  assert.ok(fs.existsSync(path.join(ws, '.harness/plans/2026-09-16-feat-legacy-plan.md')));
+  const store = projectStoreDir(ws, { home: harnessHome });
+  assert.ok(fs.existsSync(path.join(store, 'plans/2026-09-16-feat-legacy-plan.md')));
   assert.equal(fs.existsSync(path.join(ws, 'docs/plans')), false);
   assert.equal(fs.existsSync(path.join(ws, 'docs/solutions')), false);
   assert.equal(fs.existsSync(path.join(ws, 'docs/agent-context.md')), false);
   assert.equal(fs.existsSync(path.join(ws, 'docs/codebase-map.md')), false);
-  assert.ok(fs.existsSync(path.join(ws, '.harness/agent-context.md')));
-  assert.ok(fs.existsSync(path.join(ws, '.harness/codebase-map.md')));
-  const overlay = path.join(projectStoreDir(ws, { home: harnessHome }), 'docs/solutions/perf/hot-table.md');
+  assert.ok(fs.existsSync(path.join(store, 'agent-context.md')));
+  assert.ok(fs.existsSync(path.join(store, 'codebase-map.md')));
+  const overlay = path.join(store, 'docs/solutions/perf/hot-table.md');
   assert.ok(fs.existsSync(overlay), `expected overlay episode at ${overlay}`);
   const session = readSession(ws);
-  assert.equal(session.activePlan, '.harness/plans/2026-09-16-feat-legacy-plan.md');
-  assert.equal(session.gatedPlan, '.harness/plans/2026-09-16-feat-legacy-plan.md');
+  const movedPlan = path.join(store, 'plans/2026-09-16-feat-legacy-plan.md');
+  assert.equal(session.activePlan, movedPlan);
+  assert.equal(session.gatedPlan, movedPlan);
   assert.equal(out.sessionRewritten, true);
 });
 
@@ -132,7 +134,7 @@ test('migrate reports a conflict instead of overwriting the destination', () => 
   const home = temp('mig-cf-cop-');
   const harnessHome = temp('mig-cf-hh-');
   write(ws, 'docs/plans/2026-09-16-feat-clash-plan.md', 'source\n');
-  write(ws, '.harness/plans/2026-09-16-feat-clash-plan.md', 'destination\n');
+  write(projectStoreDir(ws, { home: harnessHome }), 'plans/2026-09-16-feat-clash-plan.md', 'destination\n');
   writeSession(ws, {
     activePlan: 'docs/plans/2026-09-16-feat-clash-plan.md',
     gatedPlan: 'docs/plans/2026-09-16-feat-clash-plan.md',
@@ -143,7 +145,7 @@ test('migrate reports a conflict instead of overwriting the destination', () => 
   assert.ok(out.conflicts.some((c) => c.from === 'docs/plans/2026-09-16-feat-clash-plan.md'));
   assert.equal(out.sessionRewritten, false);
   assert.equal(fs.readFileSync(path.join(ws, 'docs/plans/2026-09-16-feat-clash-plan.md'), 'utf8'), 'source\n');
-  assert.equal(fs.readFileSync(path.join(ws, '.harness/plans/2026-09-16-feat-clash-plan.md'), 'utf8'), 'destination\n');
+  assert.equal(fs.readFileSync(path.join(projectStoreDir(ws, { home: harnessHome }), 'plans/2026-09-16-feat-clash-plan.md'), 'utf8'), 'destination\n');
   const session = readSession(ws);
   assert.equal(session.activePlan, 'docs/plans/2026-09-16-feat-clash-plan.md');
 });
@@ -155,7 +157,7 @@ test('init-repo migrates leftover gitignored docs/plans before seeding', () => {
   write(ws, 'docs/plans/2026-09-16-feat-seed-plan.md', '---\ntitle: leftover\n---\n');
   const res = run(['init-repo'], { ws, home, harnessHome });
   assert.equal(res.status, 0, res.stderr + res.stdout);
-  assert.ok(fs.existsSync(path.join(ws, '.harness/plans/2026-09-16-feat-seed-plan.md')));
+  assert.ok(fs.existsSync(path.join(projectStoreDir(ws, { home: harnessHome }), 'plans/2026-09-16-feat-seed-plan.md')));
   assert.equal(fs.existsSync(path.join(ws, 'docs/plans')), false);
 });
 
@@ -185,7 +187,7 @@ test('migrate moves untracked siblings even when docs/plans has a tracked .gitke
   const out = JSON.parse(res.stdout);
   assert.ok(out.moved.some((m) => m.from === 'docs/plans/2026-09-16-feat-sidecar-plan.md'));
   assert.ok(fs.existsSync(path.join(ws, 'docs/plans/.gitkeep')));
-  assert.ok(fs.existsSync(path.join(ws, '.harness/plans/2026-09-16-feat-sidecar-plan.md')));
+  assert.ok(fs.existsSync(path.join(projectStoreDir(ws, { home: harnessHome }), 'plans/2026-09-16-feat-sidecar-plan.md')));
   assert.equal(fs.existsSync(path.join(ws, 'docs/plans/2026-09-16-feat-sidecar-plan.md')), false);
 });
 
@@ -216,12 +218,11 @@ test('init-repo surfaces migrate conflicts and does not seed leftover docs/plans
   const home = temp('mig-init-cf-cop-');
   const harnessHome = temp('mig-init-cf-hh-');
   write(ws, 'docs/plans/2026-09-16-feat-clash-plan.md', 'source\n');
-  write(ws, '.harness/plans/2026-09-16-feat-clash-plan.md', 'destination\n');
+  write(projectStoreDir(ws, { home: harnessHome }), 'plans/2026-09-16-feat-clash-plan.md', 'destination\n');
   const res = run(['init-repo'], { ws, home, harnessHome });
   assert.equal(res.status, 5, res.stderr + res.stdout);
   assert.ok(fs.existsSync(path.join(ws, 'docs/plans/2026-09-16-feat-clash-plan.md')));
-  assert.ok(fs.existsSync(path.join(ws, '.harness/plans/.gitkeep')));
-  assert.equal(fs.readFileSync(path.join(ws, '.harness/plans/2026-09-16-feat-clash-plan.md'), 'utf8'), 'destination\n');
+  assert.equal(fs.readFileSync(path.join(projectStoreDir(ws, { home: harnessHome }), 'plans/2026-09-16-feat-clash-plan.md'), 'utf8'), 'destination\n');
 });
 
 test('migrate refuses to follow a symlinked docs/solutions directory', () => {

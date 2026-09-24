@@ -29,7 +29,7 @@ export function runGate({ workspace, flags, query = '' }) {
     checks.push({
       id: 'C1',
       pass: false,
-      message: 'No plan under docs/plans/ or .harness/plans/',
+      message: 'No plan in the project store, docs/plans/, or .harness/plans/',
       severity: 'fail',
     });
     pass = false;

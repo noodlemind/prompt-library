@@ -186,19 +186,20 @@ test('plan-new binds java from a host classification file and does not import a 
     binPath, 'plan-new', '--type', 'feat', '--slug', 'order-check', '--intent', 'Add token checks',
     '--date', '2026-09-23', '--classification', 'classification.json', '--json',
     '--workspace', ws, '--copilot-home', home,
-  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home } });
+  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') } });
   assert.equal(result.status, 0, result.stderr + result.stdout);
   const planPath = JSON.parse(result.stdout).path;
-  const frontmatter = YAML.parse(fs.readFileSync(path.join(ws, planPath), 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]);
+  const frontmatter = YAML.parse(fs.readFileSync(planPath, 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]);
   assert.deepEqual(frontmatter.routing.skills.required, ['java', 'ensure-plan']);
   assert.equal(frontmatter.playbook, 'feature');
   assert.equal(frontmatter.skills_used.includes('java'), false);
-  const route = spawnSync(process.execPath, [binPath, 'route', '--plan', planPath, '--workspace', ws, '--json'], { cwd: ws, encoding: 'utf8' });
+  const routeEnv = { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') };
+  const route = spawnSync(process.execPath, [binPath, 'route', '--plan', planPath, '--workspace', ws, '--json'], { cwd: ws, encoding: 'utf8', env: routeEnv });
   assert.equal(route.status, 0, route.stderr + route.stdout);
   assert.equal(fs.existsSync(planPath) || true, true);
-  const before = fs.readFileSync(path.join(ws, planPath), 'utf8');
-  spawnSync(process.execPath, [binPath, 'route', '--plan', planPath, '--workspace', ws], { cwd: ws, encoding: 'utf8' });
-  assert.equal(fs.readFileSync(path.join(ws, planPath), 'utf8'), before);
+  const before = fs.readFileSync(planPath, 'utf8');
+  spawnSync(process.execPath, [binPath, 'route', '--plan', planPath, '--workspace', ws], { cwd: ws, encoding: 'utf8', env: routeEnv });
+  assert.equal(fs.readFileSync(planPath, 'utf8'), before);
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
@@ -248,7 +249,7 @@ Keep this body.
   const run = (args) => spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
     cwd: ws,
     encoding: 'utf8',
-    env: { ...process.env, COPILOT_HOME: home },
+    env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') },
   });
   const first = run(['plan-new', '--from', rel, '--json']);
   assert.equal(first.status, 0, first.stderr + first.stdout);

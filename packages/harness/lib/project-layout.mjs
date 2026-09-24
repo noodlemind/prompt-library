@@ -83,32 +83,41 @@ export function gitHasTrackedFiles(workspace, rel) {
   return listed.ok && listed.files.length > 0;
 }
 
-/**
- * Where to write new plans: keep using committed docs/plans when git tracks
- * that directory; otherwise use gitignored .harness/plans. If git cannot be
- * probed, keep an existing docs/plans directory so we never switch write
- * root and then delete committed files.
- */
-export function plansWriteRel(workspace) {
-  const listed = gitLsFiles(workspace, WORKSPACE_PLANS_REL);
-  if (!listed.ok) {
-    return dirExists(workspace, WORKSPACE_PLANS_REL) ? WORKSPACE_PLANS_REL : SESSION_PLANS_REL;
-  }
-  return listed.files.length > 0 ? WORKSPACE_PLANS_REL : SESSION_PLANS_REL;
+/** New plans live outside the repo so a reset or another commit cannot drop them. */
+export const EXTERNAL_PLANS_REL = 'plans';
+
+export function plansWriteTarget(workspace, { home } = {}) {
+  return {
+    base: projectStoreDir(workspace, { home }),
+    dirRel: EXTERNAL_PLANS_REL,
+    kind: 'user',
+  };
+}
+
+export function externalPlansDir(workspace, { home } = {}) {
+  const target = plansWriteTarget(workspace, { home });
+  return path.join(target.base, target.dirRel);
+}
+
+/** @deprecated Writers use plansWriteTarget. Kept so older callers still name the in-repo session folder. */
+export function plansWriteRel() {
+  return EXTERNAL_PLANS_REL;
 }
 
 export function plansReadRels(workspace) {
   const rels = [];
   if (dirExists(workspace, WORKSPACE_PLANS_REL)) rels.push(WORKSPACE_PLANS_REL);
   if (dirExists(workspace, SESSION_PLANS_REL)) rels.push(SESSION_PLANS_REL);
-  if (rels.length === 0) rels.push(plansWriteRel(workspace));
   return rels;
 }
 
 export function isPlanRel(rel) {
   const normalized = String(rel || '').replace(/\\/g, '/');
+  if (path.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) return true;
   return (
-    normalized.startsWith(`${WORKSPACE_PLANS_REL}/`) || normalized.startsWith(`${SESSION_PLANS_REL}/`)
+    normalized.startsWith(`${WORKSPACE_PLANS_REL}/`) ||
+    normalized.startsWith(`${SESSION_PLANS_REL}/`) ||
+    normalized.startsWith(`${EXTERNAL_PLANS_REL}/`)
   );
 }
 
@@ -120,46 +129,70 @@ export function isCanonicalPlanName(name) {
   return PLAN_FILE.test(String(name || ''));
 }
 
+function contained(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 /**
- * Resolve a --plan argument or session path to a workspace-relative plan path.
- * Accepts docs/plans/…, .harness/plans/…, or a basename.
+ * Resolve a --plan argument. Legacy docs/plans and .harness/plans stay readable.
+ * A basename with no legacy file resolves to the external project store.
  */
-export function normalizePlanRel(workspace, planPath) {
+export function normalizePlanRel(workspace, planPath, { home } = {}) {
   if (!planPath || typeof planPath !== 'string') return null;
+  const external = externalPlansDir(workspace, { home });
+  if (path.isAbsolute(planPath)) {
+    const resolved = path.resolve(planPath);
+    try {
+      const full = fs.realpathSync(resolved);
+      const root = fs.existsSync(external) ? fs.realpathSync(external) : path.resolve(external);
+      if (contained(root, full) && full.endsWith('.md')) return full;
+    } catch {
+      if (contained(path.resolve(external), resolved) && resolved.endsWith('.md')) return resolved;
+    }
+  }
   const root = path.resolve(workspace);
-  const full = path.isAbsolute(planPath) ? path.resolve(planPath) : path.resolve(root, planPath);
+  const full = path.resolve(root, planPath);
   const rel = path.relative(root, full).replace(/\\/g, '/');
-  if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
-  if (rel.endsWith('.md') && isPlanRel(rel)) return rel;
-  const base = path.posix.basename(rel.endsWith('.md') ? rel : `${rel}.md`);
+  if (!rel.startsWith('..') && !path.isAbsolute(rel) && rel.endsWith('.md') && isPlanRel(rel) && !rel.startsWith(`${EXTERNAL_PLANS_REL}/`)) {
+    return rel;
+  }
+  const base = path.posix.basename((rel.endsWith('.md') ? rel : `${path.posix.basename(planPath)}.md`).replace(/\\/g, '/'));
   if (!base.endsWith('.md')) return null;
   for (const dirRel of plansReadRels(workspace)) {
     const candidate = `${dirRel}/${base}`;
     if (fileExists(workspace, candidate)) return candidate;
   }
-  return `${plansWriteRel(workspace)}/${base}`;
+  const outside = path.join(external, base);
+  if (fs.existsSync(outside)) return outside;
+  return outside;
 }
 
-export function listPlanRels(workspace) {
+export function listPlanRels(workspace, { home } = {}) {
   const seen = new Set();
   const out = [];
-  for (const dirRel of plansReadRels(workspace)) {
-    const dir = path.join(workspace, dirRel);
-    if (!fs.existsSync(dir)) continue;
+  const take = (dir, nameFor) => {
+    if (!fs.existsSync(dir)) return;
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.md') || f.startsWith('_') || f === 'README.md') continue;
       if (seen.has(f)) continue;
       seen.add(f);
-      out.push(`${dirRel}/${f}`);
+      out.push(nameFor(f));
     }
+  };
+  for (const dirRel of plansReadRels(workspace)) {
+    take(path.join(workspace, dirRel), (f) => `${dirRel}/${f}`);
   }
+  take(externalPlansDir(workspace, { home }), (f) => path.join(externalPlansDir(workspace, { home }), f));
   return out;
 }
 
-export function agentContextRel(workspace) {
+export function agentContextRel(workspace, { home } = {}) {
   if (fileExists(workspace, WORKSPACE_AGENT_CTX_REL)) return WORKSPACE_AGENT_CTX_REL;
   if (fileExists(workspace, SESSION_AGENT_CTX_REL)) return SESSION_AGENT_CTX_REL;
-  return dirExists(workspace, 'docs') ? WORKSPACE_AGENT_CTX_REL : SESSION_AGENT_CTX_REL;
+  const external = path.join(projectStoreDir(workspace, { home }), 'agent-context.md');
+  if (fs.existsSync(external)) return external;
+  return external;
 }
 
 export function codebaseMapWriteRel(workspace) {
@@ -170,22 +203,13 @@ export function codebaseMapWriteRel(workspace) {
   return SESSION_MAP_REL;
 }
 
-/**
- * Episode write root. Existing docs/solutions stays the committed product
- * location. New app repos write under ~/.harness/projects/<repo-id>/ so the
- * working tree is not polluted.
- */
+/** New episodes always go to the external project store. Tracked docs/solutions stay readable. */
 export function solutionsWriteTarget(workspace, { home } = {}) {
-  const listed = gitLsFiles(workspace, WORKSPACE_SOLUTIONS_REL);
-  if (!listed.ok) {
-    if (dirExists(workspace, WORKSPACE_SOLUTIONS_REL)) {
-      return { base: path.resolve(workspace), dirRel: WORKSPACE_SOLUTIONS_REL, kind: 'workspace' };
-    }
-  } else if (listed.files.length > 0) {
-    return { base: path.resolve(workspace), dirRel: WORKSPACE_SOLUTIONS_REL, kind: 'workspace' };
-  }
-  const overlay = projectStoreDir(workspace, { home });
-  return { base: overlay, dirRel: WORKSPACE_SOLUTIONS_REL, kind: 'user' };
+  return {
+    base: projectStoreDir(workspace, { home }),
+    dirRel: WORKSPACE_SOLUTIONS_REL,
+    kind: 'user',
+  };
 }
 
 export function solutionsScanRoots(workspace, { home } = {}) {

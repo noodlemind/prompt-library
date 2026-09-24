@@ -154,7 +154,7 @@ function migrateItem({ workspace, kind, fromRel, destRoot, destRel, dryRun }) {
   return { kind, from, to, action, files, conflicts, kept };
 }
 
-function rewriteSessionPlanPaths(workspace, moved, dryRun) {
+function rewriteSessionPlanPaths(workspace, moved, dryRun, home) {
   const session = readSession(workspace);
   if (!session) return false;
   const movedFrom = new Set(
@@ -168,7 +168,7 @@ function rewriteSessionPlanPaths(workspace, moved, dryRun) {
     if (typeof raw !== 'string') continue;
     const n = posixRel(raw);
     if (!movedFrom.has(n)) continue;
-    next[key] = `${SESSION_PLANS_REL}/${n.slice(`${WORKSPACE_PLANS_REL}/`.length)}`;
+    next[key] = path.join(projectStoreDir(workspace, { home }), 'plans', path.posix.basename(n));
     changed = true;
   }
   if (changed && !dryRun) writeSession(workspace, next, false);
@@ -181,8 +181,8 @@ export function inspectLayout(workspace, { home } = {}) {
     {
       kind: 'plans',
       from: WORKSPACE_PLANS_REL,
-      to: SESSION_PLANS_REL,
-      destRoot: path.resolve(workspace),
+      to: 'plans',
+      destRoot: projectStoreDir(workspace, { home }),
     },
     {
       kind: 'solutions',
@@ -193,14 +193,14 @@ export function inspectLayout(workspace, { home } = {}) {
     {
       kind: 'agent-context',
       from: WORKSPACE_AGENT_CTX_REL,
-      to: SESSION_AGENT_CTX_REL,
-      destRoot: path.resolve(workspace),
+      to: 'agent-context.md',
+      destRoot: projectStoreDir(workspace, { home }),
     },
     {
       kind: 'codebase-map',
       from: WORKSPACE_MAP_REL,
-      to: SESSION_MAP_REL,
-      destRoot: path.resolve(workspace),
+      to: 'codebase-map.md',
+      destRoot: projectStoreDir(workspace, { home }),
     },
   ].map((spec) => {
     const exists = fs.existsSync(path.join(workspace, spec.from));
@@ -265,7 +265,7 @@ export function runMigrateLayout({ workspace, dryRun = false, log = () => {}, ho
       log(`conflict ${conflict.from} → ${conflict.to} (${conflict.reason})`);
     }
   }
-  const sessionRewritten = rewriteSessionPlanPaths(workspace, moved, dryRun);
+  const sessionRewritten = rewriteSessionPlanPaths(workspace, moved, dryRun, home);
   if (sessionRewritten) log(`${dryRun ? 'would rewrite' : 'rewrote'} session plan paths`);
   return {
     moved,

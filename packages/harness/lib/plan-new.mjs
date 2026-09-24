@@ -5,7 +5,8 @@ import { createStyle } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { loadConfiguredChecks } from './plan-readiness.mjs';
 import { isPrimitivePath } from './primitive-governance.mjs';
-import { plansWriteRel } from './project-layout.mjs';
+import { plansWriteTarget } from './project-layout.mjs';
+import { harnessGlobalHome } from './paths.mjs';
 import { ensureHarnessDir } from './session.mjs';
 import { applyClassification, readClassification } from './classification.mjs';
 import { ensureIndexes } from './ensure-indexes.mjs';
@@ -52,6 +53,7 @@ export function buildPlanSkeleton({
   status,
   check,
   plansRel = 'docs/plans',
+  plansBase = null,
   routing = null,
   domains = [],
   playbook = null,
@@ -74,7 +76,8 @@ export function buildPlanSkeleton({
     scalar(gap.primitive, 'gap', { required: true });
   }
 
-  const rel = `${plansRel}/${date}-${type}-${slug}-plan.md`;
+  const fileName = `${date}-${type}-${slug}-plan.md`;
+  const rel = plansBase ? path.join(plansBase, plansRel, fileName) : `${plansRel}/${fileName}`;
   const impactedList = impacted.length ? impacted.slice() : gap?.primitive ? [gap.primitive] : [];
   const primitive = impactedList.some(isPrimitivePath) || isPrimitivePath(gap?.primitive);
   const finalStatus = status || (gap ? 'blocked-capability' : 'in-progress');
@@ -213,7 +216,9 @@ export async function cmdPlanNew(argv) {
   }
 
   if (!opts.date) opts.date = new Date().toISOString().slice(0, 10);
-  opts.plansRel = plansWriteRel(workspace);
+  const plansTarget = plansWriteTarget(workspace, { home: harnessGlobalHome() });
+  opts.plansBase = plansTarget.base;
+  opts.plansRel = plansTarget.dirRel;
   if (!toStdout) ensureHarnessDir(workspace, dryRun);
 
   const configured = loadConfiguredChecks(workspace);
@@ -251,7 +256,7 @@ export async function cmdPlanNew(argv) {
   opts.routing = prepared.routing;
 
   const { path: rel, content } = buildPlanSkeleton(opts);
-  const full = path.join(workspace, rel);
+  const full = path.isAbsolute(rel) ? rel : path.join(workspace, rel);
   if (toStdout) {
     process.stdout.write(content);
     return 0;

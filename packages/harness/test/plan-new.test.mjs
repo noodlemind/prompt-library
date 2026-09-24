@@ -28,7 +28,7 @@ function harness(ws, args) {
   const r = spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
     cwd: ws,
     encoding: 'utf8',
-    env: { ...process.env, COPILOT_HOME: home },
+    env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') },
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
@@ -95,12 +95,14 @@ test('CLI: plan-new slices at the `--` boundary — no value flag swallows it, n
       binPath, 'plan-new', '--type', 'feat', '--slug', 'boundary-demo', '--intent', 'Do the thing',
       '--date', '2026-07-21', '--workspace', ws, '--title', '--', '--json',
     ],
-    { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: path.join(ws, '.copilot-home') } }
+    { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: path.join(ws, '.copilot-home'), HARNESS_HOME: path.join(ws, 'harness-home') } }
   );
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /plan-new/, 'the human ledger renders');
   assert.throws(() => JSON.parse(r.stdout), 'the post-boundary --json must be inert content, not the output selector');
-  const content = fs.readFileSync(path.join(ws, '.harness/plans/2026-07-21-feat-boundary-demo-plan.md'), 'utf8');
+  const written = fs.readdirSync(path.join(ws, 'harness-home'), { recursive: true }).find((name) => String(name).endsWith('boundary-demo-plan.md'));
+  assert.ok(written, 'plan file is outside the repo');
+  const content = fs.readFileSync(path.join(ws, 'harness-home', String(written)), 'utf8');
   const frontmatter = YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]);
   assert.equal(frontmatter.title, 'Boundary Demo', 'the boundary token must never become the --title value');
   fs.rmSync(ws, { recursive: true, force: true });
@@ -113,7 +115,7 @@ test('CLI: plan-new --status is declared and writes the requested status frontma
     '--date', '2026-07-21', '--status', 'planned', '--json',
   ]);
   assert.equal(explicit.status, 0, `${explicit.stdout}${explicit.stderr}`);
-  assert.match(fs.readFileSync(path.join(ws, JSON.parse(explicit.stdout).path), 'utf8'), /^status: planned$/m);
+  assert.match(fs.readFileSync(JSON.parse(explicit.stdout).path, 'utf8'), /^status: planned$/m);
 
   // The documented default is untouched by declaring the override.
   const implicit = harness(ws, [
@@ -121,7 +123,7 @@ test('CLI: plan-new --status is declared and writes the requested status frontma
     '--date', '2026-07-21', '--json',
   ]);
   assert.equal(implicit.status, 0, `${implicit.stdout}${implicit.stderr}`);
-  assert.match(fs.readFileSync(path.join(ws, JSON.parse(implicit.stdout).path), 'utf8'), /^status: in-progress$/m);
+  assert.match(fs.readFileSync(JSON.parse(implicit.stdout).path, 'utf8'), /^status: in-progress$/m);
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
@@ -130,9 +132,12 @@ test('cmdPlanNew CLI writes the dated plan file', () => {
   const r = harness(ws, ['plan-new', '--type', 'feat', '--slug', 'demo-thing', '--intent', 'Do the demo', '--date', '2026-07-21', '--impacted', 'src/A.java,src/B.java', '--json']);
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout);
-  assert.equal(out.path, '.harness/plans/2026-07-21-feat-demo-thing-plan.md');
-  assert.ok(fs.existsSync(path.join(ws, out.path)));
-  const content = fs.readFileSync(path.join(ws, out.path), 'utf8');
+  assert.equal(path.isAbsolute(out.path), true);
+  assert.ok(out.path.endsWith('2026-07-21-feat-demo-thing-plan.md'));
+  assert.ok(out.path.includes(`${path.sep}harness-home${path.sep}`));
+  assert.equal(out.path.includes(`${path.sep}docs${path.sep}plans${path.sep}`), false);
+  assert.ok(fs.existsSync(out.path));
+  const content = fs.readFileSync(out.path, 'utf8');
   assert.deepEqual(YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]).verification.required, ['unit-tests']);
   fs.rmSync(ws, { recursive: true, force: true });
 });
@@ -159,7 +164,7 @@ test('cmdPlanNew requires a configured check and an explicit choice when several
   const autoExec = harness(ws, ['plan-new', '--type', 'feat', '--slug', 'auto-exec', '--intent', 'Do work', '--date', '2026-07-21', '--json']);
   assert.equal(autoExec.status, 0, autoExec.stderr);
   assert.deepEqual(
-    YAML.parse(fs.readFileSync(path.join(ws, JSON.parse(autoExec.stdout).path), 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]).verification.required,
+    YAML.parse(fs.readFileSync(JSON.parse(autoExec.stdout).path, 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]).verification.required,
     ['unit-tests'],
   );
   fs.rmSync(ws, { recursive: true, force: true });
