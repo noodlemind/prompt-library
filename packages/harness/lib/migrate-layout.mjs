@@ -83,6 +83,22 @@ function pruneEmptyAncestors(workspace, rel) {
   }
 }
 
+function copyPresent({ workspace, fromRel, destRoot, destRel, dryRun }) {
+  const files = [];
+  for (const srcRel of listRelFiles(workspace, fromRel)) {
+    const destPathRel = destFileRel(srcRel, fromRel, destRel);
+    const destFull = path.join(destRoot, destPathRel);
+    if (fs.existsSync(destFull)) continue;
+    if (dryRun) {
+      files.push({ from: srcRel, to: destPathRel });
+      continue;
+    }
+    const written = copyFileContainedExclusive(workspace, srcRel, destRoot, destPathRel);
+    if (written) files.push({ from: srcRel, to: destPathRel });
+  }
+  return files;
+}
+
 function destFileRel(fromRel, fromRootRel, destRootRel) {
   const suffix = posixRel(fromRel).slice(posixRel(fromRootRel).length).replace(/^\//, '');
   return suffix ? `${posixRel(destRootRel)}/${suffix}` : posixRel(destRootRel);
@@ -185,9 +201,21 @@ export function inspectLayout(workspace, { home } = {}) {
       destRoot: projectStoreDir(workspace, { home }),
     },
     {
+      kind: 'session-plans',
+      from: SESSION_PLANS_REL,
+      to: 'plans',
+      destRoot: projectStoreDir(workspace, { home }),
+    },
+    {
       kind: 'solutions',
       from: WORKSPACE_SOLUTIONS_REL,
       to: WORKSPACE_SOLUTIONS_REL,
+      destRoot: overlay,
+    },
+    {
+      kind: 'knowledge',
+      from: 'knowledge/solutions',
+      to: 'knowledge/solutions',
       destRoot: overlay,
     },
     {
@@ -230,6 +258,17 @@ export function runMigrateLayout({ workspace, dryRun = false, log = () => {}, ho
   for (const spec of inspected) {
     if (spec.action === 'absent') continue;
     if (spec.action === 'keep-tracked') {
+      const copied = copyPresent({
+        workspace,
+        fromRel: spec.from,
+        destRoot: spec.destRoot,
+        destRel: spec.to,
+        dryRun,
+      });
+      for (const file of copied) {
+        moved.push({ kind: spec.kind, from: file.from, to: file.to, copied: true });
+        log(`${dryRun ? 'would copy' : 'copied'} ${file.from} → ${file.to}`);
+      }
       kept.push({ kind: spec.kind, from: spec.from, reason: 'tracked' });
       log(`keep ${spec.from} (git-tracked)`);
       continue;

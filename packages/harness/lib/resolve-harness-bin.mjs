@@ -4,7 +4,7 @@ import path from 'path';
 import { findHarnessOnPath, globalHarnessShimPath, INSTALL_FIX_HINT } from './global-bin.mjs';
 
 const HARNESS_REL = path.join('packages', 'harness', 'bin', 'harness.mjs');
-const NM_REL = path.join('node_modules', '@dev-kit', 'harness', 'bin', 'harness.mjs');
+const NM_REL = path.join('node_modules', 'harness', 'bin', 'harness.mjs');
 
 export function resolveHarnessBin({ workspace = process.cwd(), copilotHome } = {}) {
   const tried = [];

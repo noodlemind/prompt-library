@@ -97,7 +97,10 @@ test('migrate leaves git-tracked docs/plans and docs/solutions in place', () => 
   assert.ok(out.kept.some((k) => k.kind === 'solutions' && k.reason === 'tracked'));
   assert.ok(fs.existsSync(path.join(ws, 'docs/plans/2026-09-16-feat-committed-plan.md')));
   assert.ok(fs.existsSync(path.join(ws, 'docs/solutions/perf/team.md')));
-  assert.equal(out.moved.length, 0);
+  const store = projectStoreDir(ws, { home: harnessHome });
+  assert.ok(fs.existsSync(path.join(store, 'plans/2026-09-16-feat-committed-plan.md')));
+  assert.ok(fs.existsSync(path.join(store, 'docs/solutions/perf/team.md')));
+  assert.ok(out.moved.some((item) => item.copied && item.from === 'docs/plans/2026-09-16-feat-committed-plan.md'));
 });
 
 test('migrate copies binary attachments without UTF-8 round-trip', () => {

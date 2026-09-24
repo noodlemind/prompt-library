@@ -64,7 +64,7 @@ function groupedForHelp() {
 function renderHelp() {
   const lines = [];
   lines.push(`harness ${out.paint('muted', '— Adaptive Engineer Harness for GitHub Copilot')}`);
-  lines.push(out.paint('muted', '@dev-kit/harness · VS Code · CLI · IntelliJ'));
+  lines.push(out.paint('muted', 'harness · VS Code · CLI · IntelliJ'));
   lines.push('');
   lines.push(`Usage: harness ${out.paint('muted', '<command> [options]')}`);
   lines.push('');
@@ -84,7 +84,7 @@ function renderHelp() {
   );
   lines.push('');
   lines.push(out.paint('muted', `${out.arrow} harness help <command>   job, usage, and options for one command`));
-  lines.push(out.paint('muted', `${out.arrow} docs   @dev-kit/harness README · harness-tool-contract.md`));
+  lines.push(out.paint('muted', `${out.arrow} docs   harness README · docs/adaptive-engineering.md`));
   return lines.join('\n');
 }
 

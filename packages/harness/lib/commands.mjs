@@ -162,7 +162,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
   const vscodeBridge = allStats.vscodeBridge || previousLock?.vscodeBridge || null;
 
   const lock = {
-    package: '@dev-kit/harness',
+    package: 'harness',
     version,
     installedAt: new Date().toISOString(),
     command,

@@ -18,6 +18,7 @@ Read this file before the first edit of a Deliver task. Name a principle in the 
 | model-the-domain | Choose the data shape before writing the logic that uses it. |
 | sequence-verifiable-units | Each commit ends in a state someone can check. |
 | ask-only-when-undrivable | Ask the owner only with a stated reason the product surface could not answer the question. Gate denial and destructive actions still stop. |
+| standards-over-local-drift | Match the module layout. New code follows the language or framework standard when the surrounding code does not. |
 
 ## smallest-change
 
@@ -70,6 +71,10 @@ Name the type, table, or state machine in the plan before the implementer writes
 ## sequence-verifiable-units
 
 For a bug, land the failing repro before the fix. For a feature, keep each commit independently checkable.
+
+## standards-over-local-drift
+
+Use the same directories, names, and test layout as the module you are editing. If that module contains a pattern that conflicts with the current language or framework standard, the new code follows the standard. A prior change is not a reason to repeat the break.
 
 ## ask-only-when-undrivable
 

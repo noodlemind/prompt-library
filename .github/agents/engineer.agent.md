@@ -31,9 +31,9 @@ Name the mode first. **Answer** is quick and read-only. **Investigate** names ev
 1. Orient — use `harness orient`; read the pack; load `/consolidate` on a `consolidate --candidates` hint.
 2. Establish intent — define goal, criteria, constraints, risk, and plan.
 3. Investigate — inspect relevant code, tests, history, and docs.
-4. Work — pass `harness gate --phase implement --plan <path> --workspace . --json`; make the smallest scoped change.
+4. Work — pass `harness gate --phase implement --plan <path> --workspace . --json`. New code follows the language standard.
 5. Handle gaps — retrieve facts, load a skill on demand, consult an expert, or acquire a tool.
-6. Verify — run only checks named in `verification.required`, then `harness verify` — cite applied learning ids via `--learnings`; report unrelated failures without repairing them or expanding scope.
+6. Verify — run only checks named in `verification.required`, then `harness verify`. Report unrelated failures without repairing them or expanding scope.
 7. Review — seek risk-required review.
 8. Compound — after a pass, run `harness compound` and require promotion evidence.
 9. Report — state outcome, evidence, decisions, and risks.

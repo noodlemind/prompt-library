@@ -1,10 +1,9 @@
-# @dev-kit/harness
+# harness
 
 CLI for the **Adaptive Engineer Harness**: install/hydrate Copilot assets, run the deterministic kernel (orient → gate → verify → compound), optional TUI, and opt-in headless agent.
 
-- Package name: **`@dev-kit/harness`** · command: **`harness`**
-- Primer: [docs/adaptive-engineering-primer.md](../../docs/adaptive-engineering-primer.md)
-- Concept: [docs/adaptive-engineer-harness.md](../../docs/adaptive-engineer-harness.md)
+- Package name: **`harness`** · command: **`harness`**
+- Explanation: [docs/adaptive-engineering.md](../../docs/adaptive-engineering.md)
 - Tool contract: [.github/skills/references/harness-tool-contract.md](../../.github/skills/references/harness-tool-contract.md)
 
 Developers use Copilot **`@engineer`**. The kernel never starts an LLM on the host path.
@@ -12,7 +11,7 @@ Developers use Copilot **`@engineer`**. The kernel never starts an LLM on the ho
 ## Install
 
 ```bash
-npm install -g @dev-kit/harness@latest
+npm install -g harness@latest
 # local monorepo:
 npm install -g ./packages/harness
 
@@ -36,7 +35,7 @@ harness migrate      # move gitignored docs/plans and docs/solutions out of the 
 ### Pin version (product repos)
 
 ```json
-{ "devDependencies": { "@dev-kit/harness": "0.8.18" } }
+{ "devDependencies": { "harness": "0.8.18" } }
 ```
 
 Or root `.harness-version` with the same pin.
@@ -56,7 +55,7 @@ Or root `.harness-version` with the same pin.
 | **Deliver** | Real product work | `@engineer` + `gate` / `verify` / `compound` / `report --growth` |
 | **Autonomous** | Evals / unattended | `harness agent --profile autonomous --verify-cmd "…"` |
 
-Same registry tools; autonomous does **not** require plans or compound. See [docs/agent-loop.md](../../docs/agent-loop.md) and [eval/README.md](./eval/README.md).
+Same registry tools; autonomous does **not** require plans or compound. It is an opt-in add-on for a measured eval. See [eval/README.md](./eval/README.md).
 
 ## Commands (summary)
 
