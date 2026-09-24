@@ -34,8 +34,9 @@ export async function ensureIndexes({ workspace, copilotHome, mode = 'missing', 
         knowledgeRoot,
         workspace,
         copilotHome,
-        flags: { dryRun, headSha: head },
+        flags: { dryRun, headSha: head, home: process.env.HARNESS_HOME },
         log,
+        home: process.env.HARNESS_HOME,
       });
     } catch (error) {
       report.knowledge.ok = false;

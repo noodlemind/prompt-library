@@ -237,9 +237,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   // Under dryRun nothing was actually written (the write above is skipped), so
   // the log line must not claim otherwise.
   log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
-  const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
-    ? path.join(copilotHome, 'knowledge')
-    : null;
+  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
   // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
   // unhandled throw here would leave the episode we JUST wrote orphaned on disk
   // and, for the `remember` caller, skip its rollback path entirely (the throw
@@ -351,9 +349,7 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     };
   }
 
-  const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
-    ? path.join(copilotHome, 'knowledge')
-    : null;
+  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
 
   const indexed = runIndexKnowledge({
     knowledgeRoot,

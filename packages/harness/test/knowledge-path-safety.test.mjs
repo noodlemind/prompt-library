@@ -105,6 +105,20 @@ test('findMatchingPlans returns nothing through a symlinked docs/plans directory
   assert.deepEqual(results, [], 'a symlinked docs/plans yields zero matches, never the outside content');
 });
 
+test('knowledge index writes the manifest in the copilot home, never in the repository', () => {
+  const ws = tempDir('probeG-idx-ws-');
+  const copilotHome = tempDir('probeG-idx-ch-');
+  fs.mkdirSync(path.join(copilotHome, 'knowledge', 'solutions', 'perf'), { recursive: true });
+  fs.writeFileSync(
+    path.join(copilotHome, 'knowledge', 'solutions', 'perf', 'same.md'),
+    '---\ntitle: same\n---\n\nbody\n',
+  );
+  const result = runIndexKnowledge({ workspace: ws, copilotHome, flags: {}, log: () => {} });
+  assert.equal(path.dirname(result.manifestPath), path.join(copilotHome, 'knowledge'));
+  assert.equal(fs.existsSync(path.join(ws, 'knowledge')), false);
+  assert.match(fs.readFileSync(result.manifestPath, 'utf8'), /same/);
+});
+
 // title/tags control chars → packet clean -----------------------------------
 
 test('the candidates packet normalizes an episode\'s title and tags — no raw control char survives', () => {

@@ -101,11 +101,12 @@ function collectSolutions(dir, scope, base) {
 
 export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log, home }) {
   const roots = [];
-  if (knowledgeRoot) {
+  const manifestRoot = knowledgeRoot || (copilotHome ? path.join(copilotHome, 'knowledge') : null);
+  if (manifestRoot) {
     roots.push({
-      dir: path.join(knowledgeRoot, 'solutions'),
+      dir: path.join(manifestRoot, 'solutions'),
       scope: 'global',
-      base: knowledgeRoot,
+      base: manifestRoot,
     });
   }
   for (const scanned of solutionsScanRoots(workspace, { home: home ?? flags?.home })) {
@@ -121,17 +122,21 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
     entries = entries.concat(collectSolutions(dir, scope, base));
   }
 
-  const seenIds = new Set();
+  const seenIds = new Map();
   for (const e of entries) {
-    if (seenIds.has(e.id)) {
-      throw new Error(`duplicate manifest id "${e.id}" — paths collide across knowledge roots`);
+    const prior = seenIds.get(e.id);
+    if (prior) {
+      throw new Error(`duplicate manifest id "${e.id}" — ${prior} and ${e.scope}:${e.path}`);
     }
-    seenIds.add(e.id);
+    seenIds.set(e.id, `${e.scope}:${e.path}`);
   }
 
   entries.sort((a, b) => a.id.localeCompare(b.id));
 
-  const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
+  if (!manifestRoot) {
+    throw new Error('harness index needs a copilot home; it does not write knowledge/ into the repository');
+  }
+  const manifestPath = path.join(manifestRoot, 'manifest.yaml');
   const today = new Date().toISOString().slice(0, 10);
   const lines = [
     '# Team knowledge index — rebuilt by harness index',
@@ -165,18 +170,37 @@ export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags
     log(`would write ${indexDir} (${entries.length} postings)`);
     return { entries: entries.length, manifestPath, indexDir };
   }
-  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-  fs.writeFileSync(manifestPath, body, 'utf8');
+  const previous = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath) : null;
+  writeManifestAtomic(manifestPath, body);
   log(`wrote ${manifestPath} (${entries.length} entries)`);
 
   const indexDir = resolveIndexDir(copilotHome || '', workspace);
-  const indexResult = runBuildPostingsIndex({
-    entries,
-    indexDir,
-    manifestUpdated: today,
-    flags,
-  });
+  let indexResult;
+  try {
+    indexResult = runBuildPostingsIndex({
+      entries,
+      indexDir,
+      manifestUpdated: today,
+      flags,
+    });
+  } catch (error) {
+    if (previous === null) fs.rmSync(manifestPath, { force: true });
+    else writeManifestAtomic(manifestPath, previous);
+    throw error;
+  }
   log(`wrote ${indexDir} (${indexResult.entryCount} postings)`);
 
   return { entries: entries.length, manifestPath, indexDir, indexEntries: indexResult.entryCount };
+}
+
+function writeManifestAtomic(file, body) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, body);
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    fs.rmSync(tmp, { force: true });
+    throw error;
+  }
 }

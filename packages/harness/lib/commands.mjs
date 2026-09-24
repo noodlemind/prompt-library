@@ -423,6 +423,7 @@ export async function cmdIndex(argv) {
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const knowledgeRoot = path.join(copilotHome, 'knowledge');
   const workspace = path.resolve(flags.workspace);
+  if (!flags.dryRun) fs.mkdirSync(knowledgeRoot, { recursive: true });
   const logger = (m) => log(flags, m);
 
     if (flags.since && !hasFlag(argv, '--structural')) {
@@ -566,7 +567,7 @@ export async function cmdIndex(argv) {
   // Stamp the current git HEAD so `index --status` can measure drift later.
   const head = spawnSyncHead(workspace);
   const result = runIndexKnowledge({
-    knowledgeRoot: fs.existsSync(knowledgeRoot) ? knowledgeRoot : null,
+    knowledgeRoot,
     workspace,
     copilotHome,
     flags: { ...flags, headSha: head },
@@ -621,8 +622,8 @@ export async function cmdIndex(argv) {
     if (empty) {
       noteParts.push(
         flags.dryRun
-          ? 'knowledge index dry run · 0 solutions under knowledge/solutions or docs/solutions'
-          : 'knowledge index recorded (meta written) · 0 solutions under knowledge/solutions or docs/solutions',
+          ? 'knowledge index dry run · 0 solutions in the harness project store or the Copilot knowledge home'
+          : 'knowledge index recorded (meta written) · 0 solutions in the harness project store or the Copilot knowledge home',
       );
     }
     if (result.staleLearnings) noteParts.push(`learnings excluded ${result.staleLearnings} (stale anchors)`);
@@ -637,6 +638,20 @@ export async function cmdIndex(argv) {
         next: empty ? 'harness compound or harness remember, then index again' : undefined,
       })
     );
+    try {
+      const { structuralIndexStatus } = await import('./index-status.mjs');
+      const structural = structuralIndexStatus(workspace);
+      if (!structural.indexed || structural.stale || (structural.unreadable || []).length) {
+        console.log(ui.line({
+          state: structural.indexed ? 'warn' : 'pending',
+          key: 'code',
+          value: structural.indexed ? (structural.stale ? 'stale' : 'unreadable') : 'not built',
+          next: 'harness index --structural',
+        }));
+      }
+    } catch {
+      // The knowledge result above already stands. Structural status is advisory here.
+    }
   }
   return 0;
 }
