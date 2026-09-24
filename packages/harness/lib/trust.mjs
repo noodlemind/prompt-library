@@ -4,6 +4,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { EXIT } from './style.mjs';
 import { writeFileContained } from './fs-safe.mjs';
+import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 
 export const TRUST_SCHEMA_VERSION = 1;
 
@@ -14,10 +15,30 @@ export const PINNED_FILES = Object.freeze([
   path.join('.github', 'harness', 'routing.yaml'),
 ]);
 
+/** Pins hashed before routing.yaml joined the list. */
+export const LEGACY_PINNED_FILES = Object.freeze(PINNED_FILES.filter((rel) => !rel.endsWith(`${path.sep}routing.yaml`)));
+
 export const TRUST_STATES = Object.freeze(['trusted', 'untrusted', 'stale', 'revoked']);
 
-export function trustStorePath(copilotHome) {
-  return path.join(copilotHome, 'harness', 'trust.yaml');
+function trustRoot({ home, copilotHome } = {}) {
+  if (home) return path.resolve(home);
+  if (process.env.HARNESS_HOME) return path.resolve(process.env.HARNESS_HOME);
+  if (copilotHome) {
+    const given = path.resolve(copilotHome);
+    const usual = path.resolve(resolveCopilotHome(undefined));
+    if (given !== usual) return given;
+  }
+  return harnessGlobalHome();
+}
+
+/** User-scope approval file. A string argument is a copilot or fixture home. */
+export function trustStorePath(homeOrCopilot) {
+  if (typeof homeOrCopilot === 'string') return path.join(trustRoot({ copilotHome: homeOrCopilot }), 'trust.yaml');
+  return path.join(trustRoot(homeOrCopilot || {}), 'trust.yaml');
+}
+
+export function legacyTrustStorePath(copilotHome) {
+  return path.join(path.resolve(copilotHome || resolveCopilotHome(undefined)), 'harness', 'trust.yaml');
 }
 
 export function projectIdentity(workspace) {
@@ -30,9 +51,9 @@ export function projectIdentity(workspace) {
   return { root, id: crypto.createHash('sha256').update(root).digest('hex').slice(0, 16) };
 }
 
-export function policyDigest(workspace) {
+export function policyDigest(workspace, files = PINNED_FILES) {
   const hash = crypto.createHash('sha256');
-  for (const rel of PINNED_FILES) {
+  for (const rel of files) {
     const full = path.join(workspace, rel);
     hash.update(rel);
     try {
@@ -45,12 +66,22 @@ export function policyDigest(workspace) {
   return hash.digest('hex');
 }
 
-function readStore(copilotHome) {
-  const file = trustStorePath(copilotHome);
-  if (!fs.existsSync(file)) return { version: TRUST_SCHEMA_VERSION, projects: {} };
+function routingFilePresent(workspace) {
+  return fs.existsSync(path.join(workspace, '.github', 'harness', 'routing.yaml'));
+}
+
+/** Current digest, or the pre-routing digest when that file is still absent. */
+export function digestMatchesApproval(recordDigest, workspace) {
+  if (!recordDigest) return false;
+  if (recordDigest === policyDigest(workspace)) return true;
+  if (!routingFilePresent(workspace) && recordDigest === policyDigest(workspace, LEGACY_PINNED_FILES)) return true;
+  return false;
+}
+
+function parseStoreFile(file) {
   try {
     const doc = YAML.parse(fs.readFileSync(file, 'utf8'), { maxAliasCount: 50 });
-        if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
       return { version: TRUST_SCHEMA_VERSION, projects: {}, unreadable: true };
     }
     const projects = doc.projects;
@@ -59,15 +90,32 @@ function readStore(copilotHome) {
     }
     return { version: doc.version || TRUST_SCHEMA_VERSION, projects };
   } catch {
-        return { version: TRUST_SCHEMA_VERSION, projects: {}, unreadable: true };
+    return { version: TRUST_SCHEMA_VERSION, projects: {}, unreadable: true };
   }
 }
 
-function writeStore(copilotHome, store) {
-  const file = trustStorePath(copilotHome);
-  const written = writeFileContained(copilotHome, path.relative(copilotHome, file), YAML.stringify(store));
+function readStore({ copilotHome, home } = {}) {
+  const file = trustStorePath({ copilotHome, home });
+  if (fs.existsSync(file)) return parseStoreFile(file);
+  const legacy = legacyTrustStorePath(copilotHome || resolveCopilotHome(undefined));
+  if (path.resolve(legacy) === path.resolve(file) || !fs.existsSync(legacy)) {
+    return { version: TRUST_SCHEMA_VERSION, projects: {} };
+  }
+  const parsed = parseStoreFile(legacy);
+  if (parsed.unreadable) return parsed;
+  try {
+    writeStore({ copilotHome, home }, parsed);
+  } catch {
+    return parsed;
+  }
+  return parsed;
+}
+
+function writeStore({ copilotHome, home } = {}, store) {
+  const root = trustRoot({ home, copilotHome });
+  const written = writeFileContained(root, 'trust.yaml', YAML.stringify(store));
   if (!written) {
-    throw Object.assign(new Error(`could not write the trust store at ${file}`), {
+    throw Object.assign(new Error(`could not write the trust store at ${path.join(root, 'trust.yaml')}`), {
       code: 'E_TARGET',
       exit: 1,
       hint: 'the path is not writable, or an ancestor is a symlink out of the home directory',
@@ -76,9 +124,9 @@ function writeStore(copilotHome, store) {
   return written;
 }
 
-export function trustStatus({ workspace, copilotHome }) {
+export function trustStatus({ workspace, copilotHome, home }) {
   const identity = projectIdentity(workspace);
-  const store = readStore(copilotHome);
+  const store = readStore({ copilotHome, home });
   const record = store.projects[identity.root] || null;
   const digest = policyDigest(workspace);
 
@@ -90,7 +138,7 @@ export function trustStatus({ workspace, copilotHome }) {
     state = 'revoked';
     reason = 'trust was explicitly revoked';
   } else if (record?.status === 'trusted') {
-    if (record.digest === digest) {
+    if (digestMatchesApproval(record.digest, workspace)) {
       state = 'trusted';
       reason = `approved ${record.approvedAt}`;
     } else {
@@ -110,46 +158,46 @@ export function trustStatus({ workspace, copilotHome }) {
     approvedAt: record?.approvedAt ?? null,
     approvedDigest: record?.digest ?? null,
     pinned: [...PINNED_FILES],
-    store: trustStorePath(copilotHome),
+    store: trustStorePath({ copilotHome, home }),
   };
 }
 
 /** Whether project-authored policy and configuration may take effect here. */
-export function isProjectTrusted({ workspace, copilotHome }) {
-  return trustStatus({ workspace, copilotHome }).trusted;
+export function isProjectTrusted({ workspace, copilotHome, home }) {
+  return trustStatus({ workspace, copilotHome, home }).trusted;
 }
 
-export function approveProject({ workspace, copilotHome, now = new Date().toISOString() }) {
+export function approveProject({ workspace, copilotHome, home, now = new Date().toISOString() }) {
   const identity = projectIdentity(workspace);
-  const store = readStore(copilotHome);
+  const store = readStore({ copilotHome, home });
   if (store.unreadable) {
     throw Object.assign(new Error('refusing to write over an unreadable trust store'), {
       code: 'E_TARGET',
       exit: 1,
-      hint: `inspect ${trustStorePath(copilotHome)} by hand — overwriting it would silently discard every approval it holds`,
+      hint: `inspect ${trustStorePath({ copilotHome, home })} by hand — overwriting it would silently discard every approval it holds`,
     });
   }
   const digest = policyDigest(workspace);
   store.version = TRUST_SCHEMA_VERSION;
   store.projects[identity.root] = { status: 'trusted', approvedAt: now, digest };
-  writeStore(copilotHome, store);
-  return trustStatus({ workspace, copilotHome });
+  writeStore({ copilotHome, home }, store);
+  return trustStatus({ workspace, copilotHome, home });
 }
 
-export function revokeProject({ workspace, copilotHome, now = new Date().toISOString() }) {
+export function revokeProject({ workspace, copilotHome, home, now = new Date().toISOString() }) {
   const identity = projectIdentity(workspace);
-  const store = readStore(copilotHome);
+  const store = readStore({ copilotHome, home });
   if (store.unreadable) {
     throw Object.assign(new Error('refusing to write over an unreadable trust store'), {
       code: 'E_TARGET',
       exit: 1,
-      hint: `inspect ${trustStorePath(copilotHome)} by hand`,
+      hint: `inspect ${trustStorePath({ copilotHome, home })} by hand`,
     });
   }
-    store.version = TRUST_SCHEMA_VERSION;
+  store.version = TRUST_SCHEMA_VERSION;
   store.projects[identity.root] = { status: 'revoked', revokedAt: now };
-  writeStore(copilotHome, store);
-  return trustStatus({ workspace, copilotHome });
+  writeStore({ copilotHome, home }, store);
+  return trustStatus({ workspace, copilotHome, home });
 }
 
 export function trustError(message, hint) {
