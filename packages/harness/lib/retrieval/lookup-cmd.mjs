@@ -10,7 +10,7 @@ const ui = createStyle({ argv: process.argv.slice(2) });
 
 export function parseLookupArgv(argv) {
   const positionals = [];
-  const flagsWithValues = new Set(['--workspace', '--copilot-home', '--output']);
+  const flagsWithValues = new Set(['--workspace', '--copilot-home', '--harness-home', '--output']);
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--') break;

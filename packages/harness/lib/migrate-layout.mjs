@@ -83,6 +83,22 @@ function pruneEmptyAncestors(workspace, rel) {
   }
 }
 
+function copyPresent({ workspace, fromRel, destRoot, destRel, dryRun }) {
+  const files = [];
+  for (const srcRel of listRelFiles(workspace, fromRel)) {
+    const destPathRel = destFileRel(srcRel, fromRel, destRel);
+    const destFull = path.join(destRoot, destPathRel);
+    if (fs.existsSync(destFull)) continue;
+    if (dryRun) {
+      files.push({ from: srcRel, to: destPathRel });
+      continue;
+    }
+    const written = copyFileContainedExclusive(workspace, srcRel, destRoot, destPathRel);
+    if (written) files.push({ from: srcRel, to: destPathRel });
+  }
+  return files;
+}
+
 function destFileRel(fromRel, fromRootRel, destRootRel) {
   const suffix = posixRel(fromRel).slice(posixRel(fromRootRel).length).replace(/^\//, '');
   return suffix ? `${posixRel(destRootRel)}/${suffix}` : posixRel(destRootRel);
@@ -154,7 +170,7 @@ function migrateItem({ workspace, kind, fromRel, destRoot, destRel, dryRun }) {
   return { kind, from, to, action, files, conflicts, kept };
 }
 
-function rewriteSessionPlanPaths(workspace, moved, dryRun) {
+function rewriteSessionPlanPaths(workspace, moved, dryRun, home) {
   const session = readSession(workspace);
   if (!session) return false;
   const movedFrom = new Set(
@@ -168,7 +184,7 @@ function rewriteSessionPlanPaths(workspace, moved, dryRun) {
     if (typeof raw !== 'string') continue;
     const n = posixRel(raw);
     if (!movedFrom.has(n)) continue;
-    next[key] = `${SESSION_PLANS_REL}/${n.slice(`${WORKSPACE_PLANS_REL}/`.length)}`;
+    next[key] = path.join(projectStoreDir(workspace, { home }), 'plans', path.posix.basename(n));
     changed = true;
   }
   if (changed && !dryRun) writeSession(workspace, next, false);
@@ -181,8 +197,14 @@ export function inspectLayout(workspace, { home } = {}) {
     {
       kind: 'plans',
       from: WORKSPACE_PLANS_REL,
-      to: SESSION_PLANS_REL,
-      destRoot: path.resolve(workspace),
+      to: 'plans',
+      destRoot: projectStoreDir(workspace, { home }),
+    },
+    {
+      kind: 'session-plans',
+      from: SESSION_PLANS_REL,
+      to: 'plans',
+      destRoot: projectStoreDir(workspace, { home }),
     },
     {
       kind: 'solutions',
@@ -191,16 +213,22 @@ export function inspectLayout(workspace, { home } = {}) {
       destRoot: overlay,
     },
     {
+      kind: 'knowledge',
+      from: 'knowledge/solutions',
+      to: 'knowledge/solutions',
+      destRoot: overlay,
+    },
+    {
       kind: 'agent-context',
       from: WORKSPACE_AGENT_CTX_REL,
-      to: SESSION_AGENT_CTX_REL,
-      destRoot: path.resolve(workspace),
+      to: 'agent-context.md',
+      destRoot: projectStoreDir(workspace, { home }),
     },
     {
       kind: 'codebase-map',
       from: WORKSPACE_MAP_REL,
-      to: SESSION_MAP_REL,
-      destRoot: path.resolve(workspace),
+      to: 'codebase-map.md',
+      destRoot: projectStoreDir(workspace, { home }),
     },
   ].map((spec) => {
     const exists = fs.existsSync(path.join(workspace, spec.from));
@@ -230,6 +258,17 @@ export function runMigrateLayout({ workspace, dryRun = false, log = () => {}, ho
   for (const spec of inspected) {
     if (spec.action === 'absent') continue;
     if (spec.action === 'keep-tracked') {
+      const copied = copyPresent({
+        workspace,
+        fromRel: spec.from,
+        destRoot: spec.destRoot,
+        destRel: spec.to,
+        dryRun,
+      });
+      for (const file of copied) {
+        moved.push({ kind: spec.kind, from: file.from, to: file.to, copied: true });
+        log(`${dryRun ? 'would copy' : 'copied'} ${file.from} → ${file.to}`);
+      }
       kept.push({ kind: spec.kind, from: spec.from, reason: 'tracked' });
       log(`keep ${spec.from} (git-tracked)`);
       continue;
@@ -265,7 +304,7 @@ export function runMigrateLayout({ workspace, dryRun = false, log = () => {}, ho
       log(`conflict ${conflict.from} → ${conflict.to} (${conflict.reason})`);
     }
   }
-  const sessionRewritten = rewriteSessionPlanPaths(workspace, moved, dryRun);
+  const sessionRewritten = rewriteSessionPlanPaths(workspace, moved, dryRun, home);
   if (sessionRewritten) log(`${dryRun ? 'would rewrite' : 'rewrote'} session plan paths`);
   return {
     moved,

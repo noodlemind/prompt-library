@@ -156,7 +156,7 @@ function verifiableWorkspace({ required, criteria, extraFrontmatter, checks, pol
   if (policy) writeConfig(workspace, 'policy.yaml', policy);
   git(workspace, ['add', '.']);
   git(workspace, ['commit', '-qm', 'baseline']);
-    approveProject({ workspace, copilotHome: copilotHomeFor(home) });
+    approveProject({ workspace, copilotHome: copilotHomeFor(home), home });
   return { workspace, home, plan };
 }
 

@@ -18,6 +18,7 @@ import { applyOps } from '../lib/knowledge/apply.mjs';
 import { LEARNING_BYTE_CAP } from '../lib/knowledge/consolidate.mjs';
 import { runInsightCompound } from '../lib/compound.mjs';
 import { runRemember } from '../lib/knowledge/remember.mjs';
+import { projectStoreDir } from '../lib/project-layout.mjs';
 import { absorbHandEdits, removeEpisodeLink } from '../lib/knowledge/admin.mjs';
 
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -103,7 +104,7 @@ test('insight episode capture stamps commit and branch provenance', () => {
     home,
   });
   assert.equal(result.pass, true, result.blockedReason);
-  const text = fs.readFileSync(path.join(ws, result.path), 'utf8');
+  const text = fs.readFileSync(path.join(projectStoreDir(ws, { home }), result.path), 'utf8');
   assert.match(text, new RegExp(`^commit: ${head(ws)}$`, 'm'));
   assert.match(text, /^branch: "feature\/insight-prov"$/m);
   assert.doesNotMatch(text, /^base:/m, 'no default branch resolvable — base omitted, never guessed');
@@ -122,7 +123,7 @@ test('remember stamps provenance on both the episode and the learning', () => {
     home,
   });
   assert.equal(result.pass, true, result.blockedReason);
-  const episodeText = fs.readFileSync(path.join(ws, result.episodePath), 'utf8');
+  const episodeText = fs.readFileSync(path.join(projectStoreDir(ws, { home }), result.episodePath), 'utf8');
   assert.match(episodeText, new RegExp(`^commit: ${head(ws)}$`, 'm'));
   assert.match(episodeText, /^branch: "feature\/remember-prov"$/m);
 

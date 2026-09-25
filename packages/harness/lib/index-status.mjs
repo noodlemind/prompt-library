@@ -27,11 +27,11 @@ function driftFromHead(workspace, indexedHead) {
 }
 
 /**
- * Knowledge / BM25 postings index under ~/.copilot/knowledge/.harness-index.
- * Built by bare `harness index`.
+ * Knowledge / BM25 postings index under <harness-home>/index/<repo-id>/knowledge.
+ * Built by bare `harness index`. The manifest stays in the Copilot knowledge home.
  */
-export function knowledgeIndexStatus({ workspace, copilotHome }) {
-  const indexDir = resolveIndexDir(copilotHome, workspace);
+export function knowledgeIndexStatus({ workspace, copilotHome, home }) {
+  const indexDir = resolveIndexDir(copilotHome, workspace, home);
   const metaPath = path.join(indexDir, 'meta.json');
   let meta = null;
   try {
@@ -131,8 +131,8 @@ export function knowledgeIndexStatus({ workspace, copilotHome }) {
  * Structural / code-symbol index under ~/.harness/index/.../structural.
  * Built by `harness index --structural`.
  */
-export function structuralIndexStatus(workspace) {
-  const index = readStructuralIndex(workspace);
+export function structuralIndexStatus(workspace, { home } = {}) {
+  const index = readStructuralIndex(workspace, { home });
   if (!index?.meta) {
     return {
       plane: 'structural',
@@ -199,9 +199,9 @@ export function structuralIndexStatus(workspace) {
  * Backward-compatible top-level fields describe the **knowledge** plane
  * (what `indexed` historically meant). Prefer `knowledge` / `structural`.
  */
-export function indexStatus({ workspace, copilotHome }) {
-  const knowledge = knowledgeIndexStatus({ workspace, copilotHome });
-  const structural = structuralIndexStatus(workspace);
+export function indexStatus({ workspace, copilotHome, home } = {}) {
+  const knowledge = knowledgeIndexStatus({ workspace, copilotHome, home });
+  const structural = structuralIndexStatus(workspace, { home });
 
   const parts = [];
   if (!knowledge.indexed) parts.push('knowledge: not built — run `harness index`');

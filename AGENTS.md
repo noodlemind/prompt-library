@@ -29,9 +29,9 @@ Deliver-mode internal skill chain:
                          open → planned → in-progress → review → done
 ```
 
-Harness architecture: `docs/adaptive-engineer-harness.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
+Harness architecture: `docs/adaptive-engineering.md`. Knowledge lookup: `.github/skills/references/knowledge-locations.md`.
 
-Plan files live in `.harness/plans/` (product repos, gitignored) or committed `docs/plans/` when git tracks files there. They track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/adaptive-engineer-harness.md`.
+Plan files live in `.harness/plans/` (product repos, gitignored) or committed `docs/plans/` when git tracks files there. They track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/adaptive-engineering.md`.
 
 ## Directory Structure
 
@@ -47,8 +47,7 @@ Plan files live in `.harness/plans/` (product repos, gitignored) or committed `d
   mcp.json         — MCP server configuration
 knowledge/         — team-wide solutions + manifest (hydrated to ~/.copilot/knowledge/)
 docs/
-  adaptive-engineering-primer.md — Adaptive Engineering primer (concept, delivery, tokens, SDD/BMAD)
-  adaptive-engineer-harness.md  — shared concept / practice doc
+  adaptive-engineering.md — how the Engineer and Harness work, and how capability is acquired
   plans/           — plan template; product repos default to `.harness/plans/`
 packages/harness/  — CLI package
 ```
@@ -92,7 +91,7 @@ Skills follow proven design patterns from Google ADK and Compound Engineering:
 
 ## Standardization Reference
 
-Read `docs/adaptive-engineer-harness.md` before adding or substantially changing agents, skills, instructions, checks, plan structure, or solution templates.
+Read `docs/adaptive-engineering.md` before adding or substantially changing agents, skills, instructions, checks, plan structure, or solution templates.
 
 ## Accumulated Knowledge
 

@@ -7,6 +7,7 @@ import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
 import { dispatch as dispatchRegistered, hasCommand, describeCommand, getCommand } from '../lib/registry.mjs';
 import { createProcessEventRegistry, detectActor } from '../lib/event-registry.mjs';
 import { parseFlags, hasFlag } from '../lib/flags.mjs';
+import { applyHarnessHomeFlag } from '../lib/paths.mjs';
 import { commandIndexEnvelope } from '../lib/command-index.mjs';
 import { createRedactor, redactedJson } from '../lib/redact.mjs';
 import { readPkgVersion } from '../lib/commands.mjs';
@@ -21,7 +22,7 @@ const out = createStyle({ argv: args });
 
 export const HELP_COMMAND_ORDER = [
   'install', 'upgrade', 'doctor', 'status', 'uninstall',
-  'init-repo', 'migrate', 'index', 'plan-new', 'config',
+  'init-repo', 'migrate', 'index', 'plan-new', 'route', 'config',
   'model', 'trust', 'resources',
     'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'agent', 'validate-plan', 'compound', 'recall', 'get', 'edit', 'write', 'apply', 'todo', 'undo', 'search', 'lookup', 'tree', 'run', 'inspect', 'tui', 'events', 'report',
   'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',
@@ -36,6 +37,7 @@ const GLOBAL_OPTIONS = [
   ['--no-color', 'plain ascii output (also honors NO_COLOR; auto when piped)'],
   ['--workspace <path>', 'repo root (default: cwd)'],
   ['--copilot-home <path>', 'override ~/.copilot'],
+  ['--harness-home <path>', 'override ~/.harness for this command'],
   ['--no-events', 'do not write any local record: .harness/events.jsonl or runs.jsonl'],
 ];
 
@@ -64,7 +66,7 @@ function groupedForHelp() {
 function renderHelp() {
   const lines = [];
   lines.push(`harness ${out.paint('muted', '— Adaptive Engineer Harness for GitHub Copilot')}`);
-  lines.push(out.paint('muted', '@dev-kit/harness · VS Code · CLI · IntelliJ'));
+  lines.push(out.paint('muted', 'harness · VS Code · CLI · IntelliJ'));
   lines.push('');
   lines.push(`Usage: harness ${out.paint('muted', '<command> [options]')}`);
   lines.push('');
@@ -84,7 +86,7 @@ function renderHelp() {
   );
   lines.push('');
   lines.push(out.paint('muted', `${out.arrow} harness help <command>   job, usage, and options for one command`));
-  lines.push(out.paint('muted', `${out.arrow} docs   @dev-kit/harness README · harness-tool-contract.md`));
+  lines.push(out.paint('muted', `${out.arrow} docs   harness README · docs/adaptive-engineering.md`));
   return lines.join('\n');
 }
 
@@ -160,6 +162,7 @@ async function main() {
   // What the command said happened, if it said. Preferred over the exit map.
   let reportedStatus = null;
   try {
+    applyHarnessHomeFlag(args);
         if (command === '--version' || command === '-V') {
       console.log(readPkgVersion());
     } else if (command === 'help' || command === '--help' || command === '-h') {

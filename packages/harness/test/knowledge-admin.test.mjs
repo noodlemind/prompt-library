@@ -236,7 +236,7 @@ test('purging an indexed episode removes it from recall: the manifest no longer 
   assert.equal(applyOps({ workspace: c.ws, opsPath: writeOps(c.ws, [op]), home: c.harnessHome }).exitCode, 0);
 
   assert.equal(run(c, ['index']).status, 0);
-  const manifestPath = path.join(c.ws, 'knowledge', 'manifest.yaml');
+  const manifestPath = path.join(c.home, 'knowledge', 'manifest.yaml');
   assert.match(fs.readFileSync(manifestPath, 'utf8'), /path: docs\/solutions\/perf\/zebra-orders-timeout\.md/);
   const before = run(c, ['recall', 'zebra orders endpoint timeout']);
   assert.equal(before.status, 0, before.stderr || before.stdout);
@@ -271,7 +271,7 @@ test('storeless purge of an indexed episode file also removes it from the recall
     '---\ntitle: "quagga storeless recall entry"\ndate: 2026-07-27\n---\n\n## Problem\n\nA quagga storeless entry that must vanish from recall on purge.\n'
   );
   assert.equal(run(c, ['index']).status, 0);
-  const manifestPath = path.join(c.ws, 'knowledge', 'manifest.yaml');
+  const manifestPath = path.join(c.home, 'knowledge', 'manifest.yaml');
   assert.match(fs.readFileSync(manifestPath, 'utf8'), /quagga-storeless\.md/);
 
   const purge = run(c, ['knowledge', 'purge', targetPath]);

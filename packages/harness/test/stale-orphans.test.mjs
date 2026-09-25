@@ -29,7 +29,7 @@ function scaffold() {
   write(home, 'knowledge/solutions/user.md'); // user-owned, never an orphan
   write(home, 'skills/team-added/SKILL.md'); // added by hand — NOT hydrated, so never an orphan
     fs.writeFileSync(path.join(home, '.harness-lock.json'), JSON.stringify({
-    package: '@dev-kit/harness',
+    package: 'harness',
     version: '0.0.0-test',
     files: [
       'agents/engineer.agent.md',

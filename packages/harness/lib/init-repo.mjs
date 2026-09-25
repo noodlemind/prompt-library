@@ -5,7 +5,9 @@ import { writeHarnessRunner } from './resolve-harness-bin.mjs';
 import { writeCodebaseMap } from './repo-map/index.mjs';
 import { ensureStore, storeDir, readLedger } from './knowledge/store.mjs';
 import { collectEpisodes, consolidateStatus, splitLedger } from './knowledge/consolidate.mjs';
-import { SESSION_AGENT_CTX_REL, WORKSPACE_PLANS_REL, plansWriteRel } from './project-layout.mjs';
+import { fileURLToPath } from 'node:url';
+import { plansWriteTarget, projectStoreDir } from './project-layout.mjs';
+import { harnessGlobalHome } from './paths.mjs';
 import { runMigrateLayout } from './migrate-layout.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
@@ -51,12 +53,13 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
     stats.migrated = migrated.moved;
   }
   if (migrated.conflicts.length) {
-    log(`migrate left ${migrated.conflicts.length} conflict(s) — new plans still go under .harness/plans unless docs/plans is git-tracked`);
+    log(`migrate left ${migrated.conflicts.length} conflict(s) — new plans go to the external project store`);
   }
-  const plansRel = plansWriteRel(workspace);
-  const plansDir = path.join(workspace, plansRel);
-  const agentRel = plansRel === WORKSPACE_PLANS_REL ? 'docs/agent-context.md' : SESSION_AGENT_CTX_REL;
-  const agentCtx = path.join(workspace, agentRel);
+  const plansTarget = plansWriteTarget(workspace, { home: flags?.home || harnessGlobalHome() });
+  const plansDir = path.join(plansTarget.base, plansTarget.dirRel);
+  const plansRel = plansDir;
+  const agentCtx = path.join(projectStoreDir(workspace, { home: flags?.home || harnessGlobalHome() }), 'agent-context.md');
+  const agentRel = agentCtx;
   const harnessConfigDir = path.join(workspace, '.github', 'harness');
 
   if (!flags.dryRun) {
@@ -109,6 +112,19 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
       }
       stats.created.push(`.github/harness/${name}`);
       log(`created .github/harness/${name}`);
+    }
+  }
+
+  const routingPath = path.join(harnessConfigDir, 'routing.yaml');
+  if (!fs.existsSync(routingPath)) {
+    const seed = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config', 'routing.seed.yaml');
+    if (fs.existsSync(seed)) {
+      if (!flags.dryRun) {
+        fs.mkdirSync(harnessConfigDir, { recursive: true });
+        fs.copyFileSync(seed, routingPath);
+      }
+      stats.created.push('.github/harness/routing.yaml');
+      log('created .github/harness/routing.yaml');
     }
   }
 

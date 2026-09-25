@@ -45,8 +45,7 @@ Plan files live in `.harness/plans/` by default (gitignored), or committed `docs
 .vscode/
   mcp.json             — MCP server configuration (Context7)
 docs/
-  adaptive-engineering-primer.md — Adaptive Engineering primer (concept, delivery, tokens, SDD/BMAD)
-  adaptive-engineer-harness.md  — shared concept / practice doc
+  adaptive-engineering.md — how the Engineer and Harness work, and how capability is acquired
   plans/               — plan template; product repos default to `.harness/plans/`
 packages/harness/      — CLI package
 AGENTS.md              — primary cross-host guidance
@@ -155,7 +154,7 @@ Update these files to keep everything synchronized:
 3. `.github/copilot-instructions.md` — shared context
 4. `.github/agent-context.md` — prompt-library repo knowledge
 5. `README.md` — overview if applicable
-6. `docs/adaptive-engineer-harness.md` — if primitive boundaries or workflow contracts changed
+6. `docs/adaptive-engineering.md` — if primitive boundaries or workflow contracts changed
 
 ## Testing
 

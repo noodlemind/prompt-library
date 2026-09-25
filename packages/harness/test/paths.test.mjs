@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { resolveCopilotHome } from '../lib/paths.mjs';
+import { applyHarnessHomeFlag, resolveCopilotHome } from '../lib/paths.mjs';
+import { parseFlags } from '../lib/flags.mjs';
 
 function withEnv(vars, fn) {
   const saved = {};
@@ -29,6 +30,19 @@ test('a nonexistent XDG copilot dir never shadows ~/.copilot', () => {
       path.join(os.homedir(), '.copilot'),
       'an XDG path that does not exist must not empty every host report'
     );
+  });
+});
+
+test('a repeated --harness-home uses the last path for both the env and parsed flags', () => {
+  const first = fs.mkdtempSync(path.join(os.tmpdir(), 'hh-first-'));
+  const second = fs.mkdtempSync(path.join(os.tmpdir(), 'hh-second-'));
+  withEnv({ HARNESS_HOME: first }, () => {
+    const chosen = applyHarnessHomeFlag(['--harness-home', first, '--harness-home', second]);
+    assert.equal(chosen, path.resolve(second));
+    assert.equal(process.env.HARNESS_HOME, path.resolve(second));
+    const flags = parseFlags(['--harness-home', first, '--harness-home', second]);
+    assert.equal(path.resolve(flags.harnessHome), path.resolve(second));
+    assert.equal(path.resolve(flags.home), path.resolve(second));
   });
 });
 

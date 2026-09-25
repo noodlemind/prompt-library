@@ -6,7 +6,7 @@ lifecycle_states: [candidate, experimental, active, deprecated, retired]
 engineer:
   entry_agent: engineer
   entry_skill: engineer
-  architecture: docs/adaptive-engineer-harness.md
+  architecture: docs/adaptive-engineering.md
   workflow: orient → establish intent → investigate → work → handle gaps → verify → review → compound → report
 
 capabilities:
@@ -198,6 +198,7 @@ capabilities:
     reason: Unreachable after starter-kit retirement; codification belongs to compounding.
   framework-docs-researcher: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
   git-history-analyzer: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  delivery-classifier: {type: agent, status: active, owner: developer-experience, version: 1, origin: delivery-routing}
   java-reviewer: {type: agent, status: active, owner: application-platform, version: 1, origin: starter}
   pattern-recognition-specialist: {type: agent, status: active, owner: architecture, version: 1, origin: starter}
   performance-oracle: {type: agent, status: active, owner: reliability-engineering, version: 1, origin: starter}
@@ -286,5 +287,5 @@ growth:
   retirement: deprecate → warn and migrate → remove source → retain registry tombstone
 
 references:
-  architecture: docs/adaptive-engineer-harness.md
+  architecture: docs/adaptive-engineering.md
   harness_contract: .github/skills/references/harness-tool-contract.md

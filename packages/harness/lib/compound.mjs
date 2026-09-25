@@ -237,9 +237,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   // Under dryRun nothing was actually written (the write above is skipped), so
   // the log line must not claim otherwise.
   log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
-  const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
-    ? path.join(copilotHome, 'knowledge')
-    : null;
+  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
   // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
   // unhandled throw here would leave the episode we JUST wrote orphaned on disk
   // and, for the `remember` caller, skip its rollback path entirely (the throw
@@ -250,7 +248,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   // just-written episode and restore all of it so retrieval state is exactly
   // pre-write, then return a clean, recoverable failure the caller handles.
   const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
-  const indexDir = resolveIndexDir(copilotHome || '', workspace);
+  const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
   const snapshots = [
     [manifestPath, snapshotFile(manifestPath)],
     [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
@@ -316,7 +314,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   };
 }
 
-export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
+export async function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
   if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log, home: flags.home });
   const session = readSession(workspace);
   const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true });
@@ -351,9 +349,7 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     };
   }
 
-  const knowledgeRoot = fs.existsSync(path.join(copilotHome, 'knowledge'))
-    ? path.join(copilotHome, 'knowledge')
-    : null;
+  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
 
   const indexed = runIndexKnowledge({
     knowledgeRoot,
@@ -363,6 +359,25 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     log,
     home: flags?.home,
   });
+
+  let codeIndex = null;
+  if (!flags.dryRun) {
+    try {
+      const { buildStructuralIndex } = await import('./repo-map/structural-index.mjs');
+      const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
+      const extractor = await createTreesitterExtract();
+      codeIndex = await buildStructuralIndex({
+        workspace,
+        home: flags?.home || process.env.HARNESS_HOME,
+        extractor,
+        log,
+      });
+      if (!codeIndex.written) log('code index was not published');
+    } catch (error) {
+      codeIndex = { written: false, error: error.message };
+      log(`code index refresh failed: ${error.message}`);
+    }
+  }
 
   const telemetry = recordSkillUsage({
     copilotHome,
@@ -390,6 +405,7 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     learning: selected.plan.fm.learning || null,
     telemetry,
     indexed,
+    codeIndex,
     blockedReason: null,
     nextTools: ['/compound-learnings', '/auto-compound'],
   };

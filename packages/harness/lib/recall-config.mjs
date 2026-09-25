@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
+import { harnessGlobalHome } from './paths.mjs';
+import { repoId } from './knowledge/store.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -69,11 +71,10 @@ export function entryMatchesCollection(entry, collectionName, collections) {
   return true;
 }
 
-export function resolveIndexDir(copilotHome, workspace) {
-  for (const root of resolveKnowledgePaths(copilotHome, workspace)) {
-    return path.join(root, '.harness-index');
-  }
-  return path.join(workspace, 'knowledge', '.harness-index');
+/** BM25 postings for one repo. An explicit home wins over HARNESS_HOME. */
+export function resolveIndexDir(_copilotHome, workspace, home) {
+  const root = home ? path.resolve(home) : harnessGlobalHome();
+  return path.join(root, 'index', repoId(workspace), 'knowledge');
 }
 
 export function resolveManifestPath(copilotHome, workspace) {
