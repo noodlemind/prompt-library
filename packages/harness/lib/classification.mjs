@@ -78,5 +78,12 @@ export function applyClassification({ workspace, declaredRisk = 'green', declare
   const domains = new Set(declaredDomains);
   for (const [domain, on] of Object.entries(classification.domains || {})) if (on) domains.add(domain);
   const risk = RISK_RANK[classification.risk] > RISK_RANK[declaredRisk] ? classification.risk : declaredRisk;
-  return { abstain: false, risk, domains: [...domains], impacted, playbook: classification.playbook || null };
+  return {
+    abstain: false,
+    risk,
+    domains: [...domains],
+    impacted,
+    playbook: classification.playbook || null,
+    primitive: classification.primitive === true,
+  };
 }

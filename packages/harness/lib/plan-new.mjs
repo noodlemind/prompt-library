@@ -19,6 +19,18 @@ const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+function warnIndexPlanes(report) {
+  const lines = [];
+  if (!report || report.error) lines.push(report?.error || 'index refresh failed');
+  else {
+    for (const plane of ['knowledge', 'structural']) {
+      const item = report[plane];
+      if (item?.attempted && !item.ok) lines.push(`${plane}: ${item.error || 'failed'}`);
+    }
+  }
+  for (const line of lines) process.stderr.write(`index  ${line}\n`);
+}
+
 function scalar(value, name, { multiline = false, required = false } = {}) {
   if (value === undefined || value === null) {
     if (required) throw new Error(`plan-new: --${name} is required`);
@@ -262,13 +274,15 @@ export async function cmdPlanNew(argv) {
     return 0;
   }
   if (!dryRun) {
-    await ensureIndexes({
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    if (fs.existsSync(full)) throw new Error(`plan-new: ${rel} already exists`);
+    const indexes = await ensureIndexes({
       workspace,
       copilotHome: resolveCopilotHome(opts.copilotHome),
-      mode: 'missing',
+      mode: 'missing-or-stale',
       dryRun: false,
-    }).catch(() => {});
-    fs.mkdirSync(path.dirname(full), { recursive: true });
+    }).catch((error) => ({ error: error.message }));
+    warnIndexPlanes(indexes);
     if (fs.existsSync(full)) throw new Error(`plan-new: ${rel} already exists`);
     fs.writeFileSync(full, content, 'utf8');
   }
@@ -284,7 +298,7 @@ export async function cmdPlanNew(argv) {
 }
 
 function prepareRouting({ workspace, impacted, risk, domains, classification, copilotHome }) {
-  let next = { impacted: impacted.slice(), risk, domains: domains.slice(), playbook: null, abstain: false };
+  let next = { impacted: impacted.slice(), risk, domains: domains.slice(), playbook: null, primitive: false, abstain: false };
   if (classification) {
     next = applyClassification({
       workspace,
@@ -301,7 +315,7 @@ function prepareRouting({ workspace, impacted, risk, domains, classification, co
     impacted: next.impacted,
     risk: next.risk,
     domains: next.domains,
-    primitive: next.impacted.some(isPrimitivePath),
+    primitive: next.primitive === true || next.impacted.some(isPrimitivePath),
     planLock: false,
   });
   if (!routed.ok) throw new Error(`plan-new: ${routed.errors.join('; ')}`);
@@ -325,6 +339,7 @@ async function relockPlan({ workspace, from, dryRun, toStdout, json, classificat
   const frontmatter = {
     ...plan.fm,
     plan_lock: true,
+    status: plan.fm.status === 'open' || !plan.fm.status ? 'planned' : plan.fm.status,
     risk: prepared.risk,
     routing: prepared.routing,
     ...(prepared.domains.length ? { domains: prepared.domains } : {}),
@@ -336,7 +351,12 @@ async function relockPlan({ workspace, from, dryRun, toStdout, json, classificat
     return 0;
   }
   if (!dryRun) {
-    await ensureIndexes({ workspace, copilotHome: resolveCopilotHome(copilotHome), mode: 'missing' }).catch(() => {});
+    const indexes = await ensureIndexes({
+      workspace,
+      copilotHome: resolveCopilotHome(copilotHome),
+      mode: 'missing-or-stale',
+    }).catch((error) => ({ error: error.message }));
+    warnIndexPlanes(indexes);
     if (fs.readFileSync(plan.fullPath, 'utf8') !== original) throw new Error('plan-new: plan changed before relock');
     fs.writeFileSync(plan.fullPath, content, 'utf8');
   }

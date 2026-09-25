@@ -129,6 +129,16 @@ test('classification keeps an existing path, raises risk, and abstains', () => {
   assert.equal(applied.risk, 'red');
   assert.deepEqual(applied.domains, ['java', 'security']);
   assert.equal(applied.playbook, 'bug-fix');
+  assert.equal(applied.primitive, false);
+  const named = applyClassification({
+    workspace: ws,
+    declaredRisk: 'green',
+    declaredDomains: [],
+    declaredImpacted: [],
+    classification: { ...classification, primitive: true, paths: [] },
+  });
+  assert.equal(named.primitive, true);
+  assert.deepEqual(named.impacted, []);
   const abstain = applyClassification({
     workspace: ws,
     declaredRisk: 'green',
@@ -139,6 +149,40 @@ test('classification keeps an existing path, raises risk, and abstains', () => {
   assert.equal(abstain.abstain, true);
   assert.deepEqual(abstain.impacted, ['src/OrderService.java']);
   assert.equal(abstain.risk, 'green');
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+test('plan-new keeps primitive: true when the host names no primitive path', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'prim-route-'));
+  const home = path.join(ws, 'home');
+  fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
+  fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
+  inventory(path.join(ws, '.github'));
+  fs.writeFileSync(path.join(ws, 'classification.json'), JSON.stringify({
+    version: 1,
+    source: 'host-subagent',
+    mode: 'deliver',
+    risk: 'green',
+    domains: { java: false, python: false, sql: false, typescript: false, aws: false, security: false, performance: false },
+    primitive: true,
+    uncertainty: 'low',
+    paths: [],
+  }));
+  const git = (args) => spawnSync('git', args, { cwd: ws, encoding: 'utf8' });
+  git(['init', '-q']);
+  git(['config', 'user.email', 'e@x.test']);
+  git(['config', 'user.name', 'T']);
+  git(['commit', '--allow-empty', '-qm', 'init']);
+  const result = spawnSync(process.execPath, [
+    binPath, 'plan-new', '--type', 'feat', '--slug', 'new-skill', '--intent', 'Add a skill',
+    '--date', '2026-09-25', '--classification', 'classification.json', '--json',
+    '--workspace', ws, '--copilot-home', home,
+  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') } });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const planPath = JSON.parse(result.stdout).path;
+  const frontmatter = YAML.parse(fs.readFileSync(planPath, 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]);
+  assert.ok(frontmatter.routing.skills.required.includes('create-primitive'), JSON.stringify(frontmatter.routing.skills));
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
@@ -200,6 +244,12 @@ test('plan-new binds java from a host classification file and does not import a 
   const before = fs.readFileSync(planPath, 'utf8');
   spawnSync(process.execPath, [binPath, 'route', '--plan', planPath, '--workspace', ws], { cwd: ws, encoding: 'utf8', env: routeEnv });
   assert.equal(fs.readFileSync(planPath, 'utf8'), before);
+  fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), 'version: 1\nskills: [\n');
+  const afterPolicy = spawnSync(process.execPath, [binPath, 'route', '--plan', planPath, '--workspace', ws, '--json'], { cwd: ws, encoding: 'utf8', env: routeEnv });
+  assert.equal(afterPolicy.status, 0, afterPolicy.stderr + afterPolicy.stdout);
+  const routed = JSON.parse(afterPolicy.stdout);
+  assert.equal(routed.snapshotOk, true);
+  assert.ok(routed.liveErrors.length > 0);
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
@@ -257,6 +307,7 @@ Keep this body.
   assert.match(text, /Keep this body/);
   const frontmatter = YAML.parse(text.match(/^---\n([\s\S]*?)\n---/)[1]);
   assert.equal(frontmatter.plan_lock, true);
+  assert.equal(frontmatter.status, 'planned');
   assert.deepEqual(frontmatter.routing.skills.required, ['java', 'ensure-plan']);
   const second = run(['plan-new', '--from', rel]);
   assert.notEqual(second.status, 0);

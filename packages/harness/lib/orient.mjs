@@ -126,9 +126,9 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
 
     try {
     const status = indexStatus({ workspace, copilotHome, home });
-    if (status.stale) nextTools.push('harness index --status  # knowledge index is behind HEAD');
-    if (status.structural && !status.structural.indexed) nextTools.push('harness index --status  # code index is not built');
-    else if (status.structural?.stale) nextTools.push('harness index --status  # code index is behind HEAD');
+    if (status.stale) nextTools.push('harness index  # knowledge index is behind HEAD');
+    if (status.structural && !status.structural.indexed) nextTools.push('harness index  # code index is not built');
+    else if (status.structural?.stale) nextTools.push('harness index  # code index is behind HEAD');
   } catch {
     // Staleness is advisory; never block orientation on it.
   }

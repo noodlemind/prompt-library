@@ -756,7 +756,7 @@ registerCommand({
 
 registerCommand({
   name: 'index',
-  summary: 'rebuild knowledge BM25 index · --status (knowledge + code) · --structural for code symbols',
+  summary: 'rebuild knowledge and code indexes · --status to look · --structural for code only',
   group: 'workspace',
   sideEffect: 'mutate',
     usage: '[--status] [--structural [--since <ref>]]',

@@ -201,5 +201,6 @@ export async function cmdRoute(argv) {
     console.log(ui.line({ state: snapshotCheck.ok ? 'ok' : 'error', key: 'route', value: plan.path }));
     console.log(ui.paint('muted', JSON.stringify(body.snapshot)));
   }
-  return snapshotCheck.ok && live.ok ? 0 : 1;
+  if (snapshotCheck.legacy) return live.ok ? 0 : 1;
+  return snapshotCheck.ok ? 0 : 1;
 }

@@ -613,12 +613,37 @@ export async function cmdIndex(argv) {
       // Advisory: never fail index because the knowledge store is unreadable.
     }
   }
+  let code = null;
+  let codeError = null;
+  try {
+    const { buildStructuralIndex } = await import('./repo-map/structural-index.mjs');
+    const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
+    const extractor = await createTreesitterExtract();
+    code = await buildStructuralIndex({
+      workspace,
+      home,
+      extractor,
+      dryRun: flags.dryRun,
+      log: logger,
+    });
+  } catch (error) {
+    codeError = error.message;
+  }
+  const integrityFailures = code?.meta?.integrityFailures || [];
+  const codeFailed = Boolean(head) && !flags.dryRun && (Boolean(codeError) || !code?.written);
   writeEvent(workspace, flags, {
     type: 'index',
     command: 'index',
-    result: 'pass',
-    exitCode: 0,
+    result: codeFailed ? 'fail' : integrityFailures.length ? 'warn' : 'pass',
+    exitCode: codeFailed ? 1 : 0,
   });
+  result.code = {
+    written: Boolean(code?.written),
+    filesIndexed: code?.meta?.filesIndexed ?? null,
+    tier: code?.meta?.extractorTier ?? null,
+    error: codeError,
+    integrityFailures,
+  };
   if (flags.json) {
     emitJson(flags, result);
   } else {
@@ -643,22 +668,20 @@ export async function cmdIndex(argv) {
         next: empty ? 'harness compound or harness remember, then index again' : undefined,
       })
     );
-    try {
-      const { structuralIndexStatus } = await import('./index-status.mjs');
-      const structural = structuralIndexStatus(workspace, { home });
-      if (!structural.indexed || structural.stale || (structural.unreadable || []).length) {
-        console.log(ui.line({
-          state: structural.indexed ? 'warn' : 'pending',
-          key: 'code',
-          value: structural.indexed ? (structural.stale ? 'stale' : 'unreadable') : 'not built',
-          next: 'harness index --structural',
-        }));
-      }
-    } catch {
-      // The knowledge result above already stands. Structural status is advisory here.
-    }
+    const codeValue = code?.written
+      ? `${code.meta.filesIndexed} files${code.meta.extractorTier ? ` · ${code.meta.extractorTier}` : ''}`
+      : head
+        ? (codeError || 'not published')
+        : 'skipped · no git HEAD';
+    console.log(ui.line({
+      state: codeFailed ? 'error' : integrityFailures.length ? 'warn' : code?.written ? 'ok' : 'warn',
+      key: 'code',
+      value: integrityFailures.length
+        ? `${codeValue} · grammar integrity mismatch (${integrityFailures.length})`
+        : codeValue,
+    }));
   }
-  return 0;
+  return codeFailed ? 1 : 0;
 }
 
 export async function computeOrientResult(argv) {
@@ -1127,7 +1150,7 @@ export async function cmdCompound(argv) {
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
-  const result = runCompound({ workspace, copilotHome, flags, log: logger });
+  const result = await runCompound({ workspace, copilotHome, flags, log: logger });
   writeEvent(workspace, flags, {
     type: 'compound',
     command: 'compound',

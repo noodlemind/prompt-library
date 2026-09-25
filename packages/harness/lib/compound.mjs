@@ -314,7 +314,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   };
 }
 
-export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
+export async function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
   if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log, home: flags.home });
   const session = readSession(workspace);
   const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true });
@@ -360,6 +360,25 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     home: flags?.home,
   });
 
+  let codeIndex = null;
+  if (!flags.dryRun) {
+    try {
+      const { buildStructuralIndex } = await import('./repo-map/structural-index.mjs');
+      const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
+      const extractor = await createTreesitterExtract();
+      codeIndex = await buildStructuralIndex({
+        workspace,
+        home: flags?.home || process.env.HARNESS_HOME,
+        extractor,
+        log,
+      });
+      if (!codeIndex.written) log('code index was not published');
+    } catch (error) {
+      codeIndex = { written: false, error: error.message };
+      log(`code index refresh failed: ${error.message}`);
+    }
+  }
+
   const telemetry = recordSkillUsage({
     copilotHome,
     plan: selected.plan,
@@ -386,6 +405,7 @@ export function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
     learning: selected.plan.fm.learning || null,
     telemetry,
     indexed,
+    codeIndex,
     blockedReason: null,
     nextTools: ['/compound-learnings', '/auto-compound'],
   };
