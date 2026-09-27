@@ -51,13 +51,17 @@ export async function ensureIndexes({ workspace, copilotHome, mode = 'missing', 
         const { buildStructuralIndex } = await import('./repo-map/structural-index.mjs');
         const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
         const extractor = await createTreesitterExtract();
-        await buildStructuralIndex({
+        const built = await buildStructuralIndex({
           workspace,
           home,
           extractor,
           dryRun,
           log,
         });
+        if (head && !built.written) {
+          report.structural.ok = false;
+          report.structural.error = 'code index was not published';
+        }
       } catch (error) {
         report.structural.ok = false;
         report.structural.error = error.message;

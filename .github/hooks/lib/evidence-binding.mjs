@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { resolveAcceptedPlan } from './external-plans.mjs';
 
 function digest(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -11,28 +12,8 @@ export function planContractText(text) {
   return String(text || '').replace(/\n## Activity\s*\n[\s\S]*?(?=\n## |$)/gi, '');
 }
 
-function isWithin(root, candidate) {
-  const relative = path.relative(root, candidate);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
 function canonicalPlan(workspace, planPath) {
-  try {
-    const root = fs.realpathSync(workspace);
-    const full = fs.realpathSync(path.resolve(workspace, planPath));
-    if (!isWithin(root, full)) return null;
-    for (const dir of ['docs/plans', '.harness/plans']) {
-      try {
-        const plans = fs.realpathSync(path.join(workspace, dir));
-        if (isWithin(root, plans) && isWithin(plans, full)) return full;
-      } catch {
-        // Directory may not exist.
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return resolveAcceptedPlan(workspace, planPath);
 }
 
 function lines(value) {
@@ -126,7 +107,7 @@ export function validateEvidenceBinding({ workspace, planPath, evidence, maxAgeH
   if (Date.now() - verifiedAt > maxAgeHours * 60 * 60 * 1000) return 'verification evidence is stale';
 
   const planFull = canonicalPlan(workspace, normalizedPlanPath);
-  if (!planFull) return 'verified plan is missing or outside docs/plans';
+  if (!planFull) return 'verified plan is missing or outside the plan directories';
   const planText = fs.readFileSync(planFull, 'utf8');
   if (evidence.binding.planDigest !== digest(planContractText(planText))) return 'plan changed after verification';
 

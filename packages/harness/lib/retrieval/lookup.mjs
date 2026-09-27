@@ -8,6 +8,7 @@ import { findEntryByDocid, resolveDocPath } from '../recall-rank.mjs';
 import { storeDir, listLearnings } from '../knowledge/store.mjs';
 import { collectEpisodes } from '../knowledge/consolidate.mjs';
 import { readStructuralIndex } from '../structural/shape.mjs';
+import { planReadDirs } from '../project-layout.mjs';
 
 /** The settled kind list, in the order the architecture doc states it. */
 export const LOOKUP_KINDS = Object.freeze([
@@ -151,31 +152,25 @@ function documentEntity({ workspace, copilotHome, identifier, home }) {
 }
 
 function planEntity({ workspace, identifier }) {
-  const candidates = identifier.startsWith('docs/plans/') || identifier.startsWith('.harness/plans/')
-    ? [identifier]
-    : [`docs/plans/${identifier}`, `.harness/plans/${identifier}`];
-  let rel = candidates[0];
+  const name = path.posix.basename(String(identifier).replace(/\\/g, '/'));
+  let rel = identifier;
   let raw = null;
-  let escaped = false;
-  for (const candidate of candidates) {
-    const read = readUnderWorkspace(workspace, candidate);
-    escaped = read.escaped;
-    if (!read.escaped && read.raw !== null) {
-      rel = candidate;
-      raw = read.raw;
-      break;
-    }
+  for (const { dir, label } of planReadDirs(workspace, { home: process.env.HARNESS_HOME })) {
+    const full = path.join(dir, name);
+    const text = readFileNoFollow(full, { root: dir });
+    if (text === null) continue;
+    rel = path.isAbsolute(label) ? full : `${label}/${name}`;
+    raw = text;
+    break;
   }
-  if (escaped || raw === null) {
+  if (raw === null) {
     const near = [];
-    for (const dirRel of ['docs/plans', '.harness/plans']) {
-      const dir = path.join(path.resolve(workspace), dirRel);
-      if (!fs.existsSync(dir)) continue;
-      for (const f of fs.readdirSync(dir).filter((name) => name.endsWith('.md')).slice(0, 5)) {
-        near.push({ kind: 'plan', id: f, location: `${dirRel}/${f}` });
+    for (const { dir, label } of planReadDirs(workspace, { home: process.env.HARNESS_HOME })) {
+      for (const f of fs.readdirSync(dir).filter((entry) => entry.endsWith('.md')).slice(0, 5)) {
+        near.push({ kind: 'plan', id: f, location: path.isAbsolute(label) ? path.join(label, f) : `${label}/${f}` });
       }
     }
-    throw notFound({ kind: 'plan', identifier, hint: 'a plan filename under docs/plans/ or .harness/plans/', related: near });
+    throw notFound({ kind: 'plan', identifier, hint: 'a plan filename in docs/plans, .harness/plans, or the project store', related: near });
   }
   const fm = raw.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
   const field = (name) => fm.match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1]?.trim().replace(/^["']|["']$/g, '') ?? null;

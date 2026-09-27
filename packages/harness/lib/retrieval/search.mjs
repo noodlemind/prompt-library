@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { EXIT } from '../style.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
-import { assertNoSymlinkAncestors } from '../fs-safe.mjs';
+import { readFileNoFollow } from '../fs-safe.mjs';
 import { tokenize, FIELD_BOOSTS } from '../tokenize.mjs';
 import { loadPostingsIndex, isIndexStale } from '../postings-index.mjs';
 import { loadManifest, rankRecall, findMatchingPlans } from '../recall-rank.mjs';
@@ -15,7 +15,7 @@ import { loadLayeredLearnings } from '../knowledge/overlay.mjs';
 import { trackedSourceFiles, readFileSafe } from '../repo-map/scan.mjs';
 import { readStructuralIndex } from '../structural/shape.mjs';
 import { SOURCES, createRetrievalResult, federate } from './kernel.mjs';
-import { plansReadRels } from '../project-layout.mjs';
+import { planReadDirs } from '../project-layout.mjs';
 
 /** The settled mode list, in the order the architecture doc states it. */
 export const MATCH_MODES = Object.freeze(['ranked', 'literal', 'regex', 'path', 'symbol']);
@@ -512,21 +512,18 @@ function loadPlans(workspace) {
   const plans = [];
   const seen = new Set();
   let anyRoot = false;
-  for (const dirRel of plansReadRels(workspace)) {
-    const root = assertNoSymlinkAncestors(workspace, dirRel);
-    if (!root) return { ok: false, reason: `${dirRel} resolves through a symlink — refusing to enumerate it`, plans: [] };
-    if (!fs.existsSync(root)) continue;
+  for (const { dir, label } of planReadDirs(workspace, { home: process.env.HARNESS_HOME })) {
     anyRoot = true;
-    for (const name of fs.readdirSync(root).sort()) {
+    for (const name of fs.readdirSync(dir).sort()) {
       if (!name.endsWith('.md') || seen.has(name)) continue;
-      const rel = `${dirRel}/${name}`;
-      const text = readFileSafe(workspace, rel);
+      const rel = path.isAbsolute(label) ? path.join(label, name) : `${label}/${name}`;
+      const text = readFileNoFollow(path.join(dir, name), { root: dir });
       if (!text) continue;
       seen.add(name);
       plans.push({ rel, name, text });
     }
   }
-  if (!anyRoot) return { ok: false, reason: 'no docs/plans or .harness/plans directory in this workspace', plans: [] };
+  if (!anyRoot) return { ok: false, reason: 'no plan directory in this workspace or its project store', plans: [] };
   return { ok: true, reason: null, plans };
 }
 

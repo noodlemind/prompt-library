@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { planContractText } from './lib/evidence-binding.mjs';
+import { resolveAcceptedPlan } from './lib/external-plans.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy } from './lib/policy.mjs';
@@ -26,14 +27,7 @@ function isPlanRelative(relative) {
 }
 
 function resolvePlanFile(workspace, rel) {
-  const joined = path.join(workspace, rel);
-  if (fs.existsSync(joined)) return joined;
-  const base = path.basename(rel);
-  for (const dir of ['docs/plans', '.harness/plans']) {
-    const candidate = path.join(workspace, dir, base);
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return joined;
+  return resolveAcceptedPlan(workspace, rel) || path.resolve(workspace, rel);
 }
 
 function record(fields) {
@@ -293,22 +287,8 @@ if (Date.now() - lastGateAt > policy.ttl * 60 * 1000) {
   deny('stale-implement-gate', 'Implement gate is stale; rerun the gate', 'stale');
 }
 
-const lexicalPlanPath = path.resolve(normalized.workspace, session.gatedPlan);
-let planPath = null;
-for (const dir of ['docs/plans', '.harness/plans']) {
-  try {
-    const plansRoot = fs.realpathSync(path.join(normalized.workspace, dir));
-    const candidate = fs.realpathSync(lexicalPlanPath);
-    const relative = path.relative(plansRoot, candidate);
-    if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
-      planPath = candidate;
-      break;
-    }
-  } catch {
-    // Try the other plans directory.
-  }
-}
-if (!planPath) deny('invalid-implement-gate', 'Gated plan is missing or outside docs/plans or .harness/plans; next: rerun `harness gate --phase implement --plan <plan> --workspace . --json`', 'invalid');
+const planPath = resolveAcceptedPlan(normalized.workspace, session.gatedPlan);
+if (!planPath) deny('invalid-implement-gate', 'Gated plan is missing or outside the plan directories; next: rerun `harness gate --phase implement --plan <plan> --workspace . --json`', 'invalid');
 
 const planText = fs.readFileSync(planPath, 'utf8');
 // Digest the Activity-stripped contract text so routine session logging does

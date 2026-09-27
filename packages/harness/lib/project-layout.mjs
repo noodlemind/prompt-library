@@ -111,6 +111,27 @@ export function plansReadRels(workspace) {
   return rels;
 }
 
+/** Absolute plan directories. Includes the external project store when it exists. */
+export function planReadDirs(workspace, { home } = {}) {
+  const dirs = [];
+  for (const rel of plansReadRels(workspace)) {
+    const full = path.join(workspace, rel);
+    try {
+      if (!fs.lstatSync(full).isSymbolicLink()) dirs.push({ dir: full, label: rel });
+    } catch {
+      // disappeared between the existence check and the stat
+    }
+  }
+  const external = externalPlansDir(workspace, { home });
+  try {
+    const st = fs.lstatSync(external);
+    if (st.isDirectory() && !st.isSymbolicLink()) dirs.push({ dir: external, label: external });
+  } catch {
+    // no external plans yet
+  }
+  return dirs;
+}
+
 export function isPlanRel(rel) {
   const normalized = String(rel || '').replace(/\\/g, '/');
   if (path.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) return true;

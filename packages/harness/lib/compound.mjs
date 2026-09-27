@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { spawnSync } from 'node:child_process';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { readSession, writeSession } from './session.mjs';
@@ -377,6 +378,20 @@ export async function runCompound({ workspace, copilotHome, flags, log = () => {
       codeIndex = { written: false, error: error.message };
       log(`code index refresh failed: ${error.message}`);
     }
+  }
+
+  const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  if (!flags.dryRun && head.status === 0 && codeIndex && !codeIndex.written) {
+    return {
+      pass: false,
+      exitCode: 1,
+      plan: selected.plan.path,
+      verificationEvidence: evidence,
+      indexed,
+      codeIndex,
+      blockedReason: codeIndex.error || 'code index was not published',
+      nextTools: ['harness index --structural'],
+    };
   }
 
   const telemetry = recordSkillUsage({

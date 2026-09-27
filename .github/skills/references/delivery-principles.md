@@ -26,7 +26,7 @@ See `AGENTS.md` coding standards. Three similar lines are enough until a fourth 
 
 ## prove-with-evidence
 
-See `docs/adaptive-engineer-harness.md`. Run the checks named on the plan. Paste the result that shows the pass.
+See `docs/adaptive-engineering.md`. Run the checks named on the plan. Paste the result that shows the pass.
 
 ## behavior-not-implementation
 

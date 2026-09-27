@@ -6,8 +6,9 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import YAML from 'yaml';
 import { applyClassification, validateClassification } from '../lib/classification.mjs';
+import { approveProject } from '../lib/trust.mjs';
 import { globMatches } from '../lib/routing-policy.mjs';
-import { discoverInventory, evaluateRouting, validateRoutingSnapshot } from '../lib/route.mjs';
+import { discoverInventory, evaluateRouting, routeWorkspace, validateRoutingSnapshot } from '../lib/route.mjs';
 import { buildContextPack, CONTEXT_PACK_MAX_BYTES } from '../lib/context-pack.mjs';
 
 const binPath = path.resolve(import.meta.dirname, '..', 'bin', 'harness.mjs');
@@ -29,6 +30,10 @@ specialists:
   - when: { risk: [amber, red], domains: [security] }
     agent: security-sentinel
 `;
+
+function trust(ws, copilotHome) {
+  approveProject({ workspace: ws, copilotHome, home: path.join(ws, 'harness-home') });
+}
 
 function inventory(root) {
   for (const rel of [
@@ -159,6 +164,7 @@ test('plan-new keeps primitive: true when the host names no primitive path', () 
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
   inventory(path.join(ws, '.github'));
+  trust(ws, home);
   fs.writeFileSync(path.join(ws, 'classification.json'), JSON.stringify({
     version: 1,
     source: 'host-subagent',
@@ -183,6 +189,67 @@ test('plan-new keeps primitive: true when the host names no primitive path', () 
   const planPath = JSON.parse(result.stdout).path;
   const frontmatter = YAML.parse(fs.readFileSync(planPath, 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]);
   assert.ok(frontmatter.routing.skills.required.includes('create-primitive'), JSON.stringify(frontmatter.routing.skills));
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+test('an untrusted routing policy is not bound into a plan', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'untrusted-route-'));
+  fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
+  fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(ws, 'src', 'OrderService.java'), 'class OrderService {}');
+  fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
+  inventory(path.join(ws, '.github'));
+  const routed = routeWorkspace({
+    workspace: ws,
+    impacted: ['src/OrderService.java'],
+    risk: 'green',
+    domains: [],
+    primitive: false,
+    planLock: false,
+    copilotHome: path.join(ws, 'home'),
+  });
+  assert.equal(routed.ok, true);
+  assert.equal(routed.snapshot.skipped, true);
+  assert.equal(routed.snapshot.reason, 'project is not trusted');
+  assert.deepEqual(routed.snapshot.skills.required, []);
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+test('high uncertainty still binds a declared Java path', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'abstain-route-'));
+  const home = path.join(ws, 'home');
+  fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
+  fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(ws, 'src', 'OrderService.java'), 'class OrderService {}');
+  fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
+  fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
+  inventory(path.join(ws, '.github'));
+  trust(ws, home);
+  fs.writeFileSync(path.join(ws, 'classification.json'), JSON.stringify({
+    version: 1,
+    source: 'host-subagent',
+    mode: 'deliver',
+    risk: 'red',
+    domains: { java: false, python: false, sql: false, typescript: false, aws: false, security: false, performance: false },
+    primitive: false,
+    uncertainty: 'high',
+    paths: ['src/Invented.java'],
+  }));
+  const git = (args) => spawnSync('git', args, { cwd: ws, encoding: 'utf8' });
+  git(['init', '-q']);
+  git(['config', 'user.email', 'e@x.test']);
+  git(['config', 'user.name', 'T']);
+  const result = spawnSync(process.execPath, [
+    binPath, 'plan-new', '--type', 'feat', '--slug', 'abstain-java', '--intent', 'Keep the Java rule',
+    '--impacted', 'src/OrderService.java', '--date', '2026-09-26',
+    '--classification', 'classification.json', '--json',
+    '--workspace', ws, '--copilot-home', home,
+  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') } });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const planPath = JSON.parse(result.stdout).path;
+  const frontmatter = YAML.parse(fs.readFileSync(planPath, 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]);
+  assert.ok(frontmatter.routing.skills.required.includes('java'), JSON.stringify(frontmatter.routing));
+  assert.equal(frontmatter.playbook, undefined);
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
@@ -211,6 +278,7 @@ test('plan-new binds java from a host classification file and does not import a 
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
   inventory(path.join(ws, '.github'));
+  trust(ws, home);
   fs.writeFileSync(path.join(ws, 'classification.json'), JSON.stringify({
     version: 1,
     source: 'host-subagent',
@@ -249,7 +317,8 @@ test('plan-new binds java from a host classification file and does not import a 
   assert.equal(afterPolicy.status, 0, afterPolicy.stderr + afterPolicy.stdout);
   const routed = JSON.parse(afterPolicy.stdout);
   assert.equal(routed.snapshotOk, true);
-  assert.ok(routed.liveErrors.length > 0);
+  assert.equal(routed.live.skipped, true);
+  assert.equal(routed.live.reason, 'project is not trusted');
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
@@ -261,6 +330,7 @@ test('plan-new --from relocks an unlocked plan and refuses a second lock', () =>
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
   inventory(path.join(ws, '.github'));
+  trust(ws, home);
   const rel = 'docs/plans/2026-09-23-feat-order-plan.md';
   fs.writeFileSync(path.join(ws, rel), `---
 plan_schema: 1

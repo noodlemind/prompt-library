@@ -6,6 +6,7 @@ import { createStyle } from './style.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
 import { isPrimitivePath } from './primitive-governance.mjs';
+import { isProjectTrusted } from './trust.mjs';
 import {
   ID_RE,
   collectIds,
@@ -154,6 +155,10 @@ export function workspaceRoutingRoots(workspace, extraRoots = []) {
 }
 
 export function routeWorkspace({ workspace, impacted, risk, domains, primitive, planLock, roots, copilotHome }) {
+  const policyPath = path.join(workspace, '.github', 'harness', 'routing.yaml');
+  if (fs.existsSync(policyPath) && !isProjectTrusted({ workspace, copilotHome, home: process.env.HARNESS_HOME })) {
+    return { ok: true, errors: [], snapshot: emptySnapshot('project is not trusted') };
+  }
   const loaded = loadRoutingPolicy(workspace);
   if (loaded.missing) return { ok: true, errors: [], snapshot: emptySnapshot('missing policy') };
   if (loaded.errors.length) return { ok: false, errors: loaded.errors, snapshot: null };

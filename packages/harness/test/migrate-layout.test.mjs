@@ -81,6 +81,22 @@ test('migrate moves gitignored docs/plans, solutions, and session files out of t
   assert.equal(out.sessionRewritten, true);
 });
 
+test('migrate rewrites a session that points at .harness/plans and keeps untracked knowledge solutions readable', () => {
+  const ws = gitWs();
+  const home = temp('mig-sess-cop-');
+  const harnessHome = temp('mig-sess-hh-');
+  write(ws, '.harness/plans/2026-09-16-fix-session-plan.md', '---\ntitle: session\n---\n');
+  write(ws, 'knowledge/solutions/java/draft.md', '---\ntitle: draft\n---\n\nlocal\n');
+  writeSession(ws, { activePlan: '.harness/plans/2026-09-16-fix-session-plan.md' });
+  const res = run(['migrate'], { ws, home, harnessHome });
+  assert.equal(res.status, 0, res.stderr + res.stdout);
+  const store = projectStoreDir(ws, { home: harnessHome });
+  const moved = path.join(store, 'plans/2026-09-16-fix-session-plan.md');
+  assert.equal(readSession(ws).activePlan, moved);
+  assert.ok(fs.existsSync(path.join(store, 'docs/solutions/java/draft.md')));
+  assert.equal(fs.existsSync(path.join(store, 'knowledge/solutions/java/draft.md')), false);
+});
+
 test('migrate leaves git-tracked docs/plans and docs/solutions in place', () => {
   const ws = gitWs();
   const home = temp('mig-keep-cop-');

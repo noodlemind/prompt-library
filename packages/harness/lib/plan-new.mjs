@@ -308,7 +308,7 @@ function prepareRouting({ workspace, impacted, risk, domains, classification, co
       classification: readClassification(classification, workspace),
     });
   }
-  if (next.abstain) return { ...next, routing: emptySnapshot('classification-abstain') };
+  if (next.abstain) next = { ...next, primitive: false, playbook: null };
   const routed = routeWorkspace({
     workspace,
     copilotHome,

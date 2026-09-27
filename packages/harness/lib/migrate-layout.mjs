@@ -174,7 +174,7 @@ function rewriteSessionPlanPaths(workspace, moved, dryRun, home) {
   const session = readSession(workspace);
   if (!session) return false;
   const movedFrom = new Set(
-    (moved || []).filter((item) => item.kind === 'plans').map((item) => posixRel(item.from))
+    (moved || []).filter((item) => item.kind === 'plans' || item.kind === 'session-plans').map((item) => posixRel(item.from))
   );
   if (!movedFrom.size) return false;
   let changed = false;
@@ -215,7 +215,7 @@ export function inspectLayout(workspace, { home } = {}) {
     {
       kind: 'knowledge',
       from: 'knowledge/solutions',
-      to: 'knowledge/solutions',
+      to: WORKSPACE_SOLUTIONS_REL,
       destRoot: overlay,
     },
     {
