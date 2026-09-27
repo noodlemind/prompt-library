@@ -14,6 +14,13 @@ import { approveTrust } from './trust.mjs';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 
+/** One temp harness root per test process, so index and recall share it without touching ~/.harness. */
+let sharedHarnessHome;
+export function cliHarnessHome() {
+  if (!sharedHarnessHome) sharedHarnessHome = tempDir('harness-data-');
+  return sharedHarnessHome;
+}
+
 /** Read a flag's value out of an argv, honoring `--flag=value`. */
 export function valueOf(argv, name) {
   const eq = argv.find((a) => typeof a === 'string' && a.startsWith(`${name}=`));
@@ -42,13 +49,18 @@ export function runHarness(args, options = {}) {
     copilotHome = tempDir('harness-home-');
     full.push('--copilot-home', copilotHome);
   }
+  const env = { ...process.env, ...(options.env || {}) };
+  const flaggedHome = valueOf(full, '--harness-home');
+  if (!options.env?.HARNESS_HOME && !flaggedHome) {
+    env.HARNESS_HOME = cliHarnessHome();
+  }
   if (workspace && copilotHome && options.trust !== false) {
-    approveTrust({ workspace, copilotHome });
+    approveTrust({ workspace, copilotHome, home: flaggedHome || env.HARNESS_HOME });
   }
   return spawnSync(process.execPath, [binPath, ...full], {
     cwd: options.cwd || packageRoot,
     encoding: options.encoding === undefined ? 'utf8' : options.encoding,
-    env: { ...process.env, ...(options.env || {}) },
+    env,
   });
 }
 

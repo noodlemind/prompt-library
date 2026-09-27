@@ -5,14 +5,18 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import YAML from 'yaml';
 import {
   PINNED_FILES,
   approveProject,
   isProjectTrusted,
+  legacyTrustStorePath,
   policyDigest,
+  projectIdentity,
   revokeProject,
   trustStatus,
   trustStorePath,
+  LEGACY_PINNED_FILES,
 } from '../lib/trust.mjs';
 import { loadPolicy } from '../lib/policy.mjs';
 import { resolveConfig } from '../lib/config.mjs';
@@ -47,6 +51,15 @@ test('a fresh project is untrusted, and says why', () => {
   assert.equal(status.state, 'untrusted');
   assert.equal(status.trusted, false);
   assert.match(status.reason, /never been approved/);
+});
+
+test('an explicit harness home holds the trust file outside the copilot directory', () => {
+  const s = scopes();
+  const home = tempDir('trust-hh-');
+  approveProject({ ...s, home });
+  assert.equal(fs.existsSync(path.join(home, 'trust.yaml')), true);
+  assert.equal(fs.existsSync(path.join(s.copilotHome, 'trust.yaml')), false);
+  assert.equal(trustStatus({ ...s, home }).state, 'trusted');
 });
 
 test('the trust record lives in the user scope, never in the workspace', () => {
@@ -123,6 +136,25 @@ test('two spellings of the same directory are one project', () => {
   approveProject(s);
   const viaDot = { workspace: path.join(s.workspace, '.'), copilotHome: s.copilotHome };
   assert.equal(isProjectTrusted(viaDot), true, 'identity is the realpath, not the spelling');
+});
+
+test('a pre-routing approval stays trusted until routing.yaml appears', () => {
+  const s = scopes();
+  writeProjectFile(s, PINNED_FILES[0], 'version: 1\n');
+  const digest = policyDigest(s.workspace, LEGACY_PINNED_FILES);
+  const legacy = legacyTrustStorePath(s.copilotHome);
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, YAML.stringify({
+    version: 1,
+    projects: {
+      [projectIdentity(s.workspace).root]: { status: 'trusted', approvedAt: '2026-01-01T00:00:00.000Z', digest },
+    },
+  }));
+  assert.equal(trustStatus(s).state, 'trusted');
+  assert.equal(fs.existsSync(trustStorePath(s.copilotHome)), true);
+  writeProjectFile(s, PINNED_FILES.find((rel) => rel.endsWith('routing.yaml')), 'version: 1\nskills: []\n');
+  assert.equal(trustStatus(s).state, 'stale');
+  assert.equal(trustStatus(s).trusted, false);
 });
 
 test('the digest changes with content and is stable without it', () => {
@@ -303,7 +335,7 @@ test('`harness trust --json approve` no longer reports success while approving n
   const parsed = JSON.parse(res.stdout);
   assert.equal(parsed.verb, 'approve',
     '`approve` must not be read as the value of `--json`');
-  assert.equal(fs.existsSync(path.join(s.copilotHome, 'harness', 'trust.yaml')), true, 'approval must be recorded');
+  assert.equal(fs.existsSync(trustStorePath(s.copilotHome)), true, 'approval must be recorded');
 });
 
 test('the CLI refuses an unknown trust verb instead of approving', () => {
@@ -313,5 +345,5 @@ test('the CLI refuses an unknown trust verb instead of approving', () => {
     '--workspace', s.workspace, '--copilot-home', s.copilotHome,
   ], { encoding: 'utf8' });
   assert.notEqual(res.status, 0, 'an unknown verb must be an error');
-  assert.equal(fs.existsSync(path.join(s.copilotHome, 'harness', 'trust.yaml')), false, 'and must approve nothing');
+  assert.equal(fs.existsSync(trustStorePath(s.copilotHome)), false, 'and must approve nothing');
 });

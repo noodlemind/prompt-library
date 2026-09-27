@@ -304,6 +304,27 @@ function symbolDelta(priorSymbols, nextSymbols) {
  * the index exactly as it was rather than empty. Returns `{ ok }` plus the
  * table name that refused, for the caller's log line.
  */
+function sweepStaleGenerations(parent, baseName) {
+  let names = [];
+  try {
+    names = fs.readdirSync(parent);
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  for (const name of names) {
+    if (!name.startsWith(`.staging-${baseName}-`) && !name.startsWith(`.retired-${baseName}-`)) continue;
+    const full = path.join(parent, name);
+    try {
+      const st = fs.statSync(full);
+      if (now - st.mtimeMs < 60_000) continue;
+      fs.rmSync(full, { recursive: true, force: true });
+    } catch {
+      // A live build owns a fresh staging directory. Leave anything we cannot stat.
+    }
+  }
+}
+
 function publishGeneration(dir, writes) {
   const parent = path.dirname(dir);
   const suffix = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -316,6 +337,7 @@ function publishGeneration(dir, writes) {
       // best effort — derived, rebuildable data; never worth failing a build
     }
   };
+  sweepStaleGenerations(parent, path.basename(dir));
   try {
     fs.mkdirSync(staging, { recursive: true });
   } catch {
@@ -422,7 +444,14 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
       reused += 1;
       continue;
     }
-    nextFiles[rel] = sanitizeEntry(extractor.extract(rel, content), { hash, mtime: st.mtimeMs, size: st.size });
+    let extracted;
+    try {
+      extracted = extractor.extract(rel, content);
+    } catch (error) {
+      extracted = { symbols: [], imports: [], defs: [], refs: [], hasErrors: true, tier: 'lexical' };
+      log(`structural parse failed ${rel}: ${error.message}`);
+    }
+    nextFiles[rel] = sanitizeEntry(extracted, { hash, mtime: st.mtimeMs, size: st.size });
     reparsed += 1;
   }
   const removedFiles = Object.keys(prior?.files || {}).filter((rel) => !(rel in nextFiles)).length;
@@ -464,6 +493,11 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     callEdgesTruncated: truncation.callEdges,
     unresolvedTruncated: truncation.unresolved,
   };
+
+  if (!meta.sha) {
+    log('structural index not published — git HEAD could not be read');
+    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
+  }
 
   if (!dryRun) {
     // ONE GENERATION, PUBLISHED ATOMICALLY (publishGeneration above). meta.json

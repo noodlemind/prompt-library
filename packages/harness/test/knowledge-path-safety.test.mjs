@@ -7,10 +7,11 @@ import { test } from 'node:test';
 import { assertNoSymlinkAncestors } from '../lib/fs-safe.mjs';
 import { runGet } from '../lib/get-cmd.mjs';
 import { runIndexKnowledge } from '../lib/index-knowledge.mjs';
+import { resolveIndexDir } from '../lib/recall-config.mjs';
 import { absorbHandEdits, purgeEpisode } from '../lib/knowledge/admin.mjs';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { collectEpisodes, consolidateCandidates } from '../lib/knowledge/consolidate.mjs';
-import { ensureStore, listLearnings, readLedger, serializeLearning, storeDir } from '../lib/knowledge/store.mjs';
+import { ensureStore, listLearnings, readLedger, repoId, serializeLearning, storeDir } from '../lib/knowledge/store.mjs';
 import { safeResolveUnderRoot } from '../lib/path-safe.mjs';
 import { findMatchingPlans } from '../lib/recall-rank.mjs';
 import { resolveContainedPath } from '../lib/sync.mjs';
@@ -85,7 +86,15 @@ test('a recall-manifest-resolved doc through a symlinked docs/solutions director
     'utf8'
   );
 
-  const result = runIndexKnowledge({ knowledgeRoot: path.join(copilotHome, 'knowledge'), workspace: ws, copilotHome, flags: {}, log: () => {} });
+  const harnessHome = tempDir('probeG-symlink-hh-');
+  const result = runIndexKnowledge({
+    knowledgeRoot: path.join(copilotHome, 'knowledge'),
+    workspace: ws,
+    copilotHome,
+    flags: {},
+    log: () => {},
+    home: harnessHome,
+  });
   const manifestText = fs.readFileSync(result.manifestPath, 'utf8');
   assert.ok(!manifestText.includes('OUTSIDE_SECRET_SENTINEL'), 'the symlinked product docs/solutions never enters the manifest');
   assert.match(manifestText, /legit/, 'the real global entry is still indexed');
@@ -103,6 +112,28 @@ test('findMatchingPlans returns nothing through a symlinked docs/plans directory
 
   const results = findMatchingPlans(ws, 'OUTSIDE_SECRET_SENTINEL plan content', 3);
   assert.deepEqual(results, [], 'a symlinked docs/plans yields zero matches, never the outside content');
+});
+
+test('knowledge index writes the manifest in the copilot home, never in the repository', () => {
+  const ws = tempDir('probeG-idx-ws-');
+  const copilotHome = tempDir('probeG-idx-ch-');
+  const harnessHome = tempDir('probeG-idx-hh-');
+  fs.mkdirSync(path.join(copilotHome, 'knowledge', 'solutions', 'perf'), { recursive: true });
+  fs.writeFileSync(
+    path.join(copilotHome, 'knowledge', 'solutions', 'perf', 'same.md'),
+    '---\ntitle: same\n---\n\nbody\n',
+  );
+  const result = runIndexKnowledge({ workspace: ws, copilotHome, flags: {}, log: () => {}, home: harnessHome });
+  assert.equal(path.dirname(result.manifestPath), path.join(copilotHome, 'knowledge'));
+  assert.equal(fs.existsSync(path.join(ws, 'knowledge')), false);
+  assert.match(fs.readFileSync(result.manifestPath, 'utf8'), /same/);
+  const indexDir = path.join(harnessHome, 'index', repoId(ws), 'knowledge');
+  assert.equal(result.indexDir, indexDir);
+  assert.ok(fs.existsSync(path.join(indexDir, 'postings.json')));
+  fs.mkdirSync(path.join(ws, 'knowledge'), { recursive: true });
+  assert.equal(resolveIndexDir(copilotHome, ws, harnessHome), indexDir);
+  assert.equal(fs.existsSync(path.join(copilotHome, 'knowledge', '.harness-index')), false);
+  assert.equal(fs.existsSync(path.join(ws, 'knowledge', '.harness-index')), false);
 });
 
 // title/tags control chars → packet clean -----------------------------------

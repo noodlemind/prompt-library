@@ -19,7 +19,10 @@ const copies = [
   { from: 'enterprise', to: 'enterprise' },
 ];
 
-const singleFiles = [{ from: '.github/copilot-instructions.md', to: 'copilot-instructions.md' }];
+const singleFiles = [
+  { from: '.github/copilot-instructions.md', to: 'copilot-instructions.md' },
+  { from: 'packages/harness/config/routing.seed.yaml', to: 'harness/routing.yaml' },
+];
 
 function rmrf(dir) {
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });

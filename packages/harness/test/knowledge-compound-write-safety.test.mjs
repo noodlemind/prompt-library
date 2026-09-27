@@ -103,8 +103,9 @@ test('runInsightCompound refuses when git-tracked docs/solutions is a symlink', 
     kind: 'insight',
   });
 
-  assert.equal(result.pass, false, JSON.stringify(result));
-  assert.equal(result.path, null);
-  assert.match(result.blockedReason, /escapes the workspace/);
-  assert.ok(!fs.existsSync(path.join(outside, 'insights')));
+  assert.equal(result.pass, true, JSON.stringify(result));
+  const target = solutionsWriteTarget(ws, { home });
+  assert.equal(target.kind, 'user');
+  assert.ok(fs.existsSync(path.join(target.base, result.episodePath || result.path)));
+  assert.ok(!fs.existsSync(path.join(outside, 'insights')), 'a tracked symlink is not the write target');
 });

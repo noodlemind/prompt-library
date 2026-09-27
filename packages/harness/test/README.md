@@ -74,7 +74,3 @@ All `*findings*`, `codex-*`, `coderabbit-*`, `*-hardening*`, `*-round*`, and `*a
 **Keep (not souvenirs):** `tui-design.test.mjs` (product design contracts), other module-named knowledge/gate/verify tests.
 
 Headers in folded files may still mention the former name for archaeology; **do not** reintroduce souvenir filenames.
-
-## Related plan
-
-`docs/plans/2026-08-11-harness-test-hygiene.md`

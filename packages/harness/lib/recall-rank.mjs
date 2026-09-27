@@ -12,8 +12,8 @@ import {
 } from './recall-config.mjs';
 import { loadPostingsIndex, isIndexStale } from './postings-index.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
-import { readFileNoFollow, assertNoSymlinkAncestors, DEFAULT_MAX_BYTES } from './fs-safe.mjs';
-import { plansReadRels, projectStoreDir } from './project-layout.mjs';
+import { readFileNoFollow, DEFAULT_MAX_BYTES } from './fs-safe.mjs';
+import { planReadDirs, projectStoreDir } from './project-layout.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -134,7 +134,7 @@ function rankWithOverlap(queryTokens, entries, minScore) {
     .sort((a, b) => b.score - a.score);
 }
 
-export function rankRecall(query, { copilotHome, workspace, limit = 3, collection = null, minScore = 0.15 }) {
+export function rankRecall(query, { copilotHome, workspace, limit = 3, collection = null, minScore = 0.15, home } = {}) {
   const { entries, updated, path: manifestPath, error } = loadManifest(copilotHome, workspace);
   if (error && manifestPath) {
     throw new Error(
@@ -150,7 +150,7 @@ export function rankRecall(query, { copilotHome, workspace, limit = 3, collectio
   const entryKey = (e) => e.docid || e.id;
   const entriesById = new Map(filtered.map((e) => [entryKey(e), e]));
 
-  const indexDir = resolveIndexDir(copilotHome, workspace);
+  const indexDir = resolveIndexDir(copilotHome, workspace, home);
   const index = loadPostingsIndex(indexDir);
   const useBm25 = index && !isIndexStale(indexDir, updated) && index.N > 0;
 
@@ -174,16 +174,11 @@ export function findMatchingPlans(workspace, query, limit = 3) {
   const results = [];
   const seen = new Set();
 
-  for (const plansDirRel of plansReadRels(workspace)) {
-    if (!assertNoSymlinkAncestors(workspace, plansDirRel)) continue;
-    const plansDir = path.join(workspace, plansDirRel);
-    if (!fs.existsSync(plansDir)) continue;
-    for (const f of fs.readdirSync(plansDir)) {
+  for (const { dir, label } of planReadDirs(workspace)) {
+    for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.md') || seen.has(f)) continue;
-      const fileRel = path.join(plansDirRel, f);
-      const full = assertNoSymlinkAncestors(workspace, fileRel);
-      if (!full) continue;
-      const raw = readFileNoFollow(full, { root: workspace });
+      const full = path.join(dir, f);
+      const raw = readFileNoFollow(full, { root: dir });
       if (raw === null) continue;
       seen.add(f);
       const text = raw.slice(0, 4000);
@@ -196,13 +191,14 @@ export function findMatchingPlans(workspace, query, limit = 3) {
         if (sl) status = sl[1];
         if (pl) plan_lock = pl[1] === 'true';
       }
+      const fileRel = path.isAbsolute(label) ? full : path.join(label, f);
       const tokens = new Set(tokenize(text));
       let hit = 0;
       for (const t of queryTokens) if (tokens.has(t)) hit++;
       const score = hit / Math.max(queryTokens.size, 1);
       if (score > 0.1) {
         results.push({
-          path: `${plansDirRel.replace(/\\/g, '/')}/${f}`,
+          path: path.isAbsolute(fileRel) ? fileRel : fileRel.replace(/\\/g, '/'),
           score,
           status,
           plan_lock,

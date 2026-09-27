@@ -1,6 +1,6 @@
 # Team Knowledge (Global)
 
-Compounded learnings and index for cross-repository recall. Installed globally by `@dev-kit/harness` to:
+Compounded learnings and index for cross-repository recall. Installed globally by `harness` to:
 
 - `%USERPROFILE%\.copilot\knowledge\` (VS Code / shared Copilot)
 - `%LOCALAPPDATA%\github-copilot\intellij\knowledge\` (IntelliJ)

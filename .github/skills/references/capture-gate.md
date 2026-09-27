@@ -57,4 +57,4 @@ Engineer **must not** ask the user to run `/capture-issue` or `/plan-issue` manu
 
 ## Template
 
-`docs/plans/_plan-template.md`
+The plan schema is the one `harness plan-new` writes.

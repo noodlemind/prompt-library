@@ -220,7 +220,7 @@ test('TUI launch installs or version-upgrades once with VS Code configuration en
     fs.writeFileSync(
       path.join(copilotHome, '.harness-lock.json'),
       JSON.stringify({
-        package: '@dev-kit/harness',
+        package: 'harness',
         version: packageVersion,
         files: ['skills'],
         vscodeBridge: { id: 'dev-kit.harness-copilot-bridge', version: '0.1.0', path: bridgePath },
@@ -242,7 +242,7 @@ test('TUI launch installs or version-upgrades once with VS Code configuration en
 
   fs.writeFileSync(
     path.join(copilotHome, '.harness-lock.json'),
-    JSON.stringify({ package: '@dev-kit/harness', version: '0.0.1', files: ['skills'] }),
+    JSON.stringify({ package: 'harness', version: '0.0.1', files: ['skills'] }),
   );
   assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), true);
   assert.deepEqual(calls.map((c) => c.command), ['install', 'upgrade']);
@@ -251,7 +251,7 @@ test('TUI launch installs or version-upgrades once with VS Code configuration en
 
   fs.writeFileSync(
     path.join(copilotHome, '.harness-lock.json'),
-    JSON.stringify({ package: '@dev-kit/harness', version: '99.0.0', files: ['skills'] }),
+    JSON.stringify({ package: 'harness', version: '99.0.0', files: ['skills'] }),
   );
     assert.equal(await ensureFirstRunInstall({ copilotHome, workspace, install, packageVersion }), false);
     assert.equal(calls.length, 2, 'running an older CLI never auto-downgrades a newer hydrated install');
@@ -285,7 +285,7 @@ test('TUI launch repairs a same-version legacy install that has no VS Code bridg
   const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
   fs.writeFileSync(
     path.join(copilotHome, '.harness-lock.json'),
-    JSON.stringify({ package: '@dev-kit/harness', version: packageVersion, files: ['skills'] }),
+    JSON.stringify({ package: 'harness', version: packageVersion, files: ['skills'] }),
   );
   const calls = [];
 
@@ -311,7 +311,7 @@ test('TUI launch repairs a same-version lock whose bridge path is a decoy or sym
   fs.writeFileSync(
     path.join(copilotHome, '.harness-lock.json'),
     JSON.stringify({
-      package: '@dev-kit/harness',
+      package: 'harness',
       version: packageVersion,
       files: ['skills'],
       vscodeBridge: { id: 'dev-kit.harness-copilot-bridge', version: '0.1.0', path: decoy },
@@ -334,7 +334,7 @@ test('TUI launch repairs a same-version lock whose bridge path is a decoy or sym
   fs.writeFileSync(
     path.join(copilotHome, '.harness-lock.json'),
     JSON.stringify({
-      package: '@dev-kit/harness',
+      package: 'harness',
       version: packageVersion,
       files: ['skills'],
       vscodeBridge: { id: 'dev-kit.harness-copilot-bridge', version: '0.1.0', path: path.join(linked, 'bridge') },

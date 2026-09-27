@@ -151,6 +151,6 @@ Engineer continuation is ordered: run the initial implement gate alone; change `
 
 ## Guardrails
 
-- Same schema as `docs/plans/_plan-template.md` — no ad-hoc variants
+- Same schema `harness plan-new` writes — no ad-hoc variants
 - Under `strict` autonomy: stop after capture and ask human to approve `/plan-issue`
 - Does not implement product code

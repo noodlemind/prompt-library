@@ -44,6 +44,6 @@ export function getAssetsRoot() {
   }
   if (skillsOk && hooksOk) return bundled;
   throw new Error(
-    'Package assets not found. From a prompt-library clone run: npm --prefix packages/harness run build:assets. Otherwise reinstall the packaged CLI with: npm install -g @dev-kit/harness.'
+    'Package assets not found. From a prompt-library clone run: npm --prefix packages/harness run build:assets. Otherwise reinstall the packaged CLI with: npm install -g harness.'
   );
 }

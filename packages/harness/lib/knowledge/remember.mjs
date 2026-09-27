@@ -9,6 +9,7 @@ import { absorbOrAbort } from './admin.mjs';
 import { resolveWriteLayer } from './layer.mjs';
 import { bucketDirFor } from './overlay.mjs';
 import { episodeAbsPath } from '../project-layout.mjs';
+import { positionalsOf } from '../positionals.mjs';
 
 export function runRemember({ workspace, copilotHome, flags, argv, log = () => {}, home }) {
     const { mode } = readStoreConfig(workspace, { home });
@@ -22,7 +23,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
       nextTools: ['harness knowledge on'],
     };
   }
-    const claim = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
+    const claim = positionalsOf(argv, { limit: 1 })[0] || null;
   if (!claim || !flags.trigger) {
     return {
       pass: false,

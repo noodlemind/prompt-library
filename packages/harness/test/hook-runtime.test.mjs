@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import YAML from 'yaml';
 import { planContractText } from '../../../.github/hooks/lib/evidence-binding.mjs';
+import { externalPlansDir } from '../../../.github/hooks/lib/external-plans.mjs';
 import {
   activatedSkillFromPayload,
   analyzeShellMutation,
@@ -141,6 +142,53 @@ function skillFixturePath(workspace, skill) {
   if (!fs.existsSync(full)) fs.writeFileSync(full, `# ${skill}\n`, 'utf8');
   return full;
 }
+
+test('an external project-store plan can pass the implement gate', () => {
+  const workspace = tempWorkspace();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-ext-home-'));
+  const previous = process.env.HARNESS_HOME;
+  process.env.HARNESS_HOME = home;
+  try {
+    writePlan(workspace);
+    const dir = externalPlansDir(workspace);
+    fs.mkdirSync(dir, { recursive: true });
+    const plan = path.join(dir, '2026-09-26-fix-external-plan.md');
+    fs.copyFileSync(path.join(workspace, 'docs/plans/hook-fixture-plan.md'), plan);
+    fs.mkdirSync(path.join(workspace, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, 'src', 'schema.json'), '{}\n');
+    fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify({
+      version: 1,
+      sessionId: 'fixture-session',
+      activePlan: plan,
+      gatedPlan: plan,
+      gatedPlanDigest: crypto.createHash('sha256').update(planContractText(fs.readFileSync(plan, 'utf8'))).digest('hex'),
+      gateStatus: 'pass',
+      lastGateAt: new Date().toISOString(),
+      gatedChecksDigest: null,
+      gatedCheckCommands: [],
+    }));
+    const allowed = spawnSync(process.execPath, [path.join(hooksRoot, 'require-plan-gate.mjs')], {
+      cwd: workspace,
+      input: JSON.stringify({
+        cwd: workspace,
+        session_id: 'vscode-session',
+        hook_event_name: 'PreToolUse',
+        tool_name: 'replace_string_in_file',
+        tool_input: { filePath: 'src/schema.json' },
+      }),
+      encoding: 'utf8',
+      env: { ...process.env, HARNESS_HOME: home, HARNESS_ENFORCEMENT: 'enforce' },
+    });
+    assert.equal(allowed.status, 0, allowed.stderr + allowed.stdout);
+    assert.equal(outputJson(allowed).continue, true, allowed.stderr + allowed.stdout);
+  } finally {
+    if (previous === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
 
 function runHook(name, workspace, payload) {
   return spawnSync(process.execPath, [path.join(hooksRoot, name)], {

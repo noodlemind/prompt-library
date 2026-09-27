@@ -1,12 +1,12 @@
 # Discoverable capability inventory. Skill metadata remains the primary trigger surface.
 version: 2
-updated: 2026-08-06
+updated: 2026-09-19
 lifecycle_states: [candidate, experimental, active, deprecated, retired]
 
 engineer:
   entry_agent: engineer
   entry_skill: engineer
-  architecture: docs/adaptive-engineer-harness.md
+  architecture: docs/adaptive-engineering.md
   workflow: orient → establish intent → investigate → work → handle gaps → verify → review → compound → report
 
 capabilities:
@@ -78,6 +78,14 @@ capabilities:
     triggers: [create skill, create agent, promote procedure, retire capability]
     usage_count: 0
   deepen-plan: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  delivery-routing:
+    type: cli
+    status: candidate
+    owner: developer-experience
+    version: 1
+    origin: delivery-routing
+    triggers: [Deliver procedure binding, plan routing snapshot, host classification validation, principle index, index initialization]
+    usage_count: 0
   document-review: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   engineer-skill:
     name: engineer
@@ -189,6 +197,7 @@ capabilities:
     reason: Unreachable after starter-kit retirement; codification belongs to compounding.
   framework-docs-researcher: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
   git-history-analyzer: {type: agent, status: active, owner: developer-experience, version: 1, origin: starter}
+  delivery-classifier: {type: agent, status: active, owner: developer-experience, version: 1, origin: delivery-routing}
   java-reviewer: {type: agent, status: active, owner: application-platform, version: 1, origin: starter}
   pattern-recognition-specialist: {type: agent, status: active, owner: architecture, version: 1, origin: starter}
   performance-oracle: {type: agent, status: active, owner: reliability-engineering, version: 1, origin: starter}
@@ -277,5 +286,5 @@ growth:
   retirement: deprecate → warn and migrate → remove source → retain registry tombstone
 
 references:
-  architecture: docs/adaptive-engineer-harness.md
+  architecture: docs/adaptive-engineering.md
   harness_contract: .github/skills/references/harness-tool-contract.md

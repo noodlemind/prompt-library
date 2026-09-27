@@ -115,7 +115,7 @@ test('rows are totally ordered by label then id, by codepoint', () => {
     'flag:index:--structural',
   ]);
   const byId = Object.fromEntries(rows.filter((r) => r.noun === 'index').map((r) => [r.id, r.label]));
-  assert.equal(byId['command:index'], 'Rebuild knowledge index');
+  assert.equal(byId['command:index'], 'Rebuild knowledge and code indexes');
   assert.equal(byId['flag:index:--status'], 'Check knowledge + code index status');
   assert.equal(byId['flag:index:--structural'], 'Rebuild code symbol index');
 });
@@ -487,7 +487,7 @@ test('every row carries its own consequence, not its command policy maximum', ()
     'Consolidate learnings': 'read',
     'List consolidate candidates': 'read',
     // …and the forms that genuinely write, which must not be softened
-    'Rebuild knowledge index': 'mutate',
+    'Rebuild knowledge and code indexes': 'mutate',
     'Rebuild code symbol index': 'mutate',
     'Sync then report': 'mutate',
     'Apply consolidate ops': 'mutate',

@@ -30,7 +30,7 @@ function usageError(message, hint) {
 
 /** Flags on this entry that take a value — a BOOLEAN flag before the verb must
  * not swallow it, which is the bug the same parser had in `run`. */
-const VALUE_FLAGS = new Set(['--workspace', '--copilot-home']);
+const VALUE_FLAGS = new Set(['--workspace', '--copilot-home', '--harness-home']);
 
 function context(argv) {
   const flags = parseFlags(argv);

@@ -137,4 +137,4 @@ Suggest next step: "Run `/plan-issue <plan-path>` to generate an implementation 
 - Do **not** set `plan_lock: true` — that's the plan-issue skill's job.
 - Keep the issue file under 100 lines. Brevity forces clarity.
 - **`@engineer`** uses internal **`/ensure-plan`** (same steps as this skill). See `capture-gate.md`.
-- Use `docs/plans/_plan-template.md` for section layout when needed.
+- Use the section list in this skill for layout. `harness plan-new` writes the same shape.

@@ -39,6 +39,24 @@ const run = ({ ws, home, harnessHome }, args) =>
     encoding: 'utf8', env: { ...process.env, HARNESS_HOME: harnessHome },
   });
 
+test('remember accepts --harness-home before the claim and writes under that root', () => {
+  const c = ctx();
+  const flagHome = tempDir('rem-flag-');
+  const res = spawnSync(process.execPath, [
+    binPath, 'remember', '--harness-home', flagHome,
+    'Use two-step default+backfill for NOT NULL adds.',
+    '--trigger', 'adding NOT NULL columns to hot tables', '--domain', 'sql',
+    '--workspace', c.ws, '--copilot-home', c.home, '--json',
+  ], { encoding: 'utf8', env: { ...process.env, HARNESS_HOME: c.harnessHome } });
+  assert.equal(res.status, 0, res.stderr + res.stdout);
+  const out = JSON.parse(res.stdout);
+  assert.ok(fs.existsSync(path.join(projectStoreDir(c.ws, { home: flagHome }), out.episodePath)));
+  assert.equal(
+    fs.existsSync(path.join(projectStoreDir(c.ws, { home: c.harnessHome }), 'docs', 'solutions')),
+    false,
+  );
+});
+
 test('remember writes a human-teaching episode and an active source: human learning in one transaction', () => {
   const c = ctx();
   const res = run(c, ['remember', 'Use two-step default+backfill for NOT NULL adds; direct ALTER takes an exclusive lock.',
@@ -46,7 +64,7 @@ test('remember writes a human-teaching episode and an active source: human learn
   assert.equal(res.status, 0, res.stderr + res.stdout);
   const out = JSON.parse(res.stdout);
   assert.equal(out.learningId, 'sql/adding-not-null-columns-to-hot-tables');
-  const episode = fs.readFileSync(path.join(c.ws, out.episodePath), 'utf8');
+  const episode = fs.readFileSync(path.join(projectStoreDir(c.ws, { home: c.harnessHome }), out.episodePath), 'utf8');
   assert.match(episode, /kind: human-teaching/);
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const learning = listLearnings(dir).find((l) => l.id === out.learningId);
@@ -320,7 +338,7 @@ test('remember rollback also reindexes so the manifest does not dangle a referen
   const c = ctx();
   const res = run(c, ['remember', 'x'.repeat(2000), '--trigger', 'an oversized claim that blows the learning byte cap']);
   assert.equal(res.status, 1, res.stderr + res.stdout);
-  const manifestPath = path.join(c.ws, 'knowledge', 'manifest.yaml');
+  const manifestPath = path.join(c.home, 'knowledge', 'manifest.yaml');
   assert.ok(fs.existsSync(manifestPath), 'manifest.yaml must exist (written by the pre-rollback index)');
   const manifest = fs.readFileSync(manifestPath, 'utf8');
   assert.doesNotMatch(

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { EXIT } from '../style.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
-import { assertNoSymlinkAncestors } from '../fs-safe.mjs';
+import { readFileNoFollow } from '../fs-safe.mjs';
 import { tokenize, FIELD_BOOSTS } from '../tokenize.mjs';
 import { loadPostingsIndex, isIndexStale } from '../postings-index.mjs';
 import { loadManifest, rankRecall, findMatchingPlans } from '../recall-rank.mjs';
@@ -15,7 +15,7 @@ import { loadLayeredLearnings } from '../knowledge/overlay.mjs';
 import { trackedSourceFiles, readFileSafe } from '../repo-map/scan.mjs';
 import { readStructuralIndex } from '../structural/shape.mjs';
 import { SOURCES, createRetrievalResult, federate } from './kernel.mjs';
-import { plansReadRels } from '../project-layout.mjs';
+import { planReadDirs } from '../project-layout.mjs';
 
 /** The settled mode list, in the order the architecture doc states it. */
 export const MATCH_MODES = Object.freeze(['ranked', 'literal', 'regex', 'path', 'symbol']);
@@ -325,10 +325,10 @@ function codeSource({ mode, query, workspace, home, explain, headSha }) {
 
 // ----------------------------------------------------------- knowledge
 
-function knowledgeGeneration({ mode, copilotHome, workspace, updated }) {
+function knowledgeGeneration({ mode, copilotHome, workspace, updated, home }) {
   if (!updated) return null;
   if (mode !== 'ranked') return updated;
-  const indexDir = resolveIndexDir(copilotHome, workspace);
+  const indexDir = resolveIndexDir(copilotHome, workspace, home);
   const index = loadPostingsIndex(indexDir);
   const fresh = Boolean(index) && !isIndexStale(indexDir, updated) && index.N > 0;
   return `${fresh ? 'bm25' : 'overlap'}@${updated}`;
@@ -349,15 +349,15 @@ const knowledgeFields = (entry) => [
   { name: 'tags', text: Array.isArray(entry.tags) ? entry.tags.join(' ') : '' },
 ];
 
-function knowledgeSource({ mode, query, workspace, copilotHome, explain, collection, collections, queryTokens }) {
+function knowledgeSource({ mode, query, workspace, copilotHome, home, explain, collection, collections, queryTokens }) {
   const manifest = loadManifest(copilotHome, workspace);
     if (manifest.error) return failed('knowledge', `knowledge manifest unreadable: ${manifest.error}`);
   if (!manifest.path) return skipped('knowledge', 'no knowledge manifest — build one with: harness index');
 
-  const generation = knowledgeGeneration({ mode, copilotHome, workspace, updated: manifest.updated });
+  const generation = knowledgeGeneration({ mode, copilotHome, workspace, updated: manifest.updated, home });
 
   if (mode === 'ranked') {
-    const ranked = rankRecall(query, { copilotHome, workspace, limit: SOURCE_CANDIDATE_CAP, collection });
+    const ranked = rankRecall(query, { copilotHome, workspace, limit: SOURCE_CANDIDATE_CAP, collection, home });
     const results = [];
     for (const entry of ranked) {
       const id = knowledgeId(entry);
@@ -512,21 +512,18 @@ function loadPlans(workspace) {
   const plans = [];
   const seen = new Set();
   let anyRoot = false;
-  for (const dirRel of plansReadRels(workspace)) {
-    const root = assertNoSymlinkAncestors(workspace, dirRel);
-    if (!root) return { ok: false, reason: `${dirRel} resolves through a symlink — refusing to enumerate it`, plans: [] };
-    if (!fs.existsSync(root)) continue;
+  for (const { dir, label } of planReadDirs(workspace, { home: process.env.HARNESS_HOME })) {
     anyRoot = true;
-    for (const name of fs.readdirSync(root).sort()) {
+    for (const name of fs.readdirSync(dir).sort()) {
       if (!name.endsWith('.md') || seen.has(name)) continue;
-      const rel = `${dirRel}/${name}`;
-      const text = readFileSafe(workspace, rel);
+      const rel = path.isAbsolute(label) ? path.join(label, name) : `${label}/${name}`;
+      const text = readFileNoFollow(path.join(dir, name), { root: dir });
       if (!text) continue;
       seen.add(name);
       plans.push({ rel, name, text });
     }
   }
-  if (!anyRoot) return { ok: false, reason: 'no docs/plans or .harness/plans directory in this workspace', plans: [] };
+  if (!anyRoot) return { ok: false, reason: 'no plan directory in this workspace or its project store', plans: [] };
   return { ok: true, reason: null, plans };
 }
 
