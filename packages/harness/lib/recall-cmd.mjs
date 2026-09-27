@@ -14,6 +14,7 @@ export function runRecall({ workspace, copilotHome, flags, argv }) {
     limit: flags.limit || 3,
     collection: flags.collection,
     minScore: flags.minScore ?? 0.15,
+    home: flags.harnessHome || flags.home,
       }).map((e) => redactRecallEntry({
     docid: e.docid || e.id,
     path: e.path,

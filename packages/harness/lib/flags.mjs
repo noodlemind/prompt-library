@@ -62,6 +62,7 @@ export function parseFlags(argv) {
     configurePath: false,
     autonomy: null,
     copilotHome: null,
+    harnessHome: null,
     targets: new Set(['vscode', 'cli', 'intellij']),
     workspace: process.cwd(),
     query: null,
@@ -145,6 +146,17 @@ export function parseFlags(argv) {
     else if (a === '--autonomy') flags.autonomy = scan[++i];
     else if (a.startsWith('--copilot-home=')) flags.copilotHome = a.split('=')[1];
     else if (a === '--copilot-home') flags.copilotHome = scan[++i];
+    else if (a.startsWith('--harness-home=')) {
+      const value = a.split('=').slice(1).join('=');
+      if (!value) invalidFlag('--harness-home', value, 'requires a directory path');
+      flags.harnessHome = value;
+      flags.home = value;
+    } else if (a === '--harness-home') {
+      const next = scan[++i];
+      if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--harness-home', next, 'requires a directory path');
+      flags.harnessHome = next;
+      flags.home = next;
+    }
         else if (a.startsWith('--target=')) {
       const value = a.split('=')[1];
       if (!value) invalidFlag('--target', value, 'requires a comma-separated target list');

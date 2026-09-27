@@ -13,7 +13,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 
 const ENGINEER_AGENT_MAX_TOKENS = 900;
 const SKILL_BODY_MAX_LINES = 300;
-const architecturePath = 'docs/adaptive-engineer-harness.md';
+const architecturePath = 'docs/adaptive-engineering.md';
 const supersededArchitectureDocs = [
   'architecture/engineer-harness.md',
   'architecture/skill-driven-prompt-library.md',
@@ -56,7 +56,7 @@ test('canonical concept doc defines task modes, ownership, gap handling, and run
   }
 });
 
-test('docs surface is primer + concept + agent-loop + plan/solution scaffolding', () => {
+test('docs surface is the adaptive engineering explanation', () => {
   const docsRoot = path.join(repoRoot, 'docs');
   const generatedTopLevel = ['codebase-map.md', 'codebase-snapshot.md'];
   for (const name of generatedTopLevel) {
@@ -71,52 +71,27 @@ test('docs surface is primer + concept + agent-loop + plan/solution scaffolding'
     .readdirSync(docsRoot)
     .filter((name) => !name.startsWith('.') && !generated.has(name))
     .sort();
-  assert.deepEqual(topLevel, [
-    'adaptive-engineer-harness.md',
-    'adaptive-engineering-primer.md',
-    'agent-loop.md',
-    'plans',
-    'solutions',
-  ]);
+  assert.deepEqual(topLevel, ['adaptive-engineering.md']);
   assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);
   }
-  const concept = read('docs/adaptive-engineer-harness.md');
+  const concept = read('docs/adaptive-engineering.md');
   for (const phrase of ['Host-first', 'Kernel-always', 'Agent-optional', 'Benchmark-test-only']) {
     assert.match(concept, new RegExp(phrase, 'i'), `product model missing ${phrase}`);
   }
-  const agentLoop = read('docs/agent-loop.md');
-  assert.match(agentLoop, /opt-in|optional/i);
-  assert.match(agentLoop, /BENCHMARK|benchmark|test/i);
-  assert.match(agentLoop, /@engineer/);
+  assert.match(concept, /Benchmark-test-only/);
+  assert.match(concept, /@engineer/);
   assert.doesNotMatch(read('packages/harness/README.md'), /harness agent[\s\S]{0,80}Adaptive Engineer runtime/i);
   assert.match(read('packages/harness/README.md'), /opt-in add-on/i);
 });
 
-test('adaptive engineering primer distinguishes change contracts from SDD/BMAD plans', () => {
-  const primer = read('docs/adaptive-engineering-primer.md');
-  for (const phrase of [
-    'Mode before action',
-    'plan_lock',
-    'Spec Kit',
-    'BMAD',
-    '2048',
-    'harness verify',
-  ]) {
-    assert.match(primer, new RegExp(phrase), `primer missing ${phrase}`);
+test('adaptive engineering doc states the start and the growth path', () => {
+  const doc = read('docs/adaptive-engineering.md');
+  for (const phrase of ['Engineer', 'Harness', 'acquired', 'compound', 'argv arrays', 'without a shell']) {
+    assert.match(doc, new RegExp(phrase, 'i'), `doc missing ${phrase}`);
   }
-  assert.doesNotMatch(primer, /next big thing/i, 'primer must stay factual, not a pitch');
-  assert.doesNotMatch(
-    primer,
-    /JSON command output is not fed back/i,
-    'primer must not claim host @engineer never reads kernel JSON',
-  );
-  assert.match(primer, /Handle gaps/, 'primer must name the nine-stage Deliver model');
-  assert.match(primer, /\| 9 \| Report \|/, 'primer must list Report as stage 9');
-  assert.match(primer, /argv arrays/, 'primer must describe the named-check argv boundary');
-  assert.match(primer, /without a shell/, 'primer must say named checks run without a shell');
-  assert.match(primer, /referenced Spec Kit and BMAD pages/, 'primer must scope the SDD/BMAD absence claim to cited pages');
+  assert.doesNotMatch(doc, /next big thing/i);
 });
 
 test('named checks execute argv from checks.yaml, not plan text', () => {
@@ -276,7 +251,7 @@ test('active entry points use the accountable Engineer vocabulary', () => {
   const activeEntryPoints = [
     'README.md',
     '.github/agents/engineer.agent.md',
-    'docs/adaptive-engineer-harness.md',
+    'docs/adaptive-engineering.md',
   ];
   for (const rel of activeEntryPoints) {
     const contract = read(rel);
@@ -345,8 +320,10 @@ test('packaged hook assets stay byte-identical to .github/hooks security files',
 });
 
 test('prompt-library retains at most one non-terminal PR plan and documents cleanup', () => {
+  const plansDir = path.join(repoRoot, 'docs', 'plans');
+  if (!fs.existsSync(plansDir)) return;
   const datedPlans = fs
-    .readdirSync(path.join(repoRoot, 'docs', 'plans'))
+    .readdirSync(plansDir)
     .filter((name) => /^\d{4}-\d{2}-\d{2}.*\.md$/.test(name));
   const live = [];
   for (const name of datedPlans) {
@@ -525,9 +502,10 @@ test('deterministic retrieval: repo map, tokenizer, and staleness require no mod
   // The extractor is a seam with a documented tree-sitter tier (AC62).
   assert.match(read('packages/harness/lib/repo-map/lexical-extractor.mjs'), /tree-sitter tier/i);
   assert.match(read('.github/skills/references/harness-tool-contract.md'), /lexical fallback for SQL\/HCL|SQL and HCL/i);
-  // init-repo documents the manual refresh + staleness check (AC61).
+  // init-repo invokes both index planes and points at status (AC61).
   const commands = read('packages/harness/lib/commands.mjs');
-  assert.match(commands, /run `harness index`[\s\S]{0,140}harness index --status/i);
+  assert.match(commands, /ensureIndexes/);
+  assert.match(commands, /harness index --status/);
 });
 
 test('enforcement is query-independent (deterministic-first invariant)', () => {
@@ -631,7 +609,7 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   const commands = read('packages/harness/lib/commands.mjs');
   assert.doesNotMatch(commands, /const KNOWLEDGE_MODES\s*=\s*new Set/, 'commands.mjs must not keep its own copy of KNOWLEDGE_MODES');
   assert.match(commands, /KNOWLEDGE_MODES[^=]*=[\s\S]*?await import\('\.\/knowledge\/store\.mjs'\)/, 'commands.mjs imports KNOWLEDGE_MODES from store.mjs');
-  const concept = read('docs/adaptive-engineer-harness.md');
+  const concept = read('docs/adaptive-engineering.md');
   assert.match(concept, /stateDiagram/, 'concept doc includes the learning lifecycle stateDiagram');
   assert.match(concept, /promote/, 'concept doc documents learning promote');
   assert.match(read('packages/harness/README.md'), /knowledge commit/, 'README documents knowledge commit');

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import YAML from 'yaml';
-import { isPlanRel, listPlanRels as listLayoutPlanRels, normalizePlanRel as normalizeLayoutPlanRel } from './project-layout.mjs';
+import { externalPlansDir, isPlanRel, listPlanRels as listLayoutPlanRels, normalizePlanRel as normalizeLayoutPlanRel } from './project-layout.mjs';
 
 const ACTIVE_STATUSES = new Set(['planned', 'in-progress', 'review']);
 
@@ -11,6 +11,15 @@ function isWithin(root, candidate) {
 }
 
 function canonicalPlanPath(workspace, normalized) {
+  if (path.isAbsolute(normalized)) {
+    try {
+      const root = fs.realpathSync(externalPlansDir(workspace));
+      const full = fs.realpathSync(normalized);
+      return isWithin(root, full) && full.endsWith('.md') ? full : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const root = fs.realpathSync(path.resolve(workspace));
     const full = fs.realpathSync(path.join(workspace, normalized));
@@ -87,7 +96,7 @@ export function selectPlan(workspace, { planPath = null, session = null, require
     const plan = loadPlan(workspace, planPath);
     return plan
       ? { plan, error: null }
-      : { plan: null, error: `Plan not found or outside docs/plans/ or .harness/plans/: ${planPath}` };
+      : { plan: null, error: `Plan not found under the project store, docs/plans/, or .harness/plans/: ${planPath}` };
   }
 
   if (session?.activePlan) {

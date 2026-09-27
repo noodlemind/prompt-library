@@ -325,10 +325,10 @@ function codeSource({ mode, query, workspace, home, explain, headSha }) {
 
 // ----------------------------------------------------------- knowledge
 
-function knowledgeGeneration({ mode, copilotHome, workspace, updated }) {
+function knowledgeGeneration({ mode, copilotHome, workspace, updated, home }) {
   if (!updated) return null;
   if (mode !== 'ranked') return updated;
-  const indexDir = resolveIndexDir(copilotHome, workspace);
+  const indexDir = resolveIndexDir(copilotHome, workspace, home);
   const index = loadPostingsIndex(indexDir);
   const fresh = Boolean(index) && !isIndexStale(indexDir, updated) && index.N > 0;
   return `${fresh ? 'bm25' : 'overlap'}@${updated}`;
@@ -349,15 +349,15 @@ const knowledgeFields = (entry) => [
   { name: 'tags', text: Array.isArray(entry.tags) ? entry.tags.join(' ') : '' },
 ];
 
-function knowledgeSource({ mode, query, workspace, copilotHome, explain, collection, collections, queryTokens }) {
+function knowledgeSource({ mode, query, workspace, copilotHome, home, explain, collection, collections, queryTokens }) {
   const manifest = loadManifest(copilotHome, workspace);
     if (manifest.error) return failed('knowledge', `knowledge manifest unreadable: ${manifest.error}`);
   if (!manifest.path) return skipped('knowledge', 'no knowledge manifest — build one with: harness index');
 
-  const generation = knowledgeGeneration({ mode, copilotHome, workspace, updated: manifest.updated });
+  const generation = knowledgeGeneration({ mode, copilotHome, workspace, updated: manifest.updated, home });
 
   if (mode === 'ranked') {
-    const ranked = rankRecall(query, { copilotHome, workspace, limit: SOURCE_CANDIDATE_CAP, collection });
+    const ranked = rankRecall(query, { copilotHome, workspace, limit: SOURCE_CANDIDATE_CAP, collection, home });
     const results = [];
     for (const entry of ranked) {
       const id = knowledgeId(entry);

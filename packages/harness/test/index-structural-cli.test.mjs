@@ -140,12 +140,14 @@ test('--since without --structural is a usage error, not a silently ignored flag
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('plain harness index still works and never builds the structural tree', () => {
+test('plain harness index rebuilds the knowledge index and the code index', () => {
   const { ws } = gitRepo(FIXTURE);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
   const r = runHarness(['index'], { home, ws });
-  assert.equal(r.status, 0, r.stderr);
-  assert.ok(!fs.existsSync(structuralIndexDir(ws, { home })), 'knowledge index alone never materializes the structural dir');
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /knowledge/);
+  assert.match(r.stdout, /code/);
+  assert.ok(fs.existsSync(structuralIndexDir(ws, { home })), 'a bare index publishes the code index when HEAD is known');
   fs.rmSync(ws, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
 });

@@ -71,7 +71,7 @@ export function knowledgeStatus({ workspace, copilotHome, home } = {}) {
 
   let drift = null;
   try {
-    const status = indexStatus({ workspace, copilotHome });
+    const status = indexStatus({ workspace, copilotHome, home });
     drift = {
       indexed: Boolean(status.indexed),
       stale: Boolean(status.stale),

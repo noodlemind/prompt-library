@@ -75,10 +75,10 @@ export function assertStoreSchemaSupported(dir) {
   }
   if (recorded !== null && recorded > STORE_SCHEMA) {
     const err = new Error(
-      `knowledge store schema ${recorded} is newer than this CLI supports (${STORE_SCHEMA}) — upgrade @dev-kit/harness before touching this store`
+      `knowledge store schema ${recorded} is newer than this CLI supports (${STORE_SCHEMA}) — upgrade harness before touching this store`
     );
     err.code = 'E_STORE_SCHEMA';
-    err.hint = 'npm install -g @dev-kit/harness@latest && harness install';
+    err.hint = 'npm install -g harness@latest && harness install';
     throw err;
   }
   return recorded;

@@ -9,7 +9,11 @@ import { test } from 'node:test';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
-const run = (args) => spawnSync(process.execPath, [binPath, ...args], { encoding: 'utf8' });
+const harnessHome = tempDir('rank-hh-');
+const run = (args) => spawnSync(process.execPath, [binPath, ...args], {
+  encoding: 'utf8',
+  env: { ...process.env, HARNESS_HOME: harnessHome },
+});
 
 function writeDoc(ws, name, kind) {
   const dir = path.join(ws, 'docs', 'solutions', 'debugging');
@@ -45,7 +49,7 @@ test('manifest carries kind, trigger, and claim frontmatter', () => {
   const home = tempDir('rank-manifesth-');
   writeDoc(ws, 'hunch.md', 'insight');
   assert.equal(run(['index', '--workspace', ws, '--copilot-home', home]).status, 0);
-  const manifest = fs.readFileSync(path.join(ws, 'knowledge', 'manifest.yaml'), 'utf8');
+  const manifest = fs.readFileSync(path.join(home, 'knowledge', 'manifest.yaml'), 'utf8');
   assert.match(manifest, /kind: insight/);
   assert.match(manifest, /trigger: "orders API timing out under load"/);
   assert.match(manifest, /claim: "pool exhaustion from N\+1 on bulk endpoint"/);

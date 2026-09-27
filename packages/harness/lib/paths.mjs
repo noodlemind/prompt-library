@@ -52,8 +52,32 @@ export function pkgRootFromImportMeta(metaUrl) {
   return path.resolve(path.dirname(fileURLToPath(metaUrl)), '..');
 }
 
-/** Global harness home for cross-project telemetry. HARNESS_HOME overrides for tests. */
+/** Harness-owned root. ~/.harness by default. HARNESS_HOME overrides it. --harness-home wins for one command. */
 export function harnessGlobalHome() {
   if (process.env.HARNESS_HOME) return path.resolve(process.env.HARNESS_HOME);
   return path.join(os.homedir(), '.harness');
+}
+
+/** Apply --harness-home before any command reads the home. The flag wins over HARNESS_HOME. A repeated flag uses the last path, matching parseFlags. */
+export function applyHarnessHomeFlag(argv) {
+  const scan = argv.slice(0, argv.indexOf('--') === -1 ? argv.length : argv.indexOf('--'));
+  let chosen = null;
+  for (let i = 0; i < scan.length; i++) {
+    const token = scan[i];
+    let value;
+    if (token.startsWith('--harness-home=')) value = token.slice('--harness-home='.length);
+    else if (token === '--harness-home') value = scan[++i];
+    else continue;
+    if (!value || value.startsWith('--')) {
+      throw Object.assign(new Error('invalid --harness-home: requires a directory path'), {
+        code: 'E_USAGE',
+        hint: 'harness help',
+        exit: 2,
+      });
+    }
+    chosen = value;
+  }
+  if (!chosen) return null;
+  process.env.HARNESS_HOME = path.resolve(chosen);
+  return process.env.HARNESS_HOME;
 }

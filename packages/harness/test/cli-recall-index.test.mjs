@@ -23,7 +23,8 @@ import { listCommands } from '../lib/registry.mjs';
 import { HELP_COMMAND_ORDER } from '../bin/harness.mjs';
 import YAML from 'yaml';
 import { approveProject } from '../lib/trust.mjs';
-import { tempDir, runHarness, writePlan, packageRoot, binPath } from './helpers/index.mjs';
+import { resolveIndexDir } from '../lib/recall-config.mjs';
+import { tempDir, runHarness, writePlan, packageRoot, binPath, cliHarnessHome } from './helpers/index.mjs';
 import {
   writeKnowledgeSolution,
   runIndex,
@@ -81,8 +82,29 @@ test('index writes enriched manifest fields and postings index', () => {
   assert.match(manifest, /module:/);
   assert.match(manifest, /excerpt:/);
   assert.match(manifest, /docid:/);
-  assert.ok(fs.existsSync(path.join(copilotHome, 'knowledge', '.harness-index', 'postings.json')));
-  assert.ok(fs.existsSync(path.join(copilotHome, 'knowledge', '.harness-index', 'meta.json')));
+  const indexDir = path.join(cliHarnessHome(), 'index');
+  const posting = fs.readdirSync(indexDir, { recursive: true }).map(String).find((name) => name.endsWith(`${path.sep}knowledge${path.sep}postings.json`) || name.endsWith('/knowledge/postings.json'));
+  assert.ok(posting, 'postings live under the harness home');
+});
+
+test('--harness-home puts knowledge postings under that root, ahead of HARNESS_HOME', () => {
+  const workspace = tempDir('harness-workspace-');
+  const copilotHome = tempDir('harness-copilot-');
+  const flagHome = tempDir('harness-flag-');
+  const envHome = tempDir('harness-env-');
+  writeKnowledgeSolution(copilotHome);
+
+  const result = runHarness(
+    ['index', '--workspace', workspace, '--copilot-home', copilotHome, '--harness-home', flagHome, '--json'],
+    { env: { HARNESS_HOME: envHome } },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const indexDir = resolveIndexDir(copilotHome, workspace, flagHome);
+  assert.ok(fs.existsSync(path.join(indexDir, 'postings.json')), indexDir);
+  assert.equal(fs.existsSync(path.join(envHome, 'index')), false, 'env home must not receive the index');
+  assert.equal(fs.existsSync(path.join(copilotHome, 'knowledge', '.harness-index')), false);
+  const manifest = path.join(copilotHome, 'knowledge', 'manifest.yaml');
+  assert.ok(fs.existsSync(manifest), 'manifest stays in the Copilot knowledge home');
 });
 
 test('BM25 recall ranks symptom match above title-only match', () => {
@@ -240,7 +262,7 @@ test('recall falls back to overlap ranker when postings index missing', () => {
   const copilotHome = tempDir('harness-copilot-');
   writeKnowledgeSolution(copilotHome, { symptom: 'timeout on checkout path' });
   runIndex(workspace, copilotHome);
-  fs.rmSync(path.join(copilotHome, 'knowledge', '.harness-index'), { recursive: true, force: true });
+  fs.rmSync(resolveIndexDir(copilotHome, workspace, cliHarnessHome()), { recursive: true, force: true });
 
   const result = runHarness([
     'recall',

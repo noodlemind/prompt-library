@@ -6,6 +6,8 @@ import { buildContextPack, learningsSectionBytes } from './context-pack.mjs';
 import { buildPlanView } from './plan-view.mjs';
 import { buildRepoMap } from './repo-map/index.mjs';
 import { indexStatus } from './index-status.mjs';
+import { parseImpactedFiles } from './plan-scope.mjs';
+import { discoverInventory, routingReadPointers, workspaceRoutingRoots } from './route.mjs';
 import { extractGoalFromPlan } from './plan-goal.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
@@ -42,12 +44,14 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     gitContext = null;
   }
 
+  const home = flags.harnessHome || flags.home;
   const recall = rankRecall(q, {
     copilotHome,
     workspace,
     limit: flags.limit || 3,
     collection: flags.collection,
     minScore: flags.minScore ?? 0.15,
+    home,
       }).map((e) => redactRecallEntry({
     docid: e.docid || e.id,
     path: e.path,
@@ -121,8 +125,10 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
 
     try {
-    const status = indexStatus({ workspace, copilotHome });
-    if (status.stale) nextTools.push('harness index  # knowledge index is behind HEAD — refresh');
+    const status = indexStatus({ workspace, copilotHome, home });
+    if (status.stale) nextTools.push('harness index  # knowledge index is behind HEAD');
+    if (status.structural && !status.structural.indexed) nextTools.push('harness index  # code index is not built');
+    else if (status.structural?.stale) nextTools.push('harness index  # code index is behind HEAD');
   } catch {
     // Staleness is advisory; never block orientation on it.
   }
@@ -140,6 +146,18 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     }
   } catch {
     // Advisory; never block orientation on it.
+  }
+
+  let routingLines = null;
+  if (active?.fm?.routing) {
+    routingLines = routingReadPointers(active.fm.routing, discoverInventory(workspaceRoutingRoots(workspace, [copilotHome])));
+    if (gatePreview.pass) {
+      for (const line of routingLines) {
+        if (line.startsWith('read ')) nextTools.push(line);
+      }
+      const javaFile = parseImpactedFiles(active).find((rel) => rel.endsWith('.java'));
+      if (javaFile) nextTools.push(`read ${javaFile}`);
+    }
   }
 
   const packBody = buildContextPack({
@@ -163,6 +181,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
     nextTools,
     gitContext,
+    routingLines,
   });
 
     const learningsBytes = learningsSectionBytes(packBody);

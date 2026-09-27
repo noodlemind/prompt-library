@@ -1,0 +1,34 @@
+version: 1
+skills:
+  - globs: ["**/*.java"]
+    skill: java
+  - globs: ["**/*.py"]
+    skill: python
+  - globs: ["**/*.{sql,pgsql}"]
+    skill: sql
+  - globs: ["**/cdk/**", "**/*stack.ts"]
+    skill: aws
+  - when: { primitive: true }
+    skill: create-primitive
+  - when: { plan_lock: false }
+    skill: ensure-plan
+instructions:
+  - globs: ["**/*.java"]
+    instruction: java
+  - globs: ["**/*.py"]
+    instruction: python
+  - globs: ["**/*.{ts,tsx}"]
+    instruction: typescript
+  - globs: ["**/*.{sql,pgsql}"]
+    instruction: postgresql
+specialists:
+  - when: { globs: ["**/*.java"] }
+    agent: java-reviewer
+  - when: { globs: ["**/*.py"] }
+    agent: python-reviewer
+  - when: { globs: ["**/*.{sql,pgsql}"] }
+    agent: sql-reviewer
+  - when: { risk: [amber, red], domains: [security] }
+    agent: security-sentinel
+  - when: { risk: [amber, red], domains: [performance] }
+    agent: performance-oracle

@@ -102,4 +102,23 @@ if (agentCtx) {
 }
 
 const message = `[harness hooks] Session context:\n- ${parts.join('\n- ')}`;
-console.log(JSON.stringify({ additionalContext: message }));
+let routingNote = '';
+if (fs.existsSync(pack)) {
+  const packText = fs.readFileSync(pack, 'utf8');
+  const start = packText.indexOf('\n## Routing');
+  if (start !== -1) {
+    const rest = packText.slice(start + 1);
+    const next = rest.indexOf('\n## ');
+    routingNote = (next === -1 ? rest : rest.slice(0, next)).trim();
+  }
+}
+const additionalContext = routingNote
+  ? `${message}\n\nRouting pointers apply only when the mode is Deliver:\n${routingNote}`
+  : message;
+console.log(JSON.stringify({
+  additionalContext,
+  hookSpecificOutput: {
+    hookEventName: 'SessionStart',
+    additionalContext,
+  },
+}));

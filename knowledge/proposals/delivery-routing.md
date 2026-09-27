@@ -270,7 +270,7 @@ The adaptable piece is that index, not the plugin. This repository already has o
 | Name | Rule in force | Leaf |
 |---|---|---|
 | smallest-change | Surgical diff | `AGENTS.md` coding standards |
-| prove-with-evidence | Named checks and `harness verify` | `docs/adaptive-engineer-harness.md` |
+| prove-with-evidence | Named checks and `harness verify` | `docs/adaptive-engineering.md` |
 | behavior-not-implementation | Tests assert observed behavior | repository TDD convention |
 | bind-before-lock | The snapshot is the contract | this proposal |
 | classify-inputs-only | Classification proposes inputs; policy binds names | this proposal |

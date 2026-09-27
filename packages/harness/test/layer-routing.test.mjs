@@ -231,7 +231,7 @@ test('a newer store schema makes this CLI refuse with an upgrade hint', () => {
 
   fs.writeFileSync(path.join(dir, 'store.json'), JSON.stringify({ schema: STORE_SCHEMA + 1 }) + '\n');
   const isSchemaRefusal = (err) =>
-    err.code === 'E_STORE_SCHEMA' && /newer than this CLI supports/.test(err.message) && /@dev-kit\/harness/.test(err.hint);
+    err.code === 'E_STORE_SCHEMA' && /newer than this CLI supports/.test(err.message) && /npm install -g harness@latest/.test(err.hint);
   assert.throws(() => ensureStore(ws, { home }), isSchemaRefusal);
   assert.throws(() => applyOps({ workspace: ws, opsPath: writeOps(ws, [addOp(ws, { slug: 'nope' })]), home }), isSchemaRefusal);
 });

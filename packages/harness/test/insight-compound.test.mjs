@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { collectEpisodes } from '../lib/knowledge/consolidate.mjs';
 import { runInsightCompound } from '../lib/compound.mjs';
+import { projectStoreDir } from '../lib/project-layout.mjs';
 import { trackWorkspaceSolutions } from './helpers/workspace.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -15,14 +16,27 @@ const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 function keepSolutionsInWorkspace(ws) {
   return trackWorkspaceSolutions(ws);
 }
-const run = (args, env = {}) =>
-  spawnSync(process.execPath, [binPath, ...args], {
+function cliHarnessHome(args, env) {
+  if (env.HARNESS_HOME) return env.HARNESS_HOME;
+  const index = args.indexOf('--copilot-home');
+  return index >= 0 ? path.join(args[index + 1], 'hh') : undefined;
+}
+function cliEpisode(ws, copilotHome, rel) {
+  return path.join(projectStoreDir(ws, { home: path.join(copilotHome, 'hh') }), rel);
+}
+const run = (args, env = {}) => {
+  const harnessHome = cliHarnessHome(args, env);
+  return spawnSync(process.execPath, [binPath, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...(harnessHome ? { HARNESS_HOME: harnessHome } : {}), ...env },
   });
+};
 const runAsync = (args, env = {}) =>
   new Promise((resolve) => {
-    const child = spawn(process.execPath, [binPath, ...args], { env: { ...process.env, ...env } });
+    const harnessHome = cliHarnessHome(args, env);
+    const child = spawn(process.execPath, [binPath, ...args], {
+      env: { ...process.env, ...(harnessHome ? { HARNESS_HOME: harnessHome } : {}), ...env },
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => (stdout += d));
@@ -43,7 +57,7 @@ test('compound --insight writes a kind: insight doc without any plan or evidence
   const out = JSON.parse(res.stdout);
   assert.equal(out.kind, 'insight');
   assert.match(out.path, /^docs\/solutions\/debugging\/\d{4}-\d{2}-\d{2}-orders-pool-exhaustion/);
-  const doc = fs.readFileSync(path.join(ws, out.path), 'utf8');
+  const doc = fs.readFileSync(cliEpisode(ws, home, out.path), 'utf8');
   assert.match(doc, /kind: insight/);
   assert.match(doc, /title: "Orders pool exhaustion under bulk load"/);
   assert.match(doc, /Connection pool exhausts/);
@@ -53,7 +67,7 @@ test('runInsightCompound rolls back the just-written episode (no orphan) and rep
   const ws = keepSolutionsInWorkspace(tempDir('insight-idxfail-ws-'));
   const copilotHome = tempDir('insight-idxfail-ch-');
   const home = tempDir('insight-idxfail-hh-');
-    fs.mkdirSync(path.join(ws, 'knowledge', 'manifest.yaml'), { recursive: true });
+    fs.mkdirSync(path.join(copilotHome, 'knowledge', 'manifest.yaml'), { recursive: true });
 
   const res = runInsightCompound({
     workspace: ws,
@@ -66,7 +80,7 @@ test('runInsightCompound rolls back the just-written episode (no orphan) and rep
   assert.equal(res.pass, false);
   assert.equal(res.exitCode, 1);
   assert.match(res.blockedReason, /index/i);
-  const insightsDir = path.join(ws, 'docs', 'solutions', 'insights');
+  const insightsDir = path.join(projectStoreDir(ws, { home }), 'docs', 'solutions', 'insights');
   const md = fs.existsSync(insightsDir) ? fs.readdirSync(insightsDir).filter((f) => f.endsWith('.md')) : [];
   assert.deepEqual(md, [], 'the just-written episode must be deleted after an index-failure rollback');
 });
@@ -76,7 +90,7 @@ test('P2: runInsightCompound reports PARTIAL recovery (not a false clean rollbac
   const copilotHome = tempDir('insight-partial-ch-');
   const home = tempDir('insight-partial-hh-');
   // Force runIndexKnowledge to throw (manifest path is a directory → EISDIR).
-  fs.mkdirSync(path.join(ws, 'knowledge', 'manifest.yaml'), { recursive: true });
+  fs.mkdirSync(path.join(copilotHome, 'knowledge', 'manifest.yaml'), { recursive: true });
 
     const insightsMarker = path.join('docs', 'solutions', 'insights');
   const origRm = fs.rmSync;
@@ -105,7 +119,7 @@ test('P2: runInsightCompound reports PARTIAL recovery (not a false clean rollbac
   assert.equal(res.partialRecovery.episodeRemains, true);
 
   // The orphaned episode really is still there — proving the report is honest.
-  const insightsDir = path.join(ws, 'docs', 'solutions', 'insights');
+  const insightsDir = path.join(projectStoreDir(ws, { home }), 'docs', 'solutions', 'insights');
   const md = fs.existsSync(insightsDir) ? fs.readdirSync(insightsDir).filter((f) => f.endsWith('.md')) : [];
   assert.equal(md.length, 1, 'the episode the rollback could not remove is still on disk (honest partial)');
 });
@@ -129,7 +143,7 @@ test('runInsightCompound --dry-run logs "would write" (never "wrote") and create
   assert.ok(episodeLog, 'an episode-path log line is emitted under dry-run');
   assert.match(episodeLog, /would write/);
   assert.doesNotMatch(episodeLog, /^wrote /);
-  assert.equal(fs.existsSync(path.join(ws, res.path)), false, 'dry-run must not write the episode file');
+  assert.equal(fs.existsSync(cliEpisode(ws, copilotHome, res.path)), false, 'dry-run must not write the episode file');
 });
 
 test('compound --insight refuses to write when the body contains a secret', () => {
@@ -165,7 +179,7 @@ test('compound --insight reads body from --body-file and indexes the doc', () =>
   const out = JSON.parse(res.stdout);
   assert.equal(out.kind, 'insight');
   assert.ok(out.indexed.entries >= 1);
-  const manifest = fs.readFileSync(path.join(ws, 'knowledge', 'manifest.yaml'), 'utf8');
+  const manifest = fs.readFileSync(path.join(home, 'knowledge', 'manifest.yaml'), 'utf8');
   assert.match(manifest, /retry-storms-need-jitter/);
 });
 
@@ -182,9 +196,9 @@ test('P1#1: N concurrent same-title captures never overwrite — N distinct file
 
   const reported = results.map((r) => JSON.parse(r.stdout).path);
   assert.equal(new Set(reported).size, N, `every process must report a DISTINCT path (got ${new Set(reported).size}/${N})`);
-  for (const p of reported) assert.ok(fs.existsSync(path.join(ws, p)), `reported path ${p} must exist on disk`);
+  for (const p of reported) assert.ok(fs.existsSync(cliEpisode(ws, home, p)), `reported path ${p} must exist on disk`);
 
-  const dir = path.join(ws, 'docs', 'solutions', 'insights');
+  const dir = path.join(projectStoreDir(ws, { home: path.join(home, 'hh') }), 'docs', 'solutions', 'insights');
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
   assert.equal(files.length, N, `all ${N} episode files must survive — no silent overwrite (got ${files.length})`);
 });
@@ -196,17 +210,18 @@ test('P1#1: a pre-existing file at the chosen suffix forces the next suffix (exc
 
   const first = JSON.parse(run(args).stdout);
   assert.match(first.path, /-exclusive-suffix-lesson\.md$/, 'first capture takes the bare base name');
-  const firstBody = fs.readFileSync(path.join(ws, first.path), 'utf8');
+  const firstBody = fs.readFileSync(cliEpisode(ws, home, first.path), 'utf8');
 
   // Pre-plant a file exactly where the SECOND capture would land (`-2.md`).
   const planted = first.path.replace(/\.md$/, '-2.md');
-  fs.writeFileSync(path.join(ws, planted), 'PRE-EXISTING — must never be overwritten\n');
+  fs.mkdirSync(path.dirname(cliEpisode(ws, home, planted)), { recursive: true });
+  fs.writeFileSync(cliEpisode(ws, home, planted), 'PRE-EXISTING — must never be overwritten\n');
 
   const second = JSON.parse(run(args).stdout);
   assert.equal(second.path, first.path.replace(/\.md$/, '-3.md'), 'the occupied -2 suffix is skipped for -3');
   assert.notEqual(second.path, planted);
-  assert.equal(fs.readFileSync(path.join(ws, planted), 'utf8'), 'PRE-EXISTING — must never be overwritten\n', 'the planted file is untouched');
-  assert.equal(fs.readFileSync(path.join(ws, first.path), 'utf8'), firstBody, 'the first capture is untouched');
+  assert.equal(fs.readFileSync(cliEpisode(ws, home, planted), 'utf8'), 'PRE-EXISTING — must never be overwritten\n', 'the planted file is untouched');
+  assert.equal(fs.readFileSync(cliEpisode(ws, home, first.path), 'utf8'), firstBody, 'the first capture is untouched');
 });
 
 test('same-day same-title insights never overwrite — deterministic suffix', () => {
@@ -220,8 +235,8 @@ test('same-day same-title insights never overwrite — deterministic suffix', ()
   const second = JSON.parse(run(args).stdout);
   assert.notEqual(first.path, second.path);
   assert.match(second.path, /-2\.md$/);
-  assert.ok(fs.existsSync(path.join(ws, first.path)));
-  assert.ok(fs.existsSync(path.join(ws, second.path)));
+  assert.ok(fs.existsSync(cliEpisode(ws, home, first.path)));
+  assert.ok(fs.existsSync(cliEpisode(ws, home, second.path)));
 });
 
 test('category input is confined to one safe path segment', () => {
@@ -246,7 +261,7 @@ test('an embedded newline in the title cannot break the line-oriented frontmatte
   ]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
-  const doc = fs.readFileSync(path.join(ws, out.path), 'utf8');
+  const doc = fs.readFileSync(cliEpisode(ws, home, out.path), 'utf8');
 
     const fmBlock = doc.match(/^---\n([\s\S]*?)\n---/)[1];
   const fmLines = fmBlock.split('\n');
@@ -255,7 +270,7 @@ test('an embedded newline in the title cannot break the line-oriented frontmatte
   assert.equal(fmLines.filter((l) => /^fake-key:/.test(l)).length, 0, 'embedded newline must not inject a new key');
   assert.match(doc, /title: "Title line one\\nline two: fake-key"/);
 
-    const episodes = collectEpisodes({ workspace: ws, copilotHome: home });
+    const episodes = collectEpisodes({ workspace: ws, copilotHome: home, home: path.join(home, 'hh') });
   const episode = episodes.find((e) => e.path === out.path);
   assert.ok(episode, 'episode discoverable after round-trip');
   assert.equal(episode.title, 'Title line one\\nline two: fake-key');

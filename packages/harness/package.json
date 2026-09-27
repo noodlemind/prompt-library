@@ -1,5 +1,5 @@
 {
-  "name": "@dev-kit/harness",
+  "name": "harness",
   "version": "0.8.18",
   "description": "Adaptive Engineer Harness — install and upgrade GitHub Copilot skills, agents, and team knowledge globally",
   "homepage": "https://github.com/noodlemind/prompt-library",
@@ -50,7 +50,7 @@
     "github-copilot",
     "agent-skills",
     "adaptive-engineer",
-    "dev-kit"
+    "harness"
   ],
   "optionalDependencies": {
     "tree-sitter-java": "0.23.5",

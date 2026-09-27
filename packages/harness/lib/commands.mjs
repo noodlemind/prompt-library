@@ -162,7 +162,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
   const vscodeBridge = allStats.vscodeBridge || previousLock?.vscodeBridge || null;
 
   const lock = {
-    package: '@dev-kit/harness',
+    package: 'harness',
     version,
     installedAt: new Date().toISOString(),
     command,
@@ -376,6 +376,18 @@ export async function cmdInitRepo(argv) {
   const logger = (m) => log(flags, m);
   flags.home = flags.home || process.env.HARNESS_HOME;
   const stats = runInitRepo({ workspace, flags, log: logger, copilotHome });
+  try {
+    const { ensureIndexes } = await import('./ensure-indexes.mjs');
+    stats.indexes = await ensureIndexes({
+      workspace,
+      copilotHome,
+      mode: 'missing-or-stale',
+      dryRun: Boolean(flags.dryRun),
+      log: logger,
+    });
+  } catch (error) {
+    stats.indexes = { error: error.message };
+  }
   const migrateConflicts = stats.migrate?.conflicts?.length || 0;
   const exitCode = migrateConflicts ? EXIT.syncConflict : 0;
   writeEvent(workspace, flags, {
@@ -397,11 +409,11 @@ export async function cmdInitRepo(argv) {
     console.log(
       ui.paint(
         'muted',
-        '  run `harness index` now, and again after a major pull from main or a docs rewrite · drift: harness index --status'
+        '  index status: harness index --status'
       )
     );
     if (exitCode) printNext('harness migrate  # resolve leftover docs/ conflicts');
-    else printNext('harness index');
+    else printNext('harness index --status');
   }
   return exitCode;
 }
@@ -411,6 +423,7 @@ export async function cmdIndex(argv) {
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const knowledgeRoot = path.join(copilotHome, 'knowledge');
   const workspace = path.resolve(flags.workspace);
+  if (!flags.dryRun) fs.mkdirSync(knowledgeRoot, { recursive: true });
   const logger = (m) => log(flags, m);
 
     if (flags.since && !hasFlag(argv, '--structural')) {
@@ -426,7 +439,11 @@ export async function cmdIndex(argv) {
   // (`harness index --structural`). Historical top-level fields are knowledge-only.
   if (hasFlag(argv, '--status')) {
     const { indexStatus } = await import('./index-status.mjs');
-    const status = indexStatus({ workspace, copilotHome });
+    const status = indexStatus({
+      workspace,
+      copilotHome,
+      home: flags.harnessHome || flags.home || process.env.HARNESS_HOME,
+    });
     if (flags.json) emitJson(flags, status);
     else {
       const k = status.knowledge || status;
@@ -553,13 +570,14 @@ export async function cmdIndex(argv) {
 
   // Stamp the current git HEAD so `index --status` can measure drift later.
   const head = spawnSyncHead(workspace);
+  const home = flags.harnessHome || flags.home || process.env.HARNESS_HOME;
   const result = runIndexKnowledge({
-    knowledgeRoot: fs.existsSync(knowledgeRoot) ? knowledgeRoot : null,
+    knowledgeRoot,
     workspace,
     copilotHome,
-    flags: { ...flags, headSha: head },
+    flags: { ...flags, headSha: head, home },
     log: logger,
-    home: flags?.home,
+    home,
   });
   // Refresh the committed codebase map alongside the knowledge index.
   try {
@@ -595,12 +613,37 @@ export async function cmdIndex(argv) {
       // Advisory: never fail index because the knowledge store is unreadable.
     }
   }
+  let code = null;
+  let codeError = null;
+  try {
+    const { buildStructuralIndex } = await import('./repo-map/structural-index.mjs');
+    const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
+    const extractor = await createTreesitterExtract();
+    code = await buildStructuralIndex({
+      workspace,
+      home,
+      extractor,
+      dryRun: flags.dryRun,
+      log: logger,
+    });
+  } catch (error) {
+    codeError = error.message;
+  }
+  const integrityFailures = code?.meta?.integrityFailures || [];
+  const codeFailed = Boolean(head) && !flags.dryRun && (Boolean(codeError) || !code?.written);
   writeEvent(workspace, flags, {
     type: 'index',
     command: 'index',
-    result: 'pass',
-    exitCode: 0,
+    result: codeFailed ? 'fail' : integrityFailures.length ? 'warn' : 'pass',
+    exitCode: codeFailed ? 1 : 0,
   });
+  result.code = {
+    written: Boolean(code?.written),
+    filesIndexed: code?.meta?.filesIndexed ?? null,
+    tier: code?.meta?.extractorTier ?? null,
+    error: codeError,
+    integrityFailures,
+  };
   if (flags.json) {
     emitJson(flags, result);
   } else {
@@ -609,8 +652,8 @@ export async function cmdIndex(argv) {
     if (empty) {
       noteParts.push(
         flags.dryRun
-          ? 'knowledge index dry run · 0 solutions under knowledge/solutions or docs/solutions'
-          : 'knowledge index recorded (meta written) · 0 solutions under knowledge/solutions or docs/solutions',
+          ? 'knowledge index dry run · 0 solutions in the harness project store or the Copilot knowledge home'
+          : 'knowledge index recorded (meta written) · 0 solutions in the harness project store or the Copilot knowledge home',
       );
     }
     if (result.staleLearnings) noteParts.push(`learnings excluded ${result.staleLearnings} (stale anchors)`);
@@ -625,8 +668,20 @@ export async function cmdIndex(argv) {
         next: empty ? 'harness compound or harness remember, then index again' : undefined,
       })
     );
+    const codeValue = code?.written
+      ? `${code.meta.filesIndexed} files${code.meta.extractorTier ? ` · ${code.meta.extractorTier}` : ''}`
+      : head
+        ? (codeError || 'not published')
+        : 'skipped · no git HEAD';
+    console.log(ui.line({
+      state: codeFailed ? 'error' : integrityFailures.length ? 'warn' : code?.written ? 'ok' : 'warn',
+      key: 'code',
+      value: integrityFailures.length
+        ? `${codeValue} · grammar integrity mismatch (${integrityFailures.length})`
+        : codeValue,
+    }));
   }
-  return 0;
+  return codeFailed ? 1 : 0;
 }
 
 export async function computeOrientResult(argv) {
@@ -1095,7 +1150,7 @@ export async function cmdCompound(argv) {
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
-  const result = runCompound({ workspace, copilotHome, flags, log: logger });
+  const result = await runCompound({ workspace, copilotHome, flags, log: logger });
   writeEvent(workspace, flags, {
     type: 'compound',
     command: 'compound',
@@ -1274,7 +1329,14 @@ export async function cmdRemember(argv) {
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
-  const result = runRemember({ workspace, copilotHome, flags, argv, log: logger });
+  const result = runRemember({
+    workspace,
+    copilotHome,
+    flags,
+    argv,
+    log: logger,
+    home: flags.harnessHome || flags.home || process.env.HARNESS_HOME,
+  });
   writeEvent(workspace, flags, {
     type: 'remember',
     command: 'remember',

@@ -5,12 +5,31 @@ import { createStyle } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { loadConfiguredChecks } from './plan-readiness.mjs';
 import { isPrimitivePath } from './primitive-governance.mjs';
-import { plansWriteRel } from './project-layout.mjs';
+import { plansWriteTarget } from './project-layout.mjs';
+import { harnessGlobalHome } from './paths.mjs';
 import { ensureHarnessDir } from './session.mjs';
+import { applyClassification, readClassification } from './classification.mjs';
+import { ensureIndexes } from './ensure-indexes.mjs';
+import { resolveCopilotHome } from './paths.mjs';
+import { loadPlan } from './plan-parse.mjs';
+import { parseImpactedFiles } from './plan-scope.mjs';
+import { emptySnapshot, routeWorkspace } from './route.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function warnIndexPlanes(report) {
+  const lines = [];
+  if (!report || report.error) lines.push(report?.error || 'index refresh failed');
+  else {
+    for (const plane of ['knowledge', 'structural']) {
+      const item = report[plane];
+      if (item?.attempted && !item.ok) lines.push(`${plane}: ${item.error || 'failed'}`);
+    }
+  }
+  for (const line of lines) process.stderr.write(`index  ${line}\n`);
+}
 
 function scalar(value, name, { multiline = false, required = false } = {}) {
   if (value === undefined || value === null) {
@@ -46,6 +65,10 @@ export function buildPlanSkeleton({
   status,
   check,
   plansRel = 'docs/plans',
+  plansBase = null,
+  routing = null,
+  domains = [],
+  playbook = null,
 } = {}) {
   scalar(slug, 'slug', { required: true });
   scalar(title, 'title');
@@ -65,12 +88,13 @@ export function buildPlanSkeleton({
     scalar(gap.primitive, 'gap', { required: true });
   }
 
-  const rel = `${plansRel}/${date}-${type}-${slug}-plan.md`;
+  const fileName = `${date}-${type}-${slug}-plan.md`;
+  const rel = plansBase ? path.join(plansBase, plansRel, fileName) : `${plansRel}/${fileName}`;
   const impactedList = impacted.length ? impacted.slice() : gap?.primitive ? [gap.primitive] : [];
   const primitive = impactedList.some(isPrimitivePath) || isPrimitivePath(gap?.primitive);
   const finalStatus = status || (gap ? 'blocked-capability' : 'in-progress');
   const acs = (criteria.length ? criteria : [`${intent} is delivered`]).map((text, i) => ({ id: `AC${i + 1}`, text }));
-  const skills = primitive ? ['engineer', 'create-primitive'] : ['engineer'];
+  const skills = ['engineer'];
   const heading = title || slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
   const frontmatter = {
@@ -90,6 +114,9 @@ export function buildPlanSkeleton({
     },
     reviews: { required: [], completed: [], critical_open: [] },
     skills_used: skills,
+    ...(routing ? { routing } : {}),
+    ...(domains?.length ? { domains } : {}),
+    ...(playbook ? { playbook } : {}),
     capability_gaps: gap
       ? [{ id: gap.id, class: 'hard', fulfillment: 'proposed', primitive: gap.primitive }]
       : [],
@@ -184,14 +211,26 @@ export async function cmdPlanNew(argv) {
       const idx = raw.indexOf(':');
       if (idx < 0) throw new Error('plan-new: --gap must be <id>:<primitive-path>');
       opts.gap = { id: raw.slice(0, idx), primitive: raw.slice(idx + 1) };
-    } else if (a === '--workspace') workspace = path.resolve(next());
+    } else if (a === '--from') opts.from = next();
+    else if (a === '--classification') opts.classification = next();
+    else if (a === '--copilot-home') opts.copilotHome = next();
+    else if (a === '--workspace') workspace = path.resolve(next());
     else if (a === '--json') json = true;
     else if (a === '--dry-run') dryRun = true;
     else if (a === '--stdout') toStdout = true;
   }
 
+  if (opts.from) {
+    if (opts.slug || opts.type || opts.intent || opts.gap) {
+      throw new Error('plan-new: --from cannot be combined with new-plan flags');
+    }
+    return relockPlan({ workspace, from: opts.from, dryRun, toStdout, json, classification: opts.classification, copilotHome: opts.copilotHome });
+  }
+
   if (!opts.date) opts.date = new Date().toISOString().slice(0, 10);
-  opts.plansRel = plansWriteRel(workspace);
+  const plansTarget = plansWriteTarget(workspace, { home: harnessGlobalHome() });
+  opts.plansBase = plansTarget.base;
+  opts.plansRel = plansTarget.dirRel;
   if (!toStdout) ensureHarnessDir(workspace, dryRun);
 
   const configured = loadConfiguredChecks(workspace);
@@ -214,14 +253,36 @@ export async function cmdPlanNew(argv) {
     throw new Error(`plan-new: --verification-check is required when multiple checks are configured: ${names.join(', ')}`);
   }
 
+  const prepared = prepareRouting({
+    workspace,
+    impacted: opts.impacted,
+    risk: opts.risk || 'green',
+    domains: [],
+    classification: opts.classification,
+    copilotHome: resolveCopilotHome(opts.copilotHome),
+  });
+  opts.impacted = prepared.impacted;
+  opts.risk = prepared.risk;
+  opts.domains = prepared.domains;
+  opts.playbook = prepared.playbook;
+  opts.routing = prepared.routing;
+
   const { path: rel, content } = buildPlanSkeleton(opts);
-  const full = path.join(workspace, rel);
+  const full = path.isAbsolute(rel) ? rel : path.join(workspace, rel);
   if (toStdout) {
     process.stdout.write(content);
     return 0;
   }
   if (!dryRun) {
     fs.mkdirSync(path.dirname(full), { recursive: true });
+    if (fs.existsSync(full)) throw new Error(`plan-new: ${rel} already exists`);
+    const indexes = await ensureIndexes({
+      workspace,
+      copilotHome: resolveCopilotHome(opts.copilotHome),
+      mode: 'missing-or-stale',
+      dryRun: false,
+    }).catch((error) => ({ error: error.message }));
+    warnIndexPlanes(indexes);
     if (fs.existsSync(full)) throw new Error(`plan-new: ${rel} already exists`);
     fs.writeFileSync(full, content, 'utf8');
   }
@@ -232,6 +293,77 @@ export async function cmdPlanNew(argv) {
     const ui = createStyle();
     console.log(ui.line({ state: 'ok', key: 'plan-new', value: dryRun ? `would create ${rel}` : rel }));
     console.log(ui.paint('muted', `${ui.arrow} harness gate --phase implement --plan ${rel} --json`));
+  }
+  return 0;
+}
+
+function prepareRouting({ workspace, impacted, risk, domains, classification, copilotHome }) {
+  let next = { impacted: impacted.slice(), risk, domains: domains.slice(), playbook: null, primitive: false, abstain: false };
+  if (classification) {
+    next = applyClassification({
+      workspace,
+      declaredRisk: risk,
+      declaredDomains: domains,
+      declaredImpacted: impacted,
+      classification: readClassification(classification, workspace),
+    });
+  }
+  if (next.abstain) return { ...next, routing: emptySnapshot('classification-abstain') };
+  const routed = routeWorkspace({
+    workspace,
+    copilotHome,
+    impacted: next.impacted,
+    risk: next.risk,
+    domains: next.domains,
+    primitive: next.primitive === true || next.impacted.some(isPrimitivePath),
+    planLock: false,
+  });
+  if (!routed.ok) throw new Error(`plan-new: ${routed.errors.join('; ')}`);
+  return { ...next, routing: routed.snapshot };
+}
+
+async function relockPlan({ workspace, from, dryRun, toStdout, json, classification, copilotHome }) {
+  const plan = loadPlan(workspace, from);
+  if (!plan) throw new Error('plan-new: --from plan was not found');
+  if (plan.fm.__parseError) throw new Error(`plan-new: --from plan frontmatter is invalid (${plan.fm.__parseError})`);
+  if (plan.plan_lock) throw new Error('plan-new: --from requires an unlocked plan');
+  const original = fs.readFileSync(plan.fullPath, 'utf8');
+  const prepared = prepareRouting({
+    workspace,
+    impacted: parseImpactedFiles(plan),
+    risk: plan.risk || 'green',
+    domains: Array.isArray(plan.fm.domains) ? plan.fm.domains : [],
+    classification,
+    copilotHome: resolveCopilotHome(copilotHome),
+  });
+  const frontmatter = {
+    ...plan.fm,
+    plan_lock: true,
+    status: plan.fm.status === 'open' || !plan.fm.status ? 'planned' : plan.fm.status,
+    risk: prepared.risk,
+    routing: prepared.routing,
+    ...(prepared.domains.length ? { domains: prepared.domains } : {}),
+    ...(prepared.playbook ? { playbook: prepared.playbook } : {}),
+  };
+  const content = original.replace(/^---\r?\n[\s\S]*?\r?\n---/, `---\n${YAML.stringify(frontmatter)}---`);
+  if (toStdout) {
+    process.stdout.write(content);
+    return 0;
+  }
+  if (!dryRun) {
+    const indexes = await ensureIndexes({
+      workspace,
+      copilotHome: resolveCopilotHome(copilotHome),
+      mode: 'missing-or-stale',
+    }).catch((error) => ({ error: error.message }));
+    warnIndexPlanes(indexes);
+    if (fs.readFileSync(plan.fullPath, 'utf8') !== original) throw new Error('plan-new: plan changed before relock');
+    fs.writeFileSync(plan.fullPath, content, 'utf8');
+  }
+  if (json) console.log(redactedJson({ path: plan.path, created: !dryRun, relocked: true }));
+  else {
+    const ui = createStyle();
+    console.log(ui.line({ state: 'ok', key: 'plan-new', value: dryRun ? `would relock ${plan.path}` : plan.path }));
   }
   return 0;
 }
