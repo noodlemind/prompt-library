@@ -808,6 +808,113 @@ test('SessionStart runtime context reinforces the critical Engineer Investigate 
   assert.match(output.additionalContext, /missing-implement-gate[\s\S]{0,160}ensure-plan\/SKILL\.md/i);
 });
 
+function writeScoredPlan(full, { lock, status }) {
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, `---\nplan_lock: ${lock}\nstatus: ${status}\n---\n\n# ${path.basename(full)}\n`);
+}
+
+function withExternalHome(run) {
+  const workspace = tempWorkspace();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-ext-home-'));
+  const previous = process.env.HARNESS_HOME;
+  process.env.HARNESS_HOME = home;
+  try {
+    return run(workspace, home);
+  } finally {
+    if (previous === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+function activePlanLine(additionalContext) {
+  return String(additionalContext || '').split('\n').find((entry) => entry.startsWith('- Active plan candidate:'));
+}
+
+test('SessionStart names an external plan when session.activePlan is unset', () => {
+  withExternalHome((workspace) => {
+    const plan = path.join(externalPlansDir(workspace), '2026-10-02-fix-external-only.md');
+    writeScoredPlan(plan, { lock: true, status: 'in-progress' });
+    const result = runHook('load-context.mjs', workspace, {});
+    assert.equal(result.status, 0, result.stderr);
+    const output = outputJson(result);
+    assert.equal(activePlanLine(output.additionalContext), `- Active plan candidate: ${plan}`);
+  });
+});
+
+test('SessionStart keeps a docs/plans candidate workspace-relative', () => {
+  const workspace = tempWorkspace();
+  try {
+    const rel = writePlan(workspace);
+    const result = runHook('load-context.mjs', workspace, {});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(activePlanLine(outputJson(result).additionalContext), `- Active plan candidate: ${rel}`);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('SessionStart prefers the higher-scoring plan when an external plan and a docs plan both exist', () => {
+  withExternalHome((workspace) => {
+    const external = path.join(externalPlansDir(workspace), '2026-10-02-fix-external-plan.md');
+    writeScoredPlan(external, { lock: true, status: 'in-progress' });
+    writeScoredPlan(path.join(workspace, 'docs/plans/open-plan.md'), { lock: false, status: 'open' });
+    const result = runHook('load-context.mjs', workspace, {});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(activePlanLine(outputJson(result).additionalContext), `- Active plan candidate: ${external}`);
+  });
+});
+
+test('session.activePlan wins over a higher-scoring plan file', () => {
+  withExternalHome((workspace) => {
+    const external = path.join(externalPlansDir(workspace), '2026-10-02-fix-external-plan.md');
+    writeScoredPlan(external, { lock: true, status: 'in-progress' });
+    const chosen = 'docs/plans/open-plan.md';
+    writeScoredPlan(path.join(workspace, chosen), { lock: false, status: 'open' });
+    fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify({
+      activePlan: chosen,
+      gateStatus: 'pass',
+    }));
+    const result = runHook('load-context.mjs', workspace, {});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(activePlanLine(outputJson(result).additionalContext), `- Active plan candidate: ${chosen}`);
+  });
+});
+
+test('preserve-context names an external plan directory and still names docs/plans', () => {
+  withExternalHome((workspace) => {
+    const dir = externalPlansDir(workspace);
+    fs.mkdirSync(dir, { recursive: true });
+    const externalOnly = runHook('preserve-context.mjs', workspace, {});
+    assert.equal(externalOnly.status, 0, externalOnly.stderr);
+    assert.equal(
+      outputJson(externalOnly).additionalContext,
+      `[harness hook] Preserve before compact:\n- plans dir: ${dir}/`
+    );
+  });
+
+  const workspace = tempWorkspace();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-ext-home-'));
+  const previous = process.env.HARNESS_HOME;
+  process.env.HARNESS_HOME = home;
+  try {
+    fs.mkdirSync(path.join(workspace, 'docs', 'plans'), { recursive: true });
+    const docsOnly = runHook('preserve-context.mjs', workspace, {});
+    assert.equal(docsOnly.status, 0, docsOnly.stderr);
+    assert.equal(
+      outputJson(docsOnly).additionalContext,
+      '[harness hook] Preserve before compact:\n- plans dir: docs/plans/'
+    );
+  } finally {
+    if (previous === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('shell analyzer catches clobber redirects, dd, nested shells, and PowerShell writers', () => {
   const cases = [
     ['echo x >| .harness/session.json', ['.harness/session.json']],
