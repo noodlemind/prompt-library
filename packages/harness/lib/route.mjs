@@ -139,6 +139,20 @@ export function routingReadPointers(snapshot, inventory) {
   return lines.filter(Boolean);
 }
 
+export function routingCards(snapshot, inventory) {
+  if (!snapshot || snapshot.skipped) return { skills: [], instructions: [], contacts: [] };
+  return {
+    skills: idCards(snapshot.skills?.required, inventory, 'skills'),
+    instructions: idCards(snapshot.instructions, inventory, 'instructions'),
+    // Specialist ids have no condition text on the snapshot.
+    contacts: idCards(snapshot.specialists?.required, inventory, 'agents').map((card) => ({ ...card, when: null })),
+  };
+}
+
+function idCards(ids, inventory, kind) {
+  return (ids || []).map((id) => ({ id, path: inventory?.[kind]?.get(id) || null }));
+}
+
 function pointer(inventory, kind, id) {
   const full = inventory?.[kind]?.get(id);
   return full ? `read ${full}` : `unavailable ${kind.replace(/s$/, '')} ${id}`;
