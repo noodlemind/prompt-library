@@ -64,6 +64,22 @@ function assertRecord(text, fm, { authority, status }) {
   assert.match(text, new RegExp(`^status: ${status}$`, 'm'));
 }
 
+test('remember of the same trigger keeps correction fields the call did not set', () => {
+  const c = ctx();
+  enable(c);
+  const written = run(c, correctArgs({ domain: 'sql' }));
+  assert.equal(written.status, 0, written.stderr + written.stdout);
+  const id = JSON.parse(written.stdout).learningId;
+  const nextClaim = 'Queue the alter behind the existing lock.';
+  const remembered = run(c, ['remember', nextClaim, '--trigger', 'altering a hot table', '--domain', 'sql']);
+  assert.equal(remembered.status, 0, remembered.stderr + remembered.stdout);
+  const learning = learnings(c).find((l) => l.id === id);
+  assert.ok(learning, 'superseded learning still exists');
+  const text = fs.readFileSync(learning.file, 'utf8');
+  assert.match(text, /Queue the alter behind the existing lock/);
+  assertRecord(text, learning.fm, { authority: 'correction', status: 'active' });
+});
+
 test('correct --authority correction writes an active learning with the four fields', () => {
   const c = ctx();
   enable(c);

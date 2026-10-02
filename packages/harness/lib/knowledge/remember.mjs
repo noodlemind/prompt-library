@@ -137,7 +137,12 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   const sha256 = crypto.createHash('sha256').update(text).digest('hex');
 
     const newEpisode = { path: episode.path, sha256, kind: 'human-teaching', plan: null };
-  const scope = correction || {};
+  const scope = { ...(correction || {}) };
+  if (existingLearning) {
+    for (const key of ['authority', 'why', 'applies', 'does_not_apply']) {
+      if (!scope[key] && existingLearning.fm[key]) scope[key] = existingLearning.fm[key];
+    }
+  }
   const op = existingLearning
     ? { op: 'SUPERSEDE', target: learningId, domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode], ...scope }
     : { op: 'ADD', domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode], ...scope };
