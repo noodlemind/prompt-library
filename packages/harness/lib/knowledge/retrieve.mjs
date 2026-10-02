@@ -35,7 +35,17 @@ function overlapCount(queryTokens, text) {
   return count;
 }
 
-function scoreLearning(l, { queryTokens, staleExcluded, include }) {
+function signalTokenSet(signals) {
+  const tokens = new Set();
+  if (!Array.isArray(signals)) return tokens;
+  for (const signal of signals) {
+    if (typeof signal !== 'string') continue;
+    for (const token of tokenize(signal)) tokens.add(token);
+  }
+  return tokens;
+}
+
+function scoreLearning(l, { queryTokens, signalTokens = new Set(), staleExcluded, include }) {
   const gate = retrievalExclusion(l, staleExcluded);
   if (gate) return { excluded: gate };
     if (include && !include(l)) return { excluded: 'filtered' };
@@ -55,22 +65,26 @@ function scoreLearning(l, { queryTokens, staleExcluded, include }) {
   // Provisional learnings are rank-damped until a verified confirmation.
   const damping = l.fm.status === 'provisional' ? 0.5 : 1;
   const score = Number((base * damping).toFixed(3));
-  return { excluded: null, hits, matched, base, damping, score, claimLine };
+  const appliesSignalHits = signalTokens.size ? overlapCount(signalTokens, l.fm.applies || '') : 0;
+  return { excluded: null, hits, matched, base, damping, score, claimLine, appliesSignalHits };
 }
 
-export function rankLearnings({ workspace, query, limit = 3, home, include }) {
+export function rankLearnings({ workspace, query, limit = 3, home, include, signals }) {
   const { learnings, staleExcluded } = loadLearnings({ workspace, home });
 
   const queryTokens = new Set(tokenize(query || ''));
+  const signalTokens = signalTokenSet(signals);
+  for (const token of signalTokens) queryTokens.add(token);
   if (!queryTokens.size) return [];
 
   const results = [];
+  const appliesBias = new Map();
   for (const l of learnings) {
-    const scored = scoreLearning(l, { queryTokens, staleExcluded, include });
+    const scored = scoreLearning(l, { queryTokens, signalTokens, staleExcluded, include });
     if (scored.excluded) continue;
     const advisory =
       (l.fm.episodes || []).length > 0 && (l.fm.episodes || []).every((e) => e.kind === 'insight');
-    results.push({
+    const row = {
       id: l.id,
             trigger: retrievedText(l.fm.trigger),
       claimLine: retrievedText(scored.claimLine).slice(0, 140),
@@ -80,11 +94,13 @@ export function rankLearnings({ workspace, query, limit = 3, home, include }) {
       advisory,
       score: scored.score,
             ...(l.layer === 'branch' ? { layer: 'branch', ...(l.subordinate ? { subordinate: true } : {}) } : {}),
-    });
+    };
+    appliesBias.set(row, scored.appliesSignalHits);
+    results.push(row);
   }
 
     return results
-    .sort((a, b) => b.score - a.score || layerTieRank(a) - layerTieRank(b) || a.id.localeCompare(b.id))
+    .sort((a, b) => b.score - a.score || appliesBias.get(b) - appliesBias.get(a) || layerTieRank(a) - layerTieRank(b) || a.id.localeCompare(b.id))
     .slice(0, limit);
 }
 
