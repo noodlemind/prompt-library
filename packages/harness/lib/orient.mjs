@@ -7,7 +7,7 @@ import { buildPlanView } from './plan-view.mjs';
 import { buildNeighborhood, buildRepoMap } from './repo-map/index.mjs';
 import { indexStatus } from './index-status.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
-import { discoverInventory, routingReadPointers, workspaceRoutingRoots } from './route.mjs';
+import { discoverInventory, routingCards, routingReadPointers, workspaceRoutingRoots } from './route.mjs';
 import { extractGoalFromPlan } from './plan-goal.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
@@ -29,6 +29,13 @@ function jsonGitContext(gitContext) {
     headSha: gitContext.headSha,
     baseSha: gitContext.baseSha,
   };
+}
+
+function indexPlane(plane) {
+  if (!plane?.indexed) return 'missing';
+  if (plane.unreadable?.length) return 'unreadable';
+  if (plane.stale) return 'stale';
+  return 'current';
 }
 
 export function runOrient({ workspace, copilotHome, flags, query, files }) {
@@ -131,10 +138,16 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     ? [`harness gate --phase implement --plan ${active?.path || '<path>'}`, 'read plan ## Impacted Files']
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
 
+  let index = { knowledge: 'missing', structural: 'missing' };
     try {
     const status = indexStatus({ workspace, copilotHome, home });
+    index = {
+      knowledge: indexPlane(status.knowledge),
+      structural: indexPlane(status.structural),
+    };
     if (status.stale) nextTools.push('harness index  # knowledge index is behind HEAD');
     if (status.structural && !status.structural.indexed) nextTools.push('harness index  # code index is not built');
+    else if (status.structural?.unreadable?.length) nextTools.push('harness index  # code index is unreadable');
     else if (status.structural?.stale) nextTools.push('harness index  # code index is behind HEAD');
   } catch {
     // Staleness is advisory; never block orientation on it.
@@ -156,8 +169,13 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }
 
   let routingLines = null;
+  let skills = [];
+  let instructions = [];
+  let contacts = [];
   if (active?.fm?.routing) {
-    routingLines = routingReadPointers(active.fm.routing, discoverInventory(workspaceRoutingRoots(workspace, [copilotHome])));
+    const inventory = discoverInventory(workspaceRoutingRoots(workspace, [copilotHome]));
+    routingLines = routingReadPointers(active.fm.routing, inventory);
+    ({ skills, instructions, contacts } = routingCards(active.fm.routing, inventory));
     if (gatePreview.pass) {
       for (const line of routingLines) {
         if (line.startsWith('read ')) nextTools.push(line);
@@ -249,6 +267,11 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,
+    neighborhood,
+    skills,
+    instructions,
+    contacts,
+    index,
   };
 }
 

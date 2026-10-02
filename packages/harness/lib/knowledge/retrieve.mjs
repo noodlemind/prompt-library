@@ -90,6 +90,7 @@ export function rankLearnings({ workspace, query, limit = 3, home, include, sign
       claimLine: retrievedText(scored.claimLine).slice(0, 140),
       ...(l.fm.applies ? { applies: retrievedText(l.fm.applies) } : {}),
       ...(l.fm.does_not_apply ? { does_not_apply: retrievedText(l.fm.does_not_apply) } : {}),
+      ...(typeof l.fm.authority === 'string' && l.fm.authority ? { authority: retrievedText(l.fm.authority) } : {}),
       status: l.fm.status || 'active',
       advisory,
       score: scored.score,

@@ -130,13 +130,31 @@ export function validateRoutingSnapshot(routing) {
   return { legacy: false, ok: errors.length === 0, errors };
 }
 
+function idList(ids) {
+  return Array.isArray(ids) ? ids : [];
+}
+
 export function routingReadPointers(snapshot, inventory) {
   if (!snapshot || snapshot.skipped) return snapshot?.reason ? [`skipped: ${snapshot.reason}`] : [];
   const lines = [];
-  for (const id of snapshot.skills?.required || []) lines.push(pointer(inventory, 'skills', id));
-  for (const id of snapshot.instructions || []) lines.push(pointer(inventory, 'instructions', id));
-  for (const id of snapshot.specialists?.required || []) lines.push(pointer(inventory, 'agents', id));
+  for (const id of idList(snapshot.skills?.required)) lines.push(pointer(inventory, 'skills', id));
+  for (const id of idList(snapshot.instructions)) lines.push(pointer(inventory, 'instructions', id));
+  for (const id of idList(snapshot.specialists?.required)) lines.push(pointer(inventory, 'agents', id));
   return lines.filter(Boolean);
+}
+
+export function routingCards(snapshot, inventory) {
+  if (!snapshot || snapshot.skipped) return { skills: [], instructions: [], contacts: [] };
+  return {
+    skills: idCards(snapshot.skills?.required, inventory, 'skills'),
+    instructions: idCards(snapshot.instructions, inventory, 'instructions'),
+    // Specialist ids have no condition text on the snapshot.
+    contacts: idCards(snapshot.specialists?.required, inventory, 'agents').map((card) => ({ ...card, when: null })),
+  };
+}
+
+function idCards(ids, inventory, kind) {
+  return idList(ids).map((id) => ({ id, path: inventory?.[kind]?.get(id) || null }));
 }
 
 function pointer(inventory, kind, id) {
