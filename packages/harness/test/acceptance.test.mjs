@@ -37,6 +37,46 @@ test('a case missing why is not ok and names why', () => {
   });
 });
 
+test('a case missing task is not ok and names task', () => {
+  assert.deepEqual(validateCase(without(complete, 'task')), {
+    ok: false,
+    missing: ['task'],
+  });
+  assert.deepEqual(validateCase({ ...complete, task: '' }), {
+    ok: false,
+    missing: ['task'],
+  });
+});
+
+test('a case missing rejected is not ok and names rejected', () => {
+  assert.deepEqual(validateCase(without(complete, 'rejected')), {
+    ok: false,
+    missing: ['rejected'],
+  });
+  assert.deepEqual(validateCase({ ...complete, rejected: '' }), {
+    ok: false,
+    missing: ['rejected'],
+  });
+});
+
+test('a case missing accepted is not ok and names accepted', () => {
+  assert.deepEqual(validateCase(without(complete, 'accepted')), {
+    ok: false,
+    missing: ['accepted'],
+  });
+  assert.deepEqual(validateCase({ ...complete, accepted: '' }), {
+    ok: false,
+    missing: ['accepted'],
+  });
+});
+
+test('a prototype-only field is missing', () => {
+  assert.deepEqual(validateCase(Object.create(complete)), {
+    ok: false,
+    missing: ['task', 'rejected', 'accepted', 'why', 'stage'],
+  });
+});
+
 test('a stage value of guess is not ok and names stage', () => {
   assert.deepEqual(validateCase({ ...complete, stage: 'guess' }), {
     ok: false,
