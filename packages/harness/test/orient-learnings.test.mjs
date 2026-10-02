@@ -82,7 +82,7 @@ test('orient surfaces matching learnings with attribution and advisory fencing',
 
   const pack = fs.readFileSync(path.join(c.ws, '.harness', 'context-pack.md'), 'utf8');
   assert.match(pack, /## Learnings \(memory\)/);
-  assert.match(pack, /Applied learnings: sql\/not-null-large-tables/);
+  assert.match(pack, /Retrieved learnings: sql\/not-null-large-tables/);
   assert.match(pack, /two-step default\+backfill/);
 });
 
