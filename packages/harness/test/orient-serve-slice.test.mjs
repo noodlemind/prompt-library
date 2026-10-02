@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { storeDir } from '../lib/knowledge/store.mjs';
+import { structuralIndexDir } from '../lib/repo-map/structural-index.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -169,6 +170,80 @@ routing:
       path: real('.github/agents/java-reviewer.agent.md'),
       when: null,
     }]);
+  } finally {
+    fs.rmSync(c.ws, { recursive: true, force: true });
+    fs.rmSync(c.home, { recursive: true, force: true });
+    fs.rmSync(c.harnessHome, { recursive: true, force: true });
+  }
+});
+
+test('orient --json returns the blocked gate when a routing id list is a string', () => {
+  const c = seededRepo();
+  try {
+    for (const [rel, body] of [
+      ['.github/skills/java/SKILL.md', '---\nname: java\n---\n'],
+      ['.github/instructions/java.instructions.md', '---\nname: java\n---\n'],
+      ['.github/agents/java-reviewer.agent.md', '---\nname: java-reviewer\n---\n'],
+    ]) {
+      const full = path.join(c.ws, rel);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, body);
+    }
+    const plans = path.join(c.ws, 'docs', 'plans');
+    fs.mkdirSync(plans, { recursive: true });
+    fs.writeFileSync(path.join(plans, '2026-05-22-fix-example-plan.md'), `---
+title: "Fix example"
+status: in-progress
+plan_lock: true
+phase: 1
+routing:
+  version: 1
+  skills:
+    required: java
+    optional: []
+  instructions: [java]
+  specialists:
+    required: [java-reviewer]
+    consult_if: []
+  skipped: false
+---
+
+# Fix example
+`);
+    const out = orientJson(c, []);
+    const real = (rel) => fs.realpathSync(path.join(c.ws, rel));
+    assert.equal(out.gateStatus, 'blocked');
+    assert.match(out.blockedReason, /must be lists/);
+    assert.deepEqual(out.skills, []);
+    assert.deepEqual(out.instructions, [{ id: 'java', path: real('.github/instructions/java.instructions.md') }]);
+    assert.deepEqual(out.contacts, [{
+      id: 'java-reviewer',
+      path: real('.github/agents/java-reviewer.agent.md'),
+      when: null,
+    }]);
+    const pack = fs.readFileSync(path.join(c.ws, '.harness', 'context-pack.md'), 'utf8');
+    assert.equal(pack.includes('unavailable skill j'), false);
+  } finally {
+    fs.rmSync(c.ws, { recursive: true, force: true });
+    fs.rmSync(c.home, { recursive: true, force: true });
+    fs.rmSync(c.harnessHome, { recursive: true, force: true });
+  }
+});
+
+test('orient --json labels an unreadable structural index as unreadable', () => {
+  const c = seededRepo();
+  try {
+    const dir = structuralIndexDir(c.ws, { home: c.harnessHome });
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ version: 1, sha: 'abc1234', filesIndexed: 1 }));
+    fs.writeFileSync(path.join(dir, 'files.json'), '{}');
+    fs.writeFileSync(path.join(dir, 'symbols.json'), '{ "truncated": ');
+    fs.writeFileSync(path.join(dir, 'graph.json'), '{}');
+    const out = orientJson(c, []);
+    assert.equal(out.index.knowledge, 'missing');
+    assert.equal(out.index.structural, 'unreadable');
+    assert.equal(out.nextTools.some((line) => line.includes('code index is behind HEAD')), false);
+    assert.ok(out.nextTools.some((line) => line.includes('code index is unreadable')));
   } finally {
     fs.rmSync(c.ws, { recursive: true, force: true });
     fs.rmSync(c.home, { recursive: true, force: true });

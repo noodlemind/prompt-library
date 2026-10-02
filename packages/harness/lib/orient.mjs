@@ -33,6 +33,7 @@ function jsonGitContext(gitContext) {
 
 function indexPlane(plane) {
   if (!plane?.indexed) return 'missing';
+  if (plane.unreadable?.length) return 'unreadable';
   if (plane.stale) return 'stale';
   return 'current';
 }
@@ -146,6 +147,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     };
     if (status.stale) nextTools.push('harness index  # knowledge index is behind HEAD');
     if (status.structural && !status.structural.indexed) nextTools.push('harness index  # code index is not built');
+    else if (status.structural?.unreadable?.length) nextTools.push('harness index  # code index is unreadable');
     else if (status.structural?.stale) nextTools.push('harness index  # code index is behind HEAD');
   } catch {
     // Staleness is advisory; never block orientation on it.

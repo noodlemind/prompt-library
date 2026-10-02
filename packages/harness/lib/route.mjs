@@ -130,12 +130,16 @@ export function validateRoutingSnapshot(routing) {
   return { legacy: false, ok: errors.length === 0, errors };
 }
 
+function idList(ids) {
+  return Array.isArray(ids) ? ids : [];
+}
+
 export function routingReadPointers(snapshot, inventory) {
   if (!snapshot || snapshot.skipped) return snapshot?.reason ? [`skipped: ${snapshot.reason}`] : [];
   const lines = [];
-  for (const id of snapshot.skills?.required || []) lines.push(pointer(inventory, 'skills', id));
-  for (const id of snapshot.instructions || []) lines.push(pointer(inventory, 'instructions', id));
-  for (const id of snapshot.specialists?.required || []) lines.push(pointer(inventory, 'agents', id));
+  for (const id of idList(snapshot.skills?.required)) lines.push(pointer(inventory, 'skills', id));
+  for (const id of idList(snapshot.instructions)) lines.push(pointer(inventory, 'instructions', id));
+  for (const id of idList(snapshot.specialists?.required)) lines.push(pointer(inventory, 'agents', id));
   return lines.filter(Boolean);
 }
 
@@ -150,7 +154,7 @@ export function routingCards(snapshot, inventory) {
 }
 
 function idCards(ids, inventory, kind) {
-  return (ids || []).map((id) => ({ id, path: inventory?.[kind]?.get(id) || null }));
+  return idList(ids).map((id) => ({ id, path: inventory?.[kind]?.get(id) || null }));
 }
 
 function pointer(inventory, kind, id) {
