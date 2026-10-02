@@ -175,6 +175,40 @@ test('a slash path links only when one tracked file has that path', () => {
   }
 });
 
+test('an explicit source extension beats another file at the same path', () => {
+  const { ws } = gitRepo({
+    'app.js': "import { Button } from 'src/components/button.ts';\nexport function app() {}\n",
+    'src/components/button.js': 'export function Button() {}\n',
+    'src/components/button.ts': 'export const Button = 1;\n',
+  });
+  try {
+    const result = buildNeighborhood({ workspace: ws, files: ['app.js'] });
+    assert.deepEqual(
+      result.files.map((entry) => entry.rel),
+      ['app.js', 'src/components/button.ts'],
+    );
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('a python parent import can land on a package init', () => {
+  const { ws } = gitRepo({
+    'pkg/sub/child.py': 'from ..foo import bar\n',
+    'pkg/foo/__init__.py': 'def bar():\n    pass\n',
+    'other/foo.py': 'def bar():\n    pass\n',
+  });
+  try {
+    const result = buildNeighborhood({ workspace: ws, files: ['pkg/sub/child.py'] });
+    assert.deepEqual(
+      result.files.map((entry) => entry.rel),
+      ['pkg/foo/__init__.py', 'pkg/sub/child.py'],
+    );
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test('a requested tracked file stays when the scan cap omits it', () => {
   const { ws } = gitRepo({
     'a.js': 'export function alpha() {}\n',

@@ -72,6 +72,8 @@ function pathCandidates(normalized, fromRel, trackedSet) {
     if (file !== fromRel && trackedSet.has(file)) files.push(file);
     if (index !== fromRel && trackedSet.has(index)) indexes.push(index);
   }
+  const init = `${normalized}/__init__.py`;
+  if (init !== fromRel && trackedSet.has(init)) indexes.push(init);
   return files.length ? files : indexes;
 }
 
@@ -106,6 +108,7 @@ function moduleIndex(rels) {
   const suffix = new Map();
   for (const rel of rels) {
     const noExt = rel.replace(IMPORT_SUFFIX, '');
+    addKey(exact, rel, rel);
     addKey(exact, noExt, rel);
     addSuffixes(suffix, noExt, rel);
     if (rel.endsWith('/__init__.py')) {
@@ -120,7 +123,13 @@ function moduleIndex(rels) {
 function moduleTargets(specifier, lookup, fromRel) {
   const cleaned = String(specifier).replace(/['"]/g, '').trim();
   if (!cleaned || cleaned.startsWith('node:') || NODE_BUILTINS.has(cleaned)) return [];
-  if (cleaned.includes('/')) return uniqueOther(lookup.exact.get(cleaned.replace(IMPORT_SUFFIX, '')), fromRel);
+  if (cleaned.includes('/')) {
+    if (IMPORT_SUFFIX.test(cleaned)) {
+      const preferred = uniqueOther(lookup.exact.get(cleaned), fromRel);
+      if (preferred.length) return preferred;
+    }
+    return uniqueOther(lookup.exact.get(cleaned.replace(IMPORT_SUFFIX, '')), fromRel);
+  }
   const asPath = cleaned.replace(IMPORT_SUFFIX, '').split('.').filter(Boolean).join('/');
   if (!asPath) return [];
   return uniqueOther(lookup.suffix.get(asPath), fromRel);
@@ -158,10 +167,14 @@ function importEdges(facts, trackedSet) {
 }
 
 function listTrackedSource(workspace) {
-  const res = spawnSync('git', ['-C', workspace, 'ls-files'], { encoding: 'utf8', timeout: 15_000 });
-  if (res.status !== 0) return [];
+  const res = spawnSync('git', ['-C', workspace, 'ls-files', '-z'], {
+    encoding: 'utf8',
+    timeout: 15_000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (res.error || res.status !== 0) return [];
   return res.stdout
-    .split('\n')
+    .split('\0')
     .filter(Boolean)
     .filter((rel) => SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase()));
 }
