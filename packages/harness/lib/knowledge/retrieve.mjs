@@ -100,7 +100,7 @@ export function rankLearnings({ workspace, query, limit = 3, home, include, sign
   }
 
     return results
-    .sort((a, b) => b.score - a.score || appliesBias.get(b) - appliesBias.get(a) || layerTieRank(a) - layerTieRank(b) || a.id.localeCompare(b.id))
+    .sort((a, b) => b.score - a.score || layerTieRank(a) - layerTieRank(b) || appliesBias.get(b) - appliesBias.get(a) || a.id.localeCompare(b.id))
     .slice(0, limit);
 }
 
