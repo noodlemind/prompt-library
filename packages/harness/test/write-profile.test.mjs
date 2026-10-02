@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { renderEngineerProfile } from '../lib/hosts/engineer-profile.mjs';
@@ -35,12 +34,37 @@ test('an unknown host throws and leaves no file', () => {
 });
 
 test('a missing directory throws before any write', () => {
-  const directory = path.join(os.tmpdir(), `harness-write-profile-missing-${process.pid}`);
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(fs.existsSync(directory), false);
-  assert.throws(() => writeEngineerProfile({ host: 'copilot', directory }));
-  assert.equal(fs.existsSync(directory), false);
-  assert.equal(fs.existsSync(path.join(directory, 'engineer-copilot.md')), false);
+  withTempSync('harness-write-profile-', (parent) => {
+    const directory = path.join(parent, 'missing');
+    assert.equal(fs.existsSync(directory), false);
+    assert.throws(() => writeEngineerProfile({ host: 'copilot', directory }));
+    assert.equal(fs.existsSync(directory), false);
+    assert.equal(fs.existsSync(path.join(directory, 'engineer-copilot.md')), false);
+  });
+});
+
+test('a symlink at engineer-copilot.md throws and leaves the outside target unchanged', () => {
+  withTempSync('harness-write-profile-', (root) => {
+    const target = path.join(root, 'outside-target.txt');
+    const targetBytes = 'outside profile bytes\n';
+    fs.writeFileSync(target, targetBytes);
+    const directory = path.join(root, 'profiles');
+    fs.mkdirSync(directory);
+    const linkPath = path.join(directory, 'engineer-copilot.md');
+    fs.symlinkSync(target, linkPath);
+
+    assert.throws(
+      () => writeEngineerProfile({ host: 'copilot', directory }),
+      (error) => {
+        assert.equal(error instanceof Error, true);
+        assert.equal(error.message.includes(linkPath), true);
+        assert.equal(error.message.includes('symlink'), true);
+        return true;
+      },
+    );
+    assert.equal(fs.readFileSync(target, 'utf8'), targetBytes);
+    assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true);
+  });
 });
 
 test('a second write overwrites the same path with the same bytes', () => {
