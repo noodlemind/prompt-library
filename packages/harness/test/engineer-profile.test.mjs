@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { renderEngineerProfile } from '../lib/hosts/engineer-profile.mjs';
+import { listCommands } from '../lib/registry.mjs';
 
 const HOSTS = ['copilot', 'grok', 'cursor', 'codex'];
 
@@ -27,6 +28,18 @@ for (const host of HOSTS) {
     assert.equal(/\b(start|launch|invoke|run)\b[^.\n]{0,40}\bmodel\b/i.test(text), false);
   });
 }
+
+test('every harness command in the profile is registered', () => {
+  const registered = new Set(listCommands());
+  for (const host of HOSTS) {
+    const text = renderEngineerProfile(host);
+    const names = [...text.matchAll(/\bharness ([a-z][a-z0-9-]*)\b/g)].map((match) => match[1]);
+    assert.notEqual(names.length, 0, `${host} profile names no harness command`);
+    for (const name of names) {
+      assert.equal(registered.has(name), true, `${host} names unregistered command ${name}`);
+    }
+  }
+});
 
 test('renderEngineerProfile throws for an unknown host', () => {
   for (const host of ['intellij', 'Copilot', '', null, undefined, 1]) {
