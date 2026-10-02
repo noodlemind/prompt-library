@@ -166,25 +166,21 @@ function importEdges(facts, trackedSet) {
   return { incoming, outgoing };
 }
 
-function listTrackedSource(workspace) {
+function listTracked(workspace) {
   const res = spawnSync('git', ['-C', workspace, 'ls-files', '-z'], {
     encoding: 'utf8',
     timeout: 15_000,
     maxBuffer: 64 * 1024 * 1024,
   });
   if (res.error || res.status !== 0) return [];
-  return res.stdout
-    .split('\0')
-    .filter(Boolean)
-    .filter((rel) => SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase()));
+  return res.stdout.split('\0').filter(Boolean);
 }
 
-function trackedForNeighborhood(workspace, maxFiles, required) {
-  const all = listTrackedSource(workspace);
+function trackedSourceForNeighborhood(sourceFiles, maxFiles, required) {
   const limit = Number.isFinite(maxFiles) && maxFiles >= 0 ? maxFiles : MAX_FILES_SCANNED;
-  const chosen = all.slice(0, limit);
+  const chosen = sourceFiles.slice(0, limit);
   const seen = new Set(chosen);
-  const tracked = new Set(all);
+  const tracked = new Set(sourceFiles);
   for (const rel of required) {
     if (!rel || seen.has(rel) || !tracked.has(rel)) continue;
     chosen.push(rel);
@@ -262,23 +258,35 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
 export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_SCANNED } = {}) {
   const requested = Array.isArray(files) ? files : [files];
   const normalized = requested.map((raw) => ({ raw, rel: requestRel(workspace, raw) }));
-  const tracked = trackedForNeighborhood(
-    workspace,
+  const trackedAll = listTracked(workspace);
+  const trackedAllSet = new Set(trackedAll);
+  const sourceFiles = trackedAll.filter((rel) => SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase()));
+  const tracked = trackedSourceForNeighborhood(
+    sourceFiles,
     maxFiles,
     normalized.map((item) => item.rel),
   );
   const trackedSet = new Set(tracked);
-  const facts = fileFacts(workspace, tracked);
-  const { incoming, outgoing } = importEdges(facts, trackedSet);
   const missing = [];
   const seenMissing = new Set();
   const seeds = [];
-  const seenSeeds = new Set();
+  const plain = [];
+  const requestedRels = [];
+  const seen = new Set();
   for (const { raw, rel } of normalized) {
     if (rel && trackedSet.has(rel)) {
-      if (!seenSeeds.has(rel)) {
-        seenSeeds.add(rel);
+      if (!seen.has(rel)) {
+        seen.add(rel);
         seeds.push(rel);
+        requestedRels.push(rel);
+      }
+      continue;
+    }
+    if (rel && trackedAllSet.has(rel)) {
+      if (!seen.has(rel)) {
+        seen.add(rel);
+        plain.push(rel);
+        requestedRels.push(rel);
       }
       continue;
     }
@@ -289,19 +297,27 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
     }
   }
   const hop = new Set(seeds);
-  for (const rel of seeds) {
-    for (const target of outgoing.get(rel) || []) hop.add(target);
-    for (const source of incoming.get(rel) || []) hop.add(source);
+  let incoming = new Map();
+  const facts = seeds.length ? fileFacts(workspace, tracked) : new Map();
+  if (seeds.length) {
+    const edges = importEdges(facts, trackedSet);
+    incoming = edges.incoming;
+    for (const rel of seeds) {
+      for (const target of edges.outgoing.get(rel) || []) hop.add(target);
+      for (const source of incoming.get(rel) || []) hop.add(source);
+    }
   }
-  return {
-    files: [...hop].sort(compareRel).map((rel) => ({
-      rel,
-      symbols: facts.get(rel).symbols,
-      imports: facts.get(rel).imports,
-      importedBy: [...(incoming.get(rel) || [])].sort(compareRel),
-    })),
-    missing,
-  };
+  const filesOut = [...hop].sort(compareRel).map((rel) => ({
+    rel,
+    symbols: facts.get(rel).symbols,
+    imports: facts.get(rel).imports,
+    importedBy: [...(incoming.get(rel) || [])].sort(compareRel),
+  }));
+  for (const rel of plain) {
+    filesOut.push({ rel, symbols: [], imports: [], importedBy: [] });
+  }
+  filesOut.sort(compareRel);
+  return { files: filesOut, missing, requested: requestedRels };
 }
 
 /**

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { buildContextPack } from '../lib/context-pack.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -80,6 +81,50 @@ test('a file flag stays out of the query when orient is asked for a.js', () => {
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
   }
+});
+
+test('a tracked README.md is a neighborhood line and only an absent path is missing', () => {
+  const ws = gitRepo({
+    'README.md': '# notes\n',
+    'a.js': "import { b } from './b.js';\nexport function alpha() { return b; }\n",
+    'b.js': 'export function b() { return 1; }\n',
+  });
+  try {
+    const res = orient(ws, ['--file', 'README.md', '--file', 'absent.js']);
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+    const pack = fs.readFileSync(path.join(ws, '.harness', 'context-pack.md'), 'utf8');
+    assert.deepEqual(neighborhoodLines(pack), ['README.md', 'Missing: absent.js']);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('a large neighborhood leaves the learning line in the pack', () => {
+  const files = [{ rel: 'a.js' }];
+  for (let i = 0; i < 400; i += 1) {
+    files.push({ rel: `n/${String(i).padStart(3, '0')}-${'x'.repeat(30)}.js` });
+  }
+  const pack = buildContextPack({
+    query: 'alpha',
+    learnings: [{ id: 'sql/keep-me', trigger: 'adding a column', claimLine: 'Use two steps.' }],
+    recall: [],
+    plans: [],
+    neighborhood: {
+      files,
+      missing: [],
+      requested: ['a.js'],
+    },
+  });
+  const lines = neighborhoodLines(pack);
+  const omitted = lines.find((line) => line.startsWith('Omitted '));
+  assert.match(omitted, /^Omitted \d+$/);
+  const count = Number(omitted.slice('Omitted '.length));
+  const printed = lines.filter((line) => line.endsWith('.js'));
+  assert.equal(printed[0], 'a.js');
+  assert.equal(printed.length + count, 401);
+  assert.match(pack, /Retrieved learnings: sql\/keep-me/);
+  assert.match(pack, /- \[sql\/keep-me\] adding a column → Use two steps\./);
+  assert.ok(Buffer.byteLength(pack, 'utf8') <= 2048);
 });
 
 test('orient with no file list writes no change neighborhood section', () => {

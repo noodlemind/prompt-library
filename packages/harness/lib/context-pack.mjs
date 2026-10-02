@@ -121,11 +121,7 @@ export function buildContextPack({
   }
 
   if (neighborhood) {
-    lines.push('', '## Change neighborhood');
-    for (const file of neighborhood.files || []) lines.push(inertLine(file.rel));
-    if (neighborhood.missing?.length) {
-      lines.push(`Missing: ${neighborhood.missing.map((item) => inertLine(item)).join(', ')}`);
-    }
+    lines.push('', '## Change neighborhood', ...boundedNeighborhoodLines(lines, neighborhood, learnings));
   }
 
     lines.push(...buildLearningsLines(learnings));
@@ -187,6 +183,53 @@ export function buildContextPack({
     body = buf.subarray(0, end).toString('utf8') + '\n\n…(truncated to 2KB budget)\n';
   }
   return body;
+}
+
+function boundedNeighborhoodLines(prefixLines, neighborhood, learnings) {
+  const rendered = new Map();
+  for (const file of neighborhood.files || []) {
+    if (file?.rel && !rendered.has(file.rel)) rendered.set(file.rel, inertLine(file.rel));
+  }
+  const requested = [];
+  const seen = new Set();
+  for (const rel of neighborhood.requested || []) {
+    if (!rendered.has(rel) || seen.has(rel)) continue;
+    seen.add(rel);
+    requested.push(rendered.get(rel));
+  }
+  const neighbors = [];
+  for (const file of neighborhood.files || []) {
+    if (!file?.rel || seen.has(file.rel)) continue;
+    seen.add(file.rel);
+    neighbors.push(rendered.get(file.rel));
+  }
+  const missingLine = neighborhood.missing?.length
+    ? `Missing: ${neighborhood.missing.map((item) => inertLine(item)).join(', ')}`
+    : '';
+  const chosen = [...requested];
+  let shown = 0;
+  for (let i = 0; i < neighbors.length; i += 1) {
+    const trial = [...chosen, neighbors[i]];
+    const left = neighbors.length - (i + 1);
+    if (left > 0) trial.push(`Omitted ${left}`);
+    if (missingLine) trial.push(missingLine);
+    // Truncation keeps the first 2KB minus the marker. Neighbors stop before that cut reaches Learnings.
+    if (bytesThroughLearnings(prefixLines, trial, learnings) > MAX_BYTES - 80) break;
+    chosen.push(neighbors[i]);
+    shown += 1;
+  }
+  const body = [...chosen];
+  const omitted = neighbors.length - shown;
+  if (omitted > 0) body.push(`Omitted ${omitted}`);
+  if (missingLine) body.push(missingLine);
+  return body;
+}
+
+function bytesThroughLearnings(prefixLines, bodyLines, learnings) {
+  return Buffer.byteLength(
+    [...prefixLines, '', '## Change neighborhood', ...bodyLines, ...buildLearningsLines(learnings)].join('\n'),
+    'utf8',
+  );
 }
 
 function extractNamedSection(body, heading) {
