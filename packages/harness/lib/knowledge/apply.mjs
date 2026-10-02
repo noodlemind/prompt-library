@@ -20,6 +20,8 @@ import {
   inertLine,
   provenanceLines,
   provenanceBytes,
+  correctionLines,
+  statusForAuthority,
 } from './store.mjs';
 import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm, collectEpisodes, splitLedger } from './consolidate.mjs';
@@ -202,7 +204,7 @@ function extractAnchors({ workspace, copilotHome, episodes, home }) {
   return [...found].sort().slice(0, ANCHOR_CAP);
 }
 
-function renderLearning({
+export function renderLearning({
   trigger,
   body,
   episodes,
@@ -214,6 +216,10 @@ function renderLearning({
   mergedFrom,
   promotedTo,
   promotedToGolden,
+  authority,
+  why,
+  applies,
+  does_not_apply,
   provenance,
 }) {
   const lines = [
@@ -222,6 +228,7 @@ function renderLearning({
     `trigger: ${yamlQuote(trigger)}`,
     `status: ${status}`,
     `source: ${source}`,
+    ...correctionLines({ authority, why, applies, does_not_apply }),
     'episodes:',
     // Shared with store.mjs's serializeLearning (episodeLines) — a pathless
     // episode is dropped and a missing/unrecognized kind defaults to 'fix',
@@ -1358,11 +1365,15 @@ export function applyOps({
             let source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e, home)) ? 'human' : 'auto';
       let status = source === 'human' ? 'active' : 'provisional';
       let provenance = writeProvenance;
+      let scope = op;
       if (promotionMode) {
                 const src = promotionSources.get(op.source.id);
         source = src.fm.source || 'auto';
         status = isActiveFm(src.fm) && src.fm.status === 'active' ? 'active' : src.fm.status || 'provisional';
         provenance = { commit: src.fm.commit, branch: src.fm.branch, base: src.fm.base };
+        scope = src.fm;
+      } else {
+        status = statusForAuthority(op.authority, status);
       }
       const content = renderLearning({
         trigger: op.trigger,
@@ -1374,6 +1385,10 @@ export function applyOps({
         source,
         supersededBy: null,
                 mergedFrom: op.op === 'MERGE' ? op.targets : null,
+        authority: scope.authority,
+        why: scope.why,
+        applies: scope.applies,
+        does_not_apply: scope.does_not_apply,
         provenance,
       });
             if (Buffer.byteLength(content, 'utf8') - provenanceBytes(provenance) > LEARNING_BYTE_CAP) {
@@ -1669,6 +1684,10 @@ function composeStrengthenedLearning(target, episodes, workspace, copilotHome, h
         mergedFrom: parseMergedFrom(fm.merged_from),
         promotedTo: fm.promoted_to || null,
         promotedToGolden: fm.promoted_to_golden || null,
+        authority: fm.authority,
+        why: fm.why,
+        applies: fm.applies,
+        does_not_apply: fm.does_not_apply,
         provenance: { commit: fm.commit, branch: fm.branch, base: fm.base },
   });
   return content;

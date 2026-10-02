@@ -4,14 +4,53 @@ import path from 'node:path';
 import { runInsightCompound } from '../compound.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { applyOps } from './apply.mjs';
-import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTransaction, StoreTransactionAbort, readLedger, writeLedger } from './store.mjs';
+import { normalizeSlug, readStoreConfig, storeDir, listLearnings, withStoreTransaction, StoreTransactionAbort, readLedger, writeLedger, CORRECTION_AUTHORITIES } from './store.mjs';
 import { absorbOrAbort } from './admin.mjs';
 import { resolveWriteLayer } from './layer.mjs';
 import { bucketDirFor } from './overlay.mjs';
 import { episodeAbsPath } from '../project-layout.mjs';
 import { positionalsOf } from '../positionals.mjs';
 
-export function runRemember({ workspace, copilotHome, flags, argv, log = () => {}, home }) {
+function oneLine(value) {
+  if (typeof value !== 'string') return null;
+  const line = value.trim();
+  if (!line || /[\u0000-\u001f\u007f]/.test(line)) return null;
+  return line;
+}
+
+function refuseCorrect(blockedReason) {
+  return {
+    pass: false,
+    exitCode: 2,
+    episodePath: null,
+    learningId: null,
+    blockedReason,
+    nextTools: [
+      'harness correct "<claim>" --trigger "<when>" --why "<why>" --applies "<where>" --does-not-apply "<where not>" --authority <instruction|correction|inference>',
+    ],
+  };
+}
+
+export function runCorrect(args) {
+  const flags = args.flags || {};
+  const why = oneLine(flags.why);
+  const applies = oneLine(flags.applies);
+  const doesNot = oneLine(flags.doesNotApply);
+  const authority = typeof flags.authority === 'string' ? flags.authority.trim() : '';
+  if (!why || !applies || !doesNot || !CORRECTION_AUTHORITIES.has(authority)) {
+    const named = typeof flags.authority === 'string' ? flags.authority.trim() : '';
+    const blockedReason = named && !CORRECTION_AUTHORITIES.has(named)
+      ? 'authority must be instruction, correction, or inference'
+      : 'correct needs --why, --applies, --does-not-apply, and --authority';
+    return refuseCorrect(blockedReason);
+  }
+  return runRemember({
+    ...args,
+    correction: { authority, why, applies, does_not_apply: doesNot },
+  });
+}
+
+export function runRemember({ workspace, copilotHome, flags, argv, log = () => {}, home, correction = null }) {
     const { mode } = readStoreConfig(workspace, { home });
   if (!['on', 'suggest'].includes(mode)) {
     return {
@@ -98,9 +137,10 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
   const sha256 = crypto.createHash('sha256').update(text).digest('hex');
 
     const newEpisode = { path: episode.path, sha256, kind: 'human-teaching', plan: null };
+  const scope = correction || {};
   const op = existingLearning
-    ? { op: 'SUPERSEDE', target: learningId, domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode] }
-    : { op: 'ADD', domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode] };
+    ? { op: 'SUPERSEDE', target: learningId, domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode], ...scope }
+    : { op: 'ADD', domain, slug, trigger: flags.trigger, body: claim, episodes: [newEpisode], ...scope };
   const ops = { schema: 1, ops: [op] };
   const opsDir = path.join(workspace, '.harness');
   fs.mkdirSync(opsDir, { recursive: true });

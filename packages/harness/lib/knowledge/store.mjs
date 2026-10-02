@@ -445,6 +445,25 @@ export function provenanceBytes(fields) {
   return provenanceLines(fields).reduce((n, line) => n + Buffer.byteLength(line, 'utf8') + 1, 0);
 }
 
+export const CORRECTION_AUTHORITIES = new Set(['instruction', 'correction', 'inference']);
+
+export function statusForAuthority(authority, fallback) {
+  if (authority === 'inference') return 'provisional';
+  if (authority === 'instruction' || authority === 'correction') return 'active';
+  return fallback;
+}
+
+// Both learning serializers call this. A field missing from either one is
+// deleted the next time that serializer rewrites the file.
+export function correctionLines({ authority, why, applies, does_not_apply } = {}) {
+  const lines = [];
+  if (CORRECTION_AUTHORITIES.has(authority)) lines.push(`authority: ${authority}`);
+  if (why) lines.push(`why: ${yamlQuote(why)}`);
+  if (applies) lines.push(`applies: ${yamlQuote(applies)}`);
+  if (does_not_apply) lines.push(`does_not_apply: ${yamlQuote(does_not_apply)}`);
+  return lines;
+}
+
 /**
  * Render a parsed `{ fm, body }` pair (as `parseLearningFrontmatter` above
  * hands back) to the canonical on-disk learning text — same field order and
@@ -468,6 +487,7 @@ export function serializeLearning(fm, body) {
     `trigger: ${yamlQuote(fm.trigger || '')}`,
     `status: ${fm.status || 'active'}`,
     `source: ${fm.source || 'auto'}`,
+    ...correctionLines(fm),
     'episodes:',
     ...episodeLines(fm.episodes),
   ];

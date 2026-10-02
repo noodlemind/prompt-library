@@ -23,6 +23,7 @@ import {
   cmdKnowledge,
   cmdConsolidate,
   cmdRemember,
+  cmdCorrect,
   cmdLearning,
   cmdEvalKnowledge,
   cmdUninstall,
@@ -1583,6 +1584,26 @@ registerCommand({
     ],
   },
   handler: cmdRemember,
+});
+
+registerCommand({
+  name: 'correct',
+  summary: 'record who authorized a claim, why, where it applies, and where it does not',
+  group: 'knowledge',
+  sideEffect: 'mutate',
+  surfaces: ['cli'],
+  args: {
+    positionals: [{ name: 'claim', description: 'the accepted claim', required: true, default: null }],
+    flags: [
+      { name: '--trigger', type: 'string', valueName: 'when', description: 'when the claim applies', required: true, default: null, tui: 'cli-only' },
+      { name: '--why', type: 'string', valueName: 'why', description: 'why this claim was accepted', required: true, default: null, tui: 'cli-only' },
+      { name: '--applies', type: 'string', valueName: 'where', description: 'where the claim applies', required: true, default: null, tui: 'cli-only' },
+      { name: '--does-not-apply', type: 'string', valueName: 'where-not', description: 'where the claim does not apply', required: true, default: null, tui: 'cli-only' },
+      { name: '--authority', type: 'string', valueName: 'authority', description: 'instruction, correction, or inference', required: true, default: null, tui: 'cli-only', choices: ['instruction', 'correction', 'inference'] },
+      { name: '--domain', type: 'string', valueName: 'd', description: 'learning domain directory (default general)', required: false, default: null, tui: 'cli-only' },
+    ],
+  },
+  handler: cmdCorrect,
 });
 
 registerCommand({
