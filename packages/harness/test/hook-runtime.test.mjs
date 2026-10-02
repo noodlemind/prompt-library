@@ -866,6 +866,26 @@ test('SessionStart prefers the higher-scoring plan when an external plan and a d
   });
 });
 
+test('SessionStart skips a done plan when session.activePlan is unset', () => {
+  withExternalHome((workspace) => {
+    const finished = path.join(externalPlansDir(workspace), '2026-10-02-fix-finished-plan.md');
+    writeScoredPlan(finished, { lock: true, status: 'done' });
+    const rel = 'docs/plans/open-plan.md';
+    writeScoredPlan(path.join(workspace, rel), { lock: false, status: 'planned' });
+    const result = runHook('load-context.mjs', workspace, {});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(activePlanLine(outputJson(result).additionalContext), `- Active plan candidate: ${rel}`);
+  });
+
+  withExternalHome((workspace) => {
+    const finished = path.join(externalPlansDir(workspace), '2026-10-02-fix-finished-plan.md');
+    writeScoredPlan(finished, { lock: true, status: 'done' });
+    const result = runHook('load-context.mjs', workspace, {});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(activePlanLine(outputJson(result).additionalContext), undefined);
+  });
+});
+
 test('session.activePlan wins over a higher-scoring plan file', () => {
   withExternalHome((workspace) => {
     const external = path.join(externalPlansDir(workspace), '2026-10-02-fix-external-plan.md');

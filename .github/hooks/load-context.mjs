@@ -59,7 +59,9 @@ function findActivePlan(workspace) {
       } catch {
         continue;
       }
-      candidates.push({ display: planDisplayPath(workspace, full), fm: parsePlanFrontmatter(text) });
+      const fm = parsePlanFrontmatter(text);
+      if (fm.status === 'done') continue;
+      candidates.push({ display: planDisplayPath(workspace, full), fm });
     }
   }
   candidates.sort((a, b) => {
