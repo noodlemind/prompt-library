@@ -18,6 +18,7 @@ const FLAGS_WITH_VALUES = new Set([
   '--source',
   '--cursor',
   '--depth',
+  '--file',
 ]);
 
 export function parseQueryFromArgv(argv, flags) {

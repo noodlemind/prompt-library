@@ -603,6 +603,7 @@ registerCommand({
       },
       { name: '--min-score', type: 'number', valueName: 'n', description: 'minimum score (default 0.15)', required: false, default: 0.15, tui: 'prompt' },
             { name: '--explain', type: 'boolean', description: 'decompose learning ranking (deterministic)', required: false, default: false, tui: 'verb' },
+      { name: '--file', type: 'string', valueName: 'path', description: 'one file to place in the change neighborhood (repeatable)', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdOrient,

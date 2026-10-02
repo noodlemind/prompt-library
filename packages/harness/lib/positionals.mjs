@@ -2,7 +2,7 @@ export const VALUE_FLAGS = Object.freeze(new Set([
   '--agent', '--allow-env', '--applies', '--authority', '--autonomy', '--base', '--body', '--body-file', '--branch',
   '--category', '--changes', '--claim', '--classification', '--collection', '--command', '--content', '--copilot-home', '--criteria',
   '--cursor', '--cwd', '--date', '--depth', '--docid', '--does-not-apply', '--domain', '--enforcement',
-  '--expect', '--from', '--gap', '--harness-home', '--host', '--id', '--ids', '--impacted', '--intent', '--layer', '--learnings',
+  '--expect', '--file', '--from', '--gap', '--harness-home', '--host', '--id', '--ids', '--impacted', '--intent', '--layer', '--learnings',
   '--limit', '--lines', '--match', '--max-bytes', '--max-seconds', '--max-turns',
   '--min-score', '--model', '--new', '--offset', '--old', '--ops', '--output', '--path', '--phase', '--plan',
   '--profile', '--provider', '--query', '--reason', '--risk', '--scope', '--session', '--since',

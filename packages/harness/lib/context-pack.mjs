@@ -56,6 +56,7 @@ export function buildContextPack({
   nextTools,
   gitContext,
   routingLines = null,
+  neighborhood = null,
 }) {
     const lines = [
     '# Harness Context Pack',
@@ -117,6 +118,14 @@ export function buildContextPack({
       '## Repo map (code orientation)',
       `- Read \`${repoMapRef.path}\` — ${repoMapRef.files} of ${repoMapRef.totalFiles} source files, ranked for this query. Start there instead of searching the tree.`
     );
+  }
+
+  if (neighborhood) {
+    lines.push('', '## Change neighborhood');
+    for (const file of neighborhood.files || []) lines.push(inertLine(file.rel));
+    if (neighborhood.missing?.length) {
+      lines.push(`Missing: ${neighborhood.missing.map((item) => inertLine(item)).join(', ')}`);
+    }
   }
 
     lines.push(...buildLearningsLines(learnings));

@@ -66,6 +66,7 @@ export function parseFlags(argv) {
     targets: new Set(['vscode', 'cli', 'intellij']),
     workspace: process.cwd(),
     query: null,
+    files: null,
     explain: false,
     phase: 'implement',
     limit: null,
@@ -136,6 +137,17 @@ export function parseFlags(argv) {
     else if (a === '--check') flags.check = true;
     else if (a.startsWith('--query=')) flags.query = a.split('=').slice(1).join('=');
     else if (a === '--query') flags.query = scan[++i];
+    else if (a.startsWith('--file=')) {
+      const value = a.split('=').slice(1).join('=');
+      if (!value) invalidFlag('--file', value, 'requires a path');
+      if (!flags.files) flags.files = [];
+      flags.files.push(value);
+    } else if (a === '--file') {
+      const next = scan[++i];
+      if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--file', next, 'requires a path');
+      if (!flags.files) flags.files = [];
+      flags.files.push(next);
+    }
     else if (a.startsWith('--phase=')) flags.phase = parsePhase(a.split('=')[1]);
     else if (a === '--phase') flags.phase = parsePhase(scan[++i]);
     else if (a.startsWith('--limit=')) flags.limit = parseInt(a.split('=')[1], 10);
