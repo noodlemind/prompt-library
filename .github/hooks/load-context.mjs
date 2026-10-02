@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'fs';
 import path from 'path';
+import { planDisplayPath, planRoots } from './lib/external-plans.mjs';
 import { resolveHookWorkspace } from './lib/tool-payload.mjs';
 
 function readStdin() {
@@ -9,19 +10,6 @@ function readStdin() {
   } catch {
     return '';
   }
-}
-
-function listPlanRels(workspace) {
-  const out = [];
-  for (const dirRel of ['docs/plans', '.harness/plans']) {
-    const plansDir = path.join(workspace, dirRel);
-    if (!fs.existsSync(plansDir)) continue;
-    for (const f of fs.readdirSync(plansDir)) {
-      if (!f.endsWith('.md') || f.startsWith('_') || f === 'README.md') continue;
-      out.push(`${dirRel}/${f}`);
-    }
-  }
-  return out.sort();
 }
 
 function parsePlanFrontmatter(text) {
@@ -48,26 +36,42 @@ function findActivePlan(workspace) {
   if (fs.existsSync(sessionPath)) {
     try {
       const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
-      if (session.activePlan) return session.activePlan.replace(/\\/g, '/');
+      if (typeof session.activePlan === 'string' && session.activePlan) return session.activePlan;
     } catch {
       /* ignore */
     }
   }
 
-  const planRels = listPlanRels(workspace);
-  const candidates = planRels
-    .map((rel) => {
+  const candidates = [];
+  for (const root of planRoots(workspace)) {
+    let names;
+    try {
+      names = fs.readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.endsWith('.md') || name.startsWith('_') || name === 'README.md') continue;
+      const full = path.join(root, name);
+      let text;
       try {
-        const text = fs.readFileSync(path.join(workspace, rel), 'utf8');
-        return { rel, fm: parsePlanFrontmatter(text) };
+        text = fs.readFileSync(full, 'utf8');
       } catch {
-        return null;
+        continue;
       }
-    })
-    .filter(Boolean)
-    .sort((a, b) => planPriority(b.fm) - planPriority(a.fm));
-
-  return candidates[0]?.rel || null;
+      const fm = parsePlanFrontmatter(text);
+      if (fm.status === 'done') continue;
+      candidates.push({ display: planDisplayPath(workspace, full), fm });
+    }
+  }
+  candidates.sort((a, b) => {
+    const score = planPriority(b.fm) - planPriority(a.fm);
+    if (score !== 0) return score;
+    if (a.display < b.display) return -1;
+    if (a.display > b.display) return 1;
+    return 0;
+  });
+  return candidates[0]?.display || null;
 }
 
 const raw = readStdin();

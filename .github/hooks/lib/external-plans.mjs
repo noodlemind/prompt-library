@@ -49,15 +49,32 @@ export function externalPlansDir(workspace) {
   return path.join(harnessHome(), 'projects', repoId(workspace), 'plans');
 }
 
+function isDirectory(full) {
+  try {
+    return fs.statSync(full).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function planRoots(workspace) {
   const roots = [];
   for (const rel of ['docs/plans', '.harness/plans']) {
     const full = path.join(workspace, rel);
-    if (fs.existsSync(full)) roots.push(full);
+    if (isDirectory(full)) roots.push(full);
   }
   const external = externalPlansDir(workspace);
-  if (fs.existsSync(external)) roots.push(external);
+  if (isDirectory(external)) roots.push(external);
   return roots;
+}
+
+/** Workspace-relative posix path, or the absolute path when target is outside the workspace. */
+export function planDisplayPath(workspace, target) {
+  const relative = path.relative(workspace, target);
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+    return relative.split(path.sep).join('/');
+  }
+  return target;
 }
 
 /** Real path of a plan that lives in a legacy dir or the external project store. */
