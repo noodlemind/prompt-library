@@ -14,7 +14,7 @@ export const RECALL_DATA_PREAMBLE =
 export function buildLearningsLines(learnings) {
   if (!learnings?.length) return [];
   const lines = ['', '## Learnings (memory)', LEARNINGS_DATA_PREAMBLE];
-  lines.push(`Applied learnings: ${learnings.map((l) => l.id).join(', ')}`);
+  lines.push(`Retrieved learnings: ${learnings.map((l) => l.id).join(', ')}`);
   for (const l of learnings) {
     const fence = l.advisory ? ' [unverified memory — advisory]' : '';
         const layerMark = l.layer === 'branch' ? (l.subordinate ? ' [branch-local, subordinate]' : ' [branch-local]') : '';
