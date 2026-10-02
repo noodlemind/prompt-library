@@ -449,7 +449,8 @@ export const CORRECTION_AUTHORITIES = new Set(['instruction', 'correction', 'inf
 
 export function statusForAuthority(authority, fallback) {
   if (authority === 'inference') return 'provisional';
-  if (authority === 'instruction' || authority === 'correction') return 'active';
+  // Active only when the caller already proved every episode is human-teaching.
+  if ((authority === 'instruction' || authority === 'correction') && fallback === 'active') return 'active';
   return fallback;
 }
 
