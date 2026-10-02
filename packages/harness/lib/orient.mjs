@@ -4,7 +4,7 @@ import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
 import { runGate } from './gate.mjs';
 import { buildContextPack, learningsSectionBytes } from './context-pack.mjs';
 import { buildPlanView } from './plan-view.mjs';
-import { buildRepoMap } from './repo-map/index.mjs';
+import { buildNeighborhood, buildRepoMap } from './repo-map/index.mjs';
 import { indexStatus } from './index-status.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
 import { discoverInventory, routingReadPointers, workspaceRoutingRoots } from './route.mjs';
@@ -31,7 +31,7 @@ function jsonGitContext(gitContext) {
   };
 }
 
-export function runOrient({ workspace, copilotHome, flags, query }) {
+export function runOrient({ workspace, copilotHome, flags, query, files }) {
   const q = query || flags.query || '';
   // A symlinked .harness redirects the context pack out of the workspace.
   if (ensureHarnessDir(workspace, flags.dryRun) === null) return null;
@@ -160,6 +160,16 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     }
   }
 
+  let neighborhood = null;
+  const requestedFiles = Array.isArray(files) ? files : flags.files;
+  if (Array.isArray(requestedFiles) && requestedFiles.length) {
+    try {
+      neighborhood = buildNeighborhood({ workspace, files: requestedFiles });
+    } catch {
+      // Neighborhood is advisory context; never fail orientation on it.
+    }
+  }
+
   const packBody = buildContextPack({
     query: q,
     recall,
@@ -182,6 +192,7 @@ export function runOrient({ workspace, copilotHome, flags, query }) {
     nextTools,
     gitContext,
     routingLines,
+    neighborhood,
   });
 
     const learningsBytes = learningsSectionBytes(packBody);
