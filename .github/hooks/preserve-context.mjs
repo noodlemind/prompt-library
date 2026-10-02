@@ -4,6 +4,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { planDisplayPath, planRoots } from './lib/external-plans.mjs';
 
 function readStdin() {
   try {
@@ -32,9 +33,10 @@ if (fs.existsSync(sessionPath)) {
     /* ignore */
   }
 }
-const plansDir = path.join(workspace, 'docs', 'plans');
-if (fs.existsSync(plansDir)) {
-  lines.push(`- plans dir: docs/plans/`);
+for (const root of planRoots(workspace)) {
+  const display = planDisplayPath(workspace, root);
+  const shown = display.endsWith('/') ? display : `${display}/`;
+  lines.push(`- plans dir: ${shown}`);
 }
 
 if (lines.length > 1) {

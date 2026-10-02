@@ -883,6 +883,25 @@ test('session.activePlan wins over a higher-scoring plan file', () => {
   });
 });
 
+test('SessionStart skips an external plans path that is not a directory', () => {
+  withExternalHome((workspace) => {
+    const external = externalPlansDir(workspace);
+    fs.mkdirSync(path.dirname(external), { recursive: true });
+    fs.writeFileSync(external, 'not a directory\n');
+    const rel = 'docs/plans/open-plan.md';
+    writeScoredPlan(path.join(workspace, rel), { lock: true, status: 'in-progress' });
+    const result = runHook('load-context.mjs', workspace, {});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(activePlanLine(outputJson(result).additionalContext), `- Active plan candidate: ${rel}`);
+    const preserved = runHook('preserve-context.mjs', workspace, {});
+    assert.equal(preserved.status, 0, preserved.stderr);
+    assert.equal(
+      outputJson(preserved).additionalContext,
+      '[harness hook] Preserve before compact:\n- plans dir: docs/plans/'
+    );
+  });
+});
+
 test('preserve-context names an external plan directory and still names docs/plans', () => {
   withExternalHome((workspace) => {
     const dir = externalPlansDir(workspace);
