@@ -93,12 +93,19 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     query: q,
   });
 
+  const namedFiles = Array.isArray(files) ? files : flags.files;
+
     let learnings = [];
   let explain = null;
   try {
     const { mode } = readStoreConfig(workspace, {});
     if (mode !== 'off' && mode !== 'capture-only') {
-      learnings = rankLearnings({ workspace, query: q, limit: 3 });
+      learnings = rankLearnings({
+        workspace,
+        query: q,
+        limit: 3,
+        ...(Array.isArray(namedFiles) && namedFiles.length ? { signals: namedFiles } : {}),
+      });
       if (flags.explain) {
         explain = explainLearnings({ workspace, query: q });
       }
@@ -161,10 +168,9 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }
 
   let neighborhood = null;
-  const requestedFiles = Array.isArray(files) ? files : flags.files;
-  if (Array.isArray(requestedFiles) && requestedFiles.length) {
+  if (Array.isArray(namedFiles) && namedFiles.length) {
     try {
-      neighborhood = buildNeighborhood({ workspace, files: requestedFiles });
+      neighborhood = buildNeighborhood({ workspace, files: namedFiles });
     } catch {
       // Neighborhood is advisory context; never fail orientation on it.
     }
