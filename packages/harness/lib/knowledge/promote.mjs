@@ -103,11 +103,16 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
           skipped.push({ id: source.id, reason: 'identical to golden with no new evidence — prune the bucket instead' });
           continue;
         }
+        const scopeFields = {};
+        for (const key of ['authority', 'why', 'applies', 'does_not_apply']) {
+          if (source.fm[key]) scopeFields[key] = source.fm[key];
+        }
         promotable.push({
           op: 'STRENGTHEN',
           target: source.id,
           episodes: newEpisodes.map((e) => ({ path: e.path, sha256: e.sha256, kind: e.kind, plan: e.plan || null })),
           source: { id: source.id, sha256 },
+          ...scopeFields,
         });
         continue;
       }

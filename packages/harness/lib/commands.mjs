@@ -1323,13 +1323,12 @@ export async function cmdConsolidate(argv) {
   return 0;
 }
 
-export async function cmdRemember(argv) {
-  const { runRemember } = await import('./knowledge/remember.mjs');
+async function finishTeaching(argv, command, run) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const logger = (m) => log(flags, m);
-  const result = runRemember({
+  const result = run({
     workspace,
     copilotHome,
     flags,
@@ -1339,7 +1338,7 @@ export async function cmdRemember(argv) {
   });
   writeEvent(workspace, flags, {
     type: 'remember',
-    command: 'remember',
+    command,
     result: result.pass ? 'pass' : 'fail',
     exitCode: result.exitCode,
     blockedReason: result.blockedReason,
@@ -1351,7 +1350,7 @@ export async function cmdRemember(argv) {
     console.log(
       ui.line({
         state: 'ok',
-        key: 'remember',
+        key: command,
         value: result.learningId,
         note: result.dryRun
           ? `dry-run — nothing written (would-be episode ${result.episodePath})`
@@ -1369,10 +1368,20 @@ export async function cmdRemember(argv) {
       console.error(l);
     }
   } else {
-    console.log(ui.line({ state: 'error', key: 'remember', value: `blocked · ${result.blockedReason}` }));
+    console.log(ui.line({ state: 'error', key: command, value: `blocked · ${result.blockedReason}` }));
     printNext(result.nextTools?.[0]);
   }
   return result.exitCode;
+}
+
+export async function cmdRemember(argv) {
+  const { runRemember } = await import('./knowledge/remember.mjs');
+  return finishTeaching(argv, 'remember', runRemember);
+}
+
+export async function cmdCorrect(argv) {
+  const { runCorrect } = await import('./knowledge/remember.mjs');
+  return finishTeaching(argv, 'correct', runCorrect);
 }
 
 export async function cmdLearning(argv) {

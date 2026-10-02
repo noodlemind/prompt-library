@@ -28,10 +28,21 @@ export function retrievalExclusion(l, staleExcluded = {}) {
   return null;
 }
 
+function overlapCount(queryTokens, text) {
+  const hay = new Set(tokenize(text));
+  let count = 0;
+  for (const token of queryTokens) if (hay.has(token)) count += 1;
+  return count;
+}
+
 function scoreLearning(l, { queryTokens, staleExcluded, include }) {
   const gate = retrievalExclusion(l, staleExcluded);
   if (gate) return { excluded: gate };
     if (include && !include(l)) return { excluded: 'filtered' };
+
+  const triggerOverlap = overlapCount(queryTokens, l.fm.trigger || '');
+  const excludedOverlap = overlapCount(queryTokens, l.fm.does_not_apply || '');
+  if (excludedOverlap > 0 && excludedOverlap >= triggerOverlap) return { excluded: 'out-of-scope' };
 
   const claimLine = (l.body.split('\n').find((x) => x.trim()) || '').trim();
   const hay = new Set(tokenize(`${l.fm.trigger || ''} ${claimLine}`));
@@ -63,6 +74,8 @@ export function rankLearnings({ workspace, query, limit = 3, home, include }) {
       id: l.id,
             trigger: retrievedText(l.fm.trigger),
       claimLine: retrievedText(scored.claimLine).slice(0, 140),
+      ...(l.fm.applies ? { applies: retrievedText(l.fm.applies) } : {}),
+      ...(l.fm.does_not_apply ? { does_not_apply: retrievedText(l.fm.does_not_apply) } : {}),
       status: l.fm.status || 'active',
       advisory,
       score: scored.score,
