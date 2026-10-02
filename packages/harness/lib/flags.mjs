@@ -105,6 +105,9 @@ export function parseFlags(argv) {
     reason: null,
     to: null,
     why: null,
+    applies: null,
+    doesNotApply: null,
+    authority: null,
     yes: false,
     layer: null,
     branch: null,
@@ -228,6 +231,21 @@ export function parseFlags(argv) {
     else if (a === '--why') {
             const next = scan[i + 1];
       if (next !== undefined && !next.startsWith('--')) flags.why = scan[++i];
+    }
+    else if (a.startsWith('--applies=')) flags.applies = a.split('=').slice(1).join('=');
+    else if (a === '--applies') {
+      const next = scan[i + 1];
+      if (next !== undefined && !next.startsWith('--')) flags.applies = scan[++i];
+    }
+    else if (a.startsWith('--does-not-apply=')) flags.doesNotApply = a.split('=').slice(1).join('=');
+    else if (a === '--does-not-apply') {
+      const next = scan[i + 1];
+      if (next !== undefined && !next.startsWith('--')) flags.doesNotApply = scan[++i];
+    }
+    else if (a.startsWith('--authority=')) flags.authority = a.split('=').slice(1).join('=');
+    else if (a === '--authority') {
+      const next = scan[i + 1];
+      if (next !== undefined && !next.startsWith('--')) flags.authority = scan[++i];
     }
     else if (a.startsWith('--since=')) {
       const value = a.split('=').slice(1).join('=');

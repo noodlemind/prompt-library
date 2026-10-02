@@ -20,6 +20,8 @@ import {
   inertLine,
   provenanceLines,
   provenanceBytes,
+  correctionLines,
+  statusForAuthority,
 } from './store.mjs';
 import { deriveGitContext, isDetachedKey } from '../git-context.mjs';
 import { MAX_OPS_PER_RUN, LEARNING_BYTE_CAP, QUARANTINE_THRESHOLD, DOMAIN_ACTIVE_CAP, isActiveFm, collectEpisodes, splitLedger } from './consolidate.mjs';
@@ -202,7 +204,7 @@ function extractAnchors({ workspace, copilotHome, episodes, home }) {
   return [...found].sort().slice(0, ANCHOR_CAP);
 }
 
-function renderLearning({
+export function renderLearning({
   trigger,
   body,
   episodes,
@@ -214,6 +216,10 @@ function renderLearning({
   mergedFrom,
   promotedTo,
   promotedToGolden,
+  authority,
+  why,
+  applies,
+  does_not_apply,
   provenance,
 }) {
   const lines = [
@@ -222,6 +228,7 @@ function renderLearning({
     `trigger: ${yamlQuote(trigger)}`,
     `status: ${status}`,
     `source: ${source}`,
+    ...correctionLines({ authority, why, applies, does_not_apply }),
     'episodes:',
     // Shared with store.mjs's serializeLearning (episodeLines) — a pathless
     // episode is dropped and a missing/unrecognized kind defaults to 'fix',
@@ -1259,7 +1266,7 @@ export function applyOps({
             exitCode: 1,
           };
         }
-        const secrets = scanSecrets(`${op.trigger}\n${op.body}`);
+        const secrets = scanSecrets(`${op.trigger}\n${op.body}\n${op.why || ''}\n${op.applies || ''}\n${op.does_not_apply || ''}`);
         if (secrets.length) {
           return rejectOp('E_SECRET', `op ${i}: secret-shaped content (${secrets.map((s) => s.id).join(', ')})`, op.episodes);
         }
@@ -1345,6 +1352,31 @@ export function applyOps({
         }
         consumedTargets.add(op.target);
       }
+      if (op.op === 'STRENGTHEN') {
+        const scopeSecrets = scanSecrets(`${op.why || ''}\n${op.applies || ''}\n${op.does_not_apply || ''}`);
+        if (scopeSecrets.length) {
+          return rejectOp(
+            'E_SECRET',
+            `op ${i}: secret-shaped content (${scopeSecrets.map((s) => s.id).join(', ')})`,
+            op.episodes
+          );
+        }
+      }
+      const admittedEpisodes = promotedEpisodes || op.episodes || [];
+      const teachingAuthority = op.authority === 'instruction' || op.authority === 'correction';
+      const humanTeaching =
+        admittedEpisodes.length > 0 &&
+        admittedEpisodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e, home));
+      if (teachingAuthority && !humanTeaching) {
+        return {
+          kind: 'reject',
+          applied: [],
+          governed: [],
+          rejected: [fail('E_AUTHORITY', `op ${i}: ${op.authority} requires human-teaching episodes`)],
+          committed: false,
+          exitCode: 1,
+        };
+      }
             planned.push({ ...op, ...(promotedEpisodes ? { episodes: promotedEpisodes } : {}), index: i });
     }
 
@@ -1358,11 +1390,15 @@ export function applyOps({
             let source = op.episodes.length && op.episodes.every((e) => verifyHumanTeachingEpisode(workspace, copilotHome, e, home)) ? 'human' : 'auto';
       let status = source === 'human' ? 'active' : 'provisional';
       let provenance = writeProvenance;
+      let scope = op;
       if (promotionMode) {
                 const src = promotionSources.get(op.source.id);
         source = src.fm.source || 'auto';
         status = isActiveFm(src.fm) && src.fm.status === 'active' ? 'active' : src.fm.status || 'provisional';
         provenance = { commit: src.fm.commit, branch: src.fm.branch, base: src.fm.base };
+        scope = src.fm;
+      } else {
+        status = statusForAuthority(op.authority, status);
       }
       const content = renderLearning({
         trigger: op.trigger,
@@ -1374,6 +1410,10 @@ export function applyOps({
         source,
         supersededBy: null,
                 mergedFrom: op.op === 'MERGE' ? op.targets : null,
+        authority: scope.authority,
+        why: scope.why,
+        applies: scope.applies,
+        does_not_apply: scope.does_not_apply,
         provenance,
       });
             if (Buffer.byteLength(content, 'utf8') - provenanceBytes(provenance) > LEARNING_BYTE_CAP) {
@@ -1386,7 +1426,7 @@ export function applyOps({
     for (const op of planned) {
       if (op.op !== 'STRENGTHEN') continue;
       const target = existing.get(op.target);
-      const content = composeStrengthenedLearning(target, op.episodes, workspace, copilotHome, home);
+      const content = composeStrengthenedLearning(target, op, workspace, copilotHome, home);
       if (content === null) {
         return rejectOp('E_TARGET', `op ${op.target}: learning file could not be read safely from the store`, op.episodes);
       }
@@ -1643,10 +1683,11 @@ export function updateFrontmatterField(file, field, value) {
   return writeLearningFile(file, next);
 }
 
-function composeStrengthenedLearning(target, episodes, workspace, copilotHome, home) {
+function composeStrengthenedLearning(target, op, workspace, copilotHome, home) {
     const text = readLearningFile(target.file);
   if (text === null) return null;
   const { fm, body } = parseLearningFrontmatter(text);
+  const episodes = op.episodes || [];
   const seen = new Set((fm.episodes || []).map((e) => `${e.path}@${e.sha256}`));
   const merged = [...(fm.episodes || [])];
   let gainedFix = false;
@@ -1655,8 +1696,10 @@ function composeStrengthenedLearning(target, episodes, workspace, copilotHome, h
     merged.push(e);
     if (e.kind === 'fix') gainedFix = true;
   }
-  // One verified confirmation activates a provisional learning (rank damping ends).
-  const status = fm.status === 'provisional' && gainedFix ? 'active' : fm.status || 'active';
+  const picked = (key) => (op[key] ? op[key] : fm[key]);
+  const authority = picked('authority');
+  // A later fix ends rank damping for other provisional learnings. An inference stays provisional.
+  const status = authority === 'inference' ? 'provisional' : fm.status === 'provisional' && gainedFix ? 'active' : fm.status || 'active';
   const content = renderLearning({
     trigger: fm.trigger || '',
     body,
@@ -1669,6 +1712,10 @@ function composeStrengthenedLearning(target, episodes, workspace, copilotHome, h
         mergedFrom: parseMergedFrom(fm.merged_from),
         promotedTo: fm.promoted_to || null,
         promotedToGolden: fm.promoted_to_golden || null,
+        authority,
+        why: picked('why'),
+        applies: picked('applies'),
+        does_not_apply: picked('does_not_apply'),
         provenance: { commit: fm.commit, branch: fm.branch, base: fm.base },
   });
   return content;

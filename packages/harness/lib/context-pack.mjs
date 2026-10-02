@@ -18,8 +18,10 @@ export function buildLearningsLines(learnings) {
   for (const l of learnings) {
     const fence = l.advisory ? ' [unverified memory — advisory]' : '';
         const layerMark = l.layer === 'branch' ? (l.subordinate ? ' [branch-local, subordinate]' : ' [branch-local]') : '';
-        lines.push(
-      `- [${l.id}]${layerMark}${fence} ${inertLine(redactSecrets(l.trigger))} → ${inertLine(redactSecrets(l.claimLine))}`
+        const applies = l.applies ? ` applies ${inertLine(redactSecrets(l.applies))}` : '';
+    const doesNot = l.does_not_apply ? ` does not apply ${inertLine(redactSecrets(l.does_not_apply))}` : '';
+    lines.push(
+      `- [${l.id}]${layerMark}${fence} ${inertLine(redactSecrets(l.trigger))} → ${inertLine(redactSecrets(l.claimLine))}${applies}${doesNot}`
     );
   }
   return lines;

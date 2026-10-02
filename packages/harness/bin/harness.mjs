@@ -25,7 +25,7 @@ export const HELP_COMMAND_ORDER = [
   'init-repo', 'migrate', 'index', 'plan-new', 'route', 'config',
   'model', 'trust', 'resources',
     'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'agent', 'validate-plan', 'compound', 'recall', 'get', 'edit', 'write', 'apply', 'todo', 'undo', 'search', 'lookup', 'tree', 'run', 'inspect', 'tui', 'events', 'report',
-  'knowledge', 'consolidate', 'remember', 'learning', 'learnings', 'eval-knowledge',
+  'knowledge', 'consolidate', 'remember', 'correct', 'learning', 'learnings', 'eval-knowledge',
   'resolve',
 ];
 
