@@ -316,7 +316,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
   for (const rel of plain) {
     filesOut.push({ rel, symbols: [], imports: [], importedBy: [] });
   }
-  filesOut.sort(compareRel);
+  filesOut.sort((a, b) => compareRel(a.rel, b.rel));
   return { files: filesOut, missing, requested: requestedRels };
 }
 
