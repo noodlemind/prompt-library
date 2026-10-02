@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { tokenize } from '../tokenize.mjs';
@@ -5,7 +6,7 @@ import { estimateTokens } from '../token-meter.mjs';
 import { extract as lexicalExtract, SOURCE_EXTENSIONS } from './lexical-extractor.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
 import { codebaseMapWriteRel } from '../project-layout.mjs';
-import { trackedSourceFiles, readFileSafe } from './scan.mjs';
+import { trackedSourceFiles, readFileSafe, MAX_FILES_SCANNED } from './scan.mjs';
 import { readStructuralIndexIfCurrent } from './structural-index.mjs';
 
 const DEFAULT_MAX_TOKENS = 1000;
@@ -51,63 +52,99 @@ function fileFacts(workspace, rels) {
   return facts;
 }
 
-function relativeTargets(fromRel, specifier, trackedSet) {
-  const normalized = path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), specifier));
+function uniqueOther(rels, fromRel) {
+  const hits = [];
+  for (const rel of rels || []) {
+    if (rel !== fromRel) hits.push(rel);
+  }
+  return hits.length === 1 ? hits : [];
+}
+
+function pathCandidates(normalized, fromRel, trackedSet) {
   if (!normalized || normalized === '..' || normalized.startsWith('../')) return [];
   if (trackedSet.has(normalized)) return normalized === fromRel ? [] : [normalized];
   if (path.posix.extname(normalized)) return [];
-  const matches = [];
+  const files = [];
+  const indexes = [];
   for (const ext of SOURCE_EXTENSIONS) {
-    const candidate = `${normalized}${ext}`;
-    if (candidate !== fromRel && trackedSet.has(candidate)) matches.push(candidate);
+    const file = `${normalized}${ext}`;
+    const index = `${normalized}/index${ext}`;
+    if (file !== fromRel && trackedSet.has(file)) files.push(file);
+    if (index !== fromRel && trackedSet.has(index)) indexes.push(index);
   }
-  return matches;
+  return files.length ? files : indexes;
+}
+
+function relativeTargets(fromRel, specifier, trackedSet) {
+  const normalized = path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), specifier));
+  return pathCandidates(normalized, fromRel, trackedSet);
+}
+
+function dotsToRelative(specifier) {
+  const match = /^(\.+)(.*)$/.exec(specifier);
+  if (!match) return '';
+  const climbs = match[1].length - 1;
+  const rest = match[2].split('.').filter(Boolean).join('/');
+  const prefix = climbs <= 0 ? './' : '../'.repeat(climbs);
+  return rest ? `${prefix}${rest}` : prefix;
+}
+
+function addKey(map, key, rel) {
+  if (!key) return;
+  let bucket = map.get(key);
+  if (!bucket) map.set(key, (bucket = new Set()));
+  bucket.add(rel);
+}
+
+function addSuffixes(map, key, rel) {
+  const parts = key.split('/');
+  for (let i = 0; i < parts.length; i++) addKey(map, parts.slice(i).join('/'), rel);
 }
 
 function moduleIndex(rels) {
-  const byModule = new Map();
-  const add = (key, rel) => {
-    if (!key) return;
-    if (!byModule.has(key)) byModule.set(key, []);
-    byModule.get(key).push(rel);
-  };
+  const exact = new Map();
+  const suffix = new Map();
   for (const rel of rels) {
     const noExt = rel.replace(IMPORT_SUFFIX, '');
-    add(noExt, rel);
-    if (rel.endsWith('/__init__.py')) add(rel.slice(0, -'/__init__.py'.length), rel);
+    addKey(exact, noExt, rel);
+    addSuffixes(suffix, noExt, rel);
+    if (rel.endsWith('/__init__.py')) {
+      const pkg = rel.slice(0, -'/__init__.py'.length);
+      addKey(exact, pkg, rel);
+      addSuffixes(suffix, pkg, rel);
+    }
   }
-  return byModule;
+  return { exact, suffix };
 }
 
-function moduleTargets(specifier, byModule) {
-  const cleaned = String(specifier).replace(/['"]/g, '').trim().replace(IMPORT_SUFFIX, '');
-  if (!cleaned || cleaned.includes('/') || cleaned.startsWith('node:') || NODE_BUILTINS.has(cleaned)) return [];
-  const asPath = cleaned.split('.').filter(Boolean).join('/');
+function moduleTargets(specifier, lookup, fromRel) {
+  const cleaned = String(specifier).replace(/['"]/g, '').trim();
+  if (!cleaned || cleaned.startsWith('node:') || NODE_BUILTINS.has(cleaned)) return [];
+  if (cleaned.includes('/')) return uniqueOther(lookup.exact.get(cleaned.replace(IMPORT_SUFFIX, '')), fromRel);
+  const asPath = cleaned.replace(IMPORT_SUFFIX, '').split('.').filter(Boolean).join('/');
   if (!asPath) return [];
-  const suffix = `/${asPath}`;
-  const matches = new Set();
-  for (const [key, rels] of byModule) {
-    if (key !== asPath && !key.endsWith(suffix)) continue;
-    for (const rel of rels) matches.add(rel);
-  }
-  return matches.size === 1 ? [...matches] : [];
+  return uniqueOther(lookup.suffix.get(asPath), fromRel);
 }
 
-function importTargets(fromRel, specifier, byModule, trackedSet) {
+function importTargets(fromRel, specifier, lookup, trackedSet) {
   const cleaned = String(specifier).replace(/['"]/g, '').trim();
   if (!cleaned) return [];
   if (cleaned.startsWith('./') || cleaned.startsWith('../')) return relativeTargets(fromRel, cleaned, trackedSet);
-  return moduleTargets(cleaned, byModule).filter((rel) => rel !== fromRel);
+  if (cleaned.startsWith('.')) {
+    const asRelative = dotsToRelative(cleaned);
+    return asRelative ? relativeTargets(fromRel, asRelative, trackedSet) : [];
+  }
+  return moduleTargets(cleaned, lookup, fromRel);
 }
 
 function importEdges(facts, trackedSet) {
-  const byModule = moduleIndex(trackedSet);
+  const lookup = moduleIndex(trackedSet);
   const incoming = new Map();
   const outgoing = new Map();
   for (const { rel, imports } of facts.values()) {
     const seen = new Set();
     for (const imp of imports) {
-      for (const target of importTargets(rel, imp, byModule, trackedSet)) {
+      for (const target of importTargets(rel, imp, lookup, trackedSet)) {
         if (seen.has(target)) continue;
         seen.add(target);
         if (!outgoing.has(rel)) outgoing.set(rel, []);
@@ -118,6 +155,29 @@ function importEdges(facts, trackedSet) {
     }
   }
   return { incoming, outgoing };
+}
+
+function listTrackedSource(workspace) {
+  const res = spawnSync('git', ['-C', workspace, 'ls-files'], { encoding: 'utf8', timeout: 15_000 });
+  if (res.status !== 0) return [];
+  return res.stdout
+    .split('\n')
+    .filter(Boolean)
+    .filter((rel) => SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase()));
+}
+
+function trackedForNeighborhood(workspace, maxFiles, required) {
+  const all = listTrackedSource(workspace);
+  const limit = Number.isFinite(maxFiles) && maxFiles >= 0 ? maxFiles : MAX_FILES_SCANNED;
+  const chosen = all.slice(0, limit);
+  const seen = new Set(chosen);
+  const tracked = new Set(all);
+  for (const rel of required) {
+    if (!rel || seen.has(rel) || !tracked.has(rel)) continue;
+    chosen.push(rel);
+    seen.add(rel);
+  }
+  return chosen;
 }
 
 export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract, title = 'Repo Map', preferStructural = true } = {}) {
@@ -186,18 +246,22 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   return { files: selected, body, tokens: estimateTokens(body), empty: false, totalFiles: total, structural: Boolean(structural) };
 }
 
-export function buildNeighborhood({ workspace, files = [] } = {}) {
-  const { files: tracked } = trackedSourceFiles(workspace);
+export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_SCANNED } = {}) {
+  const requested = Array.isArray(files) ? files : [files];
+  const normalized = requested.map((raw) => ({ raw, rel: requestRel(workspace, raw) }));
+  const tracked = trackedForNeighborhood(
+    workspace,
+    maxFiles,
+    normalized.map((item) => item.rel),
+  );
   const trackedSet = new Set(tracked);
   const facts = fileFacts(workspace, tracked);
   const { incoming, outgoing } = importEdges(facts, trackedSet);
-  const requested = Array.isArray(files) ? files : [files];
   const missing = [];
   const seenMissing = new Set();
   const seeds = [];
   const seenSeeds = new Set();
-  for (const raw of requested) {
-    const rel = requestRel(workspace, raw);
+  for (const { raw, rel } of normalized) {
     if (rel && trackedSet.has(rel)) {
       if (!seenSeeds.has(rel)) {
         seenSeeds.add(rel);

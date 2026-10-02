@@ -114,6 +114,81 @@ test('a relative import stays in its directory and a parent import still counts'
   }
 });
 
+test('a directory import matches an index file', () => {
+  const { ws } = gitRepo({
+    'a.js': "import { Button } from './components';\nexport function alpha() {}\n",
+    'components/index.js': 'export function Button() {}\n',
+  });
+  try {
+    const result = buildNeighborhood({ workspace: ws, files: ['a.js'] });
+    assert.deepEqual(
+      result.files.map((entry) => entry.rel),
+      ['a.js', 'components/index.js'],
+    );
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('a python parent import stays in that package', () => {
+  const { ws } = gitRepo({
+    'pkg/sub/child.py': 'from ..foo import bar\n',
+    'pkg/foo.py': 'def bar():\n    pass\n',
+    'other/foo.py': 'def bar():\n    pass\n',
+  });
+  try {
+    const result = buildNeighborhood({ workspace: ws, files: ['pkg/sub/child.py'] });
+    assert.deepEqual(
+      result.files.map((entry) => entry.rel),
+      ['pkg/foo.py', 'pkg/sub/child.py'],
+    );
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('a slash path links only when one tracked file has that path', () => {
+  const { ws } = gitRepo({
+    'app.js': "import { Button } from 'src/components/button';\nexport function app() {}\n",
+    'src/components/button.ts': 'export function Button() {}\n',
+    'other/src/components/button.ts': 'export function Other() {}\n',
+  });
+  const ambiguous = gitRepo({
+    'app.js': "import { Button } from 'src/components/button';\nexport function app() {}\n",
+    'src/components/button.js': 'export function Button() {}\n',
+    'src/components/button.ts': 'export const Button = 1;\n',
+  });
+  try {
+    const unique = buildNeighborhood({ workspace: ws, files: ['app.js'] });
+    assert.deepEqual(
+      unique.files.map((entry) => entry.rel),
+      ['app.js', 'src/components/button.ts'],
+    );
+    const many = buildNeighborhood({ workspace: ambiguous.ws, files: ['app.js'] });
+    assert.deepEqual(
+      many.files.map((entry) => entry.rel),
+      ['app.js'],
+    );
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(ambiguous.ws, { recursive: true, force: true });
+  }
+});
+
+test('a requested tracked file stays when the scan cap omits it', () => {
+  const { ws } = gitRepo({
+    'a.js': 'export function alpha() {}\n',
+    'z.js': 'export function zeta() {}\n',
+  });
+  try {
+    const result = buildNeighborhood({ workspace: ws, files: ['z.js'], maxFiles: 1 });
+    assert.deepEqual(result.missing, []);
+    assert.deepEqual(result.files, [{ rel: 'z.js', symbols: ['zeta'], imports: [], importedBy: [] }]);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test('a current structural index supplies the neighborhood and a stale one does not', async () => {
   const { ws, git } = gitRepo({
     'a.js': "import { b } from './b.js';\nexport function alpha() {}\n",
