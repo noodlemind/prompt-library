@@ -19,6 +19,7 @@ import {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const hooksRoot = path.join(repoRoot, '.github', 'hooks');
+const binPath = path.join(repoRoot, 'packages', 'harness', 'bin', 'harness.mjs');
 
 function tempWorkspace() {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-hook-fixture-'));
@@ -200,7 +201,7 @@ function runHook(name, workspace, payload) {
       ...payload,
     }),
     encoding: 'utf8',
-    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce', HARNESS_BIN: binPath },
   });
 }
 

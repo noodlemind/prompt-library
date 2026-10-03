@@ -123,6 +123,34 @@ test('verify stores the normalized diff and the next unchanged edit is unchanged
   assert.equal(changed.continue, true);
 });
 
+test('an edit that supplies different bytes is allowed after verify', () => {
+  const c = ctx();
+  const gate = harness(c, ['gate', '--plan', c.plan, '--phase', 'implement']);
+  assert.equal(gate.status, 0, gate.stderr + gate.stdout);
+  recordSuccessfulEdit(c.ws, { file_path: 'src/example.js' });
+  const verified = harness(c, ['verify', '--plan', c.plan, '--base', 'HEAD']);
+  assert.equal(verified.status, 0, verified.stderr + verified.stdout);
+  const blocked = jsonLine(edit(c, 'src/example.js'));
+  assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
+  const revised = jsonLine(spawnSync(process.execPath, [editHook], {
+    cwd: c.ws,
+    input: JSON.stringify({
+      cwd: c.ws,
+      session_id: 'vscode-session',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'replace_string_in_file',
+      tool_input: {
+        filePath: 'src/example.js',
+        old_string: 'export const value = 2;\n',
+        new_string: 'export const value = 3;\n',
+      },
+    }),
+    encoding: 'utf8',
+    env: hookEnv(c),
+  }));
+  assert.equal(revised.continue, true);
+});
+
 test('the edit hook denies when the current diff cannot be read', () => {
   const c = ctx();
   const gate = harness(c, ['gate', '--plan', c.plan, '--phase', 'implement']);

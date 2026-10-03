@@ -124,6 +124,42 @@ function currentDiff(workspace) {
     .join('\n');
 }
 
+function readFileText(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function replacementChanges(file, previous, next) {
+  if (typeof next !== 'string' || typeof previous !== 'string' || next === previous) return false;
+  const current = readFileText(file);
+  return current === null || current.includes(previous);
+}
+
+function editChangesBytes(normalized) {
+  const input = normalized.toolInput || {};
+  const files = normalized.targets;
+  if (files.length === 1 && replacementChanges(files[0], input.old_string ?? input.oldString, input.new_string ?? input.newString)) {
+    return true;
+  }
+  const content = input.contents ?? input.content;
+  if (typeof content === 'string' && files.length === 1) {
+    const current = readFileText(files[0]);
+    if (current === null || current !== content) return true;
+  }
+  for (const collection of [input.files, input.edits, input.replacements]) {
+    if (!Array.isArray(collection)) continue;
+    for (const item of collection) {
+      if (!item || typeof item !== 'object') continue;
+      const target = files.length === 1 ? files[0] : null;
+      if (target && replacementChanges(target, item.old_string ?? item.oldString, item.new_string ?? item.newString)) return true;
+    }
+  }
+  return false;
+}
+
 function retryDecision(lastAttempt, nextAttempt) {
   const bin = process.env.HARNESS_BIN;
   const modulePath = bin && path.resolve(path.dirname(bin), '../lib/task-control.mjs');
@@ -411,7 +447,9 @@ if (typeof session.diffFingerprint === 'string' && session.diffFingerprint.lengt
   if (nextDiff === null) {
     deny('unreadable-diff', 'The current diff could not be read; retry the edit once git diff HEAD succeeds', 'invalid');
   }
-  const decision = retryDecision(session.diffFingerprint, nextDiff);
+  const decision = editChangesBytes(normalized)
+    ? { action: 'allow' }
+    : retryDecision(session.diffFingerprint, nextDiff);
   if (decision.action === 'block' && decision.reason === 'unchanged-retry') {
     deny(
       'unchanged-retry',

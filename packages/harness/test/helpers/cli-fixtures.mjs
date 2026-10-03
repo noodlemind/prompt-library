@@ -211,7 +211,7 @@ export function runHook(name, workspace, toolInput = {}) {
     cwd: workspace,
     input: JSON.stringify({ workspace, tool_input: toolInput }),
     encoding: 'utf8',
-    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce', HARNESS_BIN: path.join(packageRoot, 'bin', 'harness.mjs') },
   });
 }
 

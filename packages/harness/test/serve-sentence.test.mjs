@@ -119,6 +119,21 @@ test('a 26-word field exits 2 and leaves the existing lesson untouched', () => {
   }
 });
 
+test('a present state sentence is stored', () => {
+  const c = ctx();
+  const enabled = run(c, ['knowledge', 'on']);
+  assert.equal(enabled.status, 0, enabled.stderr + enabled.stdout);
+  for (const applies of ['The build is green.', 'The page is open.']) {
+    const accepted = correct(c, {
+      claim: applies,
+      trigger: applies,
+      applies,
+      doesNot: SEED_DOES_NOT,
+    });
+    assert.equal(accepted.status, 0, accepted.stderr + accepted.stdout);
+  }
+});
+
 test('a 25-word present active sentence is stored and the next orient returns its authority', () => {
   const c = ctx();
   const enabled = run(c, ['knowledge', 'on']);

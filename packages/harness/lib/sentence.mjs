@@ -1,5 +1,5 @@
 const PAST = /\b(?:was|were|had|did|been)\b/i;
-const PASSIVE = /\b(?:is|are|was|were|be|been|being)\s+\w+(?:ed|en)\b/;
+const PASSIVE = /\b(?:is|are|was|were|be|been|being)\s+\w+ed\b/;
 
 export function checkServeSentence(text, field) {
   const value = typeof text === 'string' ? text.trim() : '';

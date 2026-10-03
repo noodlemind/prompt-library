@@ -301,6 +301,52 @@ test('plan-new --goal rejects --type and --risk and writes no plan file', () => 
   }
 });
 
+test('a short plan passes verify after a green file change', () => {
+  const c = coldRepo();
+  const previousHome = useHome(c);
+  try {
+    const created = harness(c, [
+      'plan-new',
+      '--goal', GOAL,
+      '--acceptance', ACCEPTANCE,
+      '--constraint', CONSTRAINT,
+      '--json',
+    ]);
+    assert.equal(created.status, 0, created.stderr || created.stdout);
+    const plan = JSON.parse(created.stdout).path;
+    fs.writeFileSync(path.join(c.ws, 'src', 'app.js'), 'export const n = 2;\n');
+    const verified = harness(c, ['verify', '--plan', plan, '--base', 'HEAD', '--json']);
+    assert.equal(verified.status, 0, verified.stderr || verified.stdout);
+    assert.equal(JSON.parse(verified.stdout).outcome, 'passed');
+  } finally {
+    removeRepo(c, previousHome);
+  }
+});
+
+test('a short plan that lists impacted files still fails verify outside that list', () => {
+  const c = coldRepo();
+  const previousHome = useHome(c);
+  try {
+    const created = harness(c, [
+      'plan-new',
+      '--goal', GOAL,
+      '--acceptance', ACCEPTANCE,
+      '--constraint', CONSTRAINT,
+      '--json',
+    ]);
+    assert.equal(created.status, 0, created.stderr || created.stdout);
+    const plan = JSON.parse(created.stdout).path;
+    fs.appendFileSync(plan, '\n## Impacted Files\n\n- `README.md`\n');
+    fs.writeFileSync(path.join(c.ws, 'src', 'app.js'), 'export const n = 2;\n');
+    const verified = harness(c, ['verify', '--plan', plan, '--base', 'HEAD', '--json']);
+    const body = JSON.parse(verified.stdout);
+    assert.notEqual(body.outcome, 'passed');
+    assert.equal(body.checks.find((check) => check.id === 'scope')?.status, 'failed');
+  } finally {
+    removeRepo(c, previousHome);
+  }
+});
+
 test('plan-new --goal without acceptance or constraint writes no file', () => {
   const c = coldRepo();
   const previousHome = useHome(c);
