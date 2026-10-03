@@ -46,6 +46,7 @@ function teach(c) {
     '--why', WHY,
     '--applies', APPLIES,
     '--does-not-apply', DOES_NOT,
+    '--shows', 'Raw Concatenation',
     '--authority', 'correction',
     '--domain', 'sql',
   ]);
@@ -143,6 +144,144 @@ test('a served lesson the diff did not use still stops cleanly', () => {
   orient(c);
   const allowed = stopJson(stop(c, 'enforce'));
   assert.equal(allowed.continue, true);
+});
+
+test('verify repeats the stored shows phrase when the diff never quotes the claim', () => {
+  const c = ctx();
+  const claim = 'save skips the audit stamp';
+  const applies = 'A save writes the audit stamp on the stored row.';
+  const doesNot = 'A task asks to remove the audit stamp.';
+  const enabled = harness(c, ['knowledge', 'on']);
+  assert.equal(enabled.status, 0, enabled.stderr + enabled.stdout);
+  const taught = harness(c, [
+    'correct', claim,
+    '--trigger', claim,
+    '--why', 'the row lands without the stamp',
+    '--applies', applies,
+    '--does-not-apply', doesNot,
+    '--shows', 'replaceRow',
+    '--authority', 'correction',
+    '--domain', 'sql',
+  ]);
+  assert.equal(taught.status, 0, taught.stderr + taught.stdout);
+  const learning = listLearnings(storeDir(c.ws, { home: c.harnessHome })).find((row) => row.id === 'sql/save-skips-the-audit-stamp');
+  assert.ok(learning, taught.stdout);
+  const before = fs.readFileSync(learning.file);
+  const gate = harness(c, ['gate', '--plan', c.plan, '--phase', 'implement']);
+  assert.equal(gate.status, 0, gate.stderr + gate.stdout);
+  const found = harness(c, ['orient', '--query', claim]);
+  assert.equal(found.status, 0, found.stderr + found.stdout);
+
+  fs.writeFileSync(path.join(c.ws, 'src', 'example.js'), 'function replaceRow(row) { store.write(row); return row; }\n');
+  const repeated = verify(c);
+  assert.equal(repeated.status, 2, repeated.stderr + repeated.stdout);
+  assert.equal(JSON.parse(repeated.stdout).outcome, 'repeated-mistake');
+  assert.equal(fs.readFileSync(learning.file).equals(before), true);
+
+  fs.writeFileSync(path.join(c.ws, 'src', 'example.js'), 'function replaceRow(row) { store.write(row); return row; }\nA task asks to remove the audit stamp.\n');
+  const scopedOut = verify(c);
+  assert.equal(scopedOut.status, 0, scopedOut.stderr + scopedOut.stdout);
+  assert.equal(JSON.parse(scopedOut.stdout).outcome, 'passed');
+  assert.equal(fs.readFileSync(learning.file).equals(before), true);
+
+  fs.writeFileSync(path.join(c.ws, 'src', 'example.js'), 'function save(row) { row.auditStamp = clock.now(); store.write(row); return row; }\n');
+  const stamped = verify(c);
+  assert.equal(stamped.status, 0, stamped.stderr + stamped.stdout);
+  assert.equal(JSON.parse(stamped.stdout).outcome, 'passed');
+  assert.equal(fs.readFileSync(learning.file).equals(before), true);
+});
+
+test('a correction with no shows stays clear when the diff quotes the claim', () => {
+  const c = ctx();
+  const claim = 'save skips the audit stamp';
+  const enabled = harness(c, ['knowledge', 'on']);
+  assert.equal(enabled.status, 0, enabled.stderr + enabled.stdout);
+  const dir = storeDir(c.ws, { home: c.harnessHome });
+  const file = path.join(dir, 'learnings', 'sql', 'save-skips-the-audit-stamp.md');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const body = [
+    '---',
+    'schema: 1',
+    `trigger: "${claim}"`,
+    'status: active',
+    'source: human',
+    'authority: correction',
+    'why: "the row lands without the stamp"',
+    'applies: "A save writes the audit stamp on the stored row."',
+    'does_not_apply: "A task asks to remove the audit stamp."',
+    'anchors: []',
+    'superseded_by: null',
+    'last_confirmed: null',
+    'origin: unknown',
+    '---',
+    '',
+    claim,
+    '',
+  ].join('\n');
+  fs.writeFileSync(file, body);
+  const before = fs.readFileSync(file);
+  fs.writeFileSync(path.join(c.ws, 'src', 'example.js'), `// ${claim}\n`);
+  const gate = harness(c, ['gate', '--plan', c.plan, '--phase', 'implement']);
+  assert.equal(gate.status, 0, gate.stderr + gate.stdout);
+  const found = harness(c, ['orient', '--query', claim]);
+  assert.equal(found.status, 0, found.stderr + found.stdout);
+  assert.equal(JSON.parse(found.stdout).learnings.some((row) => row.id === 'sql/save-skips-the-audit-stamp'), true, found.stdout);
+  const passed = verify(c);
+  assert.equal(passed.status, 0, passed.stderr + passed.stdout);
+  assert.equal(JSON.parse(passed.stdout).outcome, 'passed');
+  assert.equal(fs.readFileSync(file).equals(before), true);
+});
+
+test('an instruction is not a diff predicate', () => {
+  const c = ctx();
+  const claim = 'Handlers keep the ledger intact.';
+  const enabled = harness(c, ['knowledge', 'on']);
+  assert.equal(enabled.status, 0, enabled.stderr + enabled.stdout);
+  const taught = harness(c, [
+    'correct', claim,
+    '--trigger', claim,
+    '--why', 'the ledger stays the source',
+    '--applies', 'Handlers keep the ledger row.',
+    '--does-not-apply', 'Handlers skip a cold ledger.',
+    '--authority', 'instruction',
+    '--domain', 'sql',
+  ]);
+  assert.equal(taught.status, 0, taught.stderr + taught.stdout);
+  fs.writeFileSync(path.join(c.ws, 'src', 'example.js'), `${claim}\n`);
+  const gate = harness(c, ['gate', '--plan', c.plan, '--phase', 'implement']);
+  assert.equal(gate.status, 0, gate.stderr + gate.stdout);
+  const found = harness(c, ['orient', '--query', claim]);
+  assert.equal(found.status, 0, found.stderr + found.stdout);
+  const passed = verify(c);
+  assert.equal(passed.status, 0, passed.stderr + passed.stdout);
+  assert.equal(JSON.parse(passed.stdout).outcome, 'passed');
+});
+
+test('orient --read arms verify with the stored file list when the query misses', () => {
+  const c = ctx();
+  const enabled = harness(c, ['knowledge', 'on']);
+  assert.equal(enabled.status, 0, enabled.stderr + enabled.stdout);
+  const taught = harness(c, [
+    'correct', 'save skips the audit stamp',
+    '--trigger', 'example',
+    '--why', 'the row lands without the stamp',
+    '--applies', 'A save writes the audit stamp on the stored row.',
+    '--does-not-apply', 'A task asks to remove the audit stamp.',
+    '--shows', 'replaceRow',
+    '--authority', 'correction',
+    '--domain', 'sql',
+  ]);
+  assert.equal(taught.status, 0, taught.stderr + taught.stdout);
+  fs.writeFileSync(path.join(c.ws, 'src', 'example.js'), 'function replaceRow(row) { store.write(row); return row; }\n');
+  const gate = harness(c, ['gate', '--plan', c.plan, '--phase', 'implement']);
+  assert.equal(gate.status, 0, gate.stderr + gate.stdout);
+  const ranked = harness(c, ['orient', '--read', '--query', 'compile the weekly report', '--file', 'src/example.js']);
+  assert.equal(ranked.status, 0, ranked.stderr + ranked.stdout);
+  assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'repo-map.md')), false);
+  assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'context-pack.md')), false);
+  const repeated = verify(c);
+  assert.equal(repeated.status, 2, repeated.stderr + repeated.stdout);
+  assert.equal(JSON.parse(repeated.stdout).outcome, 'repeated-mistake');
 });
 
 test('a stop with no fresh passing evidence does not complete', () => {
