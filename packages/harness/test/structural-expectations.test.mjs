@@ -3,7 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+
+const binPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../bin/harness.mjs');
 import { loadPolicy, checkSeverityFor, enforcementExitCode } from '../lib/policy.mjs';
 import { structuralDir, readStructuralIndex, STRUCTURAL_SHAPE_VERSION } from '../lib/structural/shape.mjs';
 import { runStructuralExpectations, STRUCTURAL_CHECK_ID } from '../lib/structural/expectations.mjs';
@@ -785,4 +788,39 @@ test('evidence payload records per-check severity and advisory failures', async 
   assert.equal(evidence.advisoryFailures.length, 1);
   assert.equal(evidence.advisoryFailures[0].id, STRUCTURAL_CHECK_ID);
   assert.ok(evidence.advisoryFailures[0].findings.some((finding) => finding.type === 'removed-symbol-with-callers'));
+});
+
+test('an advisory structural failure still reports a repeated applicable lesson', async () => {
+  const { workspace, home, plan } = structuralWorkspace();
+  await buildBaseline(workspace, home);
+  const copilotHome = copilotHomeFor(home);
+  const harness = (args) => spawnSync(process.execPath, [
+    binPath, ...args, '--workspace', workspace, '--harness-home', home, '--copilot-home', copilotHome, '--json', '--no-events',
+  ], {
+    cwd: workspace,
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_HOME: home, COPILOT_HOME: copilotHome, HARNESS_NO_EVENTS: '1' },
+  });
+  const taught = harness([
+    'correct', 'raw concatenation',
+    '--trigger', 'raw concatenation',
+    '--why', 'a joined string builds the query',
+    '--applies', 'The handler builds sql.',
+    '--does-not-apply', 'A billing pdf stays plain.',
+    '--authority', 'correction',
+    '--domain', 'sql',
+  ]);
+  assert.equal(taught.status, 0, taught.stderr + taught.stdout);
+  const oriented = harness(['orient', '--query', 'raw concatenation']);
+  assert.equal(oriented.status, 0, oriented.stderr + oriented.stdout);
+  fs.writeFileSync(
+    path.join(workspace, 'src', 'example.js'),
+    'export const other = 2;\n// handler uses Raw Concatenation today\n',
+  );
+  const repeated = harness(['verify', '--plan', plan, '--base', 'HEAD']);
+  const body = JSON.parse(repeated.stdout);
+  assert.equal(body.outcome, 'repeated-mistake', repeated.stderr + repeated.stdout);
+  const structural = body.checks.find((check) => check.id === STRUCTURAL_CHECK_ID);
+  assert.equal(structural.status, 'failed');
+  assert.equal(structural.severity, 'advisory');
 });

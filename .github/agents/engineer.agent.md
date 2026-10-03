@@ -28,17 +28,7 @@ Name the mode first. **Answer** is quick and read-only. **Investigate** names ev
 
 ## Delivery lifecycle
 
-1. Orient — use `harness orient`; read the pack; load `/consolidate` on a `consolidate --candidates` hint.
-2. Establish intent — define goal, criteria, constraints, risk, and plan.
-3. Investigate — inspect relevant code, tests, history, and docs.
-4. Work — pass `harness gate --phase implement --plan <path> --workspace . --json`. New code follows the language standard.
-5. Handle gaps — retrieve facts, load a skill on demand, consult an expert, or acquire a tool.
-6. Verify — run only checks named in `verification.required`, then `harness verify`. Report unrelated failures without repairing them or expanding scope.
-7. Review — seek risk-required review.
-8. Compound — after a pass, run `harness compound` and require promotion evidence.
-9. Report — state outcome, evidence, decisions, and risks.
-
-When blocked by a missing gate and autonomy allows, read `~/.copilot/skills/ensure-plan/SKILL.md`; create/lock the plan in a standalone mutation, pass the implement gate, retry, then verify. Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~/.copilot/skills/create-primitive/SKILL.md`; a plan label is not activation.
+When blocked by a missing gate and autonomy allows, read `~/.copilot/skills/ensure-plan/SKILL.md`; create/lock the plan in a standalone mutation, pass the implement gate, retry, then verify. Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~/.copilot/skills/create-primitive/SKILL.md`; a plan label is not activation. A person approves a new skill or specialist before it is installed.
 
 ## Gaps and consultation
 

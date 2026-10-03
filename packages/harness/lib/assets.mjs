@@ -15,7 +15,14 @@ function hookAssetsStale(sourceHooks, bundledHooks) {
   const files = [
     'block-destructive-commands.mjs',
     'require-plan-gate.mjs',
+    'load-context.mjs',
+    'require-verification.mjs',
     'lib/tool-payload.mjs',
+    'lib/host-adapter.mjs',
+    'grok-build.mjs',
+    'cursor.mjs',
+    'grok.mjs',
+    'codex.mjs',
   ];
   return files.some((rel) => {
     const src = path.join(sourceHooks, rel);

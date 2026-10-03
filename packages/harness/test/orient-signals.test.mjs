@@ -133,6 +133,26 @@ test('orient --file drops a learning whose does_not_apply contains the named pat
   try {
     const { ids } = learningIds(c, ['--file', NEIGHBOR_FILE]);
     assert.deepEqual(ids, ['sql/beta-neighbor', 'sql/alpha-plain']);
+    const read = spawnSync(process.execPath, [
+      binPath,
+      'orient',
+      '--read',
+      '--json',
+      '--no-events',
+      '--query',
+      QUERY,
+      '--workspace',
+      c.ws,
+      '--copilot-home',
+      c.home,
+      '--harness-home',
+      c.harnessHome,
+    ], {
+      encoding: 'utf8',
+      env: { ...process.env, HARNESS_HOME: c.harnessHome },
+    });
+    assert.equal(read.status, 0, read.stderr || read.stdout);
+    assert.equal(JSON.parse(read.stdout).neighborhood, null);
   } finally {
     fs.rmSync(c.ws, { recursive: true, force: true });
     fs.rmSync(c.home, { recursive: true, force: true });

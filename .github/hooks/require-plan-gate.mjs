@@ -3,6 +3,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { planContractText } from './lib/evidence-binding.mjs';
 import { resolveAcceptedPlan } from './lib/external-plans.mjs';
 import { writeHookEvent } from './lib/events.mjs';
@@ -62,6 +64,28 @@ function deny(reason, message, gate = 'missing') {
   process.exit(0);
 }
 
+function nonEmptyStrings(value) {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((item) => typeof item === 'string' && item.trim());
+}
+
+function readPlanRecord(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const line = text.split(/\r?\n/).find((entry) => entry.startsWith('{') && entry.endsWith('}'));
+  if (!line) return null;
+  let value;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (typeof value.goal !== 'string' || !value.goal.trim()) return null;
+  if (!nonEmptyStrings(value.acceptance) || !nonEmptyStrings(value.constraints)) return null;
+  return value;
+}
+
 function impactedFiles(text) {
   const section = text.match(/## Impacted Files\s*\n([\s\S]*?)(?=\n## |$)/i)?.[1] || '';
   return section
@@ -85,6 +109,50 @@ function isPlannedAncestor(file, entries) {
     const planned = entry.replace(/\/\*\*$/, '').replace(/\/+$/, '');
     return planned.startsWith(prefix);
   });
+}
+
+function currentDiff(workspace) {
+  const diff = spawnSync('git', ['diff', '--no-ext-diff', 'HEAD'], {
+    cwd: workspace,
+    encoding: 'utf8',
+    timeout: 4000,
+  });
+  if (diff.error || diff.status !== 0) return null;
+  return String(diff.stdout || '')
+    .split(/\r?\n/)
+    .filter((line) => !/^index [0-9a-f]+\.\.[0-9a-f]+(?:\s|$)/.test(line))
+    .join('\n');
+}
+
+function retryDecision(lastAttempt, nextAttempt) {
+  const bin = process.env.HARNESS_BIN;
+  const modulePath = bin && path.resolve(path.dirname(bin), '../lib/task-control.mjs');
+  if (modulePath && fs.existsSync(modulePath)) {
+    const href = pathToFileURL(modulePath).href;
+    const result = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', `import fs from 'node:fs';
+import { decideNext } from ${JSON.stringify(href)};
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(decideNext(input)));`],
+      {
+        input: JSON.stringify({ lastAttempt, nextAttempt }),
+        encoding: 'utf8',
+        timeout: 4000,
+      },
+    );
+    if (!result.error && result.status === 0 && result.stdout) {
+      try {
+        return JSON.parse(result.stdout);
+      } catch {
+      }
+    }
+  }
+  // Copied into the host home, this file cannot import packages/harness.
+  if (typeof nextAttempt === 'string' && nextAttempt.length > 0 && nextAttempt === lastAttempt) {
+    return { action: 'block', reason: 'unchanged-retry' };
+  }
+  return { action: 'continue' };
 }
 
 function sessionActivatedSkill(session, skill, sessionId, ttlMinutes) {
@@ -305,17 +373,20 @@ if (planStatus === 'planned') {
     'invalid'
   );
 }
+const planRecord = readPlanRecord(planText);
 const allowed = impactedFiles(planText);
-// The planned-ancestor exception applies only to paths mkdir itself creates,
-// not to every target of a compound command that happens to include mkdir.
-const mkdirRelatives = new Set(
-  normalized.mkdirTargets.map((target) =>
-    path.relative(normalized.workspace, path.resolve(normalized.workspace, target)).replace(/\\/g, '/')
-  )
-);
-for (const relative of governed) {
-  if (!inScope(relative, allowed) && !(mkdirRelatives.has(relative) && isPlannedAncestor(relative, allowed))) {
-    deny('out-of-plan-scope', `File is outside the plan's ## Impacted Files: ${relative}; next: add it to ## Impacted Files and rerun the gate, or edit only planned files`, 'passed');
+if (!planRecord || allowed.length > 0) {
+  // The planned-ancestor exception applies only to paths mkdir itself creates,
+  // not to every target of a compound command that happens to include mkdir.
+  const mkdirRelatives = new Set(
+    normalized.mkdirTargets.map((target) =>
+      path.relative(normalized.workspace, path.resolve(normalized.workspace, target)).replace(/\\/g, '/')
+    )
+  );
+  for (const relative of governed) {
+    if (!inScope(relative, allowed) && !(mkdirRelatives.has(relative) && isPlannedAncestor(relative, allowed))) {
+      deny('out-of-plan-scope', `File is outside the plan's ## Impacted Files: ${relative}; next: add it to ## Impacted Files and rerun the gate, or edit only planned files`, 'passed');
+    }
   }
 }
 if (governed.some(isPrimitivePath)) {
@@ -330,6 +401,21 @@ if (governed.some(isPrimitivePath)) {
     deny(
       'missing-create-primitive-activation',
       'Read ~/.copilot/skills/create-primitive/SKILL.md now and follow it; naming create-primitive in skills_used is not activation, so retry this mutation only after the successful skill read is recorded for this chat session',
+      'passed'
+    );
+  }
+}
+
+if (typeof session.diffFingerprint === 'string' && session.diffFingerprint.length > 0) {
+  const nextDiff = currentDiff(normalized.workspace);
+  if (nextDiff === null) {
+    deny('unreadable-diff', 'The current diff could not be read; retry the edit once git diff HEAD succeeds', 'invalid');
+  }
+  const decision = retryDecision(session.diffFingerprint, nextDiff);
+  if (decision.action === 'block' && decision.reason === 'unchanged-retry') {
+    deny(
+      'unchanged-retry',
+      'The diff matches the last verified attempt; change the diff before editing again',
       'passed'
     );
   }

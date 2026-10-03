@@ -2,6 +2,7 @@
 /** Stop gate: require fresh passed evidence after every successful governed mutation. */
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { validateEvidenceBinding } from './lib/evidence-binding.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { stopBlockOutput } from './lib/hook-output.mjs';
@@ -77,6 +78,25 @@ try {
   deny('session is unreadable');
 }
 
+function refreshVerification(current) {
+  const bin = process.env.HARNESS_BIN;
+  const command = bin ? process.execPath : 'harness';
+  const args = [...(bin ? [bin] : []), 'verify', '--json', '--no-events', '--workspace', workspace];
+  if (current?.activePlan) args.push('--plan', current.activePlan);
+  const result = spawnSync(command, args, {
+    cwd: workspace,
+    encoding: 'utf8',
+    timeout: 80000,
+    env: process.env,
+  });
+  if (result.error || result.status == null) return current;
+  try {
+    return JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  } catch {
+    return current;
+  }
+}
+
 if (!session.lastEditAt) allow('No successful governed mutation requires verification.');
 const lastEditAt = Date.parse(session.lastEditAt);
 if (!Number.isFinite(lastEditAt)) deny('last edit timestamp is missing or invalid');
@@ -85,6 +105,7 @@ if (Number.isFinite(lastCompletedEditAt) && lastCompletedEditAt >= lastEditAt) {
   allow('Latest successful mutation already has completion evidence.');
 }
 
+if (!session.lastEvidencePath || !session.lastVerifyAt) session = refreshVerification(session);
 if (!session.lastEvidencePath || !session.lastVerifyAt) deny('harness verify has not run');
 const evidencePath = path.resolve(workspace, session.lastEvidencePath);
 if (!evidencePath.startsWith(path.join(workspace, '.harness', 'evidence') + path.sep) || !fs.existsSync(evidencePath)) {
@@ -97,6 +118,7 @@ try {
 } catch {
   deny('verification evidence is unreadable');
 }
+if (evidence.outcome === 'repeated-mistake') deny('verification outcome is repeated-mistake; run harness correct');
 if (evidence.outcome !== 'passed') deny(`verification outcome is ${evidence.outcome || 'unknown'}`);
 const normalizedPlan = (value) => String(value || '').replace(/\\/g, '/');
 if (session.activePlan && normalizedPlan(evidence.plan) !== normalizedPlan(session.activePlan)) {

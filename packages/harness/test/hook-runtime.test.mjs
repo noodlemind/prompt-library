@@ -757,7 +757,7 @@ test('Stop returns a structured block while a successful edit lacks verification
   const output = outputJson(result).hookSpecificOutput;
   assert.equal(output.hookEventName, 'Stop');
   assert.equal(output.decision, 'block');
-  assert.match(output.reason, /harness verify has not run/i);
+  assert.match(output.reason, /verification outcome is inconclusive/i);
 });
 
 test('Stop resolves the product workspace from VS Code transcript metadata', () => {
@@ -784,7 +784,7 @@ test('Stop resolves the product workspace from VS Code transcript metadata', () 
   const output = outputJson(result).hookSpecificOutput;
   assert.equal(output.hookEventName, 'Stop');
   assert.equal(output.decision, 'block');
-  assert.match(output.reason, /harness verify has not run/i);
+  assert.match(output.reason, /verification outcome is inconclusive/i);
 });
 
 test('hook configuration registers official lifecycle events from a deterministic cwd', () => {

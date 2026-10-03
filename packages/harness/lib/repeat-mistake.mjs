@@ -1,4 +1,5 @@
 import { tokenize } from './tokenize.mjs';
+import { rankLearnings } from './knowledge/retrieve.mjs';
 
 function text(value) {
   if (value == null) return '';
@@ -26,9 +27,29 @@ export function judgeRepeat({ testsPassed, delivered, rejected, applies, doesNot
   const inside = tokenOverlap(delivered, applies);
   if (outside > 0 && outside >= inside) return { ok: true, reason: 'out-of-scope' };
 
-  const rejectedText = text(rejected).trim();
-  if (!blank(applies) && text(delivered).includes(rejectedText)) {
-    return { ok: false, reason: 'repeated-mistake' };
-  }
+  const rejectedTokens = tokenize(rejected);
+  const deliveredTokens = new Set(tokenize(delivered));
+  const repeated = rejectedTokens.length > 0 && rejectedTokens.every((token) => deliveredTokens.has(token));
+  if (!blank(applies) && repeated) return { ok: false, reason: 'repeated-mistake' };
   return { ok: true, reason: 'clear' };
+}
+
+export function repeatedFromServed({ workspace, home, session, delivered }) {
+  let served = [];
+  try {
+    served = rankLearnings({
+      workspace,
+      query: session?.lastQuery || '',
+      home,
+    });
+  } catch {
+    return false;
+  }
+  return served.some((learning) => judgeRepeat({
+    testsPassed: true,
+    delivered,
+    rejected: learning.claimLine,
+    applies: learning.applies,
+    doesNotApply: learning.does_not_apply,
+  }).reason === 'repeated-mistake');
 }

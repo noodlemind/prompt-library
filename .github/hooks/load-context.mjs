@@ -1,8 +1,53 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
 import fs from 'fs';
 import path from 'path';
 import { planDisplayPath, planRoots } from './lib/external-plans.mjs';
 import { resolveHookWorkspace } from './lib/tool-payload.mjs';
+
+function emptyOrientSlice() {
+  return {
+    neighborhood: null,
+    learnings: [],
+    skills: [],
+    instructions: [],
+    contacts: [],
+    index: { knowledge: 'missing', structural: 'missing' },
+    gateStatus: 'blocked',
+    activePlan: null,
+  };
+}
+
+function orientSlice(workspace) {
+  const bin = process.env.HARNESS_BIN;
+  const command = bin ? process.execPath : 'harness';
+  const args = [
+    ...(bin ? [bin] : []),
+    'orient',
+    '--read',
+    '--json',
+    '--no-events',
+    '--workspace',
+    workspace,
+  ];
+  const res = spawnSync(command, args, {
+    cwd: workspace,
+    encoding: 'utf8',
+    timeout: 8000,
+    env: process.env,
+  });
+  if (!res || res.error || res.status !== 0 || !res.stdout) return emptyOrientSlice();
+  try {
+    const parsed = JSON.parse(res.stdout);
+    const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed) : [];
+    if (keys.length !== 8 || !Object.hasOwn(parsed, 'neighborhood') || !Object.hasOwn(parsed, 'index')) {
+      return emptyOrientSlice();
+    }
+    return parsed;
+  } catch {
+    return emptyOrientSlice();
+  }
+}
 
 function readStdin() {
   try {
@@ -116,9 +161,10 @@ if (fs.existsSync(pack)) {
     routingNote = (next === -1 ? rest : rest.slice(0, next)).trim();
   }
 }
-const additionalContext = routingNote
+const contextBody = routingNote
   ? `${message}\n\nRouting pointers apply only when the mode is Deliver:\n${routingNote}`
   : message;
+const additionalContext = `${contextBody}\nharness-orient-slice: ${JSON.stringify(orientSlice(workspace))}`;
 console.log(JSON.stringify({
   additionalContext,
   hookSpecificOutput: {

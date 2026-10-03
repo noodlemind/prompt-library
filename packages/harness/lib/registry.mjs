@@ -519,8 +519,27 @@ function planNewFlagValue(rest, name) {
   return value;
 }
 
+function planNewFlagValues(rest, name) {
+  const values = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--') break;
+    if (rest[i] === name) values.push(rest[++i]);
+  }
+  return values;
+}
+
 function planNewRequireArgs(rest) {
   if (planNewFlagValue(rest, '--from')) return undefined;
+  const goalValues = planNewFlagValues(rest, '--goal');
+  if (goalValues.length) {
+    const goal = goalValues.at(-1);
+    const acceptance = planNewFlagValues(rest, '--acceptance').filter((value) => typeof value === 'string' && value.trim());
+    const constraints = planNewFlagValues(rest, '--constraint').filter((value) => typeof value === 'string' && value.trim());
+    if (!goal || !String(goal).trim() || acceptance.length === 0 || constraints.length === 0) {
+      return 'plan-new: --goal requires at least one --acceptance and one --constraint';
+    }
+    return undefined;
+  }
   const slug = planNewFlagValue(rest, '--slug');
   if (!slug || !PLAN_NEW_SLUG_RE.test(slug)) {
     return 'plan-new: --slug is required and must be lowercase-hyphen (a-z0-9-)';
@@ -604,6 +623,7 @@ registerCommand({
       { name: '--min-score', type: 'number', valueName: 'n', description: 'minimum score (default 0.15)', required: false, default: 0.15, tui: 'prompt' },
             { name: '--explain', type: 'boolean', description: 'decompose learning ranking (deterministic)', required: false, default: false, tui: 'verb' },
       { name: '--file', type: 'string', valueName: 'path', description: 'one file to place in the change neighborhood (repeatable)', required: false, default: null, tui: 'prompt' },
+      { name: '--read', type: 'boolean', description: 'print the eight-key session slice and write no context pack', required: false, default: false, tui: 'cli-only' },
     ],
   },
   handler: cmdOrient,
@@ -719,6 +739,7 @@ registerCommand({
     positionals: [],
     flags: [
       { name: '--host', type: 'string', valueName: 'name', description: 'run host-specific checks (vscode executes installed-hook probes)', required: false, default: null, tui: 'prompt' },
+      { name: '--adapter', type: 'string', valueName: 'name', description: 'check one installed host adapter file', required: false, default: null, tui: 'cli-only' },
     ],
   },
   handler: cmdDoctor,
@@ -826,6 +847,9 @@ registerCommand({
       { name: '--type', type: 'string', valueName: 't', description: 'feat|fix|docs|refactor|chore', required: true, default: null, tui: 'prompt' },
       { name: '--slug', type: 'string', valueName: 's', description: 'lowercase-hyphen slug', required: true, default: null, tui: 'prompt' },
       { name: '--intent', type: 'string', valueName: 'text', description: 'one-line intent', required: true, default: null, tui: 'prompt' },
+      { name: '--goal', type: 'string', valueName: 'text', description: 'short plan goal; requires --acceptance and --constraint', required: false, default: null, tui: 'cli-only' },
+      { name: '--acceptance', type: 'string', valueName: 'text', description: 'short plan acceptance criterion (repeatable)', required: false, default: null, tui: 'cli-only' },
+      { name: '--constraint', type: 'string', valueName: 'text', description: 'short plan constraint (repeatable)', required: false, default: null, tui: 'cli-only' },
       { name: '--verification-check', type: 'string', valueName: 'name', description: 'configured named check (required when several are configured)', required: false, default: null, tui: 'prompt' },
       { name: '--impacted', type: 'string', valueName: 'a,b', description: 'comma-separated Impacted Files', required: false, default: null, tui: 'prompt' },
       { name: '--criteria', type: 'string', valueName: 'text', description: 'an acceptance criterion (repeatable)', required: false, default: null, tui: 'prompt' },
