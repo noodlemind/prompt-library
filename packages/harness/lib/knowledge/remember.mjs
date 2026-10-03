@@ -46,17 +46,21 @@ export function runCorrect(args) {
     return refuseCorrect(blockedReason);
   }
   const claim = positionalsOf(args.argv, { limit: 1 })[0] || '';
-  for (const [field, value] of [
+  const shows = oneLine(flags.shows);
+  if (authority === 'correction' && !shows) return refuseCorrect('correct --authority correction needs --shows');
+  const sentences = [
     ['claim', claim],
     ['applies', applies],
     ['does_not_apply', doesNot],
-  ]) {
+  ];
+  if (shows) sentences.push(['shows', shows]);
+  for (const [field, value] of sentences) {
     const sentence = checkServeSentence(value, field);
     if (!sentence.ok) return refuseCorrect(sentence.blockedReason);
   }
   return runRemember({
     ...args,
-    correction: { authority, why, applies, does_not_apply: doesNot },
+    correction: { authority, why, applies, does_not_apply: doesNot, ...(shows ? { shows } : {}) },
   });
 }
 
@@ -149,7 +153,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     const newEpisode = { path: episode.path, sha256, kind: 'human-teaching', plan: null };
   const scope = { ...(correction || {}) };
   if (existingLearning) {
-    for (const key of ['authority', 'why', 'applies', 'does_not_apply']) {
+    for (const key of ['authority', 'why', 'applies', 'does_not_apply', 'shows']) {
       if (!scope[key] && existingLearning.fm[key]) scope[key] = existingLearning.fm[key];
     }
   }

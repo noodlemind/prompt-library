@@ -104,7 +104,7 @@ export function buildPromotionOps({ workspace, home, branchKey = null, ids = nul
           continue;
         }
         const scopeFields = {};
-        for (const key of ['authority', 'why', 'applies', 'does_not_apply']) {
+        for (const key of ['authority', 'why', 'applies', 'does_not_apply', 'shows']) {
           if (source.fm[key]) scopeFields[key] = source.fm[key];
         }
         promotable.push({

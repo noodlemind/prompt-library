@@ -220,6 +220,7 @@ export function renderLearning({
   why,
   applies,
   does_not_apply,
+  shows,
   provenance,
 }) {
   const lines = [
@@ -228,7 +229,7 @@ export function renderLearning({
     `trigger: ${yamlQuote(trigger)}`,
     `status: ${status}`,
     `source: ${source}`,
-    ...correctionLines({ authority, why, applies, does_not_apply }),
+    ...correctionLines({ authority, why, applies, does_not_apply, shows }),
     'episodes:',
     // Shared with store.mjs's serializeLearning (episodeLines) — a pathless
     // episode is dropped and a missing/unrecognized kind defaults to 'fix',
@@ -1266,7 +1267,7 @@ export function applyOps({
             exitCode: 1,
           };
         }
-        const secrets = scanSecrets(`${op.trigger}\n${op.body}\n${op.why || ''}\n${op.applies || ''}\n${op.does_not_apply || ''}`);
+        const secrets = scanSecrets(`${op.trigger}\n${op.body}\n${op.why || ''}\n${op.applies || ''}\n${op.does_not_apply || ''}\n${op.shows || ''}`);
         if (secrets.length) {
           return rejectOp('E_SECRET', `op ${i}: secret-shaped content (${secrets.map((s) => s.id).join(', ')})`, op.episodes);
         }
@@ -1353,7 +1354,7 @@ export function applyOps({
         consumedTargets.add(op.target);
       }
       if (op.op === 'STRENGTHEN') {
-        const scopeSecrets = scanSecrets(`${op.why || ''}\n${op.applies || ''}\n${op.does_not_apply || ''}`);
+        const scopeSecrets = scanSecrets(`${op.why || ''}\n${op.applies || ''}\n${op.does_not_apply || ''}\n${op.shows || ''}`);
         if (scopeSecrets.length) {
           return rejectOp(
             'E_SECRET',
@@ -1414,6 +1415,7 @@ export function applyOps({
         why: scope.why,
         applies: scope.applies,
         does_not_apply: scope.does_not_apply,
+        shows: scope.shows,
         provenance,
       });
             if (Buffer.byteLength(content, 'utf8') - provenanceBytes(provenance) > LEARNING_BYTE_CAP) {
@@ -1716,6 +1718,7 @@ function composeStrengthenedLearning(target, op, workspace, copilotHome, home) {
         why: picked('why'),
         applies: picked('applies'),
         does_not_apply: picked('does_not_apply'),
+        shows: picked('shows'),
         provenance: { commit: fm.commit, branch: fm.branch, base: fm.base },
   });
   return content;
