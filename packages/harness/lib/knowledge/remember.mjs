@@ -10,6 +10,7 @@ import { resolveWriteLayer } from './layer.mjs';
 import { bucketDirFor } from './overlay.mjs';
 import { episodeAbsPath } from '../project-layout.mjs';
 import { positionalsOf } from '../positionals.mjs';
+import { checkServeSentence } from '../sentence.mjs';
 
 function oneLine(value) {
   if (typeof value !== 'string') return null;
@@ -43,6 +44,15 @@ export function runCorrect(args) {
       ? 'authority must be instruction, correction, or inference'
       : 'correct needs --why, --applies, --does-not-apply, and --authority';
     return refuseCorrect(blockedReason);
+  }
+  const claim = positionalsOf(args.argv, { limit: 1 })[0] || '';
+  for (const [field, value] of [
+    ['claim', claim],
+    ['applies', applies],
+    ['does_not_apply', doesNot],
+  ]) {
+    const sentence = checkServeSentence(value, field);
+    if (!sentence.ok) return refuseCorrect(sentence.blockedReason);
   }
   return runRemember({
     ...args,

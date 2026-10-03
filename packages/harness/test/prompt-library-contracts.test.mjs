@@ -105,25 +105,13 @@ test('named checks execute argv from checks.yaml, not plan text', () => {
   assert.match(runner, /shell:\s*false/, 'named checks must not run through a shell');
 });
 
-test('engineer agent is frozen, thin, and owns the only normative nine-step delivery lifecycle', () => {
+test('engineer agent is frozen, thin, and leaves the delivery checklist to the harness', () => {
   const engineer = read('.github/agents/engineer.agent.md');
   const estimatedTokens = Math.ceil(Buffer.byteLength(engineer, 'utf8') / 4);
 
   assert.ok(estimatedTokens >= 600, `Engineer context is too small (${estimatedTokens} estimated tokens)`);
   assert.ok(estimatedTokens <= 900, `Engineer context is too large (${estimatedTokens} estimated tokens)`);
-  for (const step of [
-    '1. Orient',
-    '2. Establish intent',
-    '3. Investigate',
-    '4. Work',
-    '5. Handle gaps',
-    '6. Verify',
-    '7. Review',
-    '8. Compound',
-    '9. Report',
-  ]) {
-    assert.match(engineer, new RegExp(step.replace('.', '\\.'), 'i'), `missing ${step}`);
-  }
+  assert.doesNotMatch(engineer, /^[0-9]+\. /m);
   for (const mode of ['Answer', 'Investigate', 'Deliver', 'Review']) {
     assert.match(engineer, new RegExp(`\\*\\*${mode}\\*\\*`), `missing ${mode} mode`);
   }
@@ -143,7 +131,6 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
 
   assert.match(engineer, /requested file mutation enters Deliver before the first edit/i);
   assert.match(engineer, /blocked[\s\S]{0,180}ensure-plan[\s\S]{0,180}implement gate[\s\S]{0,180}retry/i);
-  assert.match(engineer, /only checks named in `verification\.required`[\s\S]{0,160}unrelated failures[\s\S]{0,120}expanding scope/i);
   assert.match(engineer, /skill, agent, instruction, prompt, check, reference, or solution[\s\S]{0,100}create-primitive/i);
   assert.match(engineer, /read `~\/\.copilot\/skills\/create-primitive\/SKILL\.md`[\s\S]{0,180}not activation/i);
   assert.match(engineer, /Capture for Later[\s\S]{0,120}Plan and Fix[\s\S]{0,120}Leave in Chat/i);
@@ -264,7 +251,7 @@ test('execution, gap resolution, and compounding skills have distinct boundaries
   // Phase execution is owned by the Engineer's Deliver lifecycle (work-on-task retired).
   const engineerContract = read('.github/agents/engineer.agent.md');
   assert.match(engineerContract, /Deliver\*{0,2} owns mutation lifecycle/i);
-  assert.match(engineerContract, /pass `harness gate --phase implement/);
+  assert.match(engineerContract, /pass the implement gate/);
   assert.match(engineerContract, /require passed `harness verify`/i);
 
   const gaps = read('.github/skills/ensure-capability/SKILL.md');
@@ -532,7 +519,7 @@ test('eval running is not a shipped harness command', () => {
 
 test('engineer step 8 runs harness compound to close the learn loop', () => {
   const engineer = read('.github/agents/engineer.agent.md');
-  assert.match(engineer, /8\.\s*Compound[^\n]*harness compound/i, 'step 8 must invoke harness compound');
+  assert.doesNotMatch(engineer, /8\.\s*Compound/i);
   // The CI budget gate must reference the read-only check.
   const workflow = read('.github/workflow-templates/harness-plan-verification.yml');
   assert.match(workflow, /harness report --check/, 'CI must run the budget gate');

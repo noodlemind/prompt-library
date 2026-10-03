@@ -69,7 +69,7 @@ test('out-of-scope when delivered overlaps doesNotApply at least as much as appl
   );
 });
 
-test('repeated-mistake when tests passed, the trimmed rejected text is present, and applies wins the overlap', () => {
+test('repeated-mistake when every rejected token is in the delivered diff and applies wins the overlap', () => {
   assert.deepEqual(
     judgeRepeat({
       testsPassed: true,
@@ -90,19 +90,6 @@ test('repeated-mistake when tests passed, the trimmed rejected text is present, 
     }),
     { ok: false, reason: 'repeated-mistake' },
   );
-});
-
-test('clear when the rejected text is absent, or applies is empty', () => {
-  assert.deepEqual(
-    judgeRepeat({
-      testsPassed: true,
-      delivered: 'uses parameterized queries',
-      rejected: 'raw sql concatenation',
-      applies: 'sql concatenation',
-      doesNotApply: 'kubernetes ingress',
-    }),
-    { ok: true, reason: 'clear' },
-  );
   assert.deepEqual(
     judgeRepeat({
       testsPassed: true,
@@ -110,6 +97,19 @@ test('clear when the rejected text is absent, or applies is empty', () => {
       rejected: 'raw concatenation',
       applies: 'sql concatenation',
       doesNotApply: '',
+    }),
+    { ok: false, reason: 'repeated-mistake' },
+  );
+});
+
+test('clear when the delivered diff shares no rejected tokens, or applies is empty', () => {
+  assert.deepEqual(
+    judgeRepeat({
+      testsPassed: true,
+      delivered: 'uses parameterized queries',
+      rejected: 'raw sql concatenation',
+      applies: 'sql concatenation',
+      doesNotApply: 'kubernetes ingress',
     }),
     { ok: true, reason: 'clear' },
   );

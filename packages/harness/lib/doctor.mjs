@@ -836,6 +836,17 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     });
   }
 
+  if (typeof flags.adapter === 'string' && flags.adapter) {
+    const safe = /^[a-z0-9-]+$/.test(flags.adapter);
+    const adapterFile = safe ? path.join(copilotHome, 'hooks', `${flags.adapter}.mjs`) : '';
+    checks.push({
+      id: 'A1',
+      name: `Host adapter ${flags.adapter}`,
+      pass: Boolean(adapterFile) && fs.existsSync(adapterFile),
+      hint: 'Run: harness install',
+    });
+  }
+
   const required = checks.filter((c) => !c.optional);
   const pass = required.every((c) => c.pass);
   return { checks, pass };

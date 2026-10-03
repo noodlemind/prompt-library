@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { extractSection } from './plan-parse.mjs';
+import { readPlanRecord } from './plan-record.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const schemas = new Map();
@@ -31,6 +32,13 @@ export function extractAcceptanceCriteria(plan) {
 export function validatePlanSchema(plan) {
   const checks = [];
   if (!plan) return { pass: false, version: null, checks: [{ id: 'schema', pass: false, message: 'Plan not found' }] };
+  if (readPlanRecord(plan.text)) {
+    return {
+      pass: true,
+      version: null,
+      checks: [{ id: 'short-record', pass: true, message: 'Short plan record present' }],
+    };
+  }
   if (plan.fm?.__parseError) {
     return {
       pass: false,

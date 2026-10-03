@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
+import { repeatedFromServed } from './repeat-mistake.mjs';
 import { readSession } from './session.mjs';
 import { selectPlan } from './plan-parse.mjs';
 import { extractAcceptanceCriteria, validatePlanSchema } from './plan-schema.mjs';
@@ -18,6 +20,22 @@ import { CHECKS_REL, loadNamedChecks, validateCommand, runNamedCheck } from './c
 import { createRedactor, redactionMarker } from './redact.mjs';
 
 const DEFAULT_CHECK_SEVERITIES = { [STRUCTURAL_CHECK_ID]: 'advisory' };
+
+function normalizedDiff(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .filter((line) => !/^index [0-9a-f]+\.\.[0-9a-f]+(?:\s|$)/.test(line))
+    .join('\n');
+}
+
+function deliveredDiff(workspace, base) {
+  const args = ['diff', '--no-ext-diff'];
+  const safeBase = typeof base === 'string' && base && !base.startsWith('-') && !/[\0\r\n]/.test(base);
+  args.push(safeBase ? base : 'HEAD');
+  const diff = spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout: 30000 });
+  if (diff.status !== 0) return '';
+  return normalizedDiff(diff.stdout || '');
+}
 
 function resultCheck(id, status, message, extra = {}) {
   return { id, status, message, ...extra };
@@ -308,8 +326,15 @@ function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
   const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   const severities = applyCheckSeverities(partial.checks, policy, partial.planGatedChecks || new Set());
     const checks = severities.checks.map(sanitizeCheckPayload);
+  const resolved = partial.outcome || resolveOutcome(checks);
+  const repeated = resolved === 'passed' && repeatedFromServed({
+    workspace,
+    home: flags.harnessHome || flags.home || process.env.HARNESS_HOME,
+    session: readSession(workspace),
+    delivered: deliveredDiff(workspace, flags.base),
+  });
   const result = {
-    outcome: partial.outcome || resolveOutcome(checks),
+    outcome: repeated ? 'repeated-mistake' : resolved,
     plan: partial.plan || null,
     checks,
     advisoryFailures: collectAdvisoryFailures(checks),
@@ -327,6 +352,8 @@ function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
     evidencePath: null,
   };
   result.evidencePath = skipEvidence ? null : writeEvidence(workspace, result, flags.dryRun);
+  // Kept off the evidence file. The edit gate compares this string later.
+  if (result.evidencePath) result.diffFingerprint = deliveredDiff(workspace, flags.base);
   return result;
 }
 

@@ -685,17 +685,27 @@ export async function cmdIndex(argv) {
 }
 
 export async function computeOrientResult(argv) {
-  const { runOrient } = await import('./orient.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);
+  if (flags.read) {
+    const { readOrientSlice } = await import('./orient-read.mjs');
+    const result = readOrientSlice({ workspace, copilotHome, flags, query, files: flags.files });
+    return { flags, workspace, copilotHome, query, result, read: true };
+  }
+  const { runOrient } = await import('./orient.mjs');
   const result = runOrient({ workspace, copilotHome, flags, query });
-  return { flags, workspace, copilotHome, query, result };
+  return { flags, workspace, copilotHome, query, result, read: false };
 }
 
 export async function cmdOrient(argv) {
-  const { flags, workspace, query, result } = await computeOrientResult(argv);
+  const computed = await computeOrientResult(argv);
+  if (computed.read) {
+    emitJson(computed.flags, computed.result);
+    return 0;
+  }
+  const { flags, workspace, query, result } = computed;
   const orientPack = (() => {
     try {
       return fs.readFileSync(path.join(workspace, result.contextPack), 'utf8');
@@ -838,6 +848,8 @@ export async function cmdVerify(argv, ctx = {}) {
     }
     throw error;
   }
+  const diffFingerprint = result.diffFingerprint;
+  delete result.diffFingerprint;
   const cancelled = result.outcome === 'cancelled';
     const runStatus = statusForVerifyResult(result);
   const exitCode = cancelled
@@ -855,6 +867,7 @@ export async function cmdVerify(argv, ctx = {}) {
       lastVerifyAt: new Date().toISOString(),
       lastVerifyOutcome: result.outcome,
       lastEvidencePath: result.evidencePath,
+      ...(typeof diffFingerprint === 'string' ? { diffFingerprint } : {}),
     },
     flags.dryRun
   );

@@ -10,6 +10,7 @@ import { resolveCopilotHome } from './paths.mjs';
 import { primitivePlanGovernance } from './primitive-governance.mjs';
 import { validateRoutingSnapshot } from './route.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
+import { readPlanRecord } from './plan-record.mjs';
 
 export function runGate({ workspace, flags, query = '' }) {
   const session = readSession(workspace);
@@ -55,15 +56,16 @@ export function runGate({ workspace, flags, query = '' }) {
     }
     if (!readiness.pass) pass = false;
 
-    if (!plan.sections.overview) {
+    const record = readPlanRecord(plan.text);
+    if (!record && !plan.sections.overview) {
       checks.push({ id: 'C1a', pass: false, message: 'Missing ## Overview', severity: 'fail' });
       pass = false;
     }
-    if (!plan.sections.acceptance) {
+    if (!record && !plan.sections.acceptance) {
       checks.push({ id: 'C1b', pass: false, message: 'Missing ## Acceptance Criteria', severity: 'fail' });
       pass = false;
     }
-    if (!plan.sections.activity) {
+    if (!record && !plan.sections.activity) {
       checks.push({
         id: 'C4',
         pass: false,
@@ -72,11 +74,11 @@ export function runGate({ workspace, flags, query = '' }) {
       });
       if (phase === 'implement') pass = false;
       else exitCode = Math.max(exitCode, 2);
-    } else {
+    } else if (!record) {
       checks.push({ id: 'C4', pass: true, message: '## Activity present', severity: 'ok' });
     }
 
-    if (plan.plan_lock) {
+    if (!record && plan.plan_lock) {
       const intentSectionOk = intentContractHasContent(plan.text);
       if (intentSectionOk) {
         checks.push({ id: 'C-goal', pass: true, message: '## Intent Contract present', severity: 'ok' });

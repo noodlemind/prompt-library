@@ -14,10 +14,21 @@ import { resolveCopilotHome } from './paths.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
 import { emptySnapshot, routeWorkspace } from './route.mjs';
+import { shortPlanDocument } from './plan-record.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function shortSlug(value) {
+  const slug = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .slice(0, 48)
+    .replace(/^-+|-+$/g, '');
+  if (!SLUG_RE.test(slug)) throw new Error('plan-new: --slug is required and must be lowercase-hyphen (a-z0-9-)');
+  return slug;
+}
 
 function warnIndexPlanes(report) {
   const lines = [];
@@ -178,7 +189,7 @@ ${impactedLines}
 
 /** CLI: parse the plan-new flags, write the skeleton, print the path. */
 export async function cmdPlanNew(argv) {
-  const opts = { impacted: [], criteria: [] };
+  const opts = { impacted: [], criteria: [], acceptance: [], constraints: [] };
   let workspace = process.cwd();
   let json = false;
   let dryRun = false;
@@ -200,6 +211,9 @@ export async function cmdPlanNew(argv) {
     else if (a === '--slug') opts.slug = next();
     else if (a === '--title') opts.title = next();
     else if (a === '--intent') opts.intent = next();
+    else if (a === '--goal') opts.goal = next();
+    else if (a === '--acceptance') opts.acceptance.push(next());
+    else if (a === '--constraint') opts.constraints.push(next());
     else if (a === '--date') opts.date = next();
     else if (a === '--risk') opts.risk = next();
     else if (a === '--status') opts.status = next();
@@ -221,13 +235,44 @@ export async function cmdPlanNew(argv) {
   }
 
   if (opts.from) {
-    if (opts.slug || opts.type || opts.intent || opts.gap) {
+    if (opts.slug || opts.type || opts.intent || opts.gap || opts.goal !== undefined || opts.acceptance.length > 0 || opts.constraints.length > 0) {
       throw new Error('plan-new: --from cannot be combined with new-plan flags');
     }
     return relockPlan({ workspace, from: opts.from, dryRun, toStdout, json, classification: opts.classification, copilotHome: opts.copilotHome });
   }
 
   if (!opts.date) opts.date = new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.date)) throw new Error('plan-new: date must be YYYY-MM-DD');
+  if (opts.goal !== undefined) {
+    if (opts.type || opts.risk || opts.status || opts.impacted.length > 0) {
+      throw new Error('plan-new: --goal does not take --type, --risk, --status, or --impacted');
+    }
+    const acceptance = opts.acceptance.filter((value) => typeof value === 'string' && value.trim());
+    const constraints = opts.constraints.filter((value) => typeof value === 'string' && value.trim());
+    if (!String(opts.goal).trim() || acceptance.length === 0 || constraints.length === 0) {
+      throw new Error('plan-new: --goal requires at least one --acceptance and one --constraint');
+    }
+    const slug = shortSlug(opts.slug || opts.goal);
+    const fileName = `${opts.date}-feat-${slug}-plan.md`;
+    const plansTarget = plansWriteTarget(workspace, { home: harnessGlobalHome() });
+    const full = path.join(plansTarget.base, plansTarget.dirRel, fileName);
+    const content = shortPlanDocument({ goal: opts.goal, acceptance, constraints });
+    if (toStdout) {
+      process.stdout.write(content);
+      return 0;
+    }
+    if (!dryRun) {
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      if (fs.existsSync(full)) throw new Error(`plan-new: ${full} already exists`);
+      fs.writeFileSync(full, content, 'utf8');
+    }
+    if (json) console.log(redactedJson({ path: full, created: !dryRun }));
+    else {
+      const ui = createStyle();
+      console.log(ui.line({ state: 'ok', key: 'plan-new', value: dryRun ? `would create ${full}` : full }));
+    }
+    return 0;
+  }
   const plansTarget = plansWriteTarget(workspace, { home: harnessGlobalHome() });
   opts.plansBase = plansTarget.base;
   opts.plansRel = plansTarget.dirRel;

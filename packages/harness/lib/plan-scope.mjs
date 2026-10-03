@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { readPlanRecord } from './plan-record.mjs';
 
 function runGit(workspace, args) {
   return spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout: 30_000 });
@@ -64,6 +65,15 @@ export function validatePlanScope({ workspace, plan, base = null }) {
   const activePlan = String(plan.path || '').replace(/\\/g, '/');
   const governedFiles = changed.files.filter((file) => file !== activePlan);
   if (allowed.length === 0) {
+    if (readPlanRecord(plan.text)) {
+      return {
+        status: 'passed',
+        allowed,
+        changedFiles: changed.files,
+        violations: [],
+        message: 'Short plan record has no Impacted Files list',
+      };
+    }
     return { status: 'failed', allowed, changedFiles: changed.files, violations: governedFiles, message: 'No Impacted Files allowlist' };
   }
   const violations = governedFiles.filter((file) => !matchesScope(file, allowed));

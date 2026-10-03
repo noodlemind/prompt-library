@@ -188,7 +188,7 @@ test('Bash file mutations require planned scope and create pending verification 
   assert.equal(allowed.status, 0, allowed.stderr);
   recordSuccessfulEdit(workspace, { command: 'printf changed > src/example.js' });
   const pending = runHook('require-verification.mjs', workspace);
-  assertHookBlocked(pending, /verify has not run/i);
+  assertHookBlocked(pending, /verification outcome is inconclusive/i);
 });
 
 test('completion hook bypasses read-only work and enforces each new recorded edit', () => {
@@ -207,7 +207,7 @@ test('completion hook bypasses read-only work and enforces each new recorded edi
   assert.equal(runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' }).status, 0);
   recordSuccessfulEdit(workspace, { file_path: 'src/example.js' });
   const unverified = runHook('require-verification.mjs', workspace);
-  assertHookBlocked(unverified, /verify has not run/i);
+  assertHookBlocked(unverified, /verification outcome is inconclusive/i);
 
   assert.equal(runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']).status, 0);
   const sessionPath = path.join(workspace, '.harness', 'session.json');

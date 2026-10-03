@@ -68,6 +68,7 @@ export function parseFlags(argv) {
     query: null,
     files: null,
     explain: false,
+    read: false,
     phase: 'implement',
     limit: null,
     refresh: false,
@@ -125,6 +126,7 @@ export function parseFlags(argv) {
     else if (a === '--verbose' || a === '-v') flags.verbose = true;
     else if (a === '--json') flags.json = true;
     else if (a === '--explain') flags.explain = true;
+    else if (a === '--read') flags.read = true;
     else if (a === '--refresh') flags.refresh = true;
     else if (a === '--semantic') flags.semantic = true;
     else if (a === '--include-plans') flags.includePlans = true;
@@ -213,6 +215,8 @@ export function parseFlags(argv) {
     else if (a === '--max-bytes') flags.maxBytes = parsePositiveInt(scan[++i], '--max-bytes');
     else if (a.startsWith('--host=')) flags.host = a.split('=').slice(1).join('=');
     else if (a === '--host') flags.host = scan[++i];
+    else if (a.startsWith('--adapter=')) flags.adapter = a.split('=').slice(1).join('=');
+    else if (a === '--adapter') flags.adapter = scan[++i];
     else if (a.startsWith('--session=')) flags.session = a.split('=').slice(1).join('=');
     else if (a === '--session') flags.session = scan[++i];
     else if (a === '--insight') flags.insight = true;
