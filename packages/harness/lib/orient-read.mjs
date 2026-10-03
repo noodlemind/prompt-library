@@ -4,7 +4,7 @@ import { runGate } from './gate.mjs';
 import { indexStatus } from './index-status.mjs';
 import { buildNeighborhood } from './repo-map/index.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
-import { readSession } from './session.mjs';
+import { readSession, writeSession } from './session.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
 import { discoverInventory, routingCards, workspaceRoutingRoots } from './route.mjs';
 
@@ -21,6 +21,14 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
   const q = query || flags.query || '';
   const home = flags.harnessHome || flags.home;
   const namedFiles = Array.isArray(files) ? files : flags.files;
+  if (String(q).trim() && !flags.dryRun) {
+    const prior = readSession(workspace) || {};
+    writeSession(workspace, {
+      ...prior,
+      lastQuery: q,
+      files: Array.isArray(namedFiles) ? namedFiles : [],
+    });
+  }
 
   let learnings = [];
   try {

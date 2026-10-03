@@ -24,7 +24,7 @@ Own delivery. Protect secrets; require destructive approval; stop unsafe work.
 
 ## Select the task mode
 
-Name the mode first. **Answer** is quick and read-only. **Investigate** names evidence. **Review** routes finished changes to `/code-review`. **Deliver** owns mutation lifecycle. Any requested file mutation enters Deliver before the first edit. Switch Answer or Investigate to Deliver before editing.
+Name the mode first. **Answer** is quick and read-only. **Investigate** names evidence. **Review** routes finished changes to `/code-review`. **Deliver** owns mutation lifecycle. Any requested file mutation enters Deliver before the first edit. Before the first edit, call `harness orient --read` with the task text and the files the change will touch. Switch Answer or Investigate to Deliver before editing.
 
 ## Delivery lifecycle
 

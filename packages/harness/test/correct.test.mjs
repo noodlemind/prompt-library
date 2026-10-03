@@ -32,15 +32,17 @@ const CLAIM = 'Wait for the lock before altering a hot table.';
 const WHY = 'a direct alter takes an exclusive lock';
 const APPLIES = 'a hot table with live traffic';
 const DOES_NOT = 'a cold table with no readers';
+const SHOWS = 'replaceRow';
 
 function enable(c) {
   const res = run(c, ['knowledge', 'on']);
   assert.equal(res.status, 0, res.stderr + res.stdout);
 }
 
-function correctArgs({ authority = 'correction', domain = null, omit = null, dryRun = false } = {}) {
+function correctArgs({ authority = 'correction', domain = null, omit = null, dryRun = false, shows = SHOWS } = {}) {
   const args = ['correct', CLAIM, '--trigger', 'altering a hot table', '--why', WHY, '--applies', APPLIES];
   if (omit !== 'does-not-apply') args.push('--does-not-apply', DOES_NOT);
+  if (authority === 'correction' && omit !== 'shows') args.push('--shows', shows);
   if (domain) args.push('--domain', domain);
   if (authority) args.push('--authority', authority);
   if (dryRun) args.push('--dry-run');
@@ -51,11 +53,12 @@ function learnings(c) {
   return listLearnings(storeDir(c.ws, { home: c.harnessHome }));
 }
 
-function assertRecord(text, fm, { authority, status }) {
+function assertRecord(text, fm, { authority, status, shows = undefined }) {
   assert.equal(fm.authority, authority);
   assert.equal(fm.why, WHY);
   assert.equal(fm.applies, APPLIES);
   assert.equal(fm.does_not_apply, DOES_NOT);
+  if (shows !== undefined) assert.equal(fm.shows, shows);
   assert.equal(fm.status, status);
   assert.match(text, new RegExp(`^authority: ${authority}$`, 'm'));
   assert.match(text, new RegExp(`^why: "${WHY}"$`, 'm'));
@@ -77,7 +80,7 @@ test('remember of the same trigger keeps correction fields the call did not set'
   assert.ok(learning, 'superseded learning still exists');
   const text = fs.readFileSync(learning.file, 'utf8');
   assert.match(text, /Queue the alter behind the existing lock/);
-  assertRecord(text, learning.fm, { authority: 'correction', status: 'active' });
+  assertRecord(text, learning.fm, { authority: 'correction', status: 'active', shows: SHOWS });
 });
 
 test('correct --authority correction writes an active learning with the four fields', () => {
@@ -90,7 +93,8 @@ test('correct --authority correction writes an active learning with the four fie
   const learning = learnings(c).find((l) => l.id === id);
   assert.ok(learning, 'learning file exists');
   const text = fs.readFileSync(learning.file, 'utf8');
-  assertRecord(text, learning.fm, { authority: 'correction', status: 'active' });
+  assertRecord(text, learning.fm, { authority: 'correction', status: 'active', shows: SHOWS });
+  assert.match(text, /^shows: "replaceRow"$/m);
 });
 
 test('correct --authority inference writes status provisional', () => {
@@ -119,6 +123,26 @@ test('correct defaults --domain to general', () => {
   const res = run(c, correctArgs());
   assert.equal(res.status, 0, res.stderr + res.stdout);
   assert.equal(JSON.parse(res.stdout).learningId, 'general/altering-a-hot-table');
+});
+
+test('correct --authority correction without --shows exits 2 and writes no learning', () => {
+  const c = ctx();
+  enable(c);
+  const before = learnings(c).length;
+  const res = run(c, correctArgs({ omit: 'shows' }));
+  assert.equal(res.status, 2, res.stderr + res.stdout);
+  assert.equal(learnings(c).length, before);
+});
+
+test('a 26-word --shows exits 2 and writes no learning', () => {
+  const c = ctx();
+  enable(c);
+  const before = learnings(c).length;
+  const shows = Array.from({ length: 26 }, (_, i) => `word${i}`).join(' ');
+  const res = run(c, correctArgs({ shows }));
+  assert.equal(res.status, 2, res.stderr + res.stdout);
+  assert.match(JSON.parse(res.stdout).blockedReason, /shows is longer than 25 words/);
+  assert.equal(learnings(c).length, before);
 });
 
 test('correct without --does-not-apply exits non-zero and writes no learning', () => {
@@ -167,9 +191,10 @@ test('renderLearning and serializeLearning keep the four fields and omit empty o
     why: fm.why,
     applies: fm.applies,
     does_not_apply: fm.does_not_apply,
+    shows: fm.shows,
   });
   for (const text of [serialized, rendered]) {
-    assertRecord(text, parseLearningFrontmatter(text).fm, { authority: 'correction', status: 'active' });
+    assertRecord(text, parseLearningFrontmatter(text).fm, { authority: 'correction', status: 'active', shows: fm.shows });
   }
   const bare = serializeLearning(
     { trigger: 't', status: 'active', source: 'human', episodes: [], authority: '', why: '', applies: '', does_not_apply: '' },
@@ -300,7 +325,7 @@ test('STRENGTHEN rejects a secret in does_not_apply and leaves the learning unch
 });
 
 test('correct rejects AKIAIOSFODNN7EXAMPLE in why, applies, and does-not-apply', () => {
-  for (const flag of ['--why', '--applies', '--does-not-apply']) {
+  for (const flag of ['--why', '--applies', '--does-not-apply', '--shows']) {
     const c = ctx();
     enable(c);
     const before = learnings(c).length;
@@ -412,6 +437,7 @@ test('a branch correction does_not_apply survives the STRENGTHEN rewrite', () =>
       why: WHY,
       applies: APPLIES,
       does_not_apply: branchDoesNot,
+      shows: SHOWS,
       episodes: [branchEp],
     }]),
     home,
@@ -426,11 +452,13 @@ test('a branch correction does_not_apply survives the STRENGTHEN rewrite', () =>
   assert.equal(opset.ops[0].authority, 'correction');
   assert.equal(opset.ops[0].why, WHY);
   assert.equal(opset.ops[0].applies, APPLIES);
+  assert.equal(opset.ops[0].shows, SHOWS);
   const applied = applyOps({ workspace: ws, opsPath: path.join(ws, PROMOTE_OPS_REL), home });
   assert.equal(applied.exitCode, 0, JSON.stringify(applied.rejected));
   const golden = listLearnings(dir).find((l) => l.id === 'sql/altering-a-hot-table');
   assert.equal(golden.fm.does_not_apply, branchDoesNot);
   assert.equal(golden.fm.authority, 'correction');
+  assert.equal(golden.fm.shows, SHOWS);
   const text = fs.readFileSync(golden.file, 'utf8');
   assert.match(text, /cold tables during a failover/);
   assert.doesNotMatch(text, /weekends only/);

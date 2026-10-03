@@ -807,6 +807,7 @@ test('an advisory structural failure still reports a repeated applicable lesson'
     '--why', 'a joined string builds the query',
     '--applies', 'The handler builds sql.',
     '--does-not-apply', 'A billing pdf stays plain.',
+    '--shows', 'Raw Concatenation',
     '--authority', 'correction',
     '--domain', 'sql',
   ]);

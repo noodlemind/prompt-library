@@ -62,6 +62,25 @@ function hookEnv(c, extra = {}) {
   };
 }
 
+function orient(c, args = []) {
+  return spawnSync(process.execPath, [
+    binPath,
+    'orient',
+    ...args,
+    '--json',
+    '--no-events',
+    '--workspace',
+    c.ws,
+    '--copilot-home',
+    c.home,
+    '--harness-home',
+    c.harnessHome,
+  ], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_HOME: c.harnessHome, COPILOT_HOME: c.home, HARNESS_NO_EVENTS: '1' },
+  });
+}
+
 function runLoadContext(c, env = hookEnv(c)) {
   return spawnSync(process.execPath, [path.join(hooksRoot, 'load-context.mjs')], {
     cwd: c.ws,
@@ -176,6 +195,42 @@ test('harness orient --read --json on a cold repo prints neighborhood null and w
     assert.equal('schema' in slice, false);
     assert.equal('status' in slice, false);
     assertNoOrientWrites(c.ws);
+  } finally {
+    removeRepo(c);
+  }
+});
+
+test('an empty orient --read leaves an existing session file unchanged', () => {
+  const c = coldRepo();
+  try {
+    const sessionPath = path.join(c.ws, '.harness', 'session.json');
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    const body = '{"version":1,"lastQuery":"keep"}\n';
+    fs.writeFileSync(sessionPath, body);
+    const result = orient(c, ['--read']);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.readFileSync(sessionPath, 'utf8'), body);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'repo-map.md')), false);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'context-pack.md')), false);
+  } finally {
+    removeRepo(c);
+  }
+});
+
+test('orient --read with a query stores the query and the file list only', () => {
+  const c = coldRepo();
+  try {
+    const sessionPath = path.join(c.ws, '.harness', 'session.json');
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    fs.writeFileSync(sessionPath, `${JSON.stringify({ version: 1, activePlan: 'docs/plans/keep.md' }, null, 2)}\n`);
+    const result = orient(c, ['--read', '--query', 'save skips the audit stamp', '--file', 'src/example.js']);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+    assert.equal(session.lastQuery, 'save skips the audit stamp');
+    assert.deepEqual(session.files, ['src/example.js']);
+    assert.equal(session.activePlan, 'docs/plans/keep.md');
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'repo-map.md')), false);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'context-pack.md')), false);
   } finally {
     removeRepo(c);
   }

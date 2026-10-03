@@ -137,4 +137,7 @@ test('edit passes --query and --file through orient and stores the task', () => 
   assert.equal(body.neighborhood.files.some((file) => file.rel === 'README.md'), true);
   const session = JSON.parse(fs.readFileSync(path.join(ws, '.harness', 'session.json'), 'utf8'));
   assert.equal(session.lastQuery, 'readme cold start');
+  assert.deepEqual(session.files, ['README.md']);
+  assert.equal(fs.existsSync(path.join(ws, '.harness', 'repo-map.md')), false);
+  assert.equal(fs.existsSync(path.join(ws, '.harness', 'context-pack.md')), false);
 });

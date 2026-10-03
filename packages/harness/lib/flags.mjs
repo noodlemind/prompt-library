@@ -109,6 +109,7 @@ export function parseFlags(argv) {
     why: null,
     applies: null,
     doesNotApply: null,
+    shows: null,
     authority: null,
     yes: false,
     layer: null,
@@ -257,6 +258,11 @@ export function parseFlags(argv) {
     else if (a === '--does-not-apply') {
       const next = scan[i + 1];
       if (next !== undefined && !next.startsWith('--')) flags.doesNotApply = scan[++i];
+    }
+    else if (a.startsWith('--shows=')) flags.shows = a.split('=').slice(1).join('=');
+    else if (a === '--shows') {
+      const next = scan[i + 1];
+      if (next !== undefined && !next.startsWith('--')) flags.shows = scan[++i];
     }
     else if (a.startsWith('--authority=')) flags.authority = a.split('=').slice(1).join('=');
     else if (a === '--authority') {

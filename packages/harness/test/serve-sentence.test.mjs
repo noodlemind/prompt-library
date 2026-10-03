@@ -54,6 +54,7 @@ function correct(c, { claim, trigger, applies, doesNot }) {
     '--why', WHY,
     '--applies', applies,
     '--does-not-apply', doesNot,
+    '--shows', 'replaceRow',
     '--authority', 'correction',
     '--domain', 'sql',
   ]);

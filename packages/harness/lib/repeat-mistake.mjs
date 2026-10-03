@@ -37,10 +37,12 @@ export function judgeRepeat({ testsPassed, delivered, rejected, applies, doesNot
 export function repeatedFromServed({ workspace, home, session, delivered }) {
   let served = [];
   try {
+    const files = Array.isArray(session?.files) ? session.files : [];
     served = rankLearnings({
       workspace,
       query: session?.lastQuery || '',
       home,
+      ...(files.length ? { signals: files } : {}),
     });
   } catch {
     return false;
@@ -48,7 +50,7 @@ export function repeatedFromServed({ workspace, home, session, delivered }) {
   return served.some((learning) => judgeRepeat({
     testsPassed: true,
     delivered,
-    rejected: learning.claimLine,
+    rejected: learning.authority === 'correction' ? learning.shows : '',
     applies: learning.applies,
     doesNotApply: learning.does_not_apply,
   }).reason === 'repeated-mistake');
