@@ -17,6 +17,7 @@ function hookAssetsStale(sourceHooks, bundledHooks) {
     'require-plan-gate.mjs',
     'load-context.mjs',
     'require-verification.mjs',
+    'lib/evidence-binding.mjs',
     'lib/tool-payload.mjs',
     'lib/host-adapter.mjs',
     'grok-build.mjs',

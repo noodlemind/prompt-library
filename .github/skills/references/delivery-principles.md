@@ -19,6 +19,9 @@ Read this file before the first edit of a Deliver task. Name a principle in the 
 | sequence-verifiable-units | Each commit ends in a state someone can check. |
 | ask-only-when-undrivable | Ask the owner only with a stated reason the product surface could not answer the question. Gate denial and destructive actions still stop. |
 | standards-over-local-drift | Match the module layout. New code follows the language or framework standard when the surrounding code does not. |
+| one-writer | When `orient --read` stored a non-empty file list, a product path must be one of those files. `mkdir` may create a parent of a listed file. |
+| parent-reads-the-diff | The implementer report is evidence. The Engineer reads the diff and writes the summary the person sees. |
+| verify-between-units | Call `harness verify` and require outcome `passed` before the next unit. |
 
 ## smallest-change
 
@@ -79,3 +82,15 @@ Use the same directories, names, and test layout as the module you are editing. 
 ## ask-only-when-undrivable
 
 Drive the real surface first. A question to the owner includes the reason that surface could not reach the answer. Approval for a destructive action, and a denied gate, still wait.
+
+## one-writer
+
+When `orient --read` stored a non-empty file list, the edit gate allows a product path only when that path is one of those files. A directory or glob entry does not allow other files. `mkdir` may create a parent directory of a listed file. Two writers do not share a workspace. Each writer calls `orient --read` with its own files before editing.
+
+## parent-reads-the-diff
+
+The implementer report is evidence. The Engineer reads the diff and writes the summary the person sees.
+
+## verify-between-units
+
+Call `harness verify` and require outcome `passed` before the next unit. Outcome `type-check-only` is not a pass for behavioral work. A new git head voids the stored verification.

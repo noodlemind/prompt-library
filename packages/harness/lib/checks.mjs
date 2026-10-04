@@ -38,6 +38,12 @@ export function loadNamedChecks(workspace) {
   }
 }
 
+function declaredProof(config) {
+  if (!config || !Object.hasOwn(config, 'proof')) return 'behavior';
+  if (config.proof === 'type-check' || config.proof === 'behavior') return config.proof;
+  return null;
+}
+
 export function validateCommand(name, config) {
   if (!config || !Array.isArray(config.command) || config.command.length === 0) {
     return `${name}.command must be a non-empty argv array`;
@@ -48,6 +54,9 @@ export function validateCommand(name, config) {
   const timeout = config.timeout_seconds ?? CHECK_TIMEOUT_DEFAULT_SECONDS;
   if (!Number.isInteger(timeout) || timeout < CHECK_TIMEOUT_MIN_SECONDS || timeout > CHECK_TIMEOUT_MAX_SECONDS) {
     return `${name}.timeout_seconds must be an integer from ${CHECK_TIMEOUT_MIN_SECONDS} to ${CHECK_TIMEOUT_MAX_SECONDS}`;
+  }
+  if (config.proof !== undefined && config.proof !== 'type-check' && config.proof !== 'behavior') {
+    return `${name}.proof must be type-check or behavior`;
   }
   return null;
 }
@@ -68,19 +77,21 @@ function trimOutput(value) {
 }
 
 export async function runNamedCheck(workspace, name, config, { signal, onStdout, onStderr, copilotHome = null, events = null } = {}) {
+  const proof = declaredProof(config);
+  const finish = (result) => (proof == null ? result : { ...result, proof });
   const invalid = validateCommand(name, config);
-  if (invalid) return resultCheck(name, 'unavailable', invalid);
+  if (invalid) return finish(resultCheck(name, 'unavailable', invalid));
 
   const timeoutSeconds = config.timeout_seconds ?? CHECK_TIMEOUT_DEFAULT_SECONDS;
 
     const home = copilotHome ?? resolveCopilotHome(null);
   const cfg = resolveConfig({ copilotHome: home, workspace, projectTrusted: isProjectTrusted({ workspace, copilotHome: home }) });
     if (cfg.errors.length) {
-    return {
+    return finish({
       status: 'unavailable',
       reason: 'refusing to run: the harness configuration has errors',
       hint: `run \`harness config validate\` — first error: ${cfg.errors[0]}`,
-    };
+    });
   }
     const allowlisted = cfg.values['checks.env_allowlist'] === true;
   const envReport = allowlisted ? buildChildEnv({ allow: cfg.values['exec.allow_env'] }) : null;
@@ -125,17 +136,17 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   const output = { stdout: trimOutput(execution.stdout), stderr: trimOutput(execution.stderr), durationMs: execution.durationMs };
 
   if (execution.status === 'cancelled') {
-    return resultCheck(name, 'unavailable', 'Cancelled — verification was interrupted', { ...output, cancelled: true });
+    return finish(resultCheck(name, 'unavailable', 'Cancelled — verification was interrupted', { ...output, cancelled: true }));
   }
   if (execution.status === 'timed-out') {
-    return resultCheck(name, 'timeout', `Timed out after ${timeoutSeconds}s`, output);
+    return finish(resultCheck(name, 'timeout', `Timed out after ${timeoutSeconds}s`, output));
   }
   if (execution.status === 'failed' && execution.exitCode === null) {
         const detail = execution.signalName ? `Terminated by signal ${execution.signalName}` : 'Named check could not be spawned';
-    return resultCheck(name, 'unavailable', detail, output);
+    return finish(resultCheck(name, 'unavailable', detail, output));
   }
   if (execution.status === 'failed') {
-    return resultCheck(name, 'failed', `Exited with status ${execution.exitCode}`, { ...output, exitCode: execution.exitCode });
+    return finish(resultCheck(name, 'failed', `Exited with status ${execution.exitCode}`, { ...output, exitCode: execution.exitCode }));
   }
-  return resultCheck(name, 'passed', 'Named check passed', { ...output, exitCode: 0 });
+  return finish(resultCheck(name, 'passed', 'Named check passed', { ...output, exitCode: 0 }));
 }

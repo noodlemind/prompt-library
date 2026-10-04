@@ -82,11 +82,23 @@ function workspaceDigest(workspace, files, planPath) {
   return hash.digest('hex');
 }
 
+function gitHead(workspace) {
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: workspace,
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+  if (head.error || head.status !== 0) return null;
+  const value = String(head.stdout || '').trim();
+  return /^[0-9a-f]{40,64}$/.test(value) ? value : null;
+}
+
 export function validateEvidenceBinding({ workspace, planPath, evidence, maxAgeHours }) {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return 'evidence is invalid';
   const binding = evidence.binding;
+  const headOk = binding?.head === null || (typeof binding?.head === 'string' && /^[0-9a-f]{40,64}$/.test(binding.head));
   if (
-    evidence.version !== 2 ||
+    evidence.version !== 3 ||
     !binding ||
     typeof binding !== 'object' ||
     Array.isArray(binding) ||
@@ -96,10 +108,12 @@ export function validateEvidenceBinding({ workspace, planPath, evidence, maxAgeH
     !Array.isArray(binding.changedFiles) ||
     !binding.changedFiles.every((file) => typeof file === 'string' && file.length > 0) ||
     typeof binding.workspaceDigest !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(binding.workspaceDigest)
+    !/^[a-f0-9]{64}$/.test(binding.workspaceDigest) ||
+    !headOk
   ) {
     return 'evidence binding is invalid';
   }
+  if (gitHead(workspace) !== binding.head) return 'verification evidence was recorded at a different head';
   const normalizedPlanPath = normalizedRel(planPath);
   if (normalizedRel(evidence.plan) !== normalizedPlanPath) return 'evidence belongs to a different plan';
   const verifiedAt = Date.parse(evidence.verifiedAt || '');
