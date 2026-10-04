@@ -19,18 +19,20 @@ function realTemp(prefix) {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
-export function createFixture(prefix) {
+export function createFixture(prefix, homes = {}) {
   const workspace = realTemp(`adaptive-${prefix}-ws-`);
-  const copilotHome = realTemp(`adaptive-${prefix}-copilot-`);
-  const harnessHome = realTemp(`adaptive-${prefix}-home-`);
+  const ownsCopilotHome = !homes.copilotHome;
+  const ownsHarnessHome = !homes.harnessHome;
+  const copilotHome = homes.copilotHome || realTemp(`adaptive-${prefix}-copilot-`);
+  const harnessHome = homes.harnessHome || realTemp(`adaptive-${prefix}-home-`);
   return {
     workspace,
     copilotHome,
     harnessHome,
     cleanup() {
       fs.rmSync(workspace, { recursive: true, force: true });
-      fs.rmSync(copilotHome, { recursive: true, force: true });
-      fs.rmSync(harnessHome, { recursive: true, force: true });
+      if (ownsCopilotHome) fs.rmSync(copilotHome, { recursive: true, force: true });
+      if (ownsHarnessHome) fs.rmSync(harnessHome, { recursive: true, force: true });
     },
   };
 }

@@ -400,18 +400,19 @@ const RUNGS = [
     id: 'parallel-workspaces',
     ladder: 'parallel',
     run(fx) {
-      const other = createFixture('writer-b');
+      const other = createFixture('writer-b', { copilotHome: fx.copilotHome, harnessHome: fx.harnessHome });
       try {
         expectExit(harness(fx, ['orient', '--read', '--query', 'edit the left file', '--file', 'src/left.js']), 0, 'left orient');
         expectExit(harness(other, ['orient', '--read', '--query', 'edit the right file', '--file', 'src/right.js']), 0, 'right orient');
         const left = readSession(fx);
         const right = readSession(other);
+        assert(other.harnessHome === fx.harnessHome, 'writers did not share the installed harness', { left: fx.harnessHome, right: other.harnessHome });
+        assert(other.copilotHome === fx.copilotHome, 'writers did not share the copilot home');
+        assert(fx.workspace !== other.workspace, 'writers share a workspace');
         assert(JSON.stringify(left.files) === JSON.stringify(['src/left.js']), 'left writer lost its file', left);
         assert(JSON.stringify(right.files) === JSON.stringify(['src/right.js']), 'right writer lost its file', right);
         assert(left.lastQuery !== right.lastQuery, 'writers share a query', { left, right });
-        assert(fx.workspace !== other.workspace, 'writers share a workspace');
-        assert(fx.harnessHome !== other.harnessHome, 'writers share a harness home');
-        return { left: left.files, right: right.files };
+        return { left: left.files, right: right.files, sharedHome: true };
       } finally {
         other.cleanup();
       }
@@ -460,7 +461,21 @@ const RUNGS = [
       const continued = stop(fx);
       assert(continued.continue === true, 'stop blocked a passed unit', continued);
       assert(hookDecision(continued).decision !== 'block', 'passed stop still blocked', continued);
-      return { blocked: 'repeated-mistake', continued: true };
+      const completedAt = Date.parse(readSession(fx).lastCompletedEditAt);
+      writeSource(fx, 'src/example.js', 'export const value = 3;\n');
+      recordEdit(fx, 'src/example.js');
+      const editedAt = Date.parse(readSession(fx).lastEditAt);
+      assert(editedAt > completedAt, 'a later edit did not advance lastEditAt', readSession(fx));
+      const stale = stop(fx);
+      const staleDecision = hookDecision(stale);
+      assert(staleDecision.decision === 'block', 'stop allowed a later edit before a fresh verify', stale);
+      assert(/changed after verification/.test(staleDecision.reason || ''), 'stale stop did not require a fresh verify', stale);
+      const again = expectExit(verify(fx, plan), 0, 'verify after the later edit');
+      assert(again.outcome === 'passed', 'the later edit did not pass', again);
+      const finished = stop(fx);
+      assert(finished.continue === true, 'stop blocked the verified later edit', finished);
+      assert(hookDecision(finished).decision !== 'block', 'verified later edit still blocked', finished);
+      return { blocked: 'repeated-mistake', continued: true, laterEdit: true };
     },
   },
 ];
