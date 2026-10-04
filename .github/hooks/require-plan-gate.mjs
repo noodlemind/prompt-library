@@ -103,11 +103,42 @@ function inScope(file, entries) {
   });
 }
 
-function exclusiveFiles(session) {
+function existingAncestor(target) {
+  let cursor = path.resolve(target);
+  const missing = [];
+  while (!fs.existsSync(cursor)) {
+    missing.unshift(path.basename(cursor));
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return null;
+    cursor = parent;
+  }
+  try {
+    return path.join(fs.realpathSync(cursor), ...missing);
+  } catch {
+    return null;
+  }
+}
+
+function exclusiveFiles(session, workspace) {
   if (!Array.isArray(session?.files)) return [];
+  let root;
+  try {
+    root = fs.realpathSync(workspace);
+  } catch {
+    root = path.resolve(workspace);
+  }
   return session.files
     .filter((entry) => typeof entry === 'string')
-    .map((entry) => entry.trim().replace(/^\.\//, '').replace(/\\/g, '/'))
+    .map((entry) => {
+      const trimmed = entry.trim();
+      if (!trimmed) return '';
+      if (!path.isAbsolute(trimmed)) return trimmed.replace(/^\.\//, '').replace(/\\/g, '/');
+      const resolved = existingAncestor(trimmed);
+      if (!resolved) return trimmed.replace(/\\/g, '/');
+      const relative = path.relative(root, resolved).replace(/\\/g, '/');
+      if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) return trimmed.replace(/\\/g, '/');
+      return relative;
+    })
     .filter(Boolean);
 }
 
@@ -419,24 +450,26 @@ if (planStatus === 'planned') {
 }
 const planRecord = readPlanRecord(planText);
 const allowed = impactedFiles(planText);
+// The planned-ancestor exception applies only to paths mkdir itself creates,
+// not to every target of a compound command that happens to include mkdir.
+const mkdirRelatives = new Set(
+  normalized.mkdirTargets.map((target) =>
+    path.relative(normalized.workspace, path.resolve(normalized.workspace, target)).replace(/\\/g, '/')
+  )
+);
 if (!planRecord || allowed.length > 0) {
-  // The planned-ancestor exception applies only to paths mkdir itself creates,
-  // not to every target of a compound command that happens to include mkdir.
-  const mkdirRelatives = new Set(
-    normalized.mkdirTargets.map((target) =>
-      path.relative(normalized.workspace, path.resolve(normalized.workspace, target)).replace(/\\/g, '/')
-    )
-  );
   for (const relative of governed) {
     if (!inScope(relative, allowed) && !(mkdirRelatives.has(relative) && isPlannedAncestor(relative, allowed))) {
       deny('out-of-plan-scope', `File is outside the plan's ## Impacted Files: ${relative}; next: add it to ## Impacted Files and rerun the gate, or edit only planned files`, 'passed');
     }
   }
 }
-const exclusive = exclusiveFiles(session);
+const exclusive = exclusiveFiles(session, normalized.workspace);
 if (exclusive.length > 0) {
   for (const relative of governed) {
-    if (!inScope(relative, exclusive)) {
+    const listed = exclusive.includes(relative);
+    const mkdirAncestor = mkdirRelatives.has(relative) && isPlannedAncestor(relative, exclusive);
+    if (!listed && !mkdirAncestor) {
       deny(
         'outside-exclusive-files',
         `File is outside the orient --read file list: ${relative}; next: call harness orient --read with the task text and this file, or edit only the listed files`,

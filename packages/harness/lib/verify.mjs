@@ -540,15 +540,20 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     base: flags.base,
     changedFiles: scope.changedFiles,
   });
+  const headMoved = preBinding.head !== binding.head;
   const stable =
-    preBinding.workspaceDigest === binding.workspaceDigest && preBinding.planDigest === binding.planDigest;
+    preBinding.workspaceDigest === binding.workspaceDigest &&
+    preBinding.planDigest === binding.planDigest &&
+    !headMoved;
   checks.push(
     resultCheck(
       'workspace-stability',
       stable ? 'passed' : 'failed',
       stable
         ? 'Workspace did not change while checks ran'
-        : 'Workspace or plan changed while verification checks were running; rerun harness verify'
+        : headMoved
+          ? 'Verification checks finished at a different head; rerun harness verify'
+          : 'Workspace or plan changed while verification checks were running; rerun harness verify'
     )
   );
 
