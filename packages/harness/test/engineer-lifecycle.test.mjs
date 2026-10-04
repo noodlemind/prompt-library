@@ -23,6 +23,7 @@ test('the engineer agent drops the numbered delivery checklist and the asset cop
   assert.match(source, /\*\*Review\*\*/);
   assert.match(source, /create-primitive\/SKILL\.md/);
   assert.match(source, /A person approves a new skill or specialist before it is installed/);
+  assert.match(source, /Before the first edit, call `harness orient --read` with the task text and the files the change will touch/);
 
   const build = spawnSync(process.execPath, [path.join(repoRoot, 'scripts', 'build-harness-assets.mjs')], {
     cwd: repoRoot,

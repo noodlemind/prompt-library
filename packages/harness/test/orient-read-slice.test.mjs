@@ -11,6 +11,11 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const repoRoot = path.resolve(packageRoot, '../..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const hooksRoot = path.join(repoRoot, '.github', 'hooks');
+const readOnlySkip = process.platform === 'win32'
+  ? 'chmod does not make a directory read-only on Windows'
+  : typeof process.getuid === 'function' && process.getuid() === 0
+    ? 'chmod is not enforced for root'
+    : false;
 const SLICE_KEYS = [
   'neighborhood',
   'learnings',
@@ -60,6 +65,25 @@ function hookEnv(c, extra = {}) {
     HARNESS_NO_EVENTS: '1',
     ...extra,
   };
+}
+
+function orient(c, args = []) {
+  return spawnSync(process.execPath, [
+    binPath,
+    'orient',
+    ...args,
+    '--json',
+    '--no-events',
+    '--workspace',
+    c.ws,
+    '--copilot-home',
+    c.home,
+    '--harness-home',
+    c.harnessHome,
+  ], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_HOME: c.harnessHome, COPILOT_HOME: c.home, HARNESS_NO_EVENTS: '1' },
+  });
 }
 
 function runLoadContext(c, env = hookEnv(c)) {
@@ -177,6 +201,60 @@ test('harness orient --read --json on a cold repo prints neighborhood null and w
     assert.equal('status' in slice, false);
     assertNoOrientWrites(c.ws);
   } finally {
+    removeRepo(c);
+  }
+});
+
+test('an empty orient --read leaves an existing session file unchanged', () => {
+  const c = coldRepo();
+  try {
+    const sessionPath = path.join(c.ws, '.harness', 'session.json');
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    const body = '{"version":1,"lastQuery":"keep"}\n';
+    fs.writeFileSync(sessionPath, body);
+    const result = orient(c, ['--read']);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.readFileSync(sessionPath, 'utf8'), body);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'repo-map.md')), false);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'context-pack.md')), false);
+  } finally {
+    removeRepo(c);
+  }
+});
+
+test('orient --read with a query stores the query and the file list only', () => {
+  const c = coldRepo();
+  try {
+    const sessionPath = path.join(c.ws, '.harness', 'session.json');
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    fs.writeFileSync(sessionPath, `${JSON.stringify({ version: 1, activePlan: 'docs/plans/keep.md' }, null, 2)}\n`);
+    const result = orient(c, ['--read', '--query', 'save skips the audit stamp', '--file', 'src/example.js']);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+    assert.equal(session.lastQuery, 'save skips the audit stamp');
+    assert.deepEqual(session.files, ['src/example.js']);
+    assert.equal(session.activePlan, 'docs/plans/keep.md');
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'repo-map.md')), false);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'context-pack.md')), false);
+  } finally {
+    removeRepo(c);
+  }
+});
+
+test('orient --read on a read-only workspace still returns the slice', { skip: readOnlySkip }, () => {
+  const c = coldRepo();
+  try {
+    fs.chmodSync(c.ws, 0o555);
+    const result = orient(c, ['--read', '--query', 'save skips the audit stamp']);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const slice = JSON.parse(result.stdout);
+    assert.deepEqual(Object.keys(slice), SLICE_KEYS);
+    assert.match(result.stderr, /repeat check was not armed/);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'session.json')), false);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'repo-map.md')), false);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'context-pack.md')), false);
+  } finally {
+    fs.chmodSync(c.ws, 0o755);
     removeRepo(c);
   }
 });

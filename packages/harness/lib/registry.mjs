@@ -1624,6 +1624,7 @@ registerCommand({
       { name: '--why', type: 'string', valueName: 'why', description: 'why this claim was accepted', required: true, default: null, tui: 'cli-only' },
       { name: '--applies', type: 'string', valueName: 'where', description: 'where the claim applies', required: true, default: null, tui: 'cli-only' },
       { name: '--does-not-apply', type: 'string', valueName: 'where-not', description: 'where the claim does not apply', required: true, default: null, tui: 'cli-only' },
+      { name: '--shows', type: 'string', valueName: 'phrase', description: 'symbol or phrase the refused diff contains. Required when --authority is correction', required: false, default: null, tui: 'cli-only' },
       { name: '--authority', type: 'string', valueName: 'authority', description: 'instruction, correction, or inference', required: true, default: null, tui: 'cli-only', choices: ['instruction', 'correction', 'inference'] },
       { name: '--domain', type: 'string', valueName: 'd', description: 'learning domain directory (default general)', required: false, default: null, tui: 'cli-only' },
     ],

@@ -456,12 +456,13 @@ export function statusForAuthority(authority, fallback) {
 
 // Both learning serializers call this. A field missing from either one is
 // deleted the next time that serializer rewrites the file.
-export function correctionLines({ authority, why, applies, does_not_apply } = {}) {
+export function correctionLines({ authority, why, applies, does_not_apply, shows } = {}) {
   const lines = [];
   if (CORRECTION_AUTHORITIES.has(authority)) lines.push(`authority: ${authority}`);
   if (why) lines.push(`why: ${yamlQuote(why)}`);
   if (applies) lines.push(`applies: ${yamlQuote(applies)}`);
   if (does_not_apply) lines.push(`does_not_apply: ${yamlQuote(does_not_apply)}`);
+  if (shows) lines.push(`shows: ${yamlQuote(shows)}`);
   return lines;
 }
 

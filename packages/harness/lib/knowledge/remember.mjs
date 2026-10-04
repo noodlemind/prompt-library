@@ -27,7 +27,7 @@ function refuseCorrect(blockedReason) {
     learningId: null,
     blockedReason,
     nextTools: [
-      'harness correct "<claim>" --trigger "<when>" --why "<why>" --applies "<where>" --does-not-apply "<where not>" --authority <instruction|correction|inference>',
+      'harness correct "<claim>" --trigger "<when>" --why "<why>" --applies "<where>" --does-not-apply "<where not>" --shows "<phrase>" --authority <instruction|correction|inference>',
     ],
   };
 }
@@ -46,6 +46,9 @@ export function runCorrect(args) {
     return refuseCorrect(blockedReason);
   }
   const claim = positionalsOf(args.argv, { limit: 1 })[0] || '';
+  const shows = oneLine(flags.shows);
+  if (authority === 'correction' && !shows) return refuseCorrect('correct --authority correction needs --shows');
+  if (shows && shows.split(/\s+/).length > 25) return refuseCorrect('shows is longer than 25 words');
   for (const [field, value] of [
     ['claim', claim],
     ['applies', applies],
@@ -56,7 +59,7 @@ export function runCorrect(args) {
   }
   return runRemember({
     ...args,
-    correction: { authority, why, applies, does_not_apply: doesNot },
+    correction: { authority, why, applies, does_not_apply: doesNot, ...(shows ? { shows } : {}) },
   });
 }
 
@@ -149,7 +152,7 @@ export function runRemember({ workspace, copilotHome, flags, argv, log = () => {
     const newEpisode = { path: episode.path, sha256, kind: 'human-teaching', plan: null };
   const scope = { ...(correction || {}) };
   if (existingLearning) {
-    for (const key of ['authority', 'why', 'applies', 'does_not_apply']) {
+    for (const key of ['authority', 'why', 'applies', 'does_not_apply', 'shows']) {
       if (!scope[key] && existingLearning.fm[key]) scope[key] = existingLearning.fm[key];
     }
   }

@@ -92,7 +92,7 @@ export function runHostAdapter() {
   const slice = orientSlice(workspace, {
     query: event === 'start' ? '' : query,
     files: event === 'start' ? [] : files,
-    readOnly: event === 'start' || !ranked,
+    readOnly: event === 'start' || event === 'edit' || !ranked,
   });
   if (event === 'start') {
     process.stdout.write(`${JSON.stringify(slice)}\n`);
