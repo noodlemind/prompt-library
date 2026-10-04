@@ -131,7 +131,21 @@ test('correct --authority correction without --shows exits 2 and writes no learn
   const before = learnings(c).length;
   const res = run(c, correctArgs({ omit: 'shows' }));
   assert.equal(res.status, 2, res.stderr + res.stdout);
+  const body = JSON.parse(res.stdout);
+  assert.match(body.blockedReason, /needs --shows/);
+  assert.match(body.nextTools.join('\n'), /--shows "<phrase>"/);
   assert.equal(learnings(c).length, before);
+});
+
+test('correct accepts a dotted call as --shows and writes it', () => {
+  const c = ctx();
+  enable(c);
+  const shows = 'store.rows.replace(row)';
+  const res = run(c, correctArgs({ shows, domain: 'sql' }));
+  assert.equal(res.status, 0, res.stderr + res.stdout);
+  const learning = learnings(c).find((l) => l.id === 'sql/altering-a-hot-table');
+  assert.ok(learning, res.stdout);
+  assert.equal(learning.fm.shows, shows);
 });
 
 test('a 26-word --shows exits 2 and writes no learning', () => {

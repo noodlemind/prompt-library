@@ -11,6 +11,11 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const repoRoot = path.resolve(packageRoot, '../..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const hooksRoot = path.join(repoRoot, '.github', 'hooks');
+const readOnlySkip = process.platform === 'win32'
+  ? 'chmod does not make a directory read-only on Windows'
+  : typeof process.getuid === 'function' && process.getuid() === 0
+    ? 'chmod is not enforced for root'
+    : false;
 const SLICE_KEYS = [
   'neighborhood',
   'learnings',
@@ -232,6 +237,24 @@ test('orient --read with a query stores the query and the file list only', () =>
     assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'repo-map.md')), false);
     assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'context-pack.md')), false);
   } finally {
+    removeRepo(c);
+  }
+});
+
+test('orient --read on a read-only workspace still returns the slice', { skip: readOnlySkip }, () => {
+  const c = coldRepo();
+  try {
+    fs.chmodSync(c.ws, 0o555);
+    const result = orient(c, ['--read', '--query', 'save skips the audit stamp']);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const slice = JSON.parse(result.stdout);
+    assert.deepEqual(Object.keys(slice), SLICE_KEYS);
+    assert.match(result.stderr, /repeat check was not armed/);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'session.json')), false);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'repo-map.md')), false);
+    assert.equal(fs.existsSync(path.join(c.ws, '.harness', 'context-pack.md')), false);
+  } finally {
+    fs.chmodSync(c.ws, 0o755);
     removeRepo(c);
   }
 });

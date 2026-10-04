@@ -65,6 +65,35 @@ function verify(c) {
   return harness(c, ['verify', '--plan', c.plan, '--base', 'HEAD']);
 }
 
+function git(cwd, args) {
+  return spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+  });
+}
+
+function teachAudit(c, shows) {
+  const claim = 'save skips the audit stamp';
+  const enabled = harness(c, ['knowledge', 'on']);
+  assert.equal(enabled.status, 0, enabled.stderr + enabled.stdout);
+  const taught = harness(c, [
+    'correct', claim,
+    '--trigger', claim,
+    '--why', 'the row lands without the stamp',
+    '--applies', 'A save writes the audit stamp on the stored row.',
+    '--does-not-apply', 'A task asks to remove the audit stamp.',
+    '--shows', shows,
+    '--authority', 'correction',
+    '--domain', 'sql',
+  ]);
+  assert.equal(taught.status, 0, taught.stderr + taught.stdout);
+  const gate = harness(c, ['gate', '--plan', c.plan, '--phase', 'implement']);
+  assert.equal(gate.status, 0, gate.stderr + gate.stdout);
+  const found = harness(c, ['orient', '--query', claim]);
+  assert.equal(found.status, 0, found.stderr + found.stdout);
+}
+
 function stop(c, enforcement) {
   return spawnSync(process.execPath, [hookPath], {
     cwd: c.ws,
@@ -189,6 +218,59 @@ test('verify repeats the stored shows phrase when the diff never quotes the clai
   assert.equal(stamped.status, 0, stamped.stderr + stamped.stdout);
   assert.equal(JSON.parse(stamped.stdout).outcome, 'passed');
   assert.equal(fs.readFileSync(learning.file).equals(before), true);
+});
+
+test('verify passes when the refused symbol survives only on a deleted line', () => {
+  const c = ctx();
+  teachAudit(c, 'replaceRow');
+  const file = path.join(c.ws, 'src', 'example.js');
+  fs.writeFileSync(file, 'function replaceRow(row) { store.write(row); return row; }\n');
+  const added = git(c.ws, ['add', 'src/example.js']);
+  assert.equal(added.status, 0, added.stderr);
+  const committed = git(c.ws, ['commit', '-qm', 'plant the refused call']);
+  assert.equal(committed.status, 0, committed.stderr);
+  fs.writeFileSync(file, 'function save(row) { row.auditStamp = clock.now(); store.write(row); return row; }\n');
+  const cleared = verify(c);
+  assert.equal(cleared.status, 0, cleared.stderr + cleared.stdout);
+  assert.equal(JSON.parse(cleared.stdout).outcome, 'passed');
+});
+
+test('verify repeats a short symbol the tokenizer drops and ignores a longer name', () => {
+  const c = ctx();
+  teachAudit(c, 'id');
+  const file = path.join(c.ws, 'src', 'example.js');
+  fs.writeFileSync(file, 'const id = 1;\n');
+  const repeated = verify(c);
+  assert.equal(repeated.status, 2, repeated.stderr + repeated.stdout);
+  assert.equal(JSON.parse(repeated.stdout).outcome, 'repeated-mistake');
+
+  fs.writeFileSync(file, 'const identity = 1;\n');
+  const longer = verify(c);
+  assert.equal(longer.status, 0, longer.stderr + longer.stdout);
+  assert.equal(JSON.parse(longer.stdout).outcome, 'passed');
+
+  fs.writeFileSync(file, 'const id = 1;\nA task asks to remove the audit stamp.\n');
+  const scopedOut = verify(c);
+  assert.equal(scopedOut.status, 0, scopedOut.stderr + scopedOut.stdout);
+  assert.equal(JSON.parse(scopedOut.stdout).outcome, 'passed');
+});
+
+test('verify repeats an operator symbol the tokenizer drops', () => {
+  const c = ctx();
+  teachAudit(c, '++');
+  fs.writeFileSync(path.join(c.ws, 'src', 'example.js'), 'function bump(i) { return i++; }\n');
+  const repeated = verify(c);
+  assert.equal(repeated.status, 2, repeated.stderr + repeated.stdout);
+  assert.equal(JSON.parse(repeated.stdout).outcome, 'repeated-mistake');
+});
+
+test('verify repeats a dotted call stored as shows', () => {
+  const c = ctx();
+  teachAudit(c, 'store.rows.replace(row)');
+  fs.writeFileSync(path.join(c.ws, 'src', 'example.js'), 'store.rows.replace(row);\n');
+  const repeated = verify(c);
+  assert.equal(repeated.status, 2, repeated.stderr + repeated.stdout);
+  assert.equal(JSON.parse(repeated.stdout).outcome, 'repeated-mistake');
 });
 
 test('a correction with no shows stays clear when the diff quotes the claim', () => {
