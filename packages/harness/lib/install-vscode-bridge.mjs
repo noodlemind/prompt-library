@@ -2,23 +2,56 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const VSCODE_BRIDGE_ID = 'dev-kit.harness-copilot-bridge';
+export const VSCODE_BRIDGE_ID = 'harness-copilot-bridge';
+export const VSCODE_BRIDGE_PUBLISHER = 'harness';
 export const VSCODE_BRIDGE_DIR = VSCODE_BRIDGE_ID;
+const LEGACY_VSCODE_BRIDGE_ID = 'dev-kit.harness-copilot-bridge';
 
 function manifestAt(root) {
   return path.join(root, 'package.json');
 }
 
-function readIdentity(root) {
+export function readBridgeIdentity(root) {
   try {
     const manifest = JSON.parse(fs.readFileSync(manifestAt(root), 'utf8'));
-    return {
-      id: `${manifest.publisher}.${manifest.name}`,
-      version: manifest.version,
-    };
+    if (manifest.publisher === VSCODE_BRIDGE_PUBLISHER && manifest.name === VSCODE_BRIDGE_ID) {
+      return VSCODE_BRIDGE_ID;
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+function readIdentity(root) {
+  const id = readBridgeIdentity(root);
+  if (!id) return null;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestAt(root), 'utf8'));
+    return { id, version: manifest.version };
+  } catch {
+    return null;
+  }
+}
+
+function removeLegacyBridge(extensionsDir, dryRun, log) {
+  const legacy = path.join(extensionsDir, LEGACY_VSCODE_BRIDGE_ID);
+  let stat;
+  try {
+    stat = fs.lstatSync(legacy);
+  } catch {
+    return;
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) return;
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestAt(legacy), 'utf8'));
+  } catch {
+    return;
+  }
+  if (`${manifest.publisher}.${manifest.name}` !== LEGACY_VSCODE_BRIDGE_ID) return;
+  log(`${dryRun ? 'would remove' : 'remove'} legacy VS Code extension: ${legacy}`);
+  if (!dryRun) fs.rmSync(legacy, { recursive: true, force: true });
 }
 
 function targetError(message) {
@@ -64,6 +97,7 @@ export function installVSCodeBridge({
     if (error?.code !== 'ENOENT') throw error;
   }
 
+  removeLegacyBridge(extensionsDir, dryRun, log);
   log(`${dryRun ? 'would ' : ''}${existing ? 'update' : 'install'} VS Code extension: ${VSCODE_BRIDGE_ID}`);
   if (!dryRun) {
     fs.mkdirSync(extensionsDir, { recursive: true });

@@ -765,3 +765,26 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(agents, /skill chain[^\n]*Deliver mode/i);
   assert.match(read('README.md'), /```text\n@engineer:/);
 });
+
+test('cursor pstack routing stays out of hydration and names no model', () => {
+  assert.doesNotMatch(read('scripts/build-harness-assets.mjs'), /['"`]\.cursor/);
+  assert.doesNotMatch(read('packages/harness/lib/sync.mjs'), /['"`]\.cursor/);
+
+  const rule = read('.cursor/rules/edit-kind.mdc');
+  assert.match(rule, /^alwaysApply:\s*true$/m);
+  for (const procedure of ['architect', 'how', 'why', 'tdd', 'unslop']) {
+    assert.match(rule, new RegExp(`\\| ${procedure} \\|`));
+  }
+  assert.match(rule, /create-primitive/);
+  assert.match(rule, /\/code-review/);
+  assert.match(rule, /harness orient --read/);
+  assert.match(rule, /harness verify/);
+
+  const modelPin = /\b(gpt|claude|grok|gemini|opus|sonnet|composer)-\d/i;
+  const rulesDir = path.join(repoRoot, '.cursor', 'rules');
+  const rules = fs.readdirSync(rulesDir).filter((name) => name.endsWith('.mdc'));
+  assert.ok(rules.includes('edit-kind.mdc'));
+  for (const name of rules) {
+    assert.doesNotMatch(read(`.cursor/rules/${name}`), modelPin, `${name} names a model`);
+  }
+});

@@ -3,7 +3,7 @@
   "displayName": "Harness Copilot Bridge",
   "description": "Routes Harness model discovery and requests through the signed-in VS Code language model API.",
   "version": "0.1.1",
-  "publisher": "dev-kit",
+  "publisher": "harness",
   "license": "UNLICENSED",
   "engines": {
     "vscode": "^1.109.0"
