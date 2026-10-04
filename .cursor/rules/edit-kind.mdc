@@ -1,0 +1,20 @@
+---
+description: Which existing procedure to open for the artifact of the current edit in this repo.
+alwaysApply: true
+---
+
+# Edit kind
+
+Name the artifact this edit will produce. Scan the table from the top and open the procedure on the first matching row. Follow that skill, and keep its text in the skill file. If that skill calls another skill, the call stays inside it.
+
+Engineer still chooses Answer, Investigate, Deliver, or Review. A write in this repo runs `harness orient --read` before the first edit, keeps a locked plan for trackable work, and runs `harness verify` after the change. A new skill, agent, instruction, check, reference, or solution doc goes through `create-primitive`. A judgment of a diff is `/code-review`. Those jobs sit outside the table.
+
+| Artifact of this edit | Procedure |
+| --- | --- |
+| Sketch of a change that is not already the local pattern | architect |
+| Explanation of how a subsystem works, or where a responsibility lives now | how |
+| Explanation of why a past decision was made | why |
+| Behavior change in `packages/harness`, `scripts`, or `.github/hooks` that extends a pattern already in the repo | tdd |
+| Wording change in a skill, agent, instruction, or doc this repo ships | unslop |
+
+A skill with no row is not a procedure for this repo. Leave pstack skills, playbooks, and model pins out of `.github/` and `packages/harness`. This file names no model.

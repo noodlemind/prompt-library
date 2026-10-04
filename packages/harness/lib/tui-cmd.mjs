@@ -36,7 +36,7 @@ import {
 import { createQuestion, answerQuestion, questionLines, questionEvent } from './tui/question.mjs';
 import { gateActionRows, parseGateAction, gatePromptLines } from './tui/gate-actions.mjs';
 import { configSettingsRows, verbActionRows } from './tui/modals.mjs';
-import { resolveVSCodeExtensionsDir, VSCODE_BRIDGE_DIR, VSCODE_BRIDGE_ID } from './install-vscode-bridge.mjs';
+import { readBridgeIdentity, resolveVSCodeExtensionsDir, VSCODE_BRIDGE_DIR, VSCODE_BRIDGE_ID } from './install-vscode-bridge.mjs';
 import {
   WALKTHROUGH_SEEN_KEY,
   attachWalkthroughOverlay,
@@ -1426,15 +1426,6 @@ export async function ensureFirstRunInstall({
     throw Object.assign(new Error(`automatic harness ${command} failed with exit ${exit}`), { code: 'E_INSTALL', exit });
   }
   return !dryRun;
-}
-
-function readBridgeIdentity(root) {
-  try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-    return `${manifest.publisher}.${manifest.name}`;
-  } catch {
-    return null;
-  }
 }
 
 function hasInstalledVSCodeBridge(lock) {

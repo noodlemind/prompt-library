@@ -122,7 +122,9 @@ test('VS Code extension installation is cross-platform, owned, and reversible', 
   const installed = installVSCodeBridge({ packageRoot, extensionsDir, dryRun: false });
   assert.ok(fs.existsSync(path.join(installed.path, 'extension.cjs')));
   const manifest = JSON.parse(fs.readFileSync(path.join(installed.path, 'package.json'), 'utf8'));
-  assert.equal(`${manifest.publisher}.${manifest.name}`, 'dev-kit.harness-copilot-bridge');
+  assert.equal(manifest.publisher, 'harness');
+  assert.equal(manifest.name, 'harness-copilot-bridge');
+  assert.equal(installed.id, 'harness-copilot-bridge');
 
   assert.equal(uninstallVSCodeBridge(installed, { extensionsDir, dryRun: false }), true);
   assert.equal(fs.existsSync(installed.path), false);
@@ -130,7 +132,7 @@ test('VS Code extension installation is cross-platform, owned, and reversible', 
 
 test('VS Code extension installation refuses to overwrite an unowned directory', () => {
   const extensionsDir = tempDir('bridge-unowned-extensions-');
-  const target = path.join(extensionsDir, 'dev-kit.harness-copilot-bridge');
+  const target = path.join(extensionsDir, 'harness-copilot-bridge');
   fs.mkdirSync(target, { recursive: true });
   fs.writeFileSync(path.join(target, 'package.json'), JSON.stringify({ publisher: 'someone-else', name: 'extension' }));
   fs.writeFileSync(path.join(target, 'keep.txt'), 'owned by someone else');
@@ -140,6 +142,20 @@ test('VS Code extension installation refuses to overwrite an unowned directory',
     /refusing to replace/i,
   );
   assert.equal(fs.readFileSync(path.join(target, 'keep.txt'), 'utf8'), 'owned by someone else');
+});
+
+test('VS Code extension installation removes the legacy dev-kit bridge directory', () => {
+  const extensionsDir = tempDir('bridge-legacy-extensions-');
+  const legacy = path.join(extensionsDir, 'dev-kit.harness-copilot-bridge');
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, 'package.json'), JSON.stringify({
+    publisher: 'dev-kit',
+    name: 'harness-copilot-bridge',
+  }));
+
+  installVSCodeBridge({ packageRoot, extensionsDir, dryRun: false });
+  assert.equal(fs.existsSync(legacy), false);
+  assert.equal(fs.existsSync(path.join(extensionsDir, 'harness-copilot-bridge', 'extension.cjs')), true);
 });
 
 test('the editor bridge authenticates loopback requests and preserves model tool turns', async (t) => {

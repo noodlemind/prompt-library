@@ -205,7 +205,7 @@ test('TUI launch installs or version-upgrades once with VS Code configuration en
   const extensionsDir = tempDir('first-tui-extensions-');
   process.env.HARNESS_VSCODE_EXTENSIONS_DIR = extensionsDir;
   try {
-  const bridgePath = path.join(extensionsDir, 'dev-kit.harness-copilot-bridge');
+  const bridgePath = path.join(extensionsDir, 'harness-copilot-bridge');
   const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
   const calls = [];
   const install = async (command, argv) => {
@@ -214,7 +214,7 @@ test('TUI launch installs or version-upgrades once with VS Code configuration en
     fs.writeFileSync(path.join(bridgePath, 'extension.cjs'), 'module.exports = {};\n');
     fs.writeFileSync(path.join(bridgePath, 'package.json'), JSON.stringify({
       name: 'harness-copilot-bridge',
-      publisher: 'dev-kit',
+      publisher: 'harness',
       version: '0.1.0',
     }));
     fs.writeFileSync(
@@ -223,7 +223,7 @@ test('TUI launch installs or version-upgrades once with VS Code configuration en
         package: 'harness',
         version: packageVersion,
         files: ['skills'],
-        vscodeBridge: { id: 'dev-kit.harness-copilot-bridge', version: '0.1.0', path: bridgePath },
+        vscodeBridge: { id: 'harness-copilot-bridge', version: '0.1.0', path: bridgePath },
       }),
     );
     return 0;
@@ -314,7 +314,7 @@ test('TUI launch repairs a same-version lock whose bridge path is a decoy or sym
       package: 'harness',
       version: packageVersion,
       files: ['skills'],
-      vscodeBridge: { id: 'dev-kit.harness-copilot-bridge', version: '0.1.0', path: decoy },
+      vscodeBridge: { id: 'harness-copilot-bridge', version: '0.1.0', path: decoy },
     }),
   );
   const calls = [];
@@ -337,7 +337,7 @@ test('TUI launch repairs a same-version lock whose bridge path is a decoy or sym
       package: 'harness',
       version: packageVersion,
       files: ['skills'],
-      vscodeBridge: { id: 'dev-kit.harness-copilot-bridge', version: '0.1.0', path: path.join(linked, 'bridge') },
+      vscodeBridge: { id: 'harness-copilot-bridge', version: '0.1.0', path: path.join(linked, 'bridge') },
     }),
   );
   calls.length = 0;
@@ -365,7 +365,7 @@ test('install tracks the VS Code bridge across a CLI-only upgrade and uninstall 
   assert.equal(installed.status, 0, installed.stderr);
   const lockPath = path.join(copilotHome, '.harness-lock.json');
   const firstLock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-  assert.equal(firstLock.vscodeBridge.id, 'dev-kit.harness-copilot-bridge');
+  assert.equal(firstLock.vscodeBridge.id, 'harness-copilot-bridge');
   assert.ok(fs.existsSync(firstLock.vscodeBridge.path));
 
   const upgraded = runHarness([

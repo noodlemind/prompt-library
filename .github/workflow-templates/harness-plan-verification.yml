@@ -35,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           : "${HARNESS_VERSION:?Harness version must be configured in the HARNESS_VERSION repository variable}"
-          npm install --global "@dev-kit/harness@${HARNESS_VERSION}"
+          npm install --global "harness@${HARNESS_VERSION}"
         env:
           HARNESS_VERSION: ${{ vars.HARNESS_VERSION }}
 
