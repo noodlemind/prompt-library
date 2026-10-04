@@ -23,11 +23,15 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
   const namedFiles = Array.isArray(files) ? files : flags.files;
   if (String(q).trim() && !flags.dryRun) {
     const prior = readSession(workspace) || {};
-    writeSession(workspace, {
-      ...prior,
-      lastQuery: q,
-      files: Array.isArray(namedFiles) ? namedFiles : [],
-    });
+    try {
+      writeSession(workspace, {
+        ...prior,
+        lastQuery: q,
+        files: Array.isArray(namedFiles) ? namedFiles : [],
+      });
+    } catch {
+      process.stderr.write('repeat check was not armed\n');
+    }
   }
 
   let learnings = [];

@@ -27,7 +27,7 @@ function refuseCorrect(blockedReason) {
     learningId: null,
     blockedReason,
     nextTools: [
-      'harness correct "<claim>" --trigger "<when>" --why "<why>" --applies "<where>" --does-not-apply "<where not>" --authority <instruction|correction|inference>',
+      'harness correct "<claim>" --trigger "<when>" --why "<why>" --applies "<where>" --does-not-apply "<where not>" --shows "<phrase>" --authority <instruction|correction|inference>',
     ],
   };
 }
@@ -48,13 +48,12 @@ export function runCorrect(args) {
   const claim = positionalsOf(args.argv, { limit: 1 })[0] || '';
   const shows = oneLine(flags.shows);
   if (authority === 'correction' && !shows) return refuseCorrect('correct --authority correction needs --shows');
-  const sentences = [
+  if (shows && shows.split(/\s+/).length > 25) return refuseCorrect('shows is longer than 25 words');
+  for (const [field, value] of [
     ['claim', claim],
     ['applies', applies],
     ['does_not_apply', doesNot],
-  ];
-  if (shows) sentences.push(['shows', shows]);
-  for (const [field, value] of sentences) {
+  ]) {
     const sentence = checkServeSentence(value, field);
     if (!sentence.ok) return refuseCorrect(sentence.blockedReason);
   }

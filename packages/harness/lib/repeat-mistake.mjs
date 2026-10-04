@@ -34,6 +34,21 @@ export function judgeRepeat({ testsPassed, delivered, rejected, applies, doesNot
   return { ok: true, reason: 'clear' };
 }
 
+function addedDiffText(diff) {
+  return String(diff || '')
+    .split('\n')
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++ '))
+    .map((line) => line.slice(1))
+    .join('\n');
+}
+
+function showsLiterally(shows, added) {
+  if (/^[A-Za-z0-9_]+$/.test(shows)) {
+    return new RegExp(`(?<![A-Za-z0-9_])${shows}(?![A-Za-z0-9_])`).test(added);
+  }
+  return added.includes(shows);
+}
+
 export function repeatedFromServed({ workspace, home, session, delivered }) {
   let served = [];
   try {
@@ -47,11 +62,19 @@ export function repeatedFromServed({ workspace, home, session, delivered }) {
   } catch {
     return false;
   }
-  return served.some((learning) => judgeRepeat({
-    testsPassed: true,
-    delivered,
-    rejected: learning.authority === 'correction' ? learning.shows : '',
-    applies: learning.applies,
-    doesNotApply: learning.does_not_apply,
-  }).reason === 'repeated-mistake');
+  const added = addedDiffText(delivered);
+  return served.some((learning) => {
+    const shows = learning.authority === 'correction' ? text(learning.shows) : '';
+    const verdict = judgeRepeat({
+      testsPassed: true,
+      delivered: added,
+      rejected: shows,
+      applies: learning.applies,
+      doesNotApply: learning.does_not_apply,
+    });
+    if (verdict.reason === 'repeated-mistake') return true;
+    if (verdict.reason !== 'clear') return false;
+    if (blank(learning.applies) || tokenize(shows).length > 0) return false;
+    return showsLiterally(shows, added);
+  });
 }
