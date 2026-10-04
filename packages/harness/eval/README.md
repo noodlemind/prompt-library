@@ -5,7 +5,10 @@ Verifier-shaped tasks on the same kernel. **Not** a public leaderboard claim (SW
 | Track | How | Scoreboard |
 |-------|-----|------------|
 | Deliver | `@engineer` + gate / verify / compound | `harness report --growth` |
+| Adaptive ladder | `node ./eval/adaptive/run.mjs` | trust, orient, verify, exclusive edit, stop between units |
 | Autonomous | `harness agent --profile autonomous --verify-cmd …` | pass / steps / tokens / duration |
+
+The adaptive ladder spawns `bin/harness.mjs`. It does not start a model and it does not exercise the TUI. `npm test` runs the same rungs through `test/adaptive-ladder.test.mjs`. Two rungs record the current verify contract and are not release-bar passes: an omitted `--shows` symbol stays `passed`, and an instruction is not a diff predicate.
 
 ## Tasks
 
