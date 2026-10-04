@@ -103,6 +103,14 @@ function inScope(file, entries) {
   });
 }
 
+function exclusiveFiles(session) {
+  if (!Array.isArray(session?.files)) return [];
+  return session.files
+    .filter((entry) => typeof entry === 'string')
+    .map((entry) => entry.trim().replace(/^\.\//, '').replace(/\\/g, '/'))
+    .filter(Boolean);
+}
+
 function isPlannedAncestor(file, entries) {
   const prefix = `${file.replace(/\/+$/, '')}/`;
   return entries.some((entry) => {
@@ -422,6 +430,18 @@ if (!planRecord || allowed.length > 0) {
   for (const relative of governed) {
     if (!inScope(relative, allowed) && !(mkdirRelatives.has(relative) && isPlannedAncestor(relative, allowed))) {
       deny('out-of-plan-scope', `File is outside the plan's ## Impacted Files: ${relative}; next: add it to ## Impacted Files and rerun the gate, or edit only planned files`, 'passed');
+    }
+  }
+}
+const exclusive = exclusiveFiles(session);
+if (exclusive.length > 0) {
+  for (const relative of governed) {
+    if (!inScope(relative, exclusive)) {
+      deny(
+        'outside-exclusive-files',
+        `File is outside the orient --read file list: ${relative}; next: call harness orient --read with the task text and this file, or edit only the listed files`,
+        'passed',
+      );
     }
   }
 }

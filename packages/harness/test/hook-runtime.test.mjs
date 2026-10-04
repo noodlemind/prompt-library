@@ -570,6 +570,47 @@ test('scoped shell creation permits only ancestor directories of planned files',
   assert.match(outputJson(denied).hookSpecificOutput.permissionDecisionReason, /out-of-plan-scope/i);
 });
 
+function writeSessionFiles(workspace, files) {
+  const sessionPath = path.join(workspace, '.harness', 'session.json');
+  const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  session.files = files;
+  fs.writeFileSync(sessionPath, JSON.stringify(session));
+}
+
+test('a non-empty orient file list allows only those governed paths', () => {
+  const workspace = tempWorkspace();
+  const plan = writePlan(workspace);
+  writePassedGate(workspace, plan);
+  writeSessionFiles(workspace, ['src/schema.json']);
+
+  const allowed = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'src/schema.json' },
+  });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.notEqual(outputJson(allowed).hookSpecificOutput?.permissionDecision, 'deny');
+
+  const denied = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: '.github/skills/example/SKILL.md' },
+  });
+  const reason = outputJson(denied).hookSpecificOutput.permissionDecisionReason;
+  assert.equal(outputJson(denied).hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(reason, /outside-exclusive-files/);
+  assert.match(reason, /\.github\/skills\/example\/SKILL\.md/);
+  assert.match(reason, /harness orient --read/);
+  assert.doesNotMatch(reason, /--query/);
+  assert.doesNotMatch(reason, /--file/);
+
+  writeSessionFiles(workspace, []);
+  const emptyList = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'src/schema.json' },
+  });
+  assert.equal(emptyList.status, 0, emptyList.stderr);
+  assert.notEqual(outputJson(emptyList).hookSpecificOutput?.permissionDecision, 'deny');
+});
+
 test('planned gate requires an in-progress transition and fresh gate before product mutation', () => {
   const workspace = tempWorkspace();
   const plan = writePlan(workspace);

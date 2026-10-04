@@ -322,19 +322,29 @@ function currentPhaseTasks(taskBody, phase) {
   return nextHeading === -1 ? remaining : remaining.slice(0, nextHeading);
 }
 
+export function behavioralProof(checks) {
+  const proved = (Array.isArray(checks) ? checks : []).filter(
+    (check) => check && (check.proof === 'type-check' || check.proof === 'behavior') && check.status === 'passed',
+  );
+  if (proved.length === 0) return 'unproven';
+  if (proved.every((check) => check.proof === 'type-check')) return 'type-check-only';
+  return 'behavior';
+}
+
 function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
   const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   const severities = applyCheckSeverities(partial.checks, policy, partial.planGatedChecks || new Set());
     const checks = severities.checks.map(sanitizeCheckPayload);
   const resolved = partial.outcome || resolveOutcome(checks);
-  const repeated = resolved === 'passed' && repeatedFromServed({
+  const typeCheckOnly = resolved === 'passed' && behavioralProof(checks) === 'type-check-only';
+  const repeated = !typeCheckOnly && resolved === 'passed' && repeatedFromServed({
     workspace,
     home: flags.harnessHome || flags.home || process.env.HARNESS_HOME,
     session: readSession(workspace),
     delivered: deliveredDiff(workspace, flags.base),
   });
   const result = {
-    outcome: repeated ? 'repeated-mistake' : resolved,
+    outcome: typeCheckOnly ? 'type-check-only' : repeated ? 'repeated-mistake' : resolved,
     plan: partial.plan || null,
     checks,
     advisoryFailures: collectAdvisoryFailures(checks),

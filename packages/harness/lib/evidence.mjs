@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { ensureHarnessDir } from './session.mjs';
 import { collectChangedFiles } from './plan-scope.mjs';
 import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { createRedactor } from './redact.mjs';
 
-const EVIDENCE_VERSION = 2;
+const EVIDENCE_VERSION = 3;
 
 function evidenceRel(planPath) {
   if (!planPath) return '.harness/evidence/unresolved-plan.json';
@@ -79,8 +80,15 @@ function validBinding(binding) {
       Array.isArray(binding.changedFiles) &&
       binding.changedFiles.every((file) => typeof file === 'string' && file.length > 0) &&
       typeof binding.workspaceDigest === 'string' &&
-      /^[a-f0-9]{64}$/.test(binding.workspaceDigest)
+      /^[a-f0-9]{64}$/.test(binding.workspaceDigest) &&
+      (binding.head === null || (typeof binding.head === 'string' && /^[0-9a-f]{40,64}$/.test(binding.head)))
   );
+}
+
+function gitHead(workspace) {
+  const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 });
+  if (head.error || head.status !== 0) return null;
+  return String(head.stdout || '').trim();
 }
 
 export function planContractText(text) {
@@ -138,6 +146,7 @@ export function createEvidenceBinding({ workspace, plan, base = null, changedFil
     planDigest: digest(planContractText(plan.text)),
     changedFiles: files,
     workspaceDigest: workspaceDigest(workspace, files, plan.path),
+    head: gitHead(workspace),
   };
 }
 
@@ -148,6 +157,9 @@ export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24 }
   }
   if (evidence.version !== EVIDENCE_VERSION || !validBinding(evidence.binding)) {
     return { pass: false, message: 'Verification evidence is not bound to the current plan and workspace' };
+  }
+  if (gitHead(workspace) !== evidence.binding.head) {
+    return { pass: false, message: 'Verification evidence was recorded at a different head' };
   }
   if (evidence.plan !== plan.path) {
     return { pass: false, message: 'Verification evidence belongs to a different plan' };

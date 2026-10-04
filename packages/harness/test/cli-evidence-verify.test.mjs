@@ -61,7 +61,7 @@ test('evidence metadata is authoritative and malformed hashed evidence falls bac
     checks: [],
   });
   const generated = JSON.parse(fs.readFileSync(path.join(workspace, rel), 'utf8'));
-  assert.equal(generated.version, 2);
+  assert.equal(generated.version, 3);
   assert.notEqual(generated.verifiedAt, '2000-01-01T00:00:00.000Z');
   assert.equal(generated.evidencePath, rel);
 
@@ -93,6 +93,43 @@ test('malformed evidence bindings fail closed without crashing validation', () =
 
   assert.equal(result.pass, false);
   assert.match(result.message, /not bound|binding.*invalid/i);
+});
+
+test('evidence binding records the git head and rejects a different or invalid head', () => {
+  const workspace = tempDir('harness-workspace-');
+  const planPath = writeVersionedPlan(workspace);
+  initGit(workspace);
+  const plan = loadPlan(workspace, planPath);
+  const binding = createEvidenceBinding({ workspace, plan, base: 'HEAD', changedFiles: [] });
+  const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  assert.equal(head.status, 0, head.stderr);
+  assert.equal(binding.head, head.stdout.trim());
+
+  const evidence = {
+    version: 3,
+    plan: plan.path,
+    outcome: 'passed',
+    verifiedAt: new Date().toISOString(),
+    binding,
+  };
+  const passed = validateEvidence({ workspace, plan, evidence });
+  assert.equal(passed.pass, true, passed.message);
+
+  const moved = validateEvidence({
+    workspace,
+    plan,
+    evidence: { ...evidence, binding: { ...binding, head: 'a'.repeat(40) } },
+  });
+  assert.equal(moved.pass, false);
+  assert.match(moved.message, /different head/i);
+
+  const unbound = validateEvidence({
+    workspace,
+    plan,
+    evidence: { ...evidence, binding: { ...binding, head: 'nope' } },
+  });
+  assert.equal(unbound.pass, false);
+  assert.match(unbound.message, /not bound|binding.*invalid/i);
 });
 
 test('verify gate requires executed verification evidence, not just a plan heading', () => {

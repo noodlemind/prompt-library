@@ -53,6 +53,8 @@ Write the minimal code to make the test pass:
 
 ### 5. Report Back
 
+The report is evidence. The Engineer reads the diff and writes the summary the person sees. Do not call `harness verify`.
+
 Return a structured summary of what was done:
 
 ```markdown
