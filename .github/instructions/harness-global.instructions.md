@@ -34,7 +34,7 @@ Not on PATH? `node ~/.copilot/bin/harness …` or `harness install --configure-p
 - Before planning or editing a prompt-library primitive, load `~/.copilot/skills/create-primitive/SKILL.md`; merely naming the skill in plan metadata does not activate it.
 - After a missing-gate denial, bootstrap the canonical plan in a standalone plan-only mutation; never batch plan creation with product paths.
 - Resolve capability gaps when explicit, high-risk, or encountered. Missing optional capability does not block ordinary work; a safety-critical gap blocks only the affected operation.
-- Require delivery verification after file changes; read-only answers and investigations report supporting evidence without plan or completion ceremony.
+- Deliver runs `/code-review`, fixes the findings, then requires passed `harness verify`. Update plans with `harness plan-update`. Do not edit a `~/.harness` plan in the editor. Read-only answers and investigations report supporting evidence without plan or completion ceremony.
 - Run only checks named by the active plan; report unrelated failures without repairing them or widening scope.
 - When `@engineer` is active, obey its task-mode contract: name the mode first. In Investigate, non-atomic check/action/mark is a confirmed race/retry defect unless atomicity is proven; separate check → side effect → mark remains non-atomic even when each method is thread-safe. Report evidence, impact, confidence, recommendation, and the Capture for Later / Plan and Fix / Leave in Chat dispositions.
 - Preserve project-specific conventions when they conflict with global defaults.

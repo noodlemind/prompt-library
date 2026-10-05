@@ -30,6 +30,7 @@ import {
   cmdResolve,
 } from './commands.mjs';
 import { cmdPlanNew } from './plan-new.mjs';
+import { cmdPlanUpdate } from './plan-update.mjs';
 import { cmdRoute } from './route.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
@@ -865,6 +866,27 @@ registerCommand({
   },
   handler: cmdPlanNew,
   requireArgs: planNewRequireArgs,
+});
+
+registerCommand({
+  name: 'plan-update',
+  summary: 'update a plan file in the external plan store',
+  group: 'workspace',
+  sideEffect: 'mutate',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'plan file under the external store or a legacy plan directory', required: true, default: null, tui: 'prompt', choices: 'plan', valueIsLiteral: true },
+      { name: '--status', type: 'string', valueName: 'name', description: 'open|planned|in-progress|review|done|blocked-capability|needs-info', required: false, default: null, tui: 'prompt' },
+      { name: '--activity', type: 'string', valueName: 'line', description: 'append one activity line (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
+      { name: '--review-completed', type: 'string', valueName: 'id', description: 'add a reviews.completed id (repeatable)', required: false, default: null, tui: 'prompt' },
+      { name: '--critical-open', type: 'string', valueName: 'id', description: 'replace reviews.critical_open (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
+      { name: '--clear-critical', type: 'boolean', description: 'set reviews.critical_open to []', required: false, default: false, tui: 'cli-only' },
+      { name: '--old', type: 'string', valueName: 'text', description: 'unique plan-body text to replace', required: false, default: null, tui: 'prompt', valueIsLiteral: true, requires: ['--new'] },
+      { name: '--new', type: 'string', valueName: 'text', description: 'replacement for --old; body only', required: false, default: null, tui: 'prompt', valueIsLiteral: true, requires: ['--old'] },
+    ],
+  },
+  handler: cmdPlanUpdate,
 });
 
 // --- engineer loop --------------------------------------------------------

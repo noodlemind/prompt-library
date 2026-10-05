@@ -7,7 +7,7 @@ engineer:
   entry_agent: engineer
   entry_skill: engineer
   architecture: docs/adaptive-engineering.md
-  workflow: orient → establish intent → investigate → work → handle gaps → verify → review → compound → report
+  workflow: orient → establish intent → investigate → work → handle gaps → review → verify → compound → report
 
 capabilities:
   analyze-and-plan:
@@ -28,6 +28,7 @@ capabilities:
     triggers: [verified success, compound learning, promotion recommendation]
     usage_count: 0
   auto-skill-draft: {type: skill, status: experimental, owner: developer-experience, version: 1, origin: starter}
+  architect: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   aws: {type: skill, status: active, owner: cloud-platform, version: 1, origin: starter}
   brainstorming: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   btw:

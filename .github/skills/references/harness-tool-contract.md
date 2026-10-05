@@ -364,7 +364,7 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 
 | Skill | Harness command(s) |
 |-------|-------------------|
-| `@engineer` Deliver mode | proportional `orient` → read pack → explicit `gate` → work → explicit `verify [--learnings <ids>]` (cite the orient-surfaced learning ids that materially shaped the change) → `compound` or `/auto-compound` |
+| `@engineer` Deliver mode | proportional `orient` → read pack → explicit `gate` → work → `/code-review` (fix findings) → explicit `verify [--learnings <ids>]` (cite the orient-surfaced learning ids that materially shaped the change) → `compound` or `/auto-compound` |
 | `@engineer` Answer/Investigate modes | minimal reads → evidence-backed report; no delivery gate, verification, or compound |
 | `/recall` | `orient` or `recall` (`-c`, `--min-score`) |
 | `/index-memory` | `index` (manifest + BM25 postings) |

@@ -51,11 +51,13 @@ verification:
   required: []
   criteria: {}
 reviews:
-  required: []
+  required: [code-review]
   completed: []
   critical_open: []
 ```
 
+Product plans list `code-review` in `reviews.required`. A docs plan may leave that list empty. `harness verify` fails while a required review is missing or `critical_open` is non-empty.
+
 Named checks are argv arrays in `.github/harness/checks.yaml`. The Harness runs them without a shell. Policy exemptions and waivers are explicit. A missing check is not a pass.
 
-Skill-first means a repeated procedure becomes a skill before it becomes another agent. The Engineer can start with no domain skill and no specialist. Those are acquired later.
+Skill-first means a repeated procedure becomes a skill before it becomes another agent. The Engineer can start with no domain skill and no specialist. Those are acquired later. Before a product edit whose shape is not already the local pattern, the Engineer loads `/architect`.

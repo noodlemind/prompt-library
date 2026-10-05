@@ -85,7 +85,7 @@ verification:
   required: []
   criteria: {}
 reviews:
-  required: []
+  required: [code-review]
   completed: []
   critical_open: []
 skills_used: []
@@ -97,6 +97,8 @@ created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
 ```
+
+For `type: docs`, `reviews.required` is `[]`. Every other type lists `code-review`.
 
 **Body sections** (create every heading; use a concise pending marker where planning owns the content):
 - `## Overview` — what and why, 2-3 sentences

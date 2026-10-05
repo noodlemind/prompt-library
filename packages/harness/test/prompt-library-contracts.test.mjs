@@ -117,6 +117,10 @@ test('engineer agent is frozen, thin, and leaves the delivery checklist to the h
   }
   assert.match(engineer, /Switch .* to Deliver before editing/i);
   assert.match(engineer, /For changed work/i);
+  assert.match(engineer, /\/code-review[\s\S]{0,80}require passed `harness verify`/);
+  assert.match(engineer, /harness plan-update/);
+  assert.match(engineer, /architect\/SKILL\.md/);
+  assert.match(engineer, /do not edit `~\/\.harness` in the editor/i);
 
   assert.equal(exists('.github/skills/engineer-autopilot/SKILL.md'), false);
   assert.equal(exists('.github/skills/references/engineer-runtime.md'), false);
@@ -203,6 +207,8 @@ test('existing skills own structured findings, proportional plans, and primitive
   assert.match(ensure, /schema-validation[\s\S]{0,100}no schema output/i);
   assert.match(ensure, /implement gate as a standalone terminal tool call[\s\S]{0,180}later tool call/i);
   assert.match(ensure, /initial implement gate[\s\S]{0,180}status: planned[\s\S]{0,100}status: in-progress[\s\S]{0,160}rerun the implement gate/i);
+  assert.match(ensure, /reviews:\s*\{required:\s*\[code-review\]/);
+  assert.match(ensure, /harness plan-update/);
 
   const primitive = read('.github/skills/create-primitive/SKILL.md');
   for (const governed of ['.github/skills/', '.github/agents/', '.github/instructions/', '.github/prompts/', '.github/checks/', 'enterprise/skills/']) {
@@ -764,6 +770,20 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   for (const mode of ['Answer', 'Investigate', 'Deliver']) assert.match(agents, new RegExp(mode));
   assert.match(agents, /skill chain[^\n]*Deliver mode/i);
   assert.match(read('README.md'), /```text\n@engineer:/);
+});
+
+test('architect is an internal design skill and names no model', () => {
+  const skill = read('.github/skills/architect/SKILL.md');
+  const frontmatter = YAML.parse(skill.match(/^---\n([\s\S]*?)\n---/)[1]);
+  assert.equal(frontmatter.name, 'architect');
+  assert.equal(frontmatter['user-invocable'], false);
+  assert.ok(frontmatter.description.length <= 220, `description is ${frontmatter.description.length} characters`);
+  assert.match(frontmatter.description, /\/code-review/);
+  assert.match(skill, /## Trigger Examples/);
+  assert.match(skill, /references\/design-red-flags\.md/);
+  assert.equal(exists('.github/skills/architect/references/design-red-flags.md'), true);
+  assert.doesNotMatch(skill, /\b(gpt|claude|grok|gemini|opus|sonnet)-\d/i);
+  assert.doesNotMatch(read('.github/skills/architect/references/design-red-flags.md'), /\b(gpt|claude|grok|gemini|opus|sonnet)-\d/i);
 });
 
 test('cursor pstack routing stays out of hydration and names no model', () => {

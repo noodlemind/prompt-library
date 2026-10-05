@@ -8,7 +8,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 ### Architecture: Skill-First Primitives
 
-- **Skills** (`.github/skills/*/SKILL.md`): 25 workflows total, including four internal workflows (`ensure-plan`, `ensure-capability`, `auto-compound`, and experimental `auto-skill-draft`). The single entry is `@engineer`; the only user-invocable skills are `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal (`user-invocable: false`), loaded on demand by the Engineer. The connected pipeline `/capture-issue` → `/plan-issue` → Engineer Deliver mode → `/code-review` → `/compound-learnings` is the engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. Quick Q&A is `@engineer` Answer mode (ceremony-free). `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
+- **Skills** (`.github/skills/*/SKILL.md`): 26 workflows total, including four internal workflows (`ensure-plan`, `ensure-capability`, `auto-compound`, and experimental `auto-skill-draft`) and design-before-code `/architect`. The single entry is `@engineer`; the only user-invocable skills are `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal (`user-invocable: false`), loaded on demand by the Engineer. The connected pipeline `/capture-issue` → `/plan-issue` → Engineer Deliver mode → `/code-review` → `/compound-learnings` is the engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. Quick Q&A is `@engineer` Answer mode (ceremony-free). `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
 - **Agents** (`.github/agents/*.agent.md`): 21 agents — 17 stateless domain experts using judgment-criteria design, 1 engineer, 1 code-implementer, plus 2 internal coordinator agents (`code-review-coordinator`, `plan-coordinator`) dispatched by `@engineer`. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns (TypeScript, Python, Java, PostgreSQL). Spring Boot and AWS SDK guidance loads on demand via the `/java` and `/aws` skill references, so a single `.java` file no longer stacks three always-on instructions.
 - **Prompt wrappers**: Retired. `.github/prompts/` no longer exists — users select `@engineer` from the agent dropdown, and `harness upgrade` purges previously hydrated wrappers via `retired.json`.
@@ -37,7 +37,7 @@ Plan files live in `.harness/plans/` by default (gitignored), or committed `docs
 ```
 .github/
   agents/              — 21 agent definitions (17 specialists + 1 engineer + 1 implementer + 2 coordinators)
-  skills/              — 25 skill directories with SKILL.md
+  skills/              — 26 skill directories with SKILL.md
   instructions/        — scoped always-on instructions (TypeScript, Python, Java, PostgreSQL); Spring Boot and AWS SDK are on-demand skill references
   checks/              — optional product-specific review check examples
   copilot-instructions.md — shared context for all agents
@@ -87,7 +87,7 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 20. **code-review-coordinator**: Thin dispatcher of the `/code-review` skill (the skill owns all criteria, confidence scoring, and checks) — delegates to specialist reviewers in parallel batches with isolated context
 21. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 
-## Available Skills (25 total)
+## Available Skills (26 total)
 
 ### User-Invocable
 1. **/engineer**: Substantial read-only investigation or full-cycle delivery with gated edits and verification
@@ -125,6 +125,9 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 23. **/ensure-capability**: Resolve capability gaps on demand when encountered
 24. **/auto-compound**: Automatically classify and persist learning after passed Engineer verification
 25. **/auto-skill-draft**: Draft an experimental skill candidate without promoting it to active use
+
+### Engineer-Internal (loaded on demand) — Design
+26. **/architect**: Sketch types, signatures, and module boundaries before a product edit whose shape is not already the local pattern.
 
 ## Key Design Decisions
 
