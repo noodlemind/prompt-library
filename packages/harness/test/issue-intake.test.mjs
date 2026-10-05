@@ -468,6 +468,81 @@ test('plan-new does not hash a spec symlink that leaves the checkout', async () 
   assert.equal(`${created.stderr}\n${created.stdout}`.includes(secret.trim()), false);
 });
 
+test('a newer checkout plan replaces the carried store copy and a newer store copy stays', () => {
+  const ws = planWorkspace();
+  withOrigin(ws);
+  const rel = writeVersionedPlan(ws, { extraFrontmatter: 'intent_sources: []\n' });
+  const tree = addWorktree(ws, 'carry-refresh');
+  const first = runHarness(['gate', '--phase', 'implement', '--plan', rel, '--workspace', tree.path, '--json'], { env: GIT_ENV });
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const storePath = JSON.parse(first.stdout).plan.path;
+  const checkoutFile = path.join(ws, rel);
+
+  fs.appendFileSync(checkoutFile, '\nEdited after carry.\n');
+  const checkoutNewer = new Date(Date.now() + 10_000);
+  fs.utimesSync(checkoutFile, checkoutNewer, checkoutNewer);
+  addWorktree(ws, 'carry-refresh');
+  assert.match(fs.readFileSync(storePath, 'utf8'), /Edited after carry/);
+
+  fs.appendFileSync(storePath, '\nStore moved on.\n');
+  const storeNewer = new Date(Date.now() + 20_000);
+  fs.utimesSync(storePath, storeNewer, storeNewer);
+  addWorktree(ws, 'carry-refresh');
+  const kept = fs.readFileSync(storePath, 'utf8');
+  assert.match(kept, /Store moved on/);
+  assert.equal(fs.readFileSync(checkoutFile, 'utf8').includes('Store moved on.'), false);
+  git(ws, ['worktree', 'remove', '--force', tree.path]);
+});
+
+test('hashIntentFile hashes the raw file bytes', async () => {
+  const { hashIntentFile } = await import('../lib/intent-sources.mjs');
+  const ws = planWorkspace();
+  const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x61]);
+  const rel = 'docs/specs/bytes.md';
+  fs.mkdirSync(path.join(ws, 'docs', 'specs'), { recursive: true });
+  fs.writeFileSync(path.join(ws, rel), bytes);
+  const raw = crypto.createHash('sha256').update(bytes).digest('hex');
+  const decoded = crypto.createHash('sha256').update(bytes.toString('utf8')).digest('hex');
+  assert.notEqual(raw, decoded);
+  assert.equal(hashIntentFile(ws, rel), raw);
+});
+
+test('separate git directories do not share a store and a linked worktree still does', async () => {
+  const { localRepoId } = await import('../lib/knowledge/store.mjs');
+  const { inspectIsolation } = await import('../lib/worktree.mjs');
+  const parent = tempDir('split-git-');
+  const gitParent = path.join(parent, 'git');
+  fs.mkdirSync(gitParent);
+  const make = (name) => {
+    const dir = path.join(parent, name);
+    fs.mkdirSync(dir);
+    const init = git(dir, ['init', '-q', '--separate-git-dir', path.join(gitParent, `${name}.git`)]);
+    assert.equal(init.status, 0, init.stderr);
+    git(dir, ['config', 'user.email', 'harness@example.test']);
+    git(dir, ['config', 'user.name', 'Harness Test']);
+    fs.writeFileSync(path.join(dir, 'README.md'), `${name}\n`);
+    assert.equal(git(dir, ['add', '.']).status, 0);
+    assert.equal(git(dir, ['commit', '-qm', 'baseline']).status, 0);
+    return dir;
+  };
+  const a = make('a');
+  const b = make('b');
+  assert.notEqual(localRepoId(a), localRepoId(b));
+  withOrigin(a);
+  const isolation = inspectIsolation({ workspace: a, env: GIT_ENV });
+  assert.equal(isolation.linked, false);
+  assert.equal(isolation.blocked, true);
+  const created = addWorktree(a, 'inside');
+  assert.equal(created.path, path.join(a, '.worktrees', 'inside'));
+  assert.equal(fs.existsSync(path.join(parent, '.worktrees')), false);
+  git(a, ['worktree', 'remove', '--force', created.path]);
+
+  const normal = planWorkspace();
+  const tree = addWorktree(normal, 'share-id');
+  assert.equal(localRepoId(tree.path), localRepoId(normal));
+  git(normal, ['worktree', 'remove', '--force', tree.path]);
+});
+
 test('plan-new fails when a discovered spec is missing on disk', () => {
   const ws = planWorkspace();
   addTracked(ws, 'docs/specs/gone.md', '# gone\n');

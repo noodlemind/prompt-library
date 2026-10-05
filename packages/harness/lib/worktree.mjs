@@ -5,6 +5,7 @@ import { EXIT } from './style.mjs';
 import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
 import { appendFileContained, readFileNoFollow, writeFileContained } from './fs-safe.mjs';
 import { externalPlansDir, SESSION_PLANS_REL, WORKSPACE_PLANS_REL } from './project-layout.mjs';
+import { linkedPrimaryCheckout } from './knowledge/store.mjs';
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const CI_TRUE = new Set(['1', 'true', 'TRUE', 'yes', 'YES']);
@@ -23,17 +24,11 @@ function usage(message) {
 }
 
 function isLinkedWorktree(workspace) {
-  try {
-    return fs.lstatSync(path.join(workspace, '.git')).isFile();
-  } catch {
-    return false;
-  }
+  return linkedPrimaryCheckout(workspace) != null;
 }
 
 function primaryRoot(workspace) {
-  const raw = gitOut(workspace, ['rev-parse', '--git-common-dir']);
-  if (!raw) return workspace;
-  return path.dirname(path.resolve(workspace, raw));
+  return linkedPrimaryCheckout(workspace) || workspace;
 }
 
 function currentBranch(workspace) {
@@ -98,13 +93,19 @@ function carryCheckoutPlans(primary, dest) {
         // The new checkout does not have this plan.
       }
       const target = path.join(storeRoot, 'plans', name);
-      try {
-        if (fs.lstatSync(target).isFile()) continue;
-      } catch {
-        // Not in the project store yet.
-      }
       const text = readFileNoFollow(src, { root: primary });
       if (text == null) continue;
+      let storeStat = null;
+      try {
+        storeStat = fs.lstatSync(target);
+      } catch {
+        storeStat = null;
+      }
+      if (storeStat) {
+        if (!storeStat.isFile()) continue;
+        const existing = readFileNoFollow(target, { root: storeRoot });
+        if (existing == null || existing === text || !(srcStat.mtimeMs > storeStat.mtimeMs)) continue;
+      }
       writeFileContained(storeRoot, path.join('plans', name), text);
     }
   }

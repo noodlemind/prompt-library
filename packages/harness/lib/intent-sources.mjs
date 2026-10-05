@@ -76,9 +76,9 @@ export function hashIntentFile(workspace, rel) {
     return null;
   }
   if (!stat.isFile()) return null;
-  const text = readFileNoFollow(full, { root: workspace });
-  if (text == null) return null;
-  return crypto.createHash('sha256').update(text).digest('hex');
+  const bytes = readFileNoFollow(full, { root: workspace, encoding: null });
+  if (bytes == null) return null;
+  return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
 export function lockIntentSources(workspace, entries, { rehash = true } = {}) {
