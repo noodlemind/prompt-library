@@ -22,6 +22,8 @@ Read this file before the first edit of a Deliver task. Name a principle in the 
 | one-writer | When `orient --read` stored a non-empty file list, a product path must be one of those files. `mkdir` may create a parent of a listed file. |
 | parent-reads-the-diff | The implementer report is evidence. The Engineer reads the diff and writes the summary the person sees. |
 | verify-between-units | Call `harness verify` and require outcome `passed` before the next unit. |
+| spec-before-code | Read in-repo specs and intents named by orient before implementing. Ambiguity is `needs-info`, not a guess. |
+| isolate-issue-work | Automatic issue work runs in a linked git worktree from `harness worktree`, not the current default-branch checkout. |
 
 ## smallest-change
 
@@ -94,3 +96,11 @@ The implementer report is evidence. The Engineer reads the diff and writes the s
 ## verify-between-units
 
 Call `harness verify` and require outcome `passed` before the next unit. Outcome `type-check-only` is not a pass for behavioral work. A new git head voids the stored verification.
+
+## spec-before-code
+
+Orient lists in-repo specs, ADRs, RFCs, intent files, and issue notes. Read those paths before implementing. Record them on plan `intent_sources`. If a source is ambiguous, set `status: needs-info` and write `## Missing` questions. Do not invent the requirement.
+
+## isolate-issue-work
+
+Do not edit the current default-branch checkout in place. Run `harness worktree --slug <issue-slug>` and continue with `--workspace` on that path. CI and `--allow-inplace` skip the check.

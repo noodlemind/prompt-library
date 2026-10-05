@@ -79,6 +79,7 @@ priority: P0|P1|P2|P3
 risk: green|amber|red
 autonomy: full|balanced|strict
 intent: ""
+intent_sources: []
 expected_outputs: []
 success_criteria: []
 verification:
@@ -125,7 +126,7 @@ For bugs, add:
 Validate the file against plan schema v1. Definition of Ready still requires
 substantive **Overview** and **Acceptance Criteria** content; initialize every
 other schema-required section with a concise pending-planning marker.
-If any required information is missing, set `status: needs-info` and add a `## Missing` section with focused questions.
+If any required information is missing, set `status: needs-info` and add a `## Missing` section with focused questions. Search in-repo specs, ADRs, intent files, and linked issue notes first. Read what exists. Ask only about what those sources leave ambiguous.
 
 ### 5. Print Summary
 

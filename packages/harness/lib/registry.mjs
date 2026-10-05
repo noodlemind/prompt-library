@@ -31,6 +31,7 @@ import {
 } from './commands.mjs';
 import { cmdPlanNew } from './plan-new.mjs';
 import { cmdPlanUpdate } from './plan-update.mjs';
+import { cmdWorktree } from './worktree-cmd.mjs';
 import { cmdRoute } from './route.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
@@ -529,6 +530,13 @@ function planNewFlagValues(rest, name) {
   return values;
 }
 
+function worktreeRequireArgs(rest) {
+  const slug = planNewFlagValue(rest, '--slug');
+  if (!slug || !PLAN_NEW_SLUG_RE.test(slug)) {
+    return 'worktree: --slug is required and must be lowercase-hyphen (a-z0-9-)';
+  }
+}
+
 function planNewRequireArgs(rest) {
   if (planNewFlagValue(rest, '--from')) return undefined;
   const goalValues = planNewFlagValues(rest, '--goal');
@@ -862,6 +870,7 @@ registerCommand({
             { name: '--status', type: 'string', valueName: 'name', description: 'open|planned|in-progress|review|done|blocked-capability|needs-info (default in-progress, or blocked-capability with --gap)', required: false, default: null, tui: 'cli-only' },
       { name: '--from', type: 'string', valueName: 'path', description: 'relock an unlocked plan in place', required: false, default: null, tui: 'cli-only' },
       { name: '--classification', type: 'string', valueName: 'path', description: 'host classification JSON to validate', required: false, default: null, tui: 'cli-only' },
+      { name: '--intent-source', type: 'string', valueName: 'path', description: 'in-repo spec, ADR, or intent path (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
     ],
   },
   handler: cmdPlanNew,
@@ -884,6 +893,7 @@ registerCommand({
       { name: '--clear-critical', type: 'boolean', description: 'set reviews.critical_open to []', required: false, default: false, tui: 'cli-only' },
       { name: '--lock', type: 'boolean', description: 'set plan_lock true; never clears it', required: false, default: false, tui: 'cli-only' },
       { name: '--intent', type: 'string', valueName: 'text', description: 'replace the intent line', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
+      { name: '--intent-source', type: 'string', valueName: 'path', description: 'append one intent_sources path (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
       { name: '--expected-output', type: 'string', valueName: 'text', description: 'append one expected output (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
       { name: '--success-criterion', type: 'string', valueName: 'text', description: 'append one success criterion (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
       { name: '--verification-check', type: 'string', valueName: 'id', description: 'append one verification.required check (repeatable)', required: false, default: null, tui: 'prompt' },
@@ -893,6 +903,22 @@ registerCommand({
     ],
   },
   handler: cmdPlanUpdate,
+});
+
+registerCommand({
+  name: 'worktree',
+  summary: 'create a linked git worktree for issue work',
+  group: 'workspace',
+  sideEffect: 'mutate',
+  args: {
+    positionals: [],
+    flags: [
+      { name: '--slug', type: 'string', valueName: 's', description: 'lowercase-hyphen slug; branch is harness/<slug>', required: true, default: null, tui: 'prompt' },
+      { name: '--from', type: 'string', valueName: 'ref', description: 'start point (default: origin default branch, else HEAD)', required: false, default: null, tui: 'prompt' },
+    ],
+  },
+  handler: cmdWorktree,
+  requireArgs: worktreeRequireArgs,
 });
 
 // --- engineer loop --------------------------------------------------------
@@ -908,6 +934,7 @@ registerCommand({
       { name: '--phase', type: 'string', valueName: 'name', description: 'implement | verify', required: false, default: 'implement', tui: 'prompt' },
       { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt', choices: 'plan' },
             { name: '--strict-intent', type: 'boolean', description: 'fail locked plans missing intent fields', required: false, default: false, tui: 'cli-only' },
+      { name: '--allow-inplace', type: 'boolean', description: 'allow implement on the current branch instead of a linked worktree', required: false, default: false, tui: 'cli-only' },
       { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe | warn | enforce (default enforce)', required: false, default: null, tui: 'prompt', choices: ['observe', 'warn', 'enforce'] },
     ],
   },

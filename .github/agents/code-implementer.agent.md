@@ -30,7 +30,7 @@ When invoked as a subagent, your task prompt will include:
 
 ### 1. Read Context
 
-Read `.github/skills/references/delivery-principles.md` before the first edit. Read the files listed in the task. Match the module's layout, names, and test style. When existing code breaks a language or framework standard, write the new code to the standard. Do not reproduce that break because it is already in the file.
+Read `.github/skills/references/delivery-principles.md` before the first edit. Read the files listed in the task. Read every path in plan `intent_sources` and any spec, ADR, or intent file named by orient before writing code. If a source is ambiguous, stop and report `## Missing` questions. Match the module's layout, names, and test style. When existing code breaks a language or framework standard, write the new code to the standard. Do not reproduce that break because it is already in the file.
 
 ### 2. Write Failing Test
 

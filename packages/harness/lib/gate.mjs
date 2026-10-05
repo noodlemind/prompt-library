@@ -11,6 +11,8 @@ import { primitivePlanGovernance } from './primitive-governance.mjs';
 import { validateRoutingSnapshot } from './route.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
 import { readPlanRecord } from './plan-record.mjs';
+import { discoverIntentSources, intentSourcesCheck } from './intent-sources.mjs';
+import { inspectIsolation, worktreeGateMessage } from './worktree.mjs';
 
 export function runGate({ workspace, flags, query = '' }) {
   const session = readSession(workspace);
@@ -175,6 +177,23 @@ export function runGate({ workspace, flags, query = '' }) {
           primitiveGovernanceFailed = true;
         }
       }
+
+      const isolation = inspectIsolation({
+        workspace,
+        allowInplace: Boolean(flags.allowInplace),
+      });
+      checks.push({
+        id: 'C-worktree',
+        pass: !isolation.blocked,
+        message: worktreeGateMessage(isolation),
+        severity: isolation.blocked ? 'fail' : 'ok',
+      });
+      if (isolation.blocked) pass = false;
+
+      const discovered = discoverIntentSources(workspace);
+      const intentCheck = intentSourcesCheck(plan, discovered);
+      checks.push(intentCheck);
+      if (!intentCheck.pass) pass = false;
     }
 
     if (phase === 'verify') {

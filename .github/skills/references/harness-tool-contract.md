@@ -66,6 +66,8 @@ This table tracks only what differs in runtime character across commands — whi
 | `verify` | agent-runtime | writes | mutates (evidence file + session) |
 | `validate-plan` | agent-runtime | writes¹ | read-only |
 | `plan-new` | agent-runtime | none | mutates workspace (writes the plan; `--stdout` prints instead) |
+| `plan-update` | agent-runtime | none | mutates the plan file |
+| `worktree` | agent-runtime | none | mutates git worktrees under `.worktrees/<slug>` |
 | `index` | agent-runtime | writes¹ | mutates the knowledge index (`--status` read-only); `--structural` mutates `~/.harness/index/<repo-id>/<worktree-id>/structural/` |
 | `get` | agent-runtime | none | read-only |
 | `search` | agent-runtime | none | read-only (never creates the knowledge store) |
@@ -137,9 +139,11 @@ This table tracks only what differs in runtime character across commands — whi
     "intentContractExcerpt": "..."
   },
   "contextPack": ".harness/context-pack.md",
+  "intentSources": [{ "path": "docs/specs/checkout.md", "kind": "spec" }],
+  "worktree": { "blocked": false, "linked": true, "onDefault": false, "isolated": true, "skipReason": null },
   "gateStatus": "pass|blocked",
   "blockedReason": null,
-  "nextTools": ["harness gate --phase implement"]
+  "nextTools": ["harness worktree --slug checkout-retry", "read docs/specs/checkout.md", "harness gate --phase implement"]
 }
 ```
 

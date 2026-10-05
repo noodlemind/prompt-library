@@ -33,13 +33,16 @@ Read-only tools are allowed before the gate for classification, recall, investig
 | **C2** | Plan created via **`/ensure-plan`** or **`/capture-issue`** (same schema — not ad-hoc engineer freeform) |
 | **C3** | `plan_lock: true` before implement (from **`/ensure-plan`** / **`/plan-issue`**) |
 | **C4** | Route in `## Activity` |
+| **C-intent-sources** | In-repo specs, ADRs, and intent files are read and listed on plan `intent_sources` |
+| **C-worktree** | Issue work is in a linked git worktree, not the default branch of the primary checkout |
 
 **Fail → invoke `/ensure-plan`** (preferred) or `/capture-issue`. **STOP** product edits.
 
 ## Autonomous path (`@engineer`)
 
 ```
-harness orient → read context-pack → /ensure-plan (if needed)
+harness orient → read context-pack and every intentSources path → /ensure-plan (if needed)
+→ harness worktree --slug <slug> when worktree.blocked
 → harness gate --phase implement --plan <path> (exit 0) → investigate → implement
 ```
 

@@ -57,6 +57,8 @@ export function buildContextPack({
   gitContext,
   routingLines = null,
   neighborhood = null,
+  intentSources = null,
+  worktree = null,
 }) {
     const lines = [
     '# Harness Context Pack',
@@ -98,6 +100,19 @@ export function buildContextPack({
     if (planGoal.intentContractExcerpt) {
       lines.push('', '### Intent Contract (excerpt)', planGoal.intentContractExcerpt);
     }
+  }
+
+  if (intentSources?.length) {
+    lines.push('', '## Intent sources (read before implement)');
+    for (const source of intentSources.slice(0, 4)) {
+      lines.push(`- \`${inertLine(source.path)}\` (${source.kind})`);
+    }
+    if (intentSources.length > 4) lines.push(`- +${intentSources.length - 4} more`);
+    lines.push('If a source is ambiguous, set status needs-info and write ## Missing questions.');
+  }
+
+  if (worktree?.blocked) {
+    lines.push('', '## Worktree', '- Isolate with `harness worktree --slug <slug>` before editing. Do not edit this branch in place.');
   }
 
   lines.push('', '## Gate (preview)');

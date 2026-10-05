@@ -18,6 +18,8 @@ import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
 import { inertLine } from './knowledge/store.mjs';
+import { discoverIntentSources } from './intent-sources.mjs';
+import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
 
 const ORIENT_BRANCH_CAP = 80;
 function jsonGitContext(gitContext) {
@@ -138,6 +140,15 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     ? [`harness gate --phase implement --plan ${active?.path || '<path>'}`, 'read plan ## Impacted Files']
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
 
+  const intentSources = discoverIntentSources(workspace, { query: q });
+  const isolation = inspectIsolation({ workspace, home, allowInplace: flags.allowInplace });
+  if (isolation.blocked) {
+    nextTools.unshift(`harness worktree --slug ${planSlugFromPath(active?.path)}`);
+  }
+  for (const source of intentSources.slice(0, 3)) {
+    nextTools.push(`read ${source.path}`);
+  }
+
   let index = { knowledge: 'missing', structural: 'missing' };
     try {
     const status = indexStatus({ workspace, copilotHome, home });
@@ -217,6 +228,8 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     gitContext,
     routingLines,
     neighborhood,
+    intentSources,
+    worktree: isolation,
   });
 
     const learningsBytes = learningsSectionBytes(packBody);
@@ -264,6 +277,14 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     repoMap: repoMapRef,
     knowledgeDebt,
     gitContext: jsonGitContext(gitContext),
+    worktree: {
+      blocked: isolation.blocked,
+      linked: isolation.linked,
+      onDefault: isolation.onDefault,
+      isolated: isolation.isolated,
+      skipReason: isolation.skipReason,
+    },
+    intentSources,
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,

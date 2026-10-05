@@ -21,7 +21,7 @@ Then select `@engineer` in Copilot Chat.
 
 Task modes are Answer, Investigate, Deliver, and Review. The Engineer owns the decision. The Harness owns the gate.
 
-Deliver is host-first. The Engineer works in the editor. Kernel-always means orient, plan lock, gate, and verify run in the Harness even when no extra agent is loaded. Agent-optional means a specialist is consulted only when the task needs that judgment. Benchmark-test-only means the unattended agent loop is for a measured eval, not for normal delivery.
+Deliver is host-first. The Engineer works in the editor. Kernel-always means orient, plan lock, gate, and verify run in the Harness even when no extra agent is loaded. Orient names in-repo specs as `intentSources` and whether the checkout is isolated. The implement gate fails when those specs are missing from plan `intent_sources`, or when issue work is still on the default branch of the primary checkout. `harness worktree --slug` opens a linked worktree. Ambiguous specs become `needs-info` questions, not guesses. Agent-optional means a specialist is consulted only when the task needs that judgment. Benchmark-test-only means the unattended agent loop is for a measured eval, not for normal delivery.
 
 The runtime has four postures. Standalone is the Engineer with the Harness and no acquired specialist. Degraded is a missing check or index, reported rather than invented. Governed is a learning that a person has confirmed. Bounded delegation means a specialist receives a narrow question and does not take over the delivery.
 
@@ -47,6 +47,7 @@ A delivery plan uses `plan_schema: 1`. Its verification block names checks. Its 
 
 ```yaml
 plan_schema: 1
+intent_sources: []
 verification:
   required: []
   criteria: {}

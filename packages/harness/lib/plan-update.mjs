@@ -192,6 +192,7 @@ export function applyPlanUpdate(text, change) {
   }
   if (change.lock) fm.plan_lock = true;
   if (change.intent !== undefined) fm.intent = oneLine(change.intent, '--intent');
+  if (change.intentSources?.length) fm.intent_sources = appendLines(fm.intent_sources, change.intentSources, '--intent-source');
   if (change.expectedOutputs?.length) fm.expected_outputs = appendLines(fm.expected_outputs, change.expectedOutputs, '--expected-output');
   if (change.successCriteria?.length) fm.success_criteria = appendLines(fm.success_criteria, change.successCriteria, '--success-criterion');
   if (change.verificationChecks?.length) fm.verification = appendChecks(fm.verification, change.verificationChecks);
@@ -270,6 +271,7 @@ export async function cmdPlanUpdate(argv) {
     successCriteria: [],
     verificationChecks: [],
     gapFulfillment: [],
+    intentSources: [],
   };
 
   for (let i = 0; i < scan.length; i++) {
@@ -297,6 +299,10 @@ export async function cmdPlanUpdate(argv) {
       change.lock = true;
     } else if (token === '--intent') {
       ({ value: change.intent, index: i } = take(scan, i));
+    } else if (token === '--intent-source') {
+      const next = take(scan, i);
+      change.intentSources.push(next.value);
+      i = next.index;
     } else if (token === '--expected-output') {
       const next = take(scan, i);
       change.expectedOutputs.push(next.value);
@@ -331,6 +337,7 @@ export async function cmdPlanUpdate(argv) {
   const hasChange = change.status !== undefined
     || change.lock
     || change.intent !== undefined
+    || change.intentSources.length > 0
     || change.activity.length > 0
     || change.completed.length > 0
     || change.expectedOutputs.length > 0
