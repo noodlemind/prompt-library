@@ -15,7 +15,7 @@ Apply `/capture-issue` and `/plan-issue` logic without asking the user to run sl
 - Prefer scaffolding the skeleton with `harness plan-new --type <t> --slug <slug> --intent "..." --impacted <files>` — it emits a valid, gate-ready plan (correct dated path, frontmatter, and every canonical section) so you fill content, not structure. Add `--gap <id>:<primitive-path>` for a capability gap (sets `status: blocked-capability` and the `capability_gaps` entry), and it auto-adds the `## Primitive Governance` block plus `create-primitive` to `skills_used` when an Impacted File is a primitive path. Then refine the generated sections before locking.
 - New paths use `.harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md` (default, gitignored) or `docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md` when git tracks files there. Prefer `harness plan-new` so the CLI chooses the root. Do not invent an undated shortcut path.
 - Before populating `verification.required`, read `.github/harness/checks.yaml`; never invent a check. Inspect each candidate command/assertion and choose only a trusted check relevant to the expected outputs; for example, `schema-validation` is forbidden when no schema output is planned. If no check exercises a documentation/primitive artifact and adding one is unjustified, use the generic product smoke check and record that limitation. New acceptance criteria and phase tasks start unchecked.
-- Create the plan with `harness plan-new` and update it with `harness plan-update --plan <path>` (status, activity, review fields, and a unique body replace). Do not edit a `~/.harness` plan in the editor. Never batch plan bootstrap with product files, directories, checks, or scripts. After a blocked compound attempt, retry with `harness plan-update` only.
+- Create the plan with `harness plan-new` and update it with `harness plan-update --plan <path>` (status, activity, review fields, a unique body replace, `--lock`, `--intent`, `--expected-output`, `--success-criterion`, `--verification-check`, and `--gap-fulfillment`). Do not edit a `~/.harness` plan in the editor. Never batch plan bootstrap with product files, directories, checks, or scripts. After a blocked compound attempt, retry with `harness plan-update` only.
 - Run the implement gate as a standalone terminal tool call with no file mutation in the same command. Wait for its explicit pass, then retry the original mutation in a later tool call.
 
 ## Trigger Examples
@@ -137,8 +137,8 @@ Follow **`/plan-issue`** for that path:
 
 - Research as needed (delegate `plan-coordinator` when `agent` tool available)
 - Fill `## Intent Contract` as the durable goal (from user message), `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, phased tasks
-- Populate frontmatter `intent`, `expected_outputs`, `success_criteria`, and named `verification.required` plus criterion mappings; never store executable shell strings in the plan
-- Set `status: planned`, `plan_lock: true`, `phase: 1`
+- Populate frontmatter `intent`, `expected_outputs`, `success_criteria`, and named `verification.required` with `harness plan-update`; never store executable shell strings in the plan
+- Set `status: planned` and `plan_lock: true` with `harness plan-update --status planned --lock`. `--lock` never clears the lock. Mark a resolved hard gap with `--gap-fulfillment <id>:done` (or `bridge` or `waived`)
 - Append Activity: `YYYY-MM-DD — ensure-plan: planned and locked (autonomous)`
 
 Respect `autonomy-policy.md`: red `risk` may require Tier 3 before lock under `strict` profile.

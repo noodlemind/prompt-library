@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import YAML from 'yaml';
-import { applyPlanUpdate } from '../lib/plan-update.mjs';
+import { applyPlanUpdate, planUpdateLockDir } from '../lib/plan-update.mjs';
 
 const binPath = path.resolve(import.meta.dirname, '..', 'bin', 'harness.mjs');
 
@@ -176,6 +176,92 @@ keep-intent is the goal
   assert.equal(JSON.parse(dry.stdout).dryRun, true);
   assert.equal(JSON.parse(dry.stdout).status, 'done');
   assert.equal(fs.readFileSync(plan, 'utf8'), before);
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+test('an explicit path does not update a same-named plan', () => {
+  const ws = workspace();
+  const plan = newPlan(ws);
+  const before = fs.readFileSync(plan, 'utf8');
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-other-plan-'));
+  const decoy = path.join(other, path.basename(plan));
+  fs.writeFileSync(decoy, 'other plan\n');
+  const refused = harness(ws, ['plan-update', '--plan', decoy, '--status', 'done']);
+  assert.notEqual(refused.status, 0, refused.stderr);
+  assert.match(refused.stderr, /outside the plan store/);
+  assert.equal(fs.readFileSync(plan, 'utf8'), before);
+  assert.equal(fs.readFileSync(decoy, 'utf8'), 'other plan\n');
+  fs.rmSync(ws, { recursive: true, force: true });
+  fs.rmSync(other, { recursive: true, force: true });
+});
+
+test('a symlink to a plan inside the store is refused', () => {
+  const ws = workspace();
+  const plan = newPlan(ws);
+  const before = fs.readFileSync(plan, 'utf8');
+  const link = path.join(path.dirname(plan), 'alias-plan.md');
+  fs.symlinkSync(plan, link);
+  const refused = harness(ws, ['plan-update', '--plan', link, '--status', 'done']);
+  assert.equal(refused.status, 2, refused.stderr);
+  assert.equal(fs.readFileSync(plan, 'utf8'), before);
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+test('plan-update can lock a plan and record goal, checks, and gap fulfillment', () => {
+  const ws = workspace();
+  const plan = newPlan(ws);
+  const seeded = fs.readFileSync(plan, 'utf8')
+    .replace('plan_lock: true', 'plan_lock: false')
+    .replace('capability_gaps: []', 'capability_gaps:\n  - {id: payment-audit, class: hard, fulfillment: proposed}');
+  fs.writeFileSync(plan, seeded);
+  if (process.platform !== 'win32') fs.chmodSync(plan, 0o600);
+  const updated = harness(ws, [
+    'plan-update', '--plan', plan, '--lock', '--intent', 'Ship the audit',
+    '--expected-output', 'audit report', '--success-criterion', 'report exists',
+    '--verification-check', 'unit-tests', '--gap-fulfillment', 'payment-audit:done', '--json',
+  ]);
+  assert.equal(updated.status, 0, updated.stderr);
+  const fm = frontmatter(fs.readFileSync(plan, 'utf8'));
+  assert.equal(fm.plan_lock, true);
+  assert.equal(fm.intent, 'Ship the audit');
+  assert.ok(fm.expected_outputs.includes('audit report'));
+  assert.ok(fm.success_criteria.includes('report exists'));
+  assert.ok(fm.verification.required.includes('unit-tests'));
+  assert.deepEqual(fm.reviews.required, ['code-review']);
+  assert.equal(fm.capability_gaps[0].fulfillment, 'done');
+  assert.equal(fm.capability_gaps[0].class, 'hard');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(plan).mode & 0o777, 0o600);
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+test('overlapping plan updates keep both changes', async () => {
+  const ws = workspace();
+  const plan = newPlan(ws);
+  const home = path.join(ws, '.copilot-home');
+  fs.mkdirSync(home, { recursive: true });
+  const lock = planUpdateLockDir(plan);
+  fs.mkdirSync(lock);
+  const child = spawn(process.execPath, [
+    binPath, 'plan-update', '--plan', plan, '--activity', 'from-child',
+    '--workspace', ws, '--copilot-home', home,
+  ], {
+    cwd: ws,
+    env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(child.exitCode, null);
+  assert.doesNotMatch(fs.readFileSync(plan, 'utf8'), /from-child/);
+  const held = fs.readFileSync(plan, 'utf8');
+  fs.writeFileSync(plan, held.includes('## Activity')
+    ? held.replace('## Activity', '## Activity\n\n- from-parent')
+    : `${held}\n## Activity\n\n- from-parent\n`);
+  fs.rmdirSync(lock);
+  const code = await new Promise((resolve) => child.on('exit', resolve));
+  assert.equal(code, 0);
+  const after = fs.readFileSync(plan, 'utf8');
+  assert.match(after, /from-parent/);
+  assert.match(after, /from-child/);
+  assert.equal(fs.existsSync(lock), false);
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
