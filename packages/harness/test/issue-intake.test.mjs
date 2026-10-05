@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import YAML from 'yaml';
 import { runHarness, tempDir } from './helpers/index.mjs';
 import { initGit, writeChecks, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 import { TEST_GIT_ENV } from './helpers/store.mjs';
+
+const SPEC_BODY = '# Checkout retry\n\nRefunds share the payment retry budget.\n';
+const SPEC_SHA = crypto.createHash('sha256').update(SPEC_BODY).digest('hex');
 
 const GIT_ENV = { ...process.env, ...TEST_GIT_ENV, CI: '', HARNESS_ALLOW_INPLACE: '' };
 
@@ -37,8 +42,14 @@ function planWorkspace(specRel) {
   const ws = tempDir('issue-intake-');
   initGit(ws);
   writeChecks(ws, { 'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] } });
-  if (specRel) addTracked(ws, specRel, '# Checkout retry\n\nRefunds share the payment retry budget.\n');
+  if (specRel) addTracked(ws, specRel, SPEC_BODY);
   return ws;
+}
+
+function parseFrontmatter(text) {
+  const match = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  assert.ok(match, 'plan has frontmatter');
+  return YAML.parse(match[1]);
 }
 
 function gateJson(ws, extra = [], env = {}) {
@@ -133,8 +144,85 @@ test('plan-new records discovered intent sources on the scaffold', () => {
   assert.equal(result.status, 0, result.stderr);
   const created = JSON.parse(result.stdout);
   const text = fs.readFileSync(created.path, 'utf8');
-  assert.match(text, /intent_sources:/);
-  assert.match(text, /docs\/specs\/checkout\.md/);
+  const fm = parseFrontmatter(text);
+  assert.equal(fm.intent_sources[0].path, 'docs/specs/checkout.md');
+  assert.equal(fm.intent_sources[0].sha256, SPEC_SHA);
+});
+
+test('implement gate still passes after a locked spec file changes', () => {
+  const ws = planWorkspace('docs/specs/checkout.md');
+  const created = runHarness(
+    [
+      'plan-new',
+      '--type',
+      'feat',
+      '--slug',
+      'checkout-retry',
+      '--intent',
+      'Honor the checkout spec',
+      '--date',
+      '2026-10-05',
+      '--verification-check',
+      'unit-tests',
+      '--workspace',
+      ws,
+      '--json',
+    ],
+    { env: GIT_ENV }
+  );
+  assert.equal(created.status, 0, created.stderr);
+  const plan = JSON.parse(created.stdout).path;
+  fs.writeFileSync(path.join(ws, 'docs/specs/checkout.md'), '# Drifted after lock\n');
+  const gated = runHarness(['gate', '--phase', 'implement', '--plan', plan, '--workspace', ws, '--json'], {
+    env: GIT_ENV,
+  });
+  assert.equal(gated.status, 0, gated.stderr + gated.stdout);
+  const check = JSON.parse(gated.stdout).checks.find((c) => c.id === 'C-intent-sources');
+  assert.equal(check.pass, true);
+  assert.doesNotMatch(check.message || '', /drift|hash mismatch|needs-info/i);
+});
+
+test('plan-update --lock stamps sha256 onto string intent_sources', () => {
+  const ws = planWorkspace('docs/specs/checkout.md');
+  const plan = writeVersionedPlan(ws, { extraFrontmatter: 'intent_sources:\n  - docs/specs/checkout.md\n' });
+  const result = runHarness(['plan-update', '--plan', plan, '--lock', '--workspace', ws, '--json'], { env: GIT_ENV });
+  assert.equal(result.status, 0, result.stderr);
+  const fm = parseFrontmatter(fs.readFileSync(path.join(ws, plan), 'utf8'));
+  assert.equal(fm.intent_sources[0].path, 'docs/specs/checkout.md');
+  assert.equal(fm.intent_sources[0].sha256, SPEC_SHA);
+});
+
+test('plan-update --activity does not rehash locked intent sources after the spec file changes', () => {
+  const ws = planWorkspace('docs/specs/checkout.md');
+  const created = runHarness(
+    [
+      'plan-new',
+      '--type',
+      'feat',
+      '--slug',
+      'checkout-retry',
+      '--intent',
+      'Honor the checkout spec',
+      '--date',
+      '2026-10-05',
+      '--verification-check',
+      'unit-tests',
+      '--workspace',
+      ws,
+      '--json',
+    ],
+    { env: GIT_ENV }
+  );
+  assert.equal(created.status, 0, created.stderr);
+  const plan = JSON.parse(created.stdout).path;
+  fs.writeFileSync(path.join(ws, 'docs/specs/checkout.md'), '# Drifted after lock\n');
+  const result = runHarness(
+    ['plan-update', '--plan', plan, '--activity', 'continue after spec edit', '--workspace', ws, '--json'],
+    { env: GIT_ENV }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const fm = parseFrontmatter(fs.readFileSync(plan, 'utf8'));
+  assert.equal(fm.intent_sources[0].sha256, SPEC_SHA);
 });
 
 test('plan-update --intent-source appends a path', () => {

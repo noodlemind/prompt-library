@@ -15,7 +15,7 @@ import { loadPlan } from './plan-parse.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
 import { emptySnapshot, routeWorkspace } from './route.mjs';
 import { shortPlanDocument } from './plan-record.mjs';
-import { discoverIntentSources } from './intent-sources.mjs';
+import { bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
@@ -315,8 +315,7 @@ export async function cmdPlanNew(argv) {
   opts.domains = prepared.domains;
   opts.playbook = prepared.playbook;
   opts.routing = prepared.routing;
-  const discovered = discoverIntentSources(workspace).map((item) => item.path);
-  opts.intentSources = [...new Set([...(opts.intentSources || []).filter(Boolean), ...discovered])];
+  opts.intentSources = bindLockedIntentSources(workspace, opts.intentSources);
 
   const { path: rel, content } = buildPlanSkeleton(opts);
   const full = path.isAbsolute(rel) ? rel : path.join(workspace, rel);
@@ -396,6 +395,9 @@ async function relockPlan({ workspace, from, dryRun, toStdout, json, classificat
     ...(prepared.domains.length ? { domains: prepared.domains } : {}),
     ...(prepared.playbook ? { playbook: prepared.playbook } : {}),
   };
+  const lockedSources = bindLockedIntentSources(workspace, frontmatter.intent_sources);
+  if (lockedSources.length) frontmatter.intent_sources = lockedSources;
+  else delete frontmatter.intent_sources;
   const content = original.replace(/^---\r?\n[\s\S]*?\r?\n---/, `---\n${YAML.stringify(frontmatter)}---`);
   if (toStdout) {
     process.stdout.write(content);

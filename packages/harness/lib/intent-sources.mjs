@@ -1,3 +1,6 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const CAP = 12;
@@ -47,10 +50,52 @@ export function discoverIntentSources(workspace, { query = '', limit = CAP } = {
   return found.slice(0, limit);
 }
 
+export function sourcePath(value) {
+  if (typeof value === 'string') return value.replace(/\\/g, '/').trim();
+  if (value && typeof value === 'object' && typeof value.path === 'string') {
+    return value.path.replace(/\\/g, '/').trim();
+  }
+  return '';
+}
+
+export function sourceHash(value) {
+  if (value && typeof value === 'object' && typeof value.sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.sha256)) {
+    return value.sha256;
+  }
+  return null;
+}
+
+export function hashIntentFile(workspace, rel) {
+  if (!workspace || !rel) return null;
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(path.join(workspace, rel))).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+export function lockIntentSources(workspace, entries, { rehash = true } = {}) {
+  const seen = new Set();
+  const out = [];
+  for (const entry of entries || []) {
+    const rel = sourcePath(entry);
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    const kept = rehash ? null : sourceHash(entry);
+    const sha256 = kept || hashIntentFile(workspace, rel);
+    out.push(sha256 ? { path: rel, sha256 } : { path: rel });
+  }
+  return out;
+}
+
+export function bindLockedIntentSources(workspace, entries) {
+  return lockIntentSources(workspace, [...(entries || []), ...discoverIntentSources(workspace)], { rehash: true });
+}
+
 export function listedIntentSources(plan) {
   const raw = plan?.fm?.intent_sources;
   if (!Array.isArray(raw)) return null;
-  return raw.map((value) => String(value).replace(/\\/g, '/').trim()).filter(Boolean);
+  return raw.map(sourcePath).filter(Boolean);
 }
 
 export function intentSourcesCheck(plan, discovered) {

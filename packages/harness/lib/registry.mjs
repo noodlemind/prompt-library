@@ -891,7 +891,7 @@ registerCommand({
       { name: '--review-completed', type: 'string', valueName: 'id', description: 'add a reviews.completed id (repeatable)', required: false, default: null, tui: 'prompt' },
       { name: '--critical-open', type: 'string', valueName: 'id', description: 'replace reviews.critical_open (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
       { name: '--clear-critical', type: 'boolean', description: 'set reviews.critical_open to []', required: false, default: false, tui: 'cli-only' },
-      { name: '--lock', type: 'boolean', description: 'set plan_lock true; never clears it', required: false, default: false, tui: 'cli-only' },
+      { name: '--lock', type: 'boolean', description: 'set plan_lock true and stamp intent_sources sha256; never clears it', required: false, default: false, tui: 'cli-only' },
       { name: '--intent', type: 'string', valueName: 'text', description: 'replace the intent line', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
       { name: '--intent-source', type: 'string', valueName: 'path', description: 'append one intent_sources path (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
       { name: '--expected-output', type: 'string', valueName: 'text', description: 'append one expected output (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
