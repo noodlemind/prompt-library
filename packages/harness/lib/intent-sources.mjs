@@ -21,6 +21,10 @@ function score(item, tokens) {
   return tokens.reduce((n, token) => n + (hay.includes(token) ? 1 : 0), 0);
 }
 
+export function rankIntentSources(workspace, intent) {
+  return discoverIntentSources(workspace, { query: typeof intent === 'string' ? intent : '' });
+}
+
 export function discoverIntentSources(workspace, { query = '', limit = CAP } = {}) {
   if (!workspace) return [];
   const listed = spawnSync('git', ['-C', workspace, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {

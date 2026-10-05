@@ -11,7 +11,7 @@ import { primitivePlanGovernance } from './primitive-governance.mjs';
 import { validateRoutingSnapshot } from './route.mjs';
 import { validatePlanReadiness } from './plan-readiness.mjs';
 import { readPlanRecord } from './plan-record.mjs';
-import { discoverIntentSources, intentSourcesCheck } from './intent-sources.mjs';
+import { intentSourcesCheck, rankIntentSources } from './intent-sources.mjs';
 import { inspectIsolation, worktreeGateMessage } from './worktree.mjs';
 
 export function runGate({ workspace, flags, query = '' }) {
@@ -190,8 +190,7 @@ export function runGate({ workspace, flags, query = '' }) {
       });
       if (isolation.blocked) pass = false;
 
-      const sourceQuery = query || (typeof plan.fm?.intent === 'string' ? plan.fm.intent : '');
-      const discovered = discoverIntentSources(workspace, { query: sourceQuery });
+      const discovered = rankIntentSources(workspace, plan.fm?.intent);
       const intentCheck = intentSourcesCheck(plan, discovered);
       checks.push(intentCheck);
       if (!intentCheck.pass) pass = false;

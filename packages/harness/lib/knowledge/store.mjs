@@ -37,7 +37,7 @@ function resolvedGitPath(workspace, raw) {
 
 export function linkedPrimaryCheckout(workspace) {
   try {
-    if (!fs.lstatSync(path.join(workspace, '.git')).isFile()) return null;
+    if (!fs.statSync(path.join(workspace, '.git')).isFile()) return null;
   } catch {
     return null;
   }
