@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import YAML from 'yaml';
-import { runHarness, tempDir } from './helpers/index.mjs';
+import { cliHarnessHome, runHarness, tempDir } from './helpers/index.mjs';
 import { initGit, writeChecks, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 import { TEST_GIT_ENV } from './helpers/store.mjs';
 
@@ -249,6 +249,23 @@ test('implement gate fails on the default branch of the primary checkout', () =>
   assert.ok(check, `missing C-worktree in ${JSON.stringify(body.checks)}`);
   assert.equal(check.pass, false);
   assert.match(check.message, /harness worktree/);
+});
+
+test('knowledge defaultBranch does not fail C-worktree without origin/HEAD', async () => {
+  const { resolveDefaultBranch } = await import('../lib/git-context.mjs');
+  const { storeDir } = await import('../lib/knowledge/store.mjs');
+  const ws = planWorkspace();
+  const branch = currentBranch(ws);
+  const home = cliHarnessHome();
+  const dir = storeDir(ws, { home });
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'config.json'), `${JSON.stringify({ mode: 'on', commit: 'none', defaultBranch: branch })}\n`);
+  const seen = resolveDefaultBranch(ws, { home });
+  assert.equal(seen?.name, branch);
+  assert.equal(seen?.source, 'config');
+  const { result, body } = gateJson(ws, { planOpts: { extraFrontmatter: 'intent_sources: []\n' } });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.equal((body.checks || []).find((c) => c.id === 'C-worktree')?.pass, true);
 });
 
 test('implement gate skips C-worktree when CI=true or --allow-inplace', () => {

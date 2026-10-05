@@ -38,6 +38,12 @@ function currentBranch(workspace) {
   return gitOut(workspace, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
 }
 
+function originDefaultName(workspace) {
+  const originHead = gitOut(workspace, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
+  if (!originHead || !originHead.startsWith('refs/remotes/origin/')) return null;
+  return originHead.slice('refs/remotes/origin/'.length);
+}
+
 function ensureWorktreeIgnore(root) {
   const gitignore = path.join(root, '.gitignore');
   const line = '.worktrees';
@@ -86,14 +92,15 @@ export function inspectIsolation({ workspace, home, env = process.env, allowInpl
     };
   }
   const linked = isLinkedWorktree(workspace);
-  const defaultBranch = resolveDefaultBranch(workspace, { home });
-  const onDefault = Boolean(defaultBranch && ctx.branch && ctx.branch === defaultBranch.name);
+  // A knowledge-store defaultBranch is not origin/HEAD. No remote means the checkout stays editable.
+  const originDefault = originDefaultName(workspace);
+  const onDefault = Boolean(originDefault && ctx.branch && ctx.branch === originDefault);
   const ci = CI_TRUE.has(String(env.CI || ''));
   const inplace = allowInplace || env.HARNESS_ALLOW_INPLACE === '1';
   let skipReason = null;
   if (ci) skipReason = 'ci';
   else if (inplace) skipReason = 'allow-inplace';
-  else if (!defaultBranch) skipReason = 'no-default-branch';
+  else if (!originDefault) skipReason = 'no-default-branch';
   else if (!onDefault) skipReason = 'feature-branch';
   else if (linked) skipReason = 'linked-worktree';
   const blocked = skipReason === null;
@@ -103,7 +110,7 @@ export function inspectIsolation({ workspace, home, env = process.env, allowInpl
     onDefault,
     isolated: linked && !onDefault,
     branch: ctx.branch,
-    defaultBranch: defaultBranch?.name || null,
+    defaultBranch: originDefault,
     skipReason: blocked ? null : skipReason,
   };
 }
