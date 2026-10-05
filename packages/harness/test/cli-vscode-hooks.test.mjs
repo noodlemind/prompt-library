@@ -49,6 +49,20 @@ function readEvents(workspace) {
     .map((line) => JSON.parse(line));
 }
 
+test('install merge leaves terminal approvals untouched', () => {
+  const settings = mergeVSCodeSettings({
+    'chat.tools.terminal.autoApprove': { git: true, 'harness bash': false, 'harness plan-update': false },
+  });
+  const approved = settings['chat.tools.terminal.autoApprove'];
+  assert.equal(approved.git, true);
+  assert.equal(approved['harness bash'], false);
+  assert.equal(approved['harness plan-update'], false);
+  assert.equal(approved['harness plan-new'], undefined);
+  assert.equal(settings['chat.tools.edits.autoApprove'], undefined);
+  assert.equal(settings['chat.tools.terminal.blockDetectedFileWrites'], undefined);
+  assert.equal(settings['chat.tools.global.autoApprove'], undefined);
+});
+
 test('VS Code configuration explicitly discovers hydrated user hooks', () => {
   const settings = mergeVSCodeSettings({ 'chat.hookFilesLocations': { 'custom/hooks': true } });
   assert.equal(settings['chat.hookFilesLocations']['custom/hooks'], true);

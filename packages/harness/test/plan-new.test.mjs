@@ -187,6 +187,29 @@ test('plan YAML safely serializes quotes, multiline intents, and Windows paths',
   assert.deepEqual(frontmatter.success_criteria, [intent]);
 });
 
+test('product plans require code-review and docs plans do not', () => {
+  for (const type of ['feat', 'fix', 'refactor', 'chore']) {
+    const { content } = buildPlanSkeleton({
+      type,
+      slug: `${type}-shape`,
+      intent: 'Do the work',
+      date: '2026-07-21',
+      check: 'unit-tests',
+    });
+    const frontmatter = YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]);
+    assert.deepEqual(frontmatter.reviews, { required: ['code-review'], completed: [], critical_open: [] }, type);
+  }
+  const { content } = buildPlanSkeleton({
+    type: 'docs',
+    slug: 'docs-note',
+    intent: 'Write the note',
+    date: '2026-07-21',
+    check: 'unit-tests',
+  });
+  const frontmatter = YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]);
+  assert.deepEqual(frontmatter.reviews.required, []);
+});
+
 test('plan-new reuses the canonical primitive path classifier', () => {
   for (const impacted of ['enterprise/skills/payment/SKILL.md', 'knowledge/capability-registry.yaml']) {
     const { content } = buildPlanSkeleton({

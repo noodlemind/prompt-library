@@ -188,8 +188,17 @@ Before delivering the review, verify:
 
 ### 9. Pipeline Continuation
 
-If reviewing a plan file with `status: review`:
-- After review is complete, suggest: "Run `/compound-learnings` to document any lessons learned."
+Apply `safe_auto` fixes in this skill. Leave `gated_auto` for the user. Keep `manual` and unresolved critical findings open.
+
+When a plan file is in scope, record the result with `harness plan-update`. Do not edit a `~/.harness` plan in the editor.
+
+- Put each unresolved critical finding in `reviews.critical_open` with `--critical-open`.
+- When none remain, clear that list with `--clear-critical`.
+- Add `code-review` to `reviews.completed` with `--review-completed code-review`.
+- Do not mark the plan `done` while `critical_open` is non-empty.
+- If a fix changed the diff, run `harness verify` again.
+
+If the plan status is `review`, suggest `/compound-learnings` for a lesson that is not already in the diff.
 
 ## Error Handling
 

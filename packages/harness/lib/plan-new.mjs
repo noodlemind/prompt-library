@@ -123,7 +123,7 @@ export function buildPlanSkeleton({
       required: [check],
       criteria: Object.fromEntries(acs.map((ac) => [ac.id, [check]])),
     },
-    reviews: { required: [], completed: [], critical_open: [] },
+    reviews: { required: type === 'docs' ? [] : ['code-review'], completed: [], critical_open: [] },
     skills_used: skills,
     ...(routing ? { routing } : {}),
     ...(domains?.length ? { domains } : {}),

@@ -14,7 +14,7 @@ Select `@engineer` in Copilot Chat.
 ```text
 @engineer: Answer      → direct, read-only reply
            Investigate → evidence-backed, read-only report
-           Deliver     → orient → lock intent → gate → work → verify → review → compound → report
+           Deliver     → orient → lock intent → gate → work → review → verify → compound → report
            Review      → independent assessment
 ```
 

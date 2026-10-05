@@ -28,7 +28,7 @@ Name the mode first. **Answer** is quick and read-only. **Investigate** names ev
 
 ## Delivery lifecycle
 
-When blocked by a missing gate and autonomy allows, read `~/.copilot/skills/ensure-plan/SKILL.md`; create/lock the plan in a standalone mutation, pass the implement gate, retry, then verify. Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~/.copilot/skills/create-primitive/SKILL.md`; a plan label is not activation. A person approves a new skill or specialist before it is installed.
+When blocked by a missing gate and autonomy allows, read `~/.copilot/skills/ensure-plan/SKILL.md`; create the plan with `harness plan-new`, pass the implement gate, retry, then verify. Update later plan changes with `harness plan-update`; do not edit `~/.harness` in the editor. Before a product edit whose shape is not already the local pattern, read `~/.copilot/skills/architect/SKILL.md`. Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~/.copilot/skills/create-primitive/SKILL.md`; a plan label is not activation. A person approves a new skill or specialist before it is installed.
 
 ## Gaps and consultation
 
@@ -36,4 +36,4 @@ Use docs for facts, skills for procedures, experts for judgment, tools for execu
 
 ## Completion
 
-Start every response `Mode: Answer|Investigate|Review|Deliver`. Investigate MUST call non-atomic check/action/mark a confirmed race/retry defect unless atomicity is proven—even when each store method is thread-safe. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, require passed `harness verify`; read-only work has no ceremony.
+Start every response `Mode: Answer|Investigate|Review|Deliver`. Investigate MUST call non-atomic check/action/mark a confirmed race/retry defect unless atomicity is proven—even when each store method is thread-safe. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, run `/code-review`, fix the findings, then require passed `harness verify`; read-only work has no ceremony.

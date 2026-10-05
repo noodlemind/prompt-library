@@ -10,7 +10,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 The system is skill-first. Skills are the primary reusable workflow contracts; agents, instructions, checks, plans, and solution docs support those skills.
 
-- **Skills** (`.github/skills/*/SKILL.md`): 25 workflows (internal support: `ensure-plan`, on-demand `ensure-capability`, `auto-compound`, `auto-skill-draft`; memory/utility: `recall`, `index-memory`, `codebase-context`, `consolidate`; single public entry **`@engineer`** plus user-invocable `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal, loaded on demand). Engineer mode selection routes incoming work; Answer mode handles quick Q&A directly without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected skill chain `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → Engineer Deliver mode → `/code-review` → `/compound-learnings` is an internal sequence used only within Deliver mode.
+- **Skills** (`.github/skills/*/SKILL.md`): 26 workflows (internal support: `ensure-plan`, on-demand `ensure-capability`, `auto-compound`, `auto-skill-draft`; design-before-code: `architect`; memory/utility: `recall`, `index-memory`, `codebase-context`, `consolidate`; single public entry **`@engineer`** plus user-invocable `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal, loaded on demand). Engineer mode selection routes incoming work; Answer mode handles quick Q&A directly without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected skill chain `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → Engineer Deliver mode → `/code-review` → `/compound-learnings` is an internal sequence used only within Deliver mode.
 - **Agents** (`.github/agents/*.agent.md`): 21 agents — 17 stateless domain experts, 1 engineer, 1 code-implementer, plus 2 internal coordinator agents. Agents are used when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active language/cloud/data reviewers include Java, Python, SQL, and AWS.
 - **Instructions** (`.github/instructions/*.instructions.md`): Scoped context that activates based on file patterns.
 - **Prompt wrappers**: Retired. `.github/prompts/` no longer exists — users select `@engineer` from the agent dropdown, and `harness upgrade` purges previously hydrated wrappers via `retired.json`.
@@ -22,7 +22,7 @@ Issues flow through a state machine:
 
 ```text
 @engineer: Answer → direct, ceremony-free reply; Investigate → evidence-backed read-only report
-           Deliver → orient → establish intent → investigate → work → on-demand gaps → verify → review → compound → report
+           Deliver → orient → establish intent → investigate → work → on-demand gaps → review → verify → compound → report
 
 Deliver-mode internal skill chain:
 /recall (recommended) → /brainstorming (optional) → /capture-issue → /plan-issue → /deepen-plan (optional) → Deliver execution (code-implementer) → /code-review → /compound-learnings → /index-memory
@@ -38,7 +38,7 @@ Plan files live in `.harness/plans/` (product repos, gitignored) or committed `d
 ```
 .github/
   agents/          — 21 agent definitions (17 specialists + 1 engineer + 1 implementer + 2 coordinators)
-  skills/          — 25 skill directories with SKILL.md
+  skills/          — 26 skill directories with SKILL.md
   instructions/    — scoped always-on instructions (TypeScript, Python, Java, PostgreSQL); Spring Boot and AWS SDK load on demand via /java and /aws skill references
   checks/          — optional product-specific review check examples
   copilot-instructions.md — shared context for all agents
