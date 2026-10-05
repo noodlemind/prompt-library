@@ -6,6 +6,7 @@ import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
 import { appendFileContained, readFileNoFollow, writeFileContained } from './fs-safe.mjs';
 import { externalPlansDir, SESSION_PLANS_REL, WORKSPACE_PLANS_REL } from './project-layout.mjs';
 import { linkedPrimaryCheckout } from './knowledge/store.mjs';
+import { withPlanUpdateLock } from './plan-update.mjs';
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const CI_TRUE = new Set(['1', 'true', 'TRUE', 'yes', 'YES']);
@@ -101,12 +102,27 @@ function carryCheckoutPlans(primary, dest) {
       } catch {
         storeStat = null;
       }
-      if (storeStat) {
-        if (!storeStat.isFile()) continue;
-        const existing = readFileNoFollow(target, { root: storeRoot });
-        if (existing == null || existing === text || !(srcStat.mtimeMs > storeStat.mtimeMs)) continue;
+      if (!storeStat) {
+        writeFileContained(storeRoot, path.join('plans', name), text);
+        continue;
       }
-      writeFileContained(storeRoot, path.join('plans', name), text);
+      if (!storeStat.isFile()) continue;
+      try {
+        withPlanUpdateLock(target, () => {
+          let held = null;
+          try {
+            held = fs.lstatSync(target);
+          } catch {
+            held = null;
+          }
+          if (!held?.isFile()) return;
+          const existing = readFileNoFollow(target, { root: storeRoot });
+          if (existing == null || existing === text || !(srcStat.mtimeMs > held.mtimeMs)) return;
+          writeFileContained(storeRoot, path.join('plans', name), text);
+        });
+      } catch (error) {
+        if (error?.code !== 'E_USAGE') throw error;
+      }
     }
   }
 }

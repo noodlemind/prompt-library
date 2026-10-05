@@ -494,6 +494,29 @@ test('a newer checkout plan replaces the carried store copy and a newer store co
   git(ws, ['worktree', 'remove', '--force', tree.path]);
 });
 
+test('carry leaves a store plan alone while plan-update holds its lock', async () => {
+  const { planUpdateLockDir } = await import('../lib/plan-update.mjs');
+  const ws = planWorkspace();
+  withOrigin(ws);
+  const rel = writeVersionedPlan(ws, { extraFrontmatter: 'intent_sources: []\n' });
+  const tree = addWorktree(ws, 'carry-lock');
+  const first = runHarness(['gate', '--phase', 'implement', '--plan', rel, '--workspace', tree.path, '--json'], { env: GIT_ENV });
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const storePath = JSON.parse(first.stdout).plan.path;
+  const checkoutFile = path.join(ws, rel);
+  fs.appendFileSync(checkoutFile, '\nEdited after carry.\n');
+  const checkoutNewer = new Date(Date.now() + 10_000);
+  fs.utimesSync(checkoutFile, checkoutNewer, checkoutNewer);
+  fs.mkdirSync(planUpdateLockDir(storePath));
+  const held = runHarness(['worktree', '--slug', 'carry-lock', '--workspace', ws, '--json'], { env: GIT_ENV });
+  assert.equal(held.status, 0, held.stderr + held.stdout);
+  assert.equal(fs.readFileSync(storePath, 'utf8').includes('Edited after carry.'), false);
+  fs.rmdirSync(planUpdateLockDir(storePath));
+  addWorktree(ws, 'carry-lock');
+  assert.match(fs.readFileSync(storePath, 'utf8'), /Edited after carry/);
+  git(ws, ['worktree', 'remove', '--force', tree.path]);
+});
+
 test('hashIntentFile hashes the raw file bytes', async () => {
   const { hashIntentFile } = await import('../lib/intent-sources.mjs');
   const ws = planWorkspace();

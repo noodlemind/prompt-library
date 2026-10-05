@@ -76,6 +76,15 @@ function releasePlanLock(lockDir) {
   try { fs.rmdirSync(lockDir); } catch { /* the lock is already gone */ }
 }
 
+export function withPlanUpdateLock(full, fn) {
+  const lockDir = acquirePlanLock(full);
+  try {
+    return fn();
+  } finally {
+    releasePlanLock(lockDir);
+  }
+}
+
 /**
  * Resolve `--plan` to a real plan file inside a plan root.
  * A bare name may match one plan. An explicit path is used as given.
