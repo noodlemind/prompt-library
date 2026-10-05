@@ -19,6 +19,7 @@ import { deriveGitContext } from './git-context.mjs';
 import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { discoverIntentSources } from './intent-sources.mjs';
+import { prepareNextTool } from './prepare.mjs';
 import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
 
 const ORIENT_BRANCH_CAP = 80;
@@ -148,6 +149,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   for (const source of intentSources.slice(0, 3)) {
     nextTools.push(`read ${source.path}`);
   }
+  if (!intentSources.length) nextTools.push(prepareNextTool(workspace));
 
   let index = { knowledge: 'missing', structural: 'missing' };
     try {

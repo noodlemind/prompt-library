@@ -32,6 +32,7 @@ import {
 import { cmdPlanNew } from './plan-new.mjs';
 import { cmdPlanUpdate } from './plan-update.mjs';
 import { cmdWorktree } from './worktree-cmd.mjs';
+import { cmdPrepare } from './prepare.mjs';
 import { cmdRoute } from './route.mjs';
 import { cmdLookup, lookupResultOf } from './retrieval/lookup-cmd.mjs';
 import { recallResultOf, getResultOf } from './retrieval/compat-results.mjs';
@@ -774,6 +775,16 @@ registerCommand({
     surfaces: ['cli', 'tui'],
   args: { positionals: [], flags: [] },
   handler: cmdInitRepo,
+});
+
+registerCommand({
+  name: 'prepare',
+  summary: 'write starter spec and ADR files when a brownfield repo has none',
+  group: 'workspace',
+  sideEffect: 'mutate',
+  surfaces: ['cli', 'tui'],
+  args: { positionals: [], flags: [] },
+  handler: cmdPrepare,
 });
 
 registerCommand({

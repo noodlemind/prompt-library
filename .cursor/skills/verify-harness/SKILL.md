@@ -5,7 +5,7 @@ description: Drive the Harness CLI the way an agent does. Use to prove orient, p
 
 # Verify Harness
 
-The user-facing surface is the `harness` CLI in `packages/harness`. There is no web UI. Agents call `orient`, `plan-new`, `plan-update --lock`, `gate --phase implement`, and `worktree`. Prove those commands by spawning `packages/harness/bin/harness.mjs` in a disposable git workspace.
+The user-facing surface is the `harness` CLI in `packages/harness`. There is no web UI. Agents call `orient`, `prepare`, `plan-new`, `plan-update --lock`, `gate --phase implement`, and `worktree`. Prove those commands by spawning `packages/harness/bin/harness.mjs` in a disposable git workspace.
 
 ## Launch
 
@@ -17,7 +17,7 @@ From the prompt-library root:
 node packages/harness/bin/harness.mjs --help
 ```
 
-Ready when that command exits `0` and prints command names including `orient`, `plan-new`, `gate`, and `worktree`.
+Ready when that command exits `0` and prints command names including `orient`, `prepare`, `plan-new`, `gate`, and `worktree`.
 
 Teardown is per drive. Delete the temp workspace and `HARNESS_HOME` directory that drive created. Do not kill by process name.
 
@@ -66,3 +66,4 @@ Delete temp workspaces, temp `HARNESS_HOME` dirs, and linked git worktrees the d
 - Doctor: `node .cursor/skills/verify-harness/scripts/doctor.mjs`
 - Intent lock proof: `node .cursor/skills/verify-harness/scripts/prove-intent-lock.mjs`
 - Worktree proof: `node .cursor/skills/verify-harness/scripts/prove-issue-worktree.mjs`
+- Prepare proof: `node .cursor/skills/verify-harness/scripts/prove-prepare.mjs`

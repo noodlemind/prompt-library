@@ -109,6 +109,8 @@ export function buildContextPack({
     }
     if (intentSources.length > 4) lines.push(`- +${intentSources.length - 4} more`);
     lines.push('If a source is ambiguous, set status needs-info and write ## Missing questions.');
+  } else if (Array.isArray(intentSources)) {
+    lines.push('', '## Intent sources (read before implement)', '- None yet. Run `harness prepare`, then edit the starter spec and ADR.');
   }
 
   if (worktree?.blocked) {

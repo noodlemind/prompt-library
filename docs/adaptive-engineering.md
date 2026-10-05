@@ -15,6 +15,15 @@ npm install -g harness
 harness install --configure-vscode
 ```
 
+On an existing repository that has no spec or ADR yet, seed the workspace and the starter docs:
+
+```bash
+harness init-repo
+harness prepare
+```
+
+`harness prepare` writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` when those paths are missing. Edit them. A later run leaves an existing file alone. Orient lists them as `intentSources`. Plan lock hashes them. If `docs/` is gitignored, prepare writes nothing and orient says to un-ignore those paths. Prepare does not rewrite a spec from the code.
+
 Then select `@engineer` in Copilot Chat.
 
 ## How a task runs
