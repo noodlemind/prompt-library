@@ -315,7 +315,7 @@ export async function cmdPlanNew(argv) {
   opts.domains = prepared.domains;
   opts.playbook = prepared.playbook;
   opts.routing = prepared.routing;
-  opts.intentSources = bindLockedIntentSources(workspace, opts.intentSources);
+  opts.intentSources = bindLockedIntentSources(workspace, opts.intentSources, { query: opts.intent || '' });
 
   const { path: rel, content } = buildPlanSkeleton(opts);
   const full = path.isAbsolute(rel) ? rel : path.join(workspace, rel);
@@ -395,7 +395,9 @@ async function relockPlan({ workspace, from, dryRun, toStdout, json, classificat
     ...(prepared.domains.length ? { domains: prepared.domains } : {}),
     ...(prepared.playbook ? { playbook: prepared.playbook } : {}),
   };
-  const lockedSources = bindLockedIntentSources(workspace, frontmatter.intent_sources);
+  const lockedSources = bindLockedIntentSources(workspace, frontmatter.intent_sources, {
+    query: typeof frontmatter.intent === 'string' ? frontmatter.intent : '',
+  });
   if (lockedSources.length) frontmatter.intent_sources = lockedSources;
   else delete frontmatter.intent_sources;
   const content = original.replace(/^---\r?\n[\s\S]*?\r?\n---/, `---\n${YAML.stringify(frontmatter)}---`);

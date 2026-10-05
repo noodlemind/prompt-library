@@ -276,7 +276,7 @@ function stampLockedIntentSources(workspace, text, { rehash, mergeDiscovered }) 
   if (!fm || typeof fm !== 'object' || Array.isArray(fm) || !fm.plan_lock) return text;
   const listed = Array.isArray(fm.intent_sources) ? fm.intent_sources : [];
   const locked = mergeDiscovered
-    ? bindLockedIntentSources(workspace, listed)
+    ? bindLockedIntentSources(workspace, listed, { query: typeof fm.intent === 'string' ? fm.intent : '' })
     : lockIntentSources(workspace, listed, { rehash });
   if (!locked.length) {
     if (!listed.length) return text;

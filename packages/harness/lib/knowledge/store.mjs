@@ -26,10 +26,22 @@ function gitOut(cwd, args) {
   return res.status === 0 ? res.stdout.trim() : null;
 }
 
-export function localRepoId(workspace) {
-  let real = workspace;
+function linkedPrimaryCheckout(workspace) {
   try {
-    real = fs.realpathSync(workspace);
+    if (!fs.lstatSync(path.join(workspace, '.git')).isFile()) return null;
+  } catch {
+    return null;
+  }
+  const common = gitOut(workspace, ['rev-parse', '--git-common-dir']);
+  if (!common) return null;
+  return path.resolve(workspace, common, '..');
+}
+
+export function localRepoId(workspace) {
+  const basis = linkedPrimaryCheckout(workspace) || workspace;
+  let real = basis;
+  try {
+    real = fs.realpathSync(basis);
   } catch {
     // keep the given path
   }

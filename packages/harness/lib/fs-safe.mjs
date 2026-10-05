@@ -222,7 +222,7 @@ export function appendFileContained(root, rel, content, { newlineGuard = false }
   }
 }
 
-export function writeFileContained(root, rel, content) {
+export function writeFileContained(root, rel, content, { exclusive = false } = {}) {
   const rootFull = path.resolve(root);
   const full = assertNoSymlinkAncestors(rootFull, rel);
   if (!full) return null;
@@ -265,12 +265,24 @@ export function writeFileContained(root, rel, content) {
     return null;
   }
   try {
-    fs.renameSync(tmp, full);
+    if (exclusive) fs.linkSync(tmp, full);
+    else fs.renameSync(tmp, full);
   } catch {
     cleanup();
     return null;
   }
+  if (exclusive) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // The published name is the hard link. A leftover temp is the same inode.
+    }
+  }
   return full;
+}
+
+export function writeFileContainedExclusive(root, rel, content) {
+  return writeFileContained(root, rel, content, { exclusive: true });
 }
 
 /** Copy bytes from srcRel under srcRoot to destRel under destRoot. Fails if

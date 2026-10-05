@@ -3,6 +3,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { EXIT } from './style.mjs';
 import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
+import { appendFileContained, readFileNoFollow, writeFileContained } from './fs-safe.mjs';
+import { externalPlansDir, SESSION_PLANS_REL, WORKSPACE_PLANS_REL } from './project-layout.mjs';
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const CI_TRUE = new Set(['1', 'true', 'TRUE', 'yes', 'YES']);
@@ -45,17 +47,67 @@ function originDefaultName(workspace) {
 }
 
 function ensureWorktreeIgnore(root) {
-  const gitignore = path.join(root, '.gitignore');
-  const line = '.worktrees';
-  if (!fs.existsSync(gitignore)) {
-    fs.writeFileSync(gitignore, `${line}\n`);
+  const rel = '.gitignore';
+  const gitignore = path.join(root, rel);
+  const line = '.worktrees\n';
+  let stat = null;
+  try {
+    stat = fs.lstatSync(gitignore);
+  } catch {
+    stat = null;
+  }
+  if (stat?.isSymbolicLink()) return;
+  if (!stat) {
+    writeFileContained(root, rel, line);
     return;
   }
-  const text = fs.readFileSync(gitignore, 'utf8');
+  if (!stat.isFile()) return;
+  const text = readFileNoFollow(gitignore, { root });
+  if (text == null) return;
   const lines = text.split(/\r?\n/);
   if (lines.some((entry) => entry === '.worktrees' || entry === '.worktrees/')) return;
-  const sep = text.length > 0 && !text.endsWith('\n') ? '\n' : '';
-  fs.appendFileSync(gitignore, `${sep}${line}\n`);
+  appendFileContained(root, rel, line, { newlineGuard: true });
+}
+
+function carryCheckoutPlans(primary, dest) {
+  const storeRoot = path.dirname(externalPlansDir(primary));
+  for (const rel of [WORKSPACE_PLANS_REL, SESSION_PLANS_REL]) {
+    const dir = path.join(primary, rel);
+    let names = [];
+    try {
+      const dirStat = fs.lstatSync(dir);
+      if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) continue;
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.endsWith('.md') || name.startsWith('_') || name === 'README.md') continue;
+      const src = path.join(dir, name);
+      let srcStat = null;
+      try {
+        srcStat = fs.lstatSync(src);
+      } catch {
+        continue;
+      }
+      if (!srcStat.isFile()) continue;
+      const destFile = path.join(dest, rel, name);
+      try {
+        if (fs.lstatSync(destFile).isFile()) continue;
+      } catch {
+        // The new checkout does not have this plan.
+      }
+      const target = path.join(storeRoot, 'plans', name);
+      try {
+        if (fs.lstatSync(target).isFile()) continue;
+      } catch {
+        // Not in the project store yet.
+      }
+      const text = readFileNoFollow(src, { root: primary });
+      if (text == null) continue;
+      writeFileContained(storeRoot, path.join('plans', name), text);
+    }
+  }
 }
 
 function resolveStartPoint(workspace, from) {
@@ -147,6 +199,7 @@ export function addIsolatedWorktree({ workspace, slug, from, dryRun = false } = 
       }
     });
     if (listedHit || isLinkedWorktree(dest)) {
+      carryCheckoutPlans(root, dest);
       return { path: dest, branch: currentBranch(dest) || branch, created: false, isolated: true };
     }
     throw usage(`worktree: ${dest} exists and is not a worktree`);
@@ -162,6 +215,7 @@ export function addIsolatedWorktree({ workspace, slug, from, dryRun = false } = 
       exit: 1,
     });
   }
+  carryCheckoutPlans(root, dest);
   return { path: dest, branch, created: true, isolated: true };
 }
 

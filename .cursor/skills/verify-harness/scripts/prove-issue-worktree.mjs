@@ -123,8 +123,8 @@ try {
 
   const srcGithub = path.join(ctx.ws, '.github');
   if (fs.existsSync(srcGithub)) fs.cpSync(srcGithub, path.join(tree.path, '.github'), { recursive: true });
-  const isolatedPlan = writePlan(tree.path);
-  const isolated = runHarness(['gate', '--phase', 'implement', '--plan', isolatedPlan], {
+  assertEqual(fs.existsSync(path.join(tree.path, plan)), false, 'uncommitted plan is absent from the new checkout');
+  const isolated = runHarness(['gate', '--phase', 'implement', '--plan', plan], {
     ...ctx,
     ws: tree.path,
   });

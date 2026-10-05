@@ -349,6 +349,22 @@ test('plan-new hashes the prepared spec and ADR', () => {
   }
 });
 
+test('exclusive prepare publish does not replace a spec that already exists', async () => {
+  const { writeFileContainedExclusive } = await import('../lib/fs-safe.mjs');
+  const { prepareIntentSources } = await import('../lib/prepare.mjs');
+  const ws = prepareWorkspace();
+  const human = '# human spec\n';
+  fs.mkdirSync(path.join(ws, 'docs', 'specs'), { recursive: true });
+  const published = writeFileContainedExclusive(ws, SPEC_REL, 'template\n');
+  assert.equal(typeof published, 'string');
+  fs.writeFileSync(published, human);
+  assert.equal(writeFileContainedExclusive(ws, SPEC_REL, 'template\n'), null);
+  assert.equal(fs.readFileSync(published, 'utf8'), human);
+  const result = prepareIntentSources({ workspace: ws });
+  assert.equal(result.files.find((file) => file.path === SPEC_REL).status, 'skipped');
+  assert.equal(fs.readFileSync(path.join(ws, SPEC_REL), 'utf8'), human);
+});
+
 test('init-repo points at prepare when the repo has no intent sources', () => {
   const ws = prepareWorkspace();
   const result = runHarness(['init-repo', '--workspace', ws], { env: GIT_ENV });

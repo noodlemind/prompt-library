@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createStyle, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
-import { assertNoSymlinkAncestors, writeFileContained } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, writeFileContainedExclusive } from './fs-safe.mjs';
 
 export const PREPARE_FILES = Object.freeze([
   { rel: 'docs/specs/overview.md', kind: 'spec' },
@@ -177,9 +177,16 @@ export function prepareIntentSources({ workspace, dryRun = false }) {
     }
     let written = null;
     try {
-      written = writeFileContained(workspace, item.rel, templateFor(item.kind, observed));
+      written = writeFileContainedExclusive(workspace, item.rel, templateFor(item.kind, observed));
     } catch {
       written = null;
+    }
+    if (!written) {
+      const landed = occupant(full);
+      if (landed && (landed.isFile() || landed.isSymbolicLink())) {
+        files.push(fileEntry(item, 'skipped'));
+        continue;
+      }
     }
     files.push(fileEntry(item, written ? 'created' : 'refused'));
   }

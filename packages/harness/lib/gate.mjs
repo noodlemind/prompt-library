@@ -190,7 +190,8 @@ export function runGate({ workspace, flags, query = '' }) {
       });
       if (isolation.blocked) pass = false;
 
-      const discovered = discoverIntentSources(workspace);
+      const sourceQuery = query || (typeof plan.fm?.intent === 'string' ? plan.fm.intent : '');
+      const discovered = discoverIntentSources(workspace, { query: sourceQuery });
       const intentCheck = intentSourcesCheck(plan, discovered);
       checks.push(intentCheck);
       if (!intentCheck.pass) pass = false;

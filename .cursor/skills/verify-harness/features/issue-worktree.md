@@ -24,7 +24,7 @@ Preconditions:
 
 - **Block.** On the default branch of the primary checkout, run `harness gate --phase implement --plan <path> --workspace <ws> --json`. Exit code is `1` and `C-worktree` has `pass: false`.
 - **Add.** Run `harness worktree --slug checkout-retry --workspace <ws> --json`. `created` is `true`, `branch` is `harness/checkout-retry`, `isolated` is `true`, and `<path>/.git` is a file.
-- **Accept.** Copy `.github` into the worktree if needed. Run the same gate with `--workspace` set to the worktree path. Exit code is `0` and `C-worktree` has `pass: true`.
+- **Accept.** Copy `.github` into the worktree if needed. The uncommitted plan is not in the new checkout. Run the same gate with the original `--plan` and `--workspace` set to the worktree path. Exit code is `0` and `C-worktree` has `pass: true`.
 - **Skip.** On a fresh primary checkout, set `CI=true` and rerun the gate. Exit code is `0`.
 - **Proof.** Run `node .cursor/skills/verify-harness/scripts/prove-issue-worktree.mjs`. Exit `0`. The evidence JSON records the blocked gate, the created worktree, and the accepted gate.
 
@@ -33,4 +33,5 @@ Preconditions:
 - Without `origin/HEAD`, `C-worktree` does not block. Set `refs/remotes/origin/<branch>` and `refs/remotes/origin/HEAD` in the fixture.
 - Orient JSON must not include the absolute worktree path under `gitContext.worktree`.
 - `.worktrees/` is gitignored. The linked checkout is still a real git worktree.
+- The proof leaves the plan uncommitted under `docs/plans` and gates that same path from the worktree. Harness copies it into the project store. Do not rewrite the plan inside the new checkout.
 - Do not prove this feature by editing files on `main` in the operator clone.

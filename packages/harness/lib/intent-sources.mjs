@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
 
 const CAP = 12;
 
@@ -67,11 +67,18 @@ export function sourceHash(value) {
 
 export function hashIntentFile(workspace, rel) {
   if (!workspace || !rel) return null;
+  const full = assertNoSymlinkAncestors(workspace, rel);
+  if (!full) return null;
+  let stat = null;
   try {
-    return crypto.createHash('sha256').update(fs.readFileSync(path.join(workspace, rel))).digest('hex');
+    stat = fs.lstatSync(full);
   } catch {
     return null;
   }
+  if (!stat.isFile()) return null;
+  const text = readFileNoFollow(full, { root: workspace });
+  if (text == null) return null;
+  return crypto.createHash('sha256').update(text).digest('hex');
 }
 
 export function lockIntentSources(workspace, entries, { rehash = true } = {}) {
@@ -83,13 +90,14 @@ export function lockIntentSources(workspace, entries, { rehash = true } = {}) {
     seen.add(rel);
     const kept = rehash ? null : sourceHash(entry);
     const sha256 = kept || hashIntentFile(workspace, rel);
-    out.push(sha256 ? { path: rel, sha256 } : { path: rel });
+    if (!sha256) throw Object.assign(new Error(`intent source unreadable: ${rel}`), { code: 'E_INTENT_SOURCE' });
+    out.push({ path: rel, sha256 });
   }
   return out;
 }
 
-export function bindLockedIntentSources(workspace, entries) {
-  return lockIntentSources(workspace, [...(entries || []), ...discoverIntentSources(workspace)], { rehash: true });
+export function bindLockedIntentSources(workspace, entries, { query = '' } = {}) {
+  return lockIntentSources(workspace, [...(entries || []), ...discoverIntentSources(workspace, { query })], { rehash: true });
 }
 
 export function listedIntentSources(plan) {

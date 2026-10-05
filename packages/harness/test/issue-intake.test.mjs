@@ -225,17 +225,18 @@ test('plan-update --activity does not rehash locked intent sources after the spe
   assert.equal(fm.intent_sources[0].sha256, SPEC_SHA);
 });
 
-test('plan-update --intent-source appends a path', () => {
+test('plan-update --intent-source appends a readable path and its hash', () => {
   const ws = planWorkspace();
+  addTracked(ws, 'docs/specs/checkout.md', SPEC_BODY);
   const plan = writeVersionedPlan(ws);
   const result = runHarness(
     ['plan-update', '--plan', plan, '--intent-source', 'docs/specs/checkout.md', '--workspace', ws, '--json'],
     { env: GIT_ENV }
   );
   assert.equal(result.status, 0, result.stderr);
-  const text = fs.readFileSync(path.join(ws, plan), 'utf8');
-  assert.match(text, /intent_sources:/);
-  assert.match(text, /docs\/specs\/checkout\.md/);
+  const fm = parseFrontmatter(fs.readFileSync(path.join(ws, plan), 'utf8'));
+  assert.equal(fm.intent_sources[0].path, 'docs/specs/checkout.md');
+  assert.equal(fm.intent_sources[0].sha256, SPEC_SHA);
 });
 
 test('implement gate fails on the default branch of the primary checkout', () => {
@@ -330,4 +331,151 @@ test('worktree --slug rejects a bad slug', () => {
   const ws = planWorkspace();
   const result = runHarness(['worktree', '--slug', 'Not A Slug', '--workspace', ws, '--json'], { env: GIT_ENV });
   assert.equal(result.status, 2);
+});
+
+function addWorktree(ws, slug) {
+  const created = runHarness(['worktree', '--slug', slug, '--workspace', ws, '--json'], { env: GIT_ENV });
+  assert.equal(created.status, 0, created.stderr);
+  const body = JSON.parse(created.stdout);
+  const github = path.join(ws, '.github');
+  if (fs.existsSync(github)) fs.cpSync(github, path.join(body.path, '.github'), { recursive: true });
+  return body;
+}
+
+test('worktree appends .worktrees to a regular .gitignore and does not follow a symlink', () => {
+  const ws = planWorkspace();
+  withOrigin(ws);
+  fs.writeFileSync(path.join(ws, '.gitignore'), 'node_modules');
+  const created = addWorktree(ws, 'ignore-regular');
+  assert.equal(fs.readFileSync(path.join(ws, '.gitignore'), 'utf8'), 'node_modules\n.worktrees\n');
+  git(ws, ['worktree', 'remove', '--force', created.path]);
+
+  const outsideDir = tempDir('outside-ignore-');
+  const outside = path.join(outsideDir, 'secret-ignore');
+  fs.writeFileSync(outside, 'keep\n');
+  const linked = planWorkspace();
+  withOrigin(linked);
+  fs.symlinkSync(outside, path.join(linked, '.gitignore'));
+  const escaped = addWorktree(linked, 'ignore-symlink');
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'keep\n');
+  assert.equal(fs.lstatSync(path.join(linked, '.gitignore')).isSymbolicLink(), true);
+  git(linked, ['worktree', 'remove', '--force', escaped.path]);
+});
+
+test('an uncommitted docs/plans file stays addressable from the new worktree', () => {
+  const ws = planWorkspace();
+  withOrigin(ws);
+  const rel = writeVersionedPlan(ws, { extraFrontmatter: 'intent_sources: []\n' });
+  const tree = addWorktree(ws, 'carry-docs');
+  assert.equal(fs.existsSync(path.join(tree.path, rel)), false);
+  const isolated = runHarness(['gate', '--phase', 'implement', '--plan', rel, '--workspace', tree.path, '--json'], { env: GIT_ENV });
+  const body = JSON.parse(isolated.stdout);
+  assert.ok(body.plan, isolated.stderr + isolated.stdout);
+  assert.equal(path.basename(body.plan.path), path.basename(rel));
+  assert.equal((body.checks || []).find((c) => c.id === 'C-worktree')?.pass, true);
+  assert.equal(isolated.status, 0, isolated.stderr + isolated.stdout);
+  git(ws, ['worktree', 'remove', '--force', tree.path]);
+});
+
+test('a gitignored .harness/plans file stays addressable from the new worktree', () => {
+  const ws = planWorkspace();
+  withOrigin(ws);
+  fs.mkdirSync(path.join(ws, '.harness', 'plans'), { recursive: true });
+  fs.writeFileSync(path.join(ws, '.gitignore'), '.harness/\n');
+  const docsRel = writeVersionedPlan(ws, {
+    name: '2026-10-05-feat-session-plan.md',
+    extraFrontmatter: 'intent_sources: []\n',
+  });
+  const rel = '.harness/plans/2026-10-05-feat-session-plan.md';
+  fs.renameSync(path.join(ws, docsRel), path.join(ws, rel));
+  const tree = addWorktree(ws, 'carry-session');
+  assert.equal(fs.existsSync(path.join(tree.path, rel)), false);
+  const isolated = runHarness(['gate', '--phase', 'implement', '--plan', rel, '--workspace', tree.path, '--json'], { env: GIT_ENV });
+  const body = JSON.parse(isolated.stdout);
+  assert.ok(body.plan, isolated.stderr + isolated.stdout);
+  assert.equal(path.basename(body.plan.path), '2026-10-05-feat-session-plan.md');
+  assert.equal(isolated.status, 0, isolated.stderr + isolated.stdout);
+  git(ws, ['worktree', 'remove', '--force', tree.path]);
+});
+
+test('plan-new without an origin remote stays visible from the linked worktree', () => {
+  const ws = planWorkspace();
+  const createdPlan = runHarness(
+    ['plan-new', '--type', 'feat', '--slug', 'store-plan', '--intent', 'Keep the plan in the project store', '--date', '2026-10-05', '--verification-check', 'unit-tests', '--workspace', ws, '--json'],
+    { env: GIT_ENV },
+  );
+  assert.equal(createdPlan.status, 0, createdPlan.stderr + createdPlan.stdout);
+  const planPath = JSON.parse(createdPlan.stdout).path;
+  const tree = addWorktree(ws, 'store-plan');
+  const isolated = runHarness(['gate', '--phase', 'implement', '--plan', planPath, '--workspace', tree.path, '--json'], { env: GIT_ENV });
+  const body = JSON.parse(isolated.stdout);
+  assert.ok(body.plan, isolated.stderr + isolated.stdout);
+  assert.equal(path.basename(body.plan.path), path.basename(planPath));
+  git(ws, ['worktree', 'remove', '--force', tree.path]);
+});
+
+test('orient, plan-new, and gate cap intent sources with the same query ranking', async () => {
+  const { discoverIntentSources } = await import('../lib/intent-sources.mjs');
+  const ws = planWorkspace();
+  for (let i = 1; i <= 12; i += 1) {
+    addTracked(ws, `docs/specs/n${String(i).padStart(2, '0')}.md`, `# n${i}\n`);
+  }
+  addTracked(ws, 'docs/specs/zebra-billing.md', '# Zebra billing\n');
+  const query = 'zebra billing';
+  const ranked = discoverIntentSources(ws, { query }).map((s) => s.path).sort();
+  const alpha = discoverIntentSources(ws).map((s) => s.path).sort();
+  assert.ok(ranked.includes('docs/specs/zebra-billing.md'));
+  assert.equal(alpha.includes('docs/specs/zebra-billing.md'), false);
+
+  const orient = runHarness(['orient', '--query', query, '--workspace', ws, '--json'], { env: GIT_ENV });
+  assert.equal(orient.status, 0, orient.stderr);
+  const orientPaths = JSON.parse(orient.stdout).intentSources.map((s) => s.path).sort();
+  assert.deepEqual(orientPaths, ranked);
+
+  const created = runHarness(
+    ['plan-new', '--type', 'feat', '--slug', 'zebra-billing', '--intent', query, '--date', '2026-10-05', '--verification-check', 'unit-tests', '--workspace', ws, '--json'],
+    { env: GIT_ENV },
+  );
+  assert.equal(created.status, 0, created.stderr + created.stdout);
+  const planPath = JSON.parse(created.stdout).path;
+  const locked = parseFrontmatter(fs.readFileSync(planPath, 'utf8')).intent_sources.map((s) => s.path).sort();
+  assert.deepEqual(locked, ranked);
+
+  const gate = runHarness(['gate', '--phase', 'implement', '--plan', planPath, '--workspace', ws, '--json'], { env: GIT_ENV });
+  const check = JSON.parse(gate.stdout).checks.find((c) => c.id === 'C-intent-sources');
+  assert.equal(check?.pass, true, check?.message || gate.stderr);
+});
+
+test('plan-new does not hash a spec symlink that leaves the checkout', async () => {
+  const { hashIntentFile } = await import('../lib/intent-sources.mjs');
+  const ws = planWorkspace();
+  const secret = 'secret token value\n';
+  const secretHash = crypto.createHash('sha256').update(secret).digest('hex');
+  const outside = path.join(tempDir('secret-spec-'), 'local.md');
+  fs.writeFileSync(outside, secret);
+  fs.mkdirSync(path.join(ws, 'docs', 'specs'), { recursive: true });
+  fs.symlinkSync(outside, path.join(ws, 'docs', 'specs', 'local.md'));
+  assert.equal(git(ws, ['add', '--', 'docs/specs/local.md']).status, 0);
+  assert.equal(git(ws, ['commit', '-qm', 'link spec']).status, 0);
+  assert.equal(hashIntentFile(ws, 'docs/specs/local.md'), null);
+  const created = runHarness(
+    ['plan-new', '--type', 'feat', '--slug', 'secret-spec', '--intent', 'Do not hash the symlink', '--date', '2026-10-05', '--verification-check', 'unit-tests', '--workspace', ws, '--json'],
+    { env: GIT_ENV },
+  );
+  assert.notEqual(created.status, 0);
+  assert.match(`${created.stderr}\n${created.stdout}`, /docs\/specs\/local\.md/);
+  assert.equal(`${created.stderr}\n${created.stdout}`.includes(secretHash), false);
+  assert.equal(`${created.stderr}\n${created.stdout}`.includes(secret.trim()), false);
+});
+
+test('plan-new fails when a discovered spec is missing on disk', () => {
+  const ws = planWorkspace();
+  addTracked(ws, 'docs/specs/gone.md', '# gone\n');
+  fs.rmSync(path.join(ws, 'docs', 'specs', 'gone.md'));
+  const created = runHarness(
+    ['plan-new', '--type', 'feat', '--slug', 'gone-spec', '--intent', 'Require a readable spec', '--date', '2026-10-05', '--verification-check', 'unit-tests', '--workspace', ws, '--json'],
+    { env: GIT_ENV },
+  );
+  assert.notEqual(created.status, 0);
+  assert.match(`${created.stderr}\n${created.stdout}`, /intent source unreadable: docs\/specs\/gone\.md/);
 });
