@@ -29,6 +29,7 @@ installation or upgrade. `harness install --configure-vscode` and
 
 ```bash
 harness init-repo    # product repo stubs: plans, checks, policy
+harness prepare      # starter docs/specs/overview.md and docs/adr/0000-architecture.md
 harness migrate      # move gitignored docs/plans and docs/solutions out of the product tree
 ```
 
@@ -67,6 +68,7 @@ Same registry tools; autonomous does **not** require plans or compound. It is an
 | `doctor` | Health; `--host vscode` runs hook probes |
 | `status` / `uninstall` | Version/lock; remove tracked files only |
 | `init-repo` | Plan/session paths + checks/policy stubs; migrates leftover gitignored `docs/` artifacts |
+| `prepare` | Starter spec and ADR when those paths are missing; skips files that already exist |
 | `migrate` | Move gitignored `docs/plans` and `docs/solutions` to `.harness/plans` and `~/.harness/projects/<repo-id>/` |
 
 ### Session Ledger (`tui`)

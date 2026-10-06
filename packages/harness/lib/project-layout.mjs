@@ -176,7 +176,7 @@ export function normalizePlanRel(workspace, planPath, { home } = {}) {
   const full = path.resolve(root, planPath);
   const rel = path.relative(root, full).replace(/\\/g, '/');
   if (!rel.startsWith('..') && !path.isAbsolute(rel) && rel.endsWith('.md') && isPlanRel(rel) && !rel.startsWith(`${EXTERNAL_PLANS_REL}/`)) {
-    return rel;
+    if (fileExists(workspace, rel)) return rel;
   }
   const base = path.posix.basename((rel.endsWith('.md') ? rel : `${path.posix.basename(planPath)}.md`).replace(/\\/g, '/'));
   if (!base.endsWith('.md')) return null;

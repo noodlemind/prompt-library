@@ -31,9 +31,17 @@ function ctx() {
 }
 
 function harness(c, args) {
+  // This fixture's origin/HEAD is the branch itself, so the implement gate treats it as the primary checkout.
   return runHarness(
     [...args, '--workspace', c.ws, '--copilot-home', c.home, '--harness-home', c.harnessHome, '--json', '--no-events'],
-    { env: { HARNESS_HOME: c.harnessHome, COPILOT_HOME: c.home, HARNESS_NO_EVENTS: '1' } },
+    {
+      env: {
+        HARNESS_HOME: c.harnessHome,
+        COPILOT_HOME: c.home,
+        HARNESS_NO_EVENTS: '1',
+        HARNESS_ALLOW_INPLACE: '1',
+      },
+    },
   );
 }
 
@@ -106,6 +114,7 @@ function stop(c, enforcement) {
       COPILOT_HOME: c.home,
       HARNESS_ENFORCEMENT: enforcement,
       HARNESS_NO_EVENTS: '1',
+      HARNESS_ALLOW_INPLACE: '1',
     },
   });
 }

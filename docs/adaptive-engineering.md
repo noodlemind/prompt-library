@@ -15,13 +15,22 @@ npm install -g harness
 harness install --configure-vscode
 ```
 
+On an existing repository that has no spec or ADR yet, seed the workspace and the starter docs:
+
+```bash
+harness init-repo
+harness prepare
+```
+
+`harness prepare` writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` when those paths are missing. Edit them. A later run leaves an existing file alone. Orient lists them as `intentSources`. Plan lock hashes them. If `docs/` is gitignored, prepare writes nothing and orient says to un-ignore those paths. Prepare does not rewrite a spec from the code.
+
 Then select `@engineer` in Copilot Chat.
 
 ## How a task runs
 
 Task modes are Answer, Investigate, Deliver, and Review. The Engineer owns the decision. The Harness owns the gate.
 
-Deliver is host-first. The Engineer works in the editor. Kernel-always means orient, plan lock, gate, and verify run in the Harness even when no extra agent is loaded. Agent-optional means a specialist is consulted only when the task needs that judgment. Benchmark-test-only means the unattended agent loop is for a measured eval, not for normal delivery.
+Deliver is host-first. The Engineer works in the editor. Kernel-always means orient, plan lock, gate, and verify run in the Harness even when no extra agent is loaded. Orient names in-repo specs as `intentSources` and whether the checkout is isolated. The implement gate fails when those specs are missing from plan `intent_sources`, or when issue work is still on the default branch of the primary checkout. `harness worktree --slug` opens a linked worktree. A plan that exists only as an uncommitted `docs/plans` file or a gitignored `.harness/plans` file is copied into the project store. A later worktree run replaces that copy when the checkout file is newer and no plan-update holds the file, and leaves the store copy when the store file is newer. A worktree with no `origin` remote shares that store, so the same `--plan` still resolves. A checkout created with `git init --separate-git-dir` keeps its own store. `.gitignore` is not followed when it is a symlink. Orient and `plan-new` keep the same 12 intent sources for one query. The implement gate ranks with the plan `intent`, so a gate query does not change which sources pass. Plan lock records `{ path, sha256 }` of the file bytes for each readable in-checkout `intent_sources` file on that tip. A symlink or a missing file fails the lock instead of hashing something outside the checkout or saving a path with no hash. `harness prepare` publishes a missing starter with an exclusive create, so a file that appears during the write is left as it is. A later edit to those files does not fail the implement gate. If shipped behavior contradicts a locked spec, update that spec in the same PR or a stacked PR. Do not rewrite the spec from the code in silence. Ambiguous specs become `needs-info` questions, not guesses. Agent-optional means a specialist is consulted only when the task needs that judgment. Benchmark-test-only means the unattended agent loop is for a measured eval, not for normal delivery.
 
 The runtime has four postures. Standalone is the Engineer with the Harness and no acquired specialist. Degraded is a missing check or index, reported rather than invented. Governed is a learning that a person has confirmed. Bounded delegation means a specialist receives a narrow question and does not take over the delivery.
 
@@ -47,6 +56,7 @@ A delivery plan uses `plan_schema: 1`. Its verification block names checks. Its 
 
 ```yaml
 plan_schema: 1
+intent_sources: []
 verification:
   required: []
   criteria: {}

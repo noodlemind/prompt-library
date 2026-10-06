@@ -75,6 +75,7 @@ export function parseFlags(argv) {
     semantic: false,
     includePlans: false,
     strictIntent: false,
+    allowInplace: false,
     noEvents: false,
     plan: null,
     base: null,
@@ -132,6 +133,7 @@ export function parseFlags(argv) {
     else if (a === '--semantic') flags.semantic = true;
     else if (a === '--include-plans') flags.includePlans = true;
     else if (a === '--strict-intent') flags.strictIntent = true;
+    else if (a === '--allow-inplace') flags.allowInplace = true;
     else if (a === '--no-events') flags.noEvents = true;
     else if (a === '--summary') flags.summary = true;
     else if (a === '--failures') flags.failures = true;
