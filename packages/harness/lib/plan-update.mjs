@@ -5,6 +5,7 @@ import { createStyle, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { externalPlansDir, planReadDirs } from './project-layout.mjs';
 import { harnessGlobalHome } from './paths.mjs';
+import { bindLockedIntentSources, lockIntentSources, sourcePath } from './intent-sources.mjs';
 
 const PLAN_STATUSES = ['open', 'planned', 'in-progress', 'review', 'done', 'blocked-capability', 'needs-info'];
 const REVIEW_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -75,6 +76,15 @@ function releasePlanLock(lockDir) {
   try { fs.rmdirSync(lockDir); } catch { /* the lock is already gone */ }
 }
 
+export function withPlanUpdateLock(full, fn) {
+  const lockDir = acquirePlanLock(full);
+  try {
+    return fn();
+  } finally {
+    releasePlanLock(lockDir);
+  }
+}
+
 /**
  * Resolve `--plan` to a real plan file inside a plan root.
  * A bare name may match one plan. An explicit path is used as given.
@@ -116,6 +126,18 @@ function appendLines(current, incoming, flag) {
   for (const item of incoming) {
     const text = oneLine(item, flag);
     if (!next.includes(text)) next.push(text);
+  }
+  return next;
+}
+
+function appendIntentSources(current, incoming) {
+  const next = Array.isArray(current) ? current.slice() : [];
+  const seen = new Set(next.map(sourcePath).filter(Boolean));
+  for (const item of incoming) {
+    const rel = oneLine(item, '--intent-source').replace(/\\/g, '/');
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    next.push(rel);
   }
   return next;
 }
@@ -192,6 +214,7 @@ export function applyPlanUpdate(text, change) {
   }
   if (change.lock) fm.plan_lock = true;
   if (change.intent !== undefined) fm.intent = oneLine(change.intent, '--intent');
+  if (change.intentSources?.length) fm.intent_sources = appendIntentSources(fm.intent_sources, change.intentSources);
   if (change.expectedOutputs?.length) fm.expected_outputs = appendLines(fm.expected_outputs, change.expectedOutputs, '--expected-output');
   if (change.successCriteria?.length) fm.success_criteria = appendLines(fm.success_criteria, change.successCriteria, '--success-criterion');
   if (change.verificationChecks?.length) fm.verification = appendChecks(fm.verification, change.verificationChecks);
@@ -250,6 +273,30 @@ export function applyPlanUpdate(text, change) {
   return `---\n${YAML.stringify(fm, { lineWidth: 0 })}---\n${body}`;
 }
 
+function stampLockedIntentSources(workspace, text, { rehash, mergeDiscovered }) {
+  const match = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return text;
+  let fm;
+  try {
+    fm = YAML.parse(match[1], { maxAliasCount: 50 });
+  } catch {
+    return text;
+  }
+  if (!fm || typeof fm !== 'object' || Array.isArray(fm) || !fm.plan_lock) return text;
+  const listed = Array.isArray(fm.intent_sources) ? fm.intent_sources : [];
+  const locked = mergeDiscovered
+    ? bindLockedIntentSources(workspace, listed, { query: typeof fm.intent === 'string' ? fm.intent : '' })
+    : lockIntentSources(workspace, listed, { rehash });
+  if (!locked.length) {
+    if (!listed.length) return text;
+    delete fm.intent_sources;
+  } else {
+    fm.intent_sources = locked;
+  }
+  const body = text.slice(match[0].length).replace(/^(?:\r?\n)/, '');
+  return `---\n${YAML.stringify(fm, { lineWidth: 0 })}---\n${body}`;
+}
+
 function take(scan, index) {
   const value = scan[index + 1];
   if (value === undefined) throw usage(`plan-update: ${scan[index]} requires a value`);
@@ -270,6 +317,7 @@ export async function cmdPlanUpdate(argv) {
     successCriteria: [],
     verificationChecks: [],
     gapFulfillment: [],
+    intentSources: [],
   };
 
   for (let i = 0; i < scan.length; i++) {
@@ -297,6 +345,10 @@ export async function cmdPlanUpdate(argv) {
       change.lock = true;
     } else if (token === '--intent') {
       ({ value: change.intent, index: i } = take(scan, i));
+    } else if (token === '--intent-source') {
+      const next = take(scan, i);
+      change.intentSources.push(next.value);
+      i = next.index;
     } else if (token === '--expected-output') {
       const next = take(scan, i);
       change.expectedOutputs.push(next.value);
@@ -331,6 +383,7 @@ export async function cmdPlanUpdate(argv) {
   const hasChange = change.status !== undefined
     || change.lock
     || change.intent !== undefined
+    || change.intentSources.length > 0
     || change.activity.length > 0
     || change.completed.length > 0
     || change.expectedOutputs.length > 0
@@ -352,6 +405,12 @@ export async function cmdPlanUpdate(argv) {
   try {
     original = fs.readFileSync(full, 'utf8');
     next = applyPlanUpdate(original, change);
+    if (change.lock || change.intentSources.length) {
+      next = stampLockedIntentSources(workspace, next, {
+        rehash: Boolean(change.lock),
+        mergeDiscovered: Boolean(change.lock),
+      });
+    }
     if (!dryRun && next !== original) {
       const mode = fs.statSync(full).mode & 0o777;
       const tmp = path.join(path.dirname(full), `.${path.basename(full)}.${process.pid}.tmp`);

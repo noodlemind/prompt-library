@@ -15,6 +15,7 @@ import { loadPlan } from './plan-parse.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
 import { emptySnapshot, routeWorkspace } from './route.mjs';
 import { shortPlanDocument } from './plan-record.mjs';
+import { bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
@@ -80,6 +81,7 @@ export function buildPlanSkeleton({
   routing = null,
   domains = [],
   playbook = null,
+  intentSources = [],
 } = {}) {
   scalar(slug, 'slug', { required: true });
   scalar(title, 'title');
@@ -128,6 +130,7 @@ export function buildPlanSkeleton({
     ...(routing ? { routing } : {}),
     ...(domains?.length ? { domains } : {}),
     ...(playbook ? { playbook } : {}),
+    ...(intentSources?.length ? { intent_sources: intentSources } : {}),
     capability_gaps: gap
       ? [{ id: gap.id, class: 'hard', fulfillment: 'proposed', primitive: gap.primitive }]
       : [],
@@ -189,7 +192,7 @@ ${impactedLines}
 
 /** CLI: parse the plan-new flags, write the skeleton, print the path. */
 export async function cmdPlanNew(argv) {
-  const opts = { impacted: [], criteria: [], acceptance: [], constraints: [] };
+  const opts = { impacted: [], criteria: [], acceptance: [], constraints: [], intentSources: [] };
   let workspace = process.cwd();
   let json = false;
   let dryRun = false;
@@ -220,6 +223,7 @@ export async function cmdPlanNew(argv) {
     else if (a === '--verification-check') opts.check = next();
     else if (a === '--impacted') opts.impacted.push(...String(next() || '').split(',').map((s) => s.trim()).filter(Boolean));
     else if (a === '--criteria') opts.criteria.push(String(next() || '').trim());
+    else if (a === '--intent-source') opts.intentSources.push(String(next() || '').trim());
     else if (a === '--gap') {
       const raw = String(next() || '');
       const idx = raw.indexOf(':');
@@ -311,6 +315,7 @@ export async function cmdPlanNew(argv) {
   opts.domains = prepared.domains;
   opts.playbook = prepared.playbook;
   opts.routing = prepared.routing;
+  opts.intentSources = bindLockedIntentSources(workspace, opts.intentSources, { query: opts.intent || '' });
 
   const { path: rel, content } = buildPlanSkeleton(opts);
   const full = path.isAbsolute(rel) ? rel : path.join(workspace, rel);
@@ -390,6 +395,11 @@ async function relockPlan({ workspace, from, dryRun, toStdout, json, classificat
     ...(prepared.domains.length ? { domains: prepared.domains } : {}),
     ...(prepared.playbook ? { playbook: prepared.playbook } : {}),
   };
+  const lockedSources = bindLockedIntentSources(workspace, frontmatter.intent_sources, {
+    query: typeof frontmatter.intent === 'string' ? frontmatter.intent : '',
+  });
+  if (lockedSources.length) frontmatter.intent_sources = lockedSources;
+  else delete frontmatter.intent_sources;
   const content = original.replace(/^---\r?\n[\s\S]*?\r?\n---/, `---\n${YAML.stringify(frontmatter)}---`);
   if (toStdout) {
     process.stdout.write(content);

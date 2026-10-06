@@ -26,10 +26,36 @@ function gitOut(cwd, args) {
   return res.status === 0 ? res.stdout.trim() : null;
 }
 
-export function localRepoId(workspace) {
-  let real = workspace;
+function resolvedGitPath(workspace, raw) {
+  const abs = path.resolve(workspace, raw);
   try {
-    real = fs.realpathSync(workspace);
+    return fs.realpathSync(abs);
+  } catch {
+    return abs;
+  }
+}
+
+export function linkedPrimaryCheckout(workspace) {
+  try {
+    if (!fs.statSync(path.join(workspace, '.git')).isFile()) return null;
+  } catch {
+    return null;
+  }
+  const gitDir = gitOut(workspace, ['rev-parse', '--git-dir']);
+  const common = gitOut(workspace, ['rev-parse', '--git-common-dir']);
+  if (!gitDir || !common) return null;
+  if (resolvedGitPath(workspace, gitDir) === resolvedGitPath(workspace, common)) return null;
+  const listed = gitOut(workspace, ['worktree', 'list', '--porcelain']);
+  const first = listed?.split('\n').find((line) => line.startsWith('worktree '));
+  if (first) return first.slice('worktree '.length);
+  return path.resolve(resolvedGitPath(workspace, common), '..');
+}
+
+export function localRepoId(workspace) {
+  const basis = linkedPrimaryCheckout(workspace) || workspace;
+  let real = basis;
+  try {
+    real = fs.realpathSync(basis);
   } catch {
     // keep the given path
   }

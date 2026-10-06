@@ -41,31 +41,19 @@ The runtime has four postures. Standalone is the Engineer and the Harness, with 
 
 Skill-first means a repeated procedure becomes a skill before it becomes another agent. The Engineer can start with no domain skill and no specialist. It acquires them when a task shows they are needed. The install does not add them for you.
 
-## Main, and pull request 76
-
-Main already has the modes, plan lock, the implement gate, named-check verify, and compound after a pass.
-
-[Pull request 76](https://github.com/noodlemind/prompt-library/pull/76) adds spec hashes, `harness prepare`, and `harness worktree`. Main does not have those three yet. This page calls that set Harness Adaptive Engineering. See also pull request 76.
-
-| Behavior | Main | Pull request 76 |
-| --- | --- | --- |
-| Plan lock | `plan_lock: true`, the intent fields, and `## Intent Contract` | Also stores `{ path, sha256 }` of the file bytes for each readable `intent_sources` path in that checkout |
-| Checkout | You create the branch. The structural index and the knowledge store already include the worktree id. There is no `harness worktree` command. | `harness worktree --slug` opens a linked worktree from `origin/HEAD`. The implement gate fails when issue work is still on the default branch of the primary checkout. |
-| No spec yet | You write the spec. Lock still proceeds. | `harness prepare` writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` when those paths are missing. A second run leaves an existing file alone. A gitignored `docs/` directory is left unwritten. |
-
 ## A spec already in the repo
 
 Product owners commit the spec. Business owners commit the business intent in that file, or in a sibling file under the same directory. The chat message selects the work.
 
-On main, a committed spec is an ordinary tracked file. Plan lock stores `intent`, `success_criteria`, `expected_outputs`, and `## Intent Contract`. The implement gate checks those fields. It does not hash the spec.
-
-On pull request 76, orient, `plan-new`, and the implement gate share one ranked list of at most 12 files. `git ls-files` supplies the candidates. A file joins the list when its path is under `spec/`, `specs/`, `adr/`, `adrs/`, `decisions/`, `rfc/`, `rfcs/`, `intent/`, `intents/`, or `issues/`. A file also joins when its name ends in `.spec.md`, `.adr.md`, `.rfc.md`, or `.intent.md`. Rank counts query words that appear in the path. The file body is not scored. The gate ranks with the plan's `intent` text. A different gate prompt does not swap the list. The Engineer reads the listed files and records the paths on `intent_sources`.
+Orient, `plan-new`, and the implement gate share one ranked list of at most 12 files. `git ls-files` supplies the candidates. A file joins the list when its path is under `spec/`, `specs/`, `adr/`, `adrs/`, `decisions/`, `rfc/`, `rfcs/`, `intent/`, `intents/`, or `issues/`. A file also joins when its name ends in `.spec.md`, `.adr.md`, `.rfc.md`, or `.intent.md`. Rank counts query words that appear in the path. The file body is not scored. The gate ranks with the plan's `intent` text. A different gate prompt does not swap the list.
 
 A SpecKit spec committed at `specs/<feature>/spec.md` is on that list because it sits under `specs/`. `plan.md`, `tasks.md`, and other files in that feature directory match the same path rule. `.specify/memory/constitution.md` is outside those paths, so the lock does not hash it. The path rule is the whole match.
 
-Plan lock stores `{ path, sha256 }` of the file bytes for each selected source. The implement gate fails until `intent_sources` lists those paths. The check compares paths. A later edit to the spec file does not fail the gate. When the code and the spec disagree, the product owner updates the spec in the same pull request or a stacked pull request.
+The Engineer reads the listed files. Plan lock stores `{ path, sha256 }` of the file bytes on `intent_sources`. The implement gate fails until those paths are listed. The check compares paths. A later edit to the spec file does not fail the gate. When the code and the spec disagree, the product owner updates the spec in the same pull request or a stacked pull request. An ambiguous spec is status `needs-info`.
 
-`harness prepare` writes `docs/specs/overview.md` only when that path is missing. It leaves a committed SpecKit `specs/<feature>/spec.md` alone. It does not fill a spec in from the code. When the ranked list is empty, orient names `harness prepare`.
+`harness prepare` writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` only when those paths are missing. A committed SpecKit `specs/<feature>/spec.md` stays as the product owner wrote it. Prepare does not fill a spec in from the code. When the ranked list is empty, orient names `harness prepare`.
+
+[Pull request 76](https://github.com/noodlemind/prompt-library/pull/76) added this lock, `harness prepare`, and `harness worktree`. That set is Harness Adaptive Engineering. See also pull request 76. It is on main.
 
 ## How a delivery runs
 
@@ -76,8 +64,12 @@ flowchart TD
   classify -->|Investigate| investigate[Read and report evidence]
   classify -->|Review| review["/code-review"]
   classify -->|Deliver| orient[harness orient]
-  orient --> lock[Lock the plan]
-  lock --> gate[harness gate]
+  orient --> hasSpec{Committed spec on the ranked list?}
+  hasSpec -->|no| prepare[harness prepare]
+  prepare --> lock[Lock the plan and hash the spec paths]
+  hasSpec -->|yes| lock
+  lock --> worktree[harness worktree]
+  worktree --> gate[harness gate]
   gate -->|blocked| lock
   gate -->|pass| edit[Edit files in scope]
   edit --> codeReview["/code-review"]
@@ -85,8 +77,6 @@ flowchart TD
   verify -->|failed| edit
   verify -->|passed| compound[harness compound]
 ```
-
-On main, lock goes to the gate. Pull request 76 inserts `harness prepare` before the lock when `intentSources` is empty, and `harness worktree --slug` before the gate.
 
 ### Orient
 
@@ -98,9 +88,9 @@ Read `.harness/context-pack.md`. Leave the CLI stdout out of the chat. Orient wr
 
 [`/recall`](../.github/skills/recall/SKILL.md) is the same lookup when you already know the query.
 
-On pull request 76, orient lists specs as `intentSources`. An empty list names `harness prepare`. If `docs/` is gitignored, the message says to un-ignore `docs/specs` and `docs/adr`.
+Orient lists the ranked specs as `intentSources`. An empty list names `harness prepare`. If `docs/` is gitignored, the message says to un-ignore `docs/specs` and `docs/adr`.
 
-### Prepare, pull request 76
+### Prepare, when no spec is committed
 
 ```bash
 harness init-repo
@@ -109,25 +99,23 @@ harness prepare
 
 Prepare writes those two files with an exclusive create. A file that appears during the write is left as it is. Prepare does not call a model. A person edits the starter afterward. The file lists top-level paths observed at the moment of the write. That person writes the architecture.
 
-On main, write the spec yourself.
+Skip prepare when `specs/<feature>/spec.md` or another matching spec is already committed. Running it anyway still adds `docs/specs/overview.md` if that path is absent. It does not edit the SpecKit file.
 
 ### Lock
 
 Trackable Deliver work needs a locked plan. The Engineer follows [`/ensure-plan`](../.github/skills/ensure-plan/SKILL.md). [`/capture-issue`](../.github/skills/capture-issue/SKILL.md) opens the issue. [`/plan-issue`](../.github/skills/plan-issue/SKILL.md) fills the phases. `harness plan-new` writes the file. `harness plan-update --lock` sets `plan_lock: true`. Update the plan with `harness plan-update`. Do not open a `~/.harness` plan in the editor.
 
-The lock stores intent, acceptance criteria, impacted files, and the checks that prove the change. Product plans list `code-review` under `reviews.required`. A docs plan may leave that list empty.
+The lock stores intent, acceptance criteria, impacted files, the checks that prove the change, and `{ path, sha256 }` for each readable in-checkout `intent_sources` file. Product plans list `code-review` under `reviews.required`. A docs plan may leave that list empty.
 
-On pull request 76 the lock also stores `{ path, sha256 }` for each readable in-checkout `intent_sources` file. A symlink fails the lock. A missing file fails the lock. Nothing re-hashes the spec while you type. A later edit to those files does not fail the implement gate. When the code and the spec disagree, update the spec in the same pull request or a stacked pull request. An ambiguous spec is status `needs-info`.
+A symlink fails the lock. A missing file fails the lock. Nothing re-hashes the spec while you type.
 
-### Worktree, pull request 76
+### Worktree
 
 ```bash
 harness worktree --slug <issue-slug>
 ```
 
-Issue work starts from the latest `origin/HEAD`, then a branch, then a linked worktree. An uncommitted `docs/plans` file, or a gitignored `.harness/plans` file, is copied into the project store so the same `--plan` still resolves. A newer checkout copy replaces an older store copy. A newer store copy stays.
-
-On main, create the branch yourself. The implement gate checks lock and status.
+Issue work starts from the latest `origin/HEAD`, then a branch, then a linked worktree. The implement gate fails when that work is still on the default branch of the primary checkout. An uncommitted `docs/plans` file, or a gitignored `.harness/plans` file, is copied into the project store so the same `--plan` still resolves. A later run copies the checkout plan over the store copy when the checkout file is newer and no plan update holds the lock. It leaves the store copy when that file is newer.
 
 ### Edit
 
@@ -194,7 +182,7 @@ Plans for a product repository live in `~/.harness/projects/<repo-id>/plans/`. `
 
 ## Next to a spec, BDD, and a wrapper
 
-A spec states the behavior. BDD turns examples into checks. Adaptive Engineering locks the material you already have, gates the edit, and writes a learning after the checks pass.
+A spec states the behavior. BDD turns examples into checks. Adaptive Engineering locks the committed spec, gates the edit, and writes a learning after the checks pass.
 
 ```mermaid
 flowchart LR
@@ -211,22 +199,23 @@ flowchart LR
     w2 --> w3[Run tests if configured]
   end
   subgraph here [This repo]
-    a1[Lock intent on the plan] --> a2[Gate the edit]
-    a2 --> a3[Verify named checks]
-    a3 --> a4[Compound after a pass]
+    a1[Hash the committed spec on the plan] --> a2[Open a worktree from origin/HEAD]
+    a2 --> a3[Gate the edit]
+    a3 --> a4[Verify named checks]
+    a4 --> a5[Compound after a pass]
   end
 ```
 
 | Question | Spec only | BDD only | Wrapper around a spec or scenarios | This repo |
 | --- | --- | --- | --- | --- |
-| Where intent lives | The committed spec file | The scenarios | The file the agent was told to read | The committed spec. On main the plan stores `intent`, `success_criteria`, `expected_outputs`, and `## Intent Contract`. Pull request 76 also hashes the matched spec paths at lock. |
-| Who updates the spec when behavior changes | No required step | Usually the same pull request as the scenario | No separate owner | A person, in the same pull request or a stacked pull request |
-| Re-check during the edit | None | None | A chat stand-in, if the wrapper has one | None. Main locks the plan once. Pull request 76 hashes the spec files once. |
-| Which checkout | The open tree | The open tree | The tree the agent started in | Pull request 76 opens a worktree from `origin/HEAD`. On main you create the branch. |
+| Where intent lives | The committed spec file | The scenarios | The file the agent was told to read | The committed spec. The plan stores `intent`, `success_criteria`, `expected_outputs`, `## Intent Contract`, and `intent_sources` hashes. |
+| Who updates the spec when behavior changes | No required step | Usually the same pull request as the scenario | No separate owner | The product owner, in the same pull request or a stacked pull request |
+| Re-check during the edit | None | None | A chat stand-in, if the wrapper has one | None. The lock hashes the spec files once. A later spec edit does not fail the gate. |
+| Which checkout | The open tree | The open tree | The tree the agent started in | `harness worktree --slug` opens a linked worktree from `origin/HEAD` |
 | What blocks the edit | Later review | A failing scenario | Host approval, when the wrapper has it | `harness gate`, plus VS Code hooks after `harness install --configure-vscode` |
 | What counts as done | A written claim | The scenario suite | The tests the wrapper runs | Named checks and the evidence file from `harness verify` |
 | What the team keeps | A separate write-up, if the team keeps one | More scenarios | Session memory | An episode, then a local learning, then a skill or agent a person approved |
-| Repo with no spec | Empty docs | An empty suite | The agent invents modules | Pull request 76 writes two starter files. A person fills them in. |
+| Repo with no spec | Empty docs | An empty suite | The agent invents modules | `harness prepare` writes two starter files. A person fills them in. |
 
 ## What a plan must contain
 
@@ -234,6 +223,7 @@ A delivery plan uses `plan_schema: 1`. Its verification block names checks. Its 
 
 ```yaml
 plan_schema: 1
+intent_sources: []
 verification:
   required: []
   criteria: {}
@@ -243,6 +233,6 @@ reviews:
   critical_open: []
 ```
 
-Pull request 76 adds `intent_sources` and fills the hashes at lock.
+Lock fills `intent_sources` with `{ path, sha256 }` for each matched spec file.
 
 Delivery rules the Engineer can cite are in [delivery principles](../.github/skills/references/delivery-principles.md).

@@ -11,3 +11,5 @@ evals/
 
 # SDD working state — never committed
 .superpowers/
+
+.cursor/skills/verify-harness/evidence/
