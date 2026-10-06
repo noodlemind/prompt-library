@@ -821,3 +821,47 @@ test('cursor pstack routing stays out of hydration and names no model', () => {
     assert.doesNotMatch(read(`.cursor/rules/${name}`), modelPin, `${name} names a model`);
   }
 });
+
+const REPO_POINTER = /prompt-library/i;
+const REPO_POINTER_SKIP = new Set([
+  'packages/harness/package.json',
+  'packages/harness/retired.json',
+  'packages/harness/test/prompt-library-contracts.test.mjs',
+]);
+const DELETED_DOC_POINTERS = [
+  'docs/architecture/engineer-harness.md',
+  'docs/onboarding/harness-quickstart.md',
+  'MEMORY-MODEL.md',
+];
+
+function filesUnder(relDir, found) {
+  const abs = path.join(repoRoot, relDir);
+  if (!fs.existsSync(abs)) return;
+  for (const name of fs.readdirSync(abs)) {
+    if (name === 'node_modules' || name === '.git') continue;
+    const rel = `${relDir}/${name}`;
+    const stat = fs.statSync(path.join(repoRoot, rel));
+    if (stat.isDirectory()) filesUnder(rel, found);
+    else if (stat.isFile()) found.push(rel);
+  }
+}
+
+test('harness package prose does not name the prompt-library repository', () => {
+  const files = [];
+  filesUnder('packages/harness', files);
+  const repoHits = [];
+  const docHits = [];
+  for (const rel of files) {
+    if (REPO_POINTER_SKIP.has(rel)) continue;
+    const buf = fs.readFileSync(path.join(repoRoot, rel));
+    if (buf.includes(0)) continue;
+    const text = buf.toString('utf8');
+    if (REPO_POINTER.test(text)) repoHits.push(rel);
+    if (!rel.startsWith('packages/harness/corpus/')) continue;
+    for (const pointer of DELETED_DOC_POINTERS) {
+      if (text.includes(pointer)) docHits.push(`${rel} → ${pointer}`);
+    }
+  }
+  assert.deepEqual(repoHits.sort(), [], 'package prose names the prompt-library repository');
+  assert.deepEqual(docHits.sort(), [], 'installed corpus points at a deleted doc');
+});
