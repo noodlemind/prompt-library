@@ -445,7 +445,7 @@ export async function runLedger({
 
   const paletteRows = (query) => {
     const { prefix, rest } = splitPrefix(query);
-    const palette = openPalette({ workspace, query: rest });
+    const palette = openPalette({ workspace, copilotHome, query: rest });
     let rows = applyPrefix(palette.rows, prefix).map((row) => ({
       ...row,
       signature: signatureOf(row),

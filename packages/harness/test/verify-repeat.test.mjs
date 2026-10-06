@@ -11,7 +11,7 @@ import { initGit, recordSuccessfulEdit, writeChecks, writeVersionedPlan } from '
 import { trackWorkspaceSolutions } from './helpers/workspace.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const hookPath = path.resolve(packageRoot, '../../.github/hooks/require-verification.mjs');
+const hookPath = path.join(packageRoot, 'corpus', 'hooks', 'require-verification.mjs');
 const CLAIM = 'raw concatenation';
 const TRIGGER = 'raw concatenation';
 const APPLIES = 'The handler builds sql.';

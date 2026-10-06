@@ -3,6 +3,8 @@ import { listCommands, getCommand, SIDE_EFFECTS, SURFACES } from './registry.mjs
 import { createEnvelope, STATUS } from './envelope.mjs';
 import { normalizeChoices } from './value-sources.mjs';
 import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
+import { getCorpusRoot } from './assets.mjs';
+import { resolveCopilotHome } from './paths.mjs';
 
 /** What a row represents. Verb rows come from two structurally different
  * sources (a declared subcommand and a `tui: 'verb'` flag) but present
@@ -11,9 +13,8 @@ export const ROW_KINDS = Object.freeze(['command', 'verb', 'skill']);
 
 export const TOKEN_KINDS = Object.freeze(['command', 'subcommand', 'flag', 'value']);
 
-/** Where skills are discovered, relative to the workspace root. Reported as a
- * relative posix path so the envelope stays machine-independent. */
-export const SKILLS_DIR = '.github/skills';
+/** HomeRel of the skills directory. The same path under the Copilot home and the corpus. */
+export const SKILLS_REL = 'skills';
 
 /** `registerCommand` always normalizes `args`, but every accessor here goes
  * through this one helper anyway — a half-annotated registry is the expected
@@ -581,45 +582,30 @@ function parseFrontmatter(text) {
   return out;
 }
 
-/**
- * Discover `<workspace>/.github/skills/<name>/SKILL.md`.
- *
- * Degrades to an empty list on ANY filesystem trouble — a missing directory, an
- * unreadable one, a directory with no SKILL.md. This code runs in product repos
- * that have no skills directory at all, where "commands only" is the correct
- * answer, not an error. Nothing here creates a path (read-path invariant), and
- * every candidate is symlink-checked against the workspace the same way
- * lib/index-knowledge.mjs checks docs/solutions.
- *
- * Returns `{found, skills}` — `found` distinguishes "the directory is not
- * there" (a product repo) from "it is there and holds nothing invocable",
- * which the envelope reports as `skillsRoot`.
- */
-function readSkills(workspace) {
-  const root = assertNoSymlinkAncestors(workspace, SKILLS_DIR);
-  if (!root || !fs.existsSync(root)) return { found: false, skills: [] };
+function scanSkillRoot(root) {
+  if (!root) return { found: false, skills: [], claimed: new Set() };
+  const skillsDir = assertNoSymlinkAncestors(root, SKILLS_REL);
+  if (!skillsDir || !fs.existsSync(skillsDir)) return { found: false, skills: [], claimed: new Set() };
   let dirents;
   try {
-    dirents = fs.readdirSync(root, { withFileTypes: true });
+    dirents = fs.readdirSync(skillsDir, { withFileTypes: true });
   } catch {
-    return { found: false, skills: [] };
+    return { found: false, skills: [], claimed: new Set() };
   }
   const names = dirents
     .filter((d) => d.isDirectory())
     .map((d) => d.name)
-    // readdir order is filesystem-dependent; sort before anything downstream
-    // can observe it, so the index is byte-identical across machines.
     .sort();
   const skills = [];
+  const claimed = new Set();
   for (const dir of names) {
-    const rel = `${SKILLS_DIR}/${dir}/SKILL.md`;
-    const full = assertNoSymlinkAncestors(workspace, rel);
+    const rel = `${SKILLS_REL}/${dir}/SKILL.md`;
+    const full = assertNoSymlinkAncestors(root, rel);
     if (!full) continue;
-    const text = readFileNoFollow(full, { root: workspace });
-    if (text === null) continue; // no SKILL.md here (e.g. a shared references dir)
+    const text = readFileNoFollow(full, { root });
+    if (text === null) continue;
+    claimed.add(dir);
     const fm = parseFrontmatter(text);
-    // Absent means invocable: the primitive standard opts OUT explicitly, and
-    // a skill missing the field is a normal user-facing skill.
     if (String(fm['user-invocable']).toLowerCase() === 'false') continue;
     skills.push({
       dir,
@@ -627,7 +613,26 @@ function readSkills(workspace) {
       description: typeof fm.description === 'string' ? fm.description.trim() : '',
     });
   }
-  return { found: true, skills };
+  return { found: true, skills, claimed };
+}
+
+/** Copilot home first, then the packaged corpus. A home id is claimed even when
+ * `user-invocable: false`, so the corpus copy of that id stays hidden. */
+function readSkills(copilotHome) {
+  const home = scanSkillRoot(copilotHome || null);
+  let corpus = { found: false, skills: [], claimed: new Set() };
+  try {
+    corpus = scanSkillRoot(getCorpusRoot());
+  } catch {
+    corpus = { found: false, skills: [], claimed: new Set() };
+  }
+  const skills = home.skills.slice();
+  for (const skill of corpus.skills) {
+    if (home.claimed.has(skill.dir)) continue;
+    skills.push(skill);
+  }
+  skills.sort((a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
+  return { found: home.found || corpus.found, skills };
 }
 
 /**
@@ -647,7 +652,7 @@ function skillRow(skill) {
   // correct reasoning that a skill is a workflow for the HOST to run and the
   // harness cannot run it — but a palette row that can only answer "this row
   // resolves to no command" is a dead end, and the palette's contract is that
-    const relPath = `${SKILLS_DIR}/${skill.dir}/SKILL.md`;
+    const relPath = `${SKILLS_REL}/${skill.dir}/SKILL.md`;
   return {
     id: `skill:${skill.dir}`,
     kind: 'skill',
@@ -676,10 +681,11 @@ function compareRows(a, b) {
   return 0;
 }
 
-export function buildCommandIndex({ surface = 'tui', workspace = process.cwd() } = {}) {
+export function buildCommandIndex({ surface = 'tui', workspace = process.cwd(), copilotHome } = {}) {
   if (!SURFACES.includes(surface)) {
     throw new TypeError(`buildCommandIndex: unknown surface ${JSON.stringify(surface)} (expected ${SURFACES.join(' | ')})`);
   }
+  const home = copilotHome == null ? resolveCopilotHome() : (copilotHome || null);
   const rows = [];
   const commandNames = new Set();
   for (const name of listCommands()) {
@@ -692,8 +698,8 @@ export function buildCommandIndex({ surface = 'tui', workspace = process.cwd() }
   let skillsRoot = null;
   const collisions = [];
   if (surface === 'tui') {
-    const { found, skills } = readSkills(workspace);
-    if (found) skillsRoot = SKILLS_DIR;
+    const { found, skills } = readSkills(home);
+    if (found) skillsRoot = SKILLS_REL;
     for (const skill of skills) {
       rows.push(skillRow(skill));
       if (commandNames.has(skill.name)) collisions.push(skill.name);
@@ -729,8 +735,8 @@ export function resolveArgv(row, values = {}) {
   return argv;
 }
 
-export function commandIndexEnvelope({ surface = 'tui', workspace = process.cwd() } = {}) {
-  const index = buildCommandIndex({ surface, workspace });
+export function commandIndexEnvelope({ surface = 'tui', workspace = process.cwd(), copilotHome } = {}) {
+  const index = buildCommandIndex({ surface, workspace, copilotHome });
   const counts = { command: 0, verb: 0, skill: 0 };
   for (const row of index.rows) counts[row.kind] += 1;
   return createEnvelope({

@@ -106,15 +106,22 @@ test('lookup file reads under the workspace and refuses to escape it', () => {
   assert.match(escaped.message, /escapes the workspace/);
 });
 
-test('lookup skill and check resolve from workspace config', () => {
+test('lookup skill resolves from the Copilot home and check stays on workspace config', () => {
   const ws = fixtureWorkspace();
-  const skill = call('skill', 'demo', ws);
+  const copilotHome = tempDir('lookup-skill-');
+  const skillFile = path.join(copilotHome, 'skills', 'demo', 'SKILL.md');
+  fs.mkdirSync(path.dirname(skillFile), { recursive: true });
+  fs.writeFileSync(skillFile, '---\nname: demo\ndescription: A demo skill\n---\n\nBody.\n');
+  const skill = call('skill', 'demo', ws, { copilotHome });
   assert.equal(skill.id, 'demo');
   assert.equal(skill.title, 'demo');
   assert.equal(skill.metadata.description, 'A demo skill');
+  assert.equal(skill.location, skillFile);
+  assert.equal(skill.provenance.source, 'copilot-home');
 
   const check = call('check', 'harness-tests', ws);
   assert.equal(check.id, 'harness-tests');
+  assert.equal(check.location, '.github/harness/checks.yaml');
   assert.equal(check.metadata.timeoutSeconds, 600);
 });
 

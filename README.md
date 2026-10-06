@@ -2,6 +2,8 @@
 
 The Engineer decides. The Harness checks the work and keeps the record. You start with those two. Skills, specialist agents, and instructions are acquired when the work needs them.
 
+This repository authors that ship set under `packages/harness/corpus/`. `harness install` copies the tree onto `~/.copilot/`.
+
 Read [how it grows](docs/adaptive-engineering.md).
 
 ```bash

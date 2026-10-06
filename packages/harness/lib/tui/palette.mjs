@@ -12,8 +12,8 @@ export function containsFlagSyntax(text) {
   return FLAG_SYNTAX.test(String(text ?? ''));
 }
 
-export function openPalette({ workspace = process.cwd(), query = '' } = {}) {
-  const index = buildCommandIndex({ surface: 'tui', workspace });
+export function openPalette({ workspace = process.cwd(), copilotHome, query = '' } = {}) {
+  const index = buildCommandIndex({ surface: 'tui', workspace, copilotHome });
   const rows = rankRows(index.rows, query);
   return {
     query,

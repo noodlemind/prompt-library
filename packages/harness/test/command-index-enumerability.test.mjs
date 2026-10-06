@@ -160,7 +160,7 @@ const DECLARED_VERBS = Object.freeze({
   // `register`/`unregister` change what the harness recognizes; `list`/`show`
   // override DOWN to read.
   model: ['show', 'set', 'clear', 'refresh'],
-  resources: ['list', 'show', 'register', 'unregister', 'discard', 'bundles', 'add', 'update', 'remove'],
+  resources: ['list', 'show', 'register', 'unregister', 'discard', 'create', 'bundles', 'add', 'update', 'remove'],
   undo: ['list'],
   todo: ['list', 'add', 'complete', 'clear'],
   inspect: ['config', 'permissions', 'workspace', 'tools'],
@@ -214,7 +214,7 @@ const VERB_POSITIONALS = Object.freeze({
   // other forgets the choice.
   model: { set: ['provider', 'model'], refresh: ['provider'] },
   // `list` takes no name — it is the query over all of them.
-  resources: { show: ['path'], register: ['path'], unregister: ['path'], discard: ['path'], add: ['bundle'], update: ['bundle'], remove: ['bundle'] },
+  resources: { show: ['path'], register: ['path'], unregister: ['path'], discard: ['path'], create: ['path', 'name'], add: ['bundle'], update: ['bundle'], remove: ['bundle'] },
   inspect: { config: ['key'] },
 });
 
@@ -251,7 +251,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 64, 'prior 63 + resources discard');
+  assert.equal(Object.values(actual).flat().length, 65, 'prior 63 + resources discard + resources create');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -311,7 +311,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
   // Modal families leave the verb strip; remaining verb rows + flag-verbs only.
   const tuiVerbs = rows.filter((r) => r.kind === 'verb').length;
   assert.ok(tuiVerbs < 40, `TUI verb strip should fold heavily (got ${tuiVerbs})`);
-  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 78, 'the CLI surface keeps every verb (+ resources discard)');
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 79, 'the CLI surface keeps every verb (+ resources discard + resources create)');
 });
 
 /**

@@ -69,7 +69,7 @@ function renderTargetAsset(src, rel, targetRoot) {
     for (const entry of entries) {
       const commands = Array.isArray(entry.hooks) ? entry.hooks : [entry];
       for (const command of commands) {
-        if (command?.cwd === '.github/hooks') command.cwd = path.join(targetRoot, 'hooks');
+        if (command?.cwd === 'hooks') command.cwd = path.join(targetRoot, 'hooks');
       }
     }
   }

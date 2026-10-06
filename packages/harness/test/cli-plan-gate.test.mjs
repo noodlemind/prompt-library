@@ -401,7 +401,7 @@ test('scope treats the active plan as governance metadata while enforcing produc
   assert.deepEqual(scope.violations, []);
 });
 
-test('implement gate requires create-primitive and plan analysis for primitive paths', () => {
+test('implement gate refuses a personal skill and still governs a corpus skill', () => {
   const workspace = tempDir('harness-workspace-');
   let plan = writeVersionedPlan(workspace, {
     impacted: ['.github/skills/example/SKILL.md'],
@@ -409,10 +409,21 @@ test('implement gate requires create-primitive and plan analysis for primitive p
   let result = runHarness(['gate', '--plan', plan, '--workspace', workspace, '--json']);
   assert.equal(result.status, 1, result.stderr);
   let body = JSON.parse(result.stdout);
+  const personal = body.checks.find((check) => check.id === 'PR0');
+  assert.equal(personal?.pass, false);
+  assert.match(personal?.message || JSON.stringify(body), /harness resources create/);
+  assert.equal(body.checks.find((check) => check.id === 'PR1'), undefined);
+
+  plan = writeVersionedPlan(workspace, {
+    impacted: ['packages/harness/corpus/skills/example/SKILL.md'],
+  });
+  result = runHarness(['gate', '--plan', plan, '--workspace', workspace, '--json']);
+  assert.equal(result.status, 1, result.stderr);
+  body = JSON.parse(result.stdout);
   assert.equal(body.checks.find((check) => check.id === 'PR1')?.pass, false);
 
   plan = writeVersionedPlan(workspace, {
-    impacted: ['.github/skills/example/SKILL.md'],
+    impacted: ['packages/harness/corpus/skills/example/SKILL.md'],
     skillsUsed: ['engineer', 'create-primitive'],
   });
   result = runHarness(['gate', '--plan', plan, '--workspace', workspace, '--json']);
@@ -421,7 +432,7 @@ test('implement gate requires create-primitive and plan analysis for primitive p
   assert.ok(body.checks.some((check) => check.id.startsWith('PR') && !check.pass));
 
   plan = writeVersionedPlan(workspace, {
-    impacted: ['.github/skills/example/SKILL.md'],
+    impacted: ['packages/harness/corpus/skills/example/SKILL.md'],
     skillsUsed: ['engineer', 'create-primitive'],
     technicalNotes: primitiveAnalysis,
   });

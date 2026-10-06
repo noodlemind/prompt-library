@@ -4,7 +4,7 @@ CLI for the **Adaptive Engineer Harness**: install/hydrate Copilot assets, run t
 
 - Package name: **`harness`** · command: **`harness`**
 - Explanation: [docs/adaptive-engineering.md](../../docs/adaptive-engineering.md)
-- Tool contract: [.github/skills/references/harness-tool-contract.md](../../.github/skills/references/harness-tool-contract.md)
+- Tool contract: [harness-tool-contract.md](corpus/skills/references/harness-tool-contract.md)
 
 Developers use Copilot **`@engineer`**. The kernel never starts an LLM on the host path.
 
@@ -25,7 +25,7 @@ missing. A current bridge install does nothing. Reload VS Code after
 installation or upgrade. `harness install --configure-vscode` and
 `harness upgrade` remain available for explicit/non-TUI setup.
 
-`prepare`/`prepack` build `assets/` so installs match published tarballs.
+The npm package includes `corpus/`. `harness install` copies that tree onto the Copilot home.
 
 ```bash
 harness init-repo    # product repo stubs: plans, checks, policy
@@ -163,13 +163,12 @@ Gate/verify keep documented policy-driven exits. Plans use `plan_schema: 1` and 
 
 ```bash
 cd packages/harness
-npm run build:assets
 npm test
 npm version patch && npm publish
 ```
 
 ```text
-bin/harness.mjs   lib/   test/   eval/   assets/ (build)   config/
+bin/harness.mjs   lib/   test/   eval/   corpus/   config/
 ```
 
 Node 20+. Runtime: `yaml`. Optional tree-sitter packages for structural index only (lexical fallback if missing).

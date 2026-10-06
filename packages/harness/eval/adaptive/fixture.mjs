@@ -13,7 +13,7 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const repoRoot = path.resolve(packageRoot, '..', '..');
 
 export const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
-export const hooksRoot = path.join(repoRoot, '.github', 'hooks');
+export const hooksRoot = path.join(packageRoot, 'corpus', 'hooks');
 
 function realTemp(prefix) {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));

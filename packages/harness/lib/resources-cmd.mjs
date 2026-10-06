@@ -9,6 +9,7 @@ import { approvedBundleNames, readPlacements, syncBundles } from './bundle-sync.
 import { listLocalPrimitives, primitiveOrigins, shippedAssetFiles } from './primitive-origins.mjs';
 import { bundleDigest, discoverBundles, parseManifest, MANIFEST_FILE, resourcesRoot } from './resources.mjs';
 import {
+  createPersonalPrimitive,
   discardPrimitive,
   localPrimitiveStatus,
   registerPrimitive,
@@ -20,7 +21,7 @@ import {
 const ui = createStyle({ argv: process.argv.slice(2) });
 
 export const RESOURCES_VERBS = Object.freeze([
-  'list', 'show', 'register', 'unregister', 'discard',
+  'list', 'show', 'register', 'unregister', 'discard', 'create',
     'add', 'update', 'remove', 'bundles',
 ]);
 
@@ -43,12 +44,24 @@ function context(argv) {
       continue;
     }
     positionals.push(a);
-    if (positionals.length === 2) break;
+  }
+  if (positionals.length > 3) {
+    throw usageError(
+      'resources accepts at most a verb, a kind, and a name',
+      'harness resources create <skill|agent|instruction> <name>',
+    );
+  }
+  if (flags.files?.length) {
+    throw usageError(
+      'resources create reads the primitive body from stdin',
+      'harness resources create <skill|agent|instruction> <name>',
+    );
   }
   return {
     flags,
     verb: positionals[0] ?? 'list',
     target: positionals[1] ?? null,
+    name: positionals[2] ?? null,
     copilotHome: resolveCopilotHome(flags.copilotHome),
   };
 }
@@ -105,7 +118,7 @@ export function resolveBundleDir(copilotHome, name) {
 }
 
 export async function resourcesResultOf(argv, ctx = {}) {
-  const { verb, target, copilotHome } = context(argv);
+  const { verb, target, name, copilotHome } = context(argv);
   if (!RESOURCES_VERBS.includes(verb)) {
     throw usageError(`unknown resources verb: ${verb}`, `one of ${RESOURCES_VERBS.join(', ')}`);
   }
@@ -154,6 +167,24 @@ export async function resourcesResultOf(argv, ctx = {}) {
     fs.rmSync(dir, { recursive: true, force: true });
         const sync = applyBundles(copilotHome);
     return { schema: 1, verb, bundle: { name: target }, sync };
+  }
+
+  if (verb === 'create') {
+    if (!target || !name) {
+      throw usageError(
+        'resources create requires a kind and a name',
+        'harness resources create <skill|agent|instruction> <name>',
+      );
+    }
+    if (process.stdin.isTTY) {
+      throw usageError(
+        'resources create reads the primitive body from stdin',
+        'harness resources create <skill|agent|instruction> <name>',
+      );
+    }
+    const text = fs.readFileSync(0, 'utf8');
+    const primitive = createPersonalPrimitive({ copilotHome, kind: target, name, text, shippedFiles, lockFiles });
+    return { schema: 1, verb: 'create', primitive };
   }
 
   if (verb === 'list') {
@@ -219,7 +250,16 @@ export async function resourcesResultOf(argv, ctx = {}) {
   return { schema: 1, verb, primitive: unregisterPrimitive({ copilotHome, rel }) };
 }
 
-const STATE_STYLE = { registered: 'ok', pending: 'warn', stale: 'warn', stray: 'warn', invalid: 'error' };
+const STATE_STYLE = {
+  registered: 'ok',
+  created: 'ok',
+  unchanged: 'ok',
+  replaced: 'ok',
+  pending: 'warn',
+  stale: 'warn',
+  stray: 'warn',
+  invalid: 'error',
+};
 
 export async function cmdResources(argv, ctx = {}) {
   const { flags } = context(argv);
@@ -282,9 +322,9 @@ export async function cmdResources(argv, ctx = {}) {
     for (const error of result.validation.errors) console.log(ui.paint('muted', `  ${inertLine(error)}`));
   } else {
     const p = result.primitive;
-    const keyWidth = keyWidthFor(['register', 'unregister', 'discard']);
+    const keyWidth = keyWidthFor(['register', 'unregister', 'discard', 'create']);
     console.log(ui.line({
-      state: p.state === 'registered' ? 'ok' : p.state === 'discarded' ? 'ok' : 'warn',
+      state: STATE_STYLE[p.state] || (p.state === 'discarded' ? 'ok' : 'warn'),
       key: result.verb,
       value: inertLine(p.path),
       note: p.state,

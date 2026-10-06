@@ -10,8 +10,8 @@ import { initGit, recordSuccessfulEdit, writeChecks, writeVersionedPlan } from '
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(packageRoot, '../..');
-const editHook = path.join(repoRoot, '.github', 'hooks', 'require-plan-gate.mjs');
-const stopHook = path.join(repoRoot, '.github', 'hooks', 'require-verification.mjs');
+const editHook = path.join(repoRoot, 'packages', 'harness', 'corpus', 'hooks', 'require-plan-gate.mjs');
+const stopHook = path.join(repoRoot, 'packages', 'harness', 'corpus', 'hooks', 'require-verification.mjs');
 
 function normalizedDiff(text) {
   return String(text || '')

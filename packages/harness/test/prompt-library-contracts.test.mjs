@@ -106,7 +106,7 @@ test('named checks execute argv from checks.yaml, not plan text', () => {
 });
 
 test('engineer agent is frozen, thin, and leaves the delivery checklist to the harness', () => {
-  const engineer = read('.github/agents/engineer.agent.md');
+  const engineer = read('packages/harness/corpus/agents/engineer.agent.md');
   const estimatedTokens = Math.ceil(Buffer.byteLength(engineer, 'utf8') / 4);
 
   assert.ok(estimatedTokens >= 600, `Engineer context is too small (${estimatedTokens} estimated tokens)`);
@@ -122,14 +122,14 @@ test('engineer agent is frozen, thin, and leaves the delivery checklist to the h
   assert.match(engineer, /architect\/SKILL\.md/);
   assert.match(engineer, /do not edit `~\/\.harness` in the editor/i);
 
-  assert.equal(exists('.github/skills/engineer-autopilot/SKILL.md'), false);
-  assert.equal(exists('.github/skills/references/engineer-runtime.md'), false);
-  assert.doesNotMatch(read('.github/skills/references/tool-native-loop.md'), /1\. Orient[\s\S]*9\. Report/i);
+  assert.equal(exists('packages/harness/corpus/skills/engineer-autopilot/SKILL.md'), false);
+  assert.equal(exists('packages/harness/corpus/skills/references/engineer-runtime.md'), false);
+  assert.doesNotMatch(read('packages/harness/corpus/skills/references/tool-native-loop.md'), /1\. Orient[\s\S]*9\. Report/i);
 });
 
 test('engineer recovers blocked mutations, routes primitives, and exposes finding disposition', () => {
-  const engineer = read('.github/agents/engineer.agent.md');
-  const globalWorkflow = read('.github/instructions/harness-global.instructions.md');
+  const engineer = read('packages/harness/corpus/agents/engineer.agent.md');
+  const globalWorkflow = read('packages/harness/corpus/instructions/harness-global.instructions.md');
   const frontmatter = YAML.parse(engineer.match(/^---\n([\s\S]*?)\n---/)?.[1] || '');
   const handoffs = new Map((frontmatter.handoffs || []).map((handoff) => [handoff.label, handoff]));
 
@@ -151,12 +151,12 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
 });
 
 test('every agent handoff declares a target agent that exists', () => {
-  const agentsDir = path.join(repoRoot, '.github/agents');
+  const agentsDir = path.join(repoRoot, 'packages/harness/corpus/agents');
   const agentFiles = fs.readdirSync(agentsDir).filter((file) => file.endsWith('.agent.md'));
   const agentNames = new Set(agentFiles.map((file) => file.replace(/\.agent\.md$/, '')));
 
   for (const file of agentFiles) {
-    const source = read(path.join('.github/agents', file));
+    const source = read(path.join('packages/harness/corpus/agents', file));
     const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
     assert.ok(match, `${file}: invalid or missing YAML frontmatter`);
     const frontmatter = YAML.parse(match[1]);
@@ -174,7 +174,7 @@ test('every agent handoff declares a target agent that exists', () => {
 });
 
 test('existing skills own structured findings, proportional plans, and primitive governance', () => {
-  const capture = read('.github/skills/capture-issue/SKILL.md');
+  const capture = read('packages/harness/corpus/skills/capture-issue/SKILL.md');
   for (const field of [
     'Title',
     'Observed behavior',
@@ -187,7 +187,7 @@ test('existing skills own structured findings, proportional plans, and primitive
   assert.match(capture, /packet is sufficient[\s\S]{0,220}do not ask/i);
   assert.match(capture, /status:\s*open[\s\S]{0,80}plan_lock:\s*false[\s\S]{0,80}phase:\s*0/i);
 
-  const ensure = read('.github/skills/ensure-plan/SKILL.md');
+  const ensure = read('packages/harness/corpus/skills/ensure-plan/SKILL.md');
   for (const phrase of [
     'one or two intended product files',
     'one session',
@@ -210,10 +210,12 @@ test('existing skills own structured findings, proportional plans, and primitive
   assert.match(ensure, /reviews:\s*\{required:\s*\[code-review\]/);
   assert.match(ensure, /harness plan-update/);
 
-  const primitive = read('.github/skills/create-primitive/SKILL.md');
-  for (const governed of ['.github/skills/', '.github/agents/', '.github/instructions/', '.github/prompts/', '.github/checks/', 'enterprise/skills/']) {
+  const primitive = read('packages/harness/corpus/skills/create-primitive/SKILL.md');
+  assert.match(primitive, /harness resources create/);
+  for (const governed of ['packages/harness/corpus/skills/', 'packages/harness/corpus/agents/', 'packages/harness/corpus/instructions/', 'packages/harness/corpus/enterprise/', '.github/checks/']) {
     assert.ok(primitive.includes(governed), `primitive path missing ${governed}`);
   }
+  assert.match(primitive, /\.github\/checks\//);
   for (const option of ['Existing /java skill', 'Existing /aws skill', 'Reference under /java', 'Reference under /aws', 'New cross-domain migration skill']) {
     assert.match(primitive, new RegExp(option.replaceAll('/', '\\/'), 'i'), `migration decision missing ${option}`);
   }
@@ -225,15 +227,15 @@ test('existing skills own structured findings, proportional plans, and primitive
 
 test('engineer loads capabilities on demand and owns bounded consultations', () => {
   const surfaces = [
-    read('.github/agents/engineer.agent.md'),
-    read('.github/instructions/harness-global.instructions.md'),
+    read('packages/harness/corpus/agents/engineer.agent.md'),
+    read('packages/harness/corpus/instructions/harness-global.instructions.md'),
   ].join('\n');
 
   assert.doesNotMatch(surfaces, /mandatory before any work.*read/i);
   assert.doesNotMatch(surfaces, /read these SKILL\.md files before acting/i);
   assert.match(surfaces, /on[- ]demand/i);
 
-  const engineer = read('.github/agents/engineer.agent.md');
+  const engineer = read('packages/harness/corpus/agents/engineer.agent.md');
   for (const field of ['question', 'acceptance criterion', 'evidence', 'constraints', 'expected response']) {
     assert.match(engineer, new RegExp(field, 'i'), `consultation packet missing ${field}`);
   }
@@ -243,7 +245,7 @@ test('engineer loads capabilities on demand and owns bounded consultations', () 
 test('active entry points use the accountable Engineer vocabulary', () => {
   const activeEntryPoints = [
     'README.md',
-    '.github/agents/engineer.agent.md',
+    'packages/harness/corpus/agents/engineer.agent.md',
     'docs/adaptive-engineering.md',
   ];
   for (const rel of activeEntryPoints) {
@@ -255,18 +257,18 @@ test('active entry points use the accountable Engineer vocabulary', () => {
 
 test('execution, gap resolution, and compounding skills have distinct boundaries', () => {
   // Phase execution is owned by the Engineer's Deliver lifecycle (work-on-task retired).
-  const engineerContract = read('.github/agents/engineer.agent.md');
+  const engineerContract = read('packages/harness/corpus/agents/engineer.agent.md');
   assert.match(engineerContract, /Deliver\*{0,2} owns mutation lifecycle/i);
   assert.match(engineerContract, /pass the implement gate/);
   assert.match(engineerContract, /require passed `harness verify`/i);
 
-  const gaps = read('.github/skills/ensure-capability/SKILL.md');
+  const gaps = read('packages/harness/corpus/skills/ensure-capability/SKILL.md');
   assert.match(gaps, /on-demand/i);
   assert.match(gaps, /when encountered/i);
   assert.doesNotMatch(gaps, /runs at ingest/i);
   assert.doesNotMatch(gaps, /mandatory preflight/i);
 
-  const compound = read('.github/skills/auto-compound/SKILL.md');
+  const compound = read('packages/harness/corpus/skills/auto-compound/SKILL.md');
   for (const field of [
     'destination',
     'recurrence',
@@ -279,7 +281,7 @@ test('execution, gap resolution, and compounding skills have distinct boundaries
   }
   assert.match(compound, /harness verify --plan/i);
 
-  const primitive = read('.github/skills/create-primitive/SKILL.md');
+  const primitive = read('packages/harness/corpus/skills/create-primitive/SKILL.md');
   assert.match(primitive, /promotion evidence/i);
   assert.match(primitive, /trigger eval/i);
   assert.match(primitive, /outcome eval/i);
@@ -287,8 +289,8 @@ test('execution, gap resolution, and compounding skills have distinct boundaries
 
 test('plan-producing primitives emit schema v1 and trusted named checks', () => {
   for (const rel of [
-    '.github/skills/capture-issue/SKILL.md',
-    '.github/agents/plan-coordinator.agent.md',
+    'packages/harness/corpus/skills/capture-issue/SKILL.md',
+    'packages/harness/corpus/agents/plan-coordinator.agent.md',
   ]) {
     const contract = read(rel);
     assert.match(contract, /plan_schema:\s*1/, `${rel} must emit schema v1`);
@@ -298,18 +300,26 @@ test('plan-producing primitives emit schema v1 and trusted named checks', () => 
   }
 });
 
-test('packaged hook assets stay byte-identical to .github/hooks security files', () => {
+test('corpus hooks are the only hook tree and their cwd token is hooks', () => {
   const files = [
     'block-destructive-commands.mjs',
     'require-plan-gate.mjs',
     'lib/tool-payload.mjs',
   ];
   for (const rel of files) {
-    const source = read(`.github/hooks/${rel}`);
-    const shipped = read(`packages/harness/assets/hooks/${rel}`);
-    assert.equal(shipped, source, `${rel} must be rebuilt into packages/harness/assets/hooks`);
-    assert.match(shipped, /unwrapShellSegments/, `${rel} must ship the shared unwrap helper`);
+    const source = read(`packages/harness/corpus/hooks/${rel}`);
+    assert.match(source, /unwrapShellSegments/, `${rel} must contain the shared unwrap helper`);
   }
+  assert.equal(exists('packages/harness/assets'), false);
+  assert.equal(exists('scripts/build-harness-assets.mjs'), false);
+  const hooks = JSON.parse(read('packages/harness/corpus/hooks/hooks.json'));
+  const cwds = [];
+  for (const entries of Object.values(hooks.hooks || {})) {
+    for (const entry of entries) {
+      for (const command of entry.hooks || []) cwds.push(command.cwd);
+    }
+  }
+  assert.deepEqual(cwds, ['hooks', 'hooks', 'hooks', 'hooks', 'hooks', 'hooks', 'hooks']);
 });
 
 test('prompt-library retains at most one non-terminal PR plan and documents cleanup', () => {
@@ -335,7 +345,7 @@ test('prompt-library retains at most one non-terminal PR plan and documents clea
 });
 
 test('hooks and CI enforce explicit plans and passed verification evidence', () => {
-  const hooks = JSON.parse(read('.github/hooks/hooks.json'));
+  const hooks = JSON.parse(read('packages/harness/corpus/hooks/hooks.json'));
   const preEditCommands = hooks.hooks.PreToolUse.flatMap((entry) => entry.hooks.map((hook) => hook.command));
   assert.ok(preEditCommands.includes('node require-plan-gate.mjs'));
   // Every tool call funnels through one wildcard PreToolUse chain so
@@ -359,13 +369,13 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
   const stopCommands = (hooks.hooks.Stop || []).flatMap((entry) => entry.hooks.map((hook) => hook.command));
   assert.ok(stopCommands.includes('node require-verification.mjs'));
 
-  const planGate = read('.github/hooks/require-plan-gate.mjs');
+  const planGate = read('packages/harness/corpus/hooks/require-plan-gate.mjs');
   assert.match(planGate, /gatedPlan/);
   assert.match(planGate, /gatedPlanDigest/);
   assert.match(planGate, /gateStatus/);
   assert.match(planGate, /Impacted Files/);
 
-  const completion = read('.github/hooks/require-verification.mjs');
+  const completion = read('packages/harness/corpus/hooks/require-verification.mjs');
   assert.match(completion, /outcome\s*!==\s*['"]passed['"]/);
   assert.match(completion, /if \(!session\.lastEditAt\) allow/);
   assert.match(completion, /lastCompletedEditAt/);
@@ -391,12 +401,12 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
 });
 
 test('single-entry: the engineer is the only user-invocable agent', () => {
-  const agentsDir = path.join(repoRoot, '.github', 'agents');
+  const agentsDir = path.join(repoRoot, 'packages/harness/corpus/agents');
   const invocable = fs
     .readdirSync(agentsDir)
     .filter((name) => name.endsWith('.agent.md'))
     .filter((name) => {
-      const fm = read(`.github/agents/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
+      const fm = read(`packages/harness/corpus/agents/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
       return !/^user-invocable:\s*false\s*$/m.test(fm);
     })
     .map((name) => name.replace(/\.agent\.md$/, ''))
@@ -404,15 +414,15 @@ test('single-entry: the engineer is the only user-invocable agent', () => {
   assert.deepEqual(invocable, ['engineer'], `@ menu must expose only the engineer, found: ${invocable.join(', ')}`);
   // Retired routing surfaces stay gone.
   for (const gone of [
-    '.github/agents/pipeline-navigator.agent.md',
-    '.github/agents/feedback-codifier.agent.md',
-    '.github/agents/pr-comment-resolver.agent.md',
-    '.github/skills/btw',
-    '.github/skills/start',
-    '.github/skills/analyze-and-plan',
-    '.github/skills/tdd-fix',
-    '.github/skills/review-guardrails',
-    '.github/skills/work-on-task',
+    'packages/harness/corpus/agents/pipeline-navigator.agent.md',
+    'packages/harness/corpus/agents/feedback-codifier.agent.md',
+    'packages/harness/corpus/agents/pr-comment-resolver.agent.md',
+    'packages/harness/corpus/skills/btw',
+    'packages/harness/corpus/skills/start',
+    'packages/harness/corpus/skills/analyze-and-plan',
+    'packages/harness/corpus/skills/tdd-fix',
+    'packages/harness/corpus/skills/review-guardrails',
+    'packages/harness/corpus/skills/work-on-task',
     '.github/prompts',
   ]) {
     assert.ok(!exists(gone), `${gone} is retired and must not exist`);
@@ -420,12 +430,12 @@ test('single-entry: the engineer is the only user-invocable agent', () => {
 });
 
 test('single-entry: the / menu is pinned to the approved skill set', () => {
-  const skillsDir = path.join(repoRoot, '.github', 'skills');
+  const skillsDir = path.join(repoRoot, 'packages/harness/corpus/skills');
   const invocable = fs
     .readdirSync(skillsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && exists(`.github/skills/${entry.name}/SKILL.md`))
+    .filter((entry) => entry.isDirectory() && exists(`packages/harness/corpus/skills/${entry.name}/SKILL.md`))
     .filter((entry) => {
-      const fm = read(`.github/skills/${entry.name}/SKILL.md`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
+      const fm = read(`packages/harness/corpus/skills/${entry.name}/SKILL.md`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
       return !/^user-invocable:\s*false\s*$/m.test(fm);
     })
     .map((entry) => entry.name)
@@ -434,7 +444,7 @@ test('single-entry: the / menu is pinned to the approved skill set', () => {
 });
 
 test('single-entry: retired primitives carry registry tombstones', () => {
-  const registry = YAML.parse(read('knowledge/capability-registry.yaml'));
+  const registry = YAML.parse(read('packages/harness/corpus/knowledge/capability-registry.yaml'));
   for (const name of ['btw', 'start', 'analyze-and-plan', 'tdd-fix', 'review-guardrails', 'work-on-task', 'pipeline-navigator', 'feedback-codifier', 'pr-comment-resolver']) {
     const entry = registry.capabilities[name];
     assert.ok(entry, `registry missing tombstone for ${name}`);
@@ -457,9 +467,9 @@ test('agent tool identifiers are pinned to the current VS Code taxonomy', () => 
     'web', 'web/fetch',
     'githubRepo', 'githubTextSearch', 'todos',
   ]);
-  const agentsDir = path.join(repoRoot, '.github', 'agents');
+  const agentsDir = path.join(repoRoot, 'packages/harness/corpus/agents');
   for (const name of fs.readdirSync(agentsDir).filter((n) => n.endsWith('.agent.md'))) {
-    const frontmatter = read(`.github/agents/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
+    const frontmatter = read(`packages/harness/corpus/agents/${name}`).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
     const tools = YAML.parse(frontmatter)?.tools || [];
     for (const tool of tools) {
       assert.ok(canonical.has(tool), `${name} declares unknown tool id "${tool}" — update the canonical allowlist deliberately if the host renamed it`);
@@ -468,7 +478,7 @@ test('agent tool identifiers are pinned to the current VS Code taxonomy', () => 
 });
 
 test('token budget: engineer agent and context pack stay within their caps', () => {
-  const agent = read('.github/agents/engineer.agent.md');
+  const agent = read('packages/harness/corpus/agents/engineer.agent.md');
   const agentTokens = estimateTokens(agent);
   assert.ok(
     agentTokens <= ENGINEER_AGENT_MAX_TOKENS,
@@ -491,10 +501,10 @@ test('deterministic retrieval: repo map, tokenizer, and staleness require no mod
     assert.doesNotMatch(src, /api\.anthropic\.com|openai|fetch\(|getProvider|ANTHROPIC_API_KEY/, `${rel} must be model-free`);
   }
   // The verbatim-query discipline (AC56) is documented in the tool contract.
-  assert.match(read('.github/skills/references/harness-tool-contract.md'), /salient nouns and identifiers \*{0,2}verbatim/i);
+  assert.match(read('packages/harness/corpus/skills/references/harness-tool-contract.md'), /salient nouns and identifiers \*{0,2}verbatim/i);
   // The extractor is a seam with a documented tree-sitter tier (AC62).
   assert.match(read('packages/harness/lib/repo-map/lexical-extractor.mjs'), /tree-sitter tier/i);
-  assert.match(read('.github/skills/references/harness-tool-contract.md'), /lexical fallback for SQL\/HCL|SQL and HCL/i);
+  assert.match(read('packages/harness/corpus/skills/references/harness-tool-contract.md'), /lexical fallback for SQL\/HCL|SQL and HCL/i);
   // init-repo invokes both index planes and points at status (AC61).
   const commands = read('packages/harness/lib/commands.mjs');
   assert.match(commands, /ensureIndexes/);
@@ -524,7 +534,7 @@ test('eval running is not a shipped harness command', () => {
 });
 
 test('engineer step 8 runs harness compound to close the learn loop', () => {
-  const engineer = read('.github/agents/engineer.agent.md');
+  const engineer = read('packages/harness/corpus/agents/engineer.agent.md');
   assert.doesNotMatch(engineer, /8\.\s*Compound/i);
   // The CI budget gate must reference the read-only check.
   const workflow = read('.github/workflow-templates/harness-plan-verification.yml');
@@ -550,7 +560,7 @@ test('read-only report command is registered and AC14 amendment is consistent', 
 });
 
 test('consolidate skill treats a cluster as a category group the skill may split into multiple ops', () => {
-  const skill = read('.github/skills/consolidate/SKILL.md');
+  const skill = read('packages/harness/corpus/skills/consolidate/SKILL.md');
   assert.doesNotMatch(skill, /choose exactly one op/i, 'the one-op-per-cluster mandate must be removed');
   assert.match(skill, /category group/i, 'a cluster is documented as a category group');
   assert.match(skill, /multiple ops/i, 'the skill may emit multiple ops for one category group');
@@ -617,11 +627,11 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
 });
 
 test('token budget: no SKILL.md body exceeds the line cap', () => {
-  const skillsDir = path.join(repoRoot, '.github', 'skills');
+  const skillsDir = path.join(repoRoot, 'packages/harness/corpus/skills');
   const oversized = fs
     .readdirSync(skillsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && exists(`.github/skills/${entry.name}/SKILL.md`))
-    .map((entry) => ({ name: entry.name, lines: read(`.github/skills/${entry.name}/SKILL.md`).split('\n').length }))
+    .filter((entry) => entry.isDirectory() && exists(`packages/harness/corpus/skills/${entry.name}/SKILL.md`))
+    .map((entry) => ({ name: entry.name, lines: read(`packages/harness/corpus/skills/${entry.name}/SKILL.md`).split('\n').length }))
     .filter((s) => s.lines > SKILL_BODY_MAX_LINES);
   assert.deepEqual(
     oversized,
@@ -631,33 +641,33 @@ test('token budget: no SKILL.md body exceeds the line cap', () => {
 });
 
 test('domain instructions do not triple-stack on a single Java file', () => {
-  const instrDir = path.join(repoRoot, '.github', 'instructions');
+  const instrDir = path.join(repoRoot, 'packages/harness/corpus/instructions');
   const javaScoped = fs
     .readdirSync(instrDir)
     .filter((name) => name.endsWith('.instructions.md'))
-    .filter((name) => /applyTo:\s*['"]\*\*\/\*\.java['"]/.test(read(`.github/instructions/${name}`)));
+    .filter((name) => /applyTo:\s*['"]\*\*\/\*\.java['"]/.test(read(`packages/harness/corpus/instructions/${name}`)));
   assert.deepEqual(
     javaScoped,
     ['java.instructions.md'],
     `exactly one always-on instruction may match **/*.java; found: ${javaScoped.join(', ')}`
   );
   // The relocated deep guides live as on-demand skill references.
-  assert.ok(exists('.github/skills/java/references/spring-boot.md'), 'Spring Boot guide moved to /java references');
-  assert.ok(exists('.github/skills/aws/references/aws-sdk.md'), 'AWS SDK guide moved to /aws references');
+  assert.ok(exists('packages/harness/corpus/skills/java/references/spring-boot.md'), 'Spring Boot guide moved to /java references');
+  assert.ok(exists('packages/harness/corpus/skills/aws/references/aws-sdk.md'), 'AWS SDK guide moved to /aws references');
 });
 
 test('capability registry inventories every current primitive with ownership and lifecycle', () => {
-  const registry = YAML.parse(read('knowledge/capability-registry.yaml'));
+  const registry = YAML.parse(read('packages/harness/corpus/knowledge/capability-registry.yaml'));
   assert.equal(registry.version, 2);
   assert.deepEqual(registry.lifecycle_states, ['candidate', 'experimental', 'active', 'deprecated', 'retired']);
 
-  const skillsDir = path.join(repoRoot, '.github', 'skills');
+  const skillsDir = path.join(repoRoot, 'packages/harness/corpus/skills');
   const currentSkills = fs
     .readdirSync(skillsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && exists(`.github/skills/${entry.name}/SKILL.md`))
+    .filter((entry) => entry.isDirectory() && exists(`packages/harness/corpus/skills/${entry.name}/SKILL.md`))
     .map((entry) => entry.name);
   const currentAgents = fs
-    .readdirSync(path.join(repoRoot, '.github', 'agents'))
+    .readdirSync(path.join(repoRoot, 'packages/harness/corpus/agents'))
     .filter((name) => name.endsWith('.agent.md'))
     .map((name) => name.replace(/\.agent\.md$/, ''));
 
@@ -703,10 +713,10 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.ok(retired.retired.includes('prompts'), 'retired.json must purge hydrated prompts');
 
   for (const rel of [
-    '.github/skills/engineer/SKILL.md',
-    '.github/skills/ensure-plan/SKILL.md',
-    '.github/skills/ensure-capability/SKILL.md',
-    '.github/skills/auto-compound/SKILL.md',
+    'packages/harness/corpus/skills/engineer/SKILL.md',
+    'packages/harness/corpus/skills/ensure-plan/SKILL.md',
+    'packages/harness/corpus/skills/ensure-capability/SKILL.md',
+    'packages/harness/corpus/skills/auto-compound/SKILL.md',
   ]) {
     const skill = read(rel);
     assert.match(skill, /Should trigger:/i, `${rel} missing positive trigger examples`);
@@ -721,9 +731,10 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
 
   const checks = YAML.parse(read('.github/harness/checks.yaml'));
   assert.match(checks.checks['prompt-contracts'].command.join(' '), /prompt-library-contracts\.test\.mjs/);
-  assert.match(checks.checks['build-assets'].command.join(' '), /build-harness-assets\.mjs/);
+  assert.equal(checks.checks['build-assets'], undefined);
+  assert.equal(exists('scripts/build-harness-assets.mjs'), false);
 
-  const coordinator = read('.github/agents/plan-coordinator.agent.md');
+  const coordinator = read('packages/harness/corpus/agents/plan-coordinator.agent.md');
   assert.match(coordinator, /Required sections:[\s\S]*## Implementation Notes/i);
   assert.match(coordinator, /## Implementation Notes\n\[/i);
   assert.match(coordinator, /type: feat\|fix\|docs\|refactor\|chore/);
@@ -734,7 +745,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(coordinator, /harness verify[^\n]*evidencePath/i);
   assert.match(coordinator, /Verification Evidence[^\n]*does not populate the plan section/i);
 
-  const ensurePlan = read('.github/skills/ensure-plan/SKILL.md');
+  const ensurePlan = read('packages/harness/corpus/skills/ensure-plan/SKILL.md');
   const ensureCapture = ensurePlan.match(/### 2\. Capture[\s\S]*?(?=### 3\.)/)?.[0] || '';
   for (const section of [
     'Memory Cards',
@@ -750,7 +761,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
     assert.match(ensureCapture, new RegExp(`## ${section}`), `ensure-plan missing ${section}`);
   }
 
-  assert.match(read('.github/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
+  assert.match(read('packages/harness/corpus/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
 
   const concept = read(architecturePath);
   assert.match(concept, /exemptions/i);
@@ -763,7 +774,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(packageReadme, /\$PLAN[^\n]*single plan resolved from the PR/i);
   assert.match(packageReadme, /\$BASE_SHA[^\n]*PR base SHA/i);
 
-  assert.match(read('.github/skills/references/harness-tool-contract.md'), /harness help <command>/);
+  assert.match(read('packages/harness/corpus/skills/references/harness-tool-contract.md'), /harness help <command>/);
   assert.match(read(architecturePath), /bounded delegation/i);
 
   const agents = read('AGENTS.md');
@@ -773,7 +784,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
 });
 
 test('architect is an internal design skill and names no model', () => {
-  const skill = read('.github/skills/architect/SKILL.md');
+  const skill = read('packages/harness/corpus/skills/architect/SKILL.md');
   const frontmatter = YAML.parse(skill.match(/^---\n([\s\S]*?)\n---/)[1]);
   assert.equal(frontmatter.name, 'architect');
   assert.equal(frontmatter['user-invocable'], false);
@@ -781,13 +792,15 @@ test('architect is an internal design skill and names no model', () => {
   assert.match(frontmatter.description, /\/code-review/);
   assert.match(skill, /## Trigger Examples/);
   assert.match(skill, /references\/design-red-flags\.md/);
-  assert.equal(exists('.github/skills/architect/references/design-red-flags.md'), true);
+  assert.equal(exists('packages/harness/corpus/skills/architect/references/design-red-flags.md'), true);
   assert.doesNotMatch(skill, /\b(gpt|claude|grok|gemini|opus|sonnet)-\d/i);
-  assert.doesNotMatch(read('.github/skills/architect/references/design-red-flags.md'), /\b(gpt|claude|grok|gemini|opus|sonnet)-\d/i);
+  assert.doesNotMatch(read('packages/harness/corpus/skills/architect/references/design-red-flags.md'), /\b(gpt|claude|grok|gemini|opus|sonnet)-\d/i);
 });
 
 test('cursor pstack routing stays out of hydration and names no model', () => {
-  assert.doesNotMatch(read('scripts/build-harness-assets.mjs'), /['"`]\.cursor/);
+  assert.equal(exists('scripts/build-harness-assets.mjs'), false);
+  assert.equal(exists('packages/harness/assets'), false);
+  assert.equal(fs.existsSync(path.join(repoRoot, 'packages/harness/corpus/.cursor')), false);
   assert.doesNotMatch(read('packages/harness/lib/sync.mjs'), /['"`]\.cursor/);
 
   const rule = read('.cursor/rules/edit-kind.mdc');

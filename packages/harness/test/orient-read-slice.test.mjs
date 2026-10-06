@@ -5,12 +5,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { getAssetsRoot } from '../lib/assets.mjs';
+import { getCorpusRoot } from '../lib/assets.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const repoRoot = path.resolve(packageRoot, '../..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
-const hooksRoot = path.join(repoRoot, '.github', 'hooks');
+const hooksRoot = path.join(packageRoot, 'corpus', 'hooks');
 const readOnlySkip = process.platform === 'win32'
   ? 'chmod does not make a directory read-only on Windows'
   : typeof process.getuid === 'function' && process.getuid() === 0
@@ -162,17 +161,15 @@ test('a broken index read still returns JSON with both labels missing', () => {
   }
 });
 
-test('getAssetsRoot refreshes assets/hooks/load-context.mjs from .github/hooks/load-context.mjs', () => {
-  const source = path.join(repoRoot, '.github', 'hooks', 'load-context.mjs');
-  getAssetsRoot();
-  const shipped = path.join(packageRoot, 'assets', 'hooks', 'load-context.mjs');
-  fs.writeFileSync(shipped, 'stale-load-context\n');
-  const past = new Date(Date.now() - 120_000);
-  fs.utimesSync(shipped, past, past);
-  fs.utimesSync(source, new Date(), new Date());
-  const root = getAssetsRoot();
-  assert.equal(root, path.join(packageRoot, 'assets'));
-  assert.equal(fs.readFileSync(shipped, 'utf8'), fs.readFileSync(source, 'utf8'));
+test('getCorpusRoot returns the packaged corpus and does not rewrite it', () => {
+  const source = path.join(packageRoot, 'corpus', 'hooks', 'load-context.mjs');
+  const before = fs.readFileSync(source);
+  const mtime = fs.statSync(source).mtimeMs;
+  const root = getCorpusRoot();
+  assert.equal(root, path.join(packageRoot, 'corpus'));
+  assert.equal(fs.readFileSync(source).equals(before), true);
+  assert.equal(fs.statSync(source).mtimeMs, mtime);
+  assert.match(fs.readFileSync(path.join(root, 'hooks', 'lib', 'tool-payload.mjs'), 'utf8'), /unwrapShellSegments/);
 });
 
 test('harness orient --read --json on a cold repo prints neighborhood null and writes nothing', () => {

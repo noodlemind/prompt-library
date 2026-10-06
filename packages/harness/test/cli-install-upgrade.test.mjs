@@ -24,7 +24,7 @@ import { listCommands } from '../lib/registry.mjs';
 import { HELP_COMMAND_ORDER } from '../bin/harness.mjs';
 import YAML from 'yaml';
 import { approveProject } from '../lib/trust.mjs';
-import { getAssetsRoot } from '../lib/commands.mjs';
+import { getCorpusRoot } from '../lib/commands.mjs';
 import { tempDir, runHarness, writePlan, packageRoot, binPath } from './helpers/index.mjs';
 import {
   writeKnowledgeSolution,
@@ -86,7 +86,7 @@ test('hook install rewrites source cwd to the hydrated user hook directory', () 
     path.join(hooksDir, 'hooks.json'),
     JSON.stringify({
       hooks: {
-        PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'node gate.mjs', cwd: '.github/hooks' }] }],
+        PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'node gate.mjs', cwd: 'hooks' }] }],
       },
     })
   );
@@ -101,7 +101,7 @@ test('VS Code doctor distinguishes a missing installed hook bundle from package 
   const copilotHome = tempDir('harness-copilot-');
   const assetsRoot = tempDir('harness-assets-');
   const workspace = tempDir('harness-workspace-');
-  const sourceHooks = path.resolve(packageRoot, '../../.github/hooks');
+  const sourceHooks = path.join(packageRoot, 'corpus', 'hooks');
   fs.cpSync(sourceHooks, path.join(assetsRoot, 'hooks'), { recursive: true });
   const settingsPath = path.join(tempDir('harness-vscode-'), 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify(mergeVSCodeSettings({})));
@@ -184,18 +184,17 @@ test('install creates global harness shim', () => {
   assert.equal(JSON.parse(validate.stdout).pass, true);
 });
 
-test('getAssetsRoot rebuilds packaged hooks when the source tree is newer', () => {
-  const source = path.join(packageRoot, '../../.github/hooks/lib/tool-payload.mjs');
-  const shipped = path.join(packageRoot, 'assets/hooks/lib/tool-payload.mjs');
-  fs.writeFileSync(shipped, 'stale-hook-payload\n');
-  const past = new Date(Date.now() - 120_000);
-  fs.utimesSync(shipped, past, past);
-  const now = new Date();
-  fs.utimesSync(source, now, now);
-  const root = getAssetsRoot();
-  assert.equal(root, path.join(packageRoot, 'assets'));
-  assert.equal(fs.readFileSync(shipped, 'utf8'), fs.readFileSync(source, 'utf8'));
-  assert.match(fs.readFileSync(shipped, 'utf8'), /unwrapShellSegments/);
+test('getCorpusRoot is the packaged corpus and does not rebuild hooks', () => {
+  const source = path.join(packageRoot, 'corpus', 'hooks', 'lib', 'tool-payload.mjs');
+  const before = fs.readFileSync(source);
+  const mtime = fs.statSync(source).mtimeMs;
+  const root = getCorpusRoot();
+  assert.equal(root, path.join(packageRoot, 'corpus'));
+  assert.equal(fs.readFileSync(source).equals(before), true);
+  assert.equal(fs.statSync(source).mtimeMs, mtime);
+  assert.match(before.toString('utf8'), /unwrapShellSegments/);
+  assert.equal(fs.existsSync(path.join(packageRoot, 'assets')), false);
+  assert.equal(fs.existsSync(path.join(packageRoot, '..', '..', 'scripts', 'build-harness-assets.mjs')), false);
 });
 
 test('TUI launch installs or version-upgrades once with VS Code configuration enabled', async () => {
@@ -608,7 +607,7 @@ test('Java and AWS migration primitive plans explicitly compare the installed do
     .replace('Existing /java skill', 'Java guidance')
     .replace('Existing /aws skill', 'AWS guidance');
   let plan = writeVersionedPlan(workspace, {
-    impacted: ['.github/skills/example/SKILL.md'],
+    impacted: ['packages/harness/corpus/skills/example/SKILL.md'],
     skillsUsed: ['engineer', 'create-primitive'],
     technicalNotes: withoutDomainComparison,
     intent: 'Create a Java and AWS upgrade migration skill',
@@ -620,7 +619,7 @@ test('Java and AWS migration primitive plans explicitly compare the installed do
   assert.match(body.nextTools.join('\n'), /create-primitive\/SKILL\.md/i);
 
   plan = writeVersionedPlan(workspace, {
-    impacted: ['.github/skills/example/SKILL.md'],
+    impacted: ['packages/harness/corpus/skills/example/SKILL.md'],
     skillsUsed: ['engineer', 'create-primitive'],
     technicalNotes: primitiveAnalysis,
     intent: 'Create a Java and AWS upgrade migration skill',

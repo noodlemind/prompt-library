@@ -7,7 +7,7 @@ import { buildPlanView } from './plan-view.mjs';
 import { buildNeighborhood, buildRepoMap } from './repo-map/index.mjs';
 import { indexStatus } from './index-status.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
-import { discoverInventory, routingCards, routingReadPointers, workspaceRoutingRoots } from './route.mjs';
+import { discoverInventory, routingCards, routingReadPointers, primitiveReadRoots } from './route.mjs';
 import { extractGoalFromPlan } from './plan-goal.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
@@ -185,7 +185,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   let instructions = [];
   let contacts = [];
   if (active?.fm?.routing) {
-    const inventory = discoverInventory(workspaceRoutingRoots(workspace, [copilotHome]));
+    const inventory = discoverInventory(primitiveReadRoots(copilotHome));
     routingLines = routingReadPointers(active.fm.routing, inventory);
     ({ skills, instructions, contacts } = routingCards(active.fm.routing, inventory));
     if (gatePreview.pass) {

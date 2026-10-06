@@ -1,15 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const repoRoot = path.resolve(packageRoot, '../..');
-const sourcePath = path.join(repoRoot, '.github', 'agents', 'engineer.agent.md');
+const sourcePath = path.join(packageRoot, 'corpus', 'agents', 'engineer.agent.md');
 
-test('the engineer agent drops the numbered delivery checklist and the asset copy matches', () => {
+test('the engineer agent drops the numbered delivery checklist', () => {
   const source = fs.readFileSync(sourcePath, 'utf8');
   assert.doesNotMatch(source, /^[0-9]+\. /m);
   assert.doesNotMatch(source, /--query` and `--file/);
@@ -24,12 +22,5 @@ test('the engineer agent drops the numbered delivery checklist and the asset cop
   assert.match(source, /create-primitive\/SKILL\.md/);
   assert.match(source, /A person approves a new skill or specialist before it is installed/);
   assert.match(source, /Before the first edit, call `harness orient --read` with the task text and the files the change will touch/);
-
-  const build = spawnSync(process.execPath, [path.join(repoRoot, 'scripts', 'build-harness-assets.mjs')], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  assert.equal(build.status, 0, build.stderr || build.stdout);
-  const copied = fs.readFileSync(path.join(packageRoot, 'assets', 'agents', 'engineer.agent.md'), 'utf8');
-  assert.equal(copied, source);
+  assert.equal(fs.existsSync(path.join(packageRoot, 'assets', 'agents', 'engineer.agent.md')), false);
 });
