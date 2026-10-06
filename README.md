@@ -2,7 +2,7 @@
 
 The Engineer decides. The Harness checks the work and keeps the record. You start with those two. Skills, specialist agents, and instructions are acquired when the work needs them.
 
-The Engineer locks a plan before a product edit. The Harness runs the named checks and stores the evidence. After a pass, compound records what the task taught. A person approves any new skill or agent.
+Product owners commit the spec in the repo. The chat message asks for a change against that file. The Harness runs the named checks and stores the evidence. After a pass, compound records what the task taught. A person approves any new skill or agent.
 
 Read [Adaptive Engineering](docs/adaptive-engineering.md).
 
