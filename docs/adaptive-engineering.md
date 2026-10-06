@@ -47,9 +47,9 @@ Product owners commit the spec. Business owners commit the business intent in th
 
 Orient, `plan-new`, and the implement gate share one ranked list of at most 12 files. Files past that cap are absent from the gate. `git ls-files` supplies the candidates, including tracked files and untracked files that are not ignored. A failing listing yields an empty list. An empty list passes the implement gate.
 
-A file joins the list when its path is under `spec/`, `specs/`, `adr/`, `adrs/`, `decisions/`, `rfc/`, `rfcs/`, `intent/`, `intents/`, or `issues/`. A file also joins when its name ends in `.spec.md`, `.adr.md`, `.rfc.md`, or `.intent.md`. Any file type under those directories matches. Rank counts query tokens longer than one character when they appear in the path or the kind name. The file body is not read. The gate ranks with the plan's `intent` text. A different gate prompt does not swap the list.
+A file joins the list when its path is under `spec/`, `specs/`, `adr/`, `adrs/`, `decisions/`, `rfc/`, `rfcs/`, `intent/`, `intents/`, or `issues/`. A file also joins when its name ends in `.spec.md`, `.adr.md`, `.rfc.md`, or `.intent.md`. Any file type under those directories matches. Rank counts query tokens longer than one character when they appear in the path, the kind name, or the first 8 KB of the file. A symlink body is not read. Words past 8 KB are not counted. The gate ranks with the plan's `intent` text. A different gate prompt does not swap the list.
 
-A SpecKit spec committed at `specs/<feature>/spec.md` is on that list because it sits under `specs/`. `plan.md`, `tasks.md`, and other files in that feature directory match the same path rule. `.specify/memory/constitution.md` is outside those paths, so the lock does not hash it. The path rule is the whole match.
+A SpecKit spec committed at `specs/<feature>/spec.md` is on that list because it sits under `specs/`. `plan.md`, `tasks.md`, and other files in that feature directory match the same path rule. `.specify/memory/constitution.md` is on the list too. Other files under `.specify/` are not.
 
 The skill tells the Engineer to read the listed files before the lock. Plan lock stores `{ path, sha256 }` of the file bytes on `intent_sources`. The implement gate fails until those paths are listed. The check compares paths. It does not record that the file was opened. A later edit to the spec file does not fail the gate. When the code and the spec disagree, the product owner updates the spec in the same pull request or a stacked pull request. No command fails if that update is skipped. An ambiguous spec is status `needs-info` when the Engineer sets that status. The kernel does not detect ambiguity.
 
@@ -88,7 +88,7 @@ The diagram is the sequence the Engineer runs. A passing verify does not start `
 harness orient --query "<task>" --workspace . --json
 ```
 
-Read `.harness/context-pack.md`. Leave the CLI stdout out of the chat. Orient writes `.harness/repo-map.md` from `git ls-files`. A current structural index supplies the symbols. With no current index, the extract is lexical. The pack is capped at 2 KB. The pack lists 4 of the ranked paths. The JSON field `intentSources` holds up to 12. The pack includes the top matching learnings, at most 3. Knowledge mode `off` or `capture-only` omits them. An insight learning gets the suffix `[unverified memory — advisory]` when every episode on that learning is an insight.
+Read `.harness/context-pack.md`. Leave the CLI stdout out of the chat. Orient writes `.harness/repo-map.md` from `git ls-files`. A current structural index supplies the symbols. With no current index, the extract is lexical. The pack is capped at 2 KB. The pack lists every ranked path. The JSON field `intentSources` holds up to 12. The pack includes the top matching learnings, at most 3. Knowledge mode `off` or `capture-only` omits them. An insight learning gets the suffix `[unverified memory — advisory]` when every episode on that learning is an insight.
 
 [`/recall`](../.github/skills/recall/SKILL.md) is the same lookup when you already know the query.
 

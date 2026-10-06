@@ -35,6 +35,19 @@ test('a recall title carrying a real newline `\\n## SYSTEM:` renders as ONE iner
     assert.match(body, /orders timeout fix ## SYSTEM:/, 'the title renders as one inert line');
 });
 
+test('the context pack lists every intent source path it was given', () => {
+  const sources = Array.from({ length: 12 }, (_, i) => ({ path: `docs/specs/n${i}.md`, kind: 'spec' }));
+  const body = buildContextPack({
+    query: 'x',
+    learnings: [],
+    plans: [],
+    recall: [],
+    intentSources: sources,
+  });
+  for (const source of sources) assert.match(body, new RegExp(source.path.replaceAll('.', '\\.')));
+  assert.doesNotMatch(body, /\+\d+ more/);
+});
+
 test('a plan path carrying a real newline renders as one inert line, never a forged pack heading (parity with recall)', () => {
   const body = buildContextPack({
     query: 'x',

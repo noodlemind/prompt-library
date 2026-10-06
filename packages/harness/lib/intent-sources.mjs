@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
 
 const CAP = 12;
+const BODY_PREFIX_BYTES = 8192;
 
 function kindOf(rel) {
   const lower = String(rel || '').replace(/\\/g, '/').toLowerCase();
@@ -11,13 +12,27 @@ function kindOf(rel) {
   if (/(^|\/)(adr|adrs|decisions)(\/|$)/.test(lower) || /^adr[-.]/.test(base) || base.endsWith('.adr.md')) return 'adr';
   if (/(^|\/)(rfc|rfcs)(\/|$)/.test(lower) || base.endsWith('.rfc.md')) return 'rfc';
   if (/(^|\/)(intent|intents)(\/|$)/.test(lower) || base.endsWith('.intent.md')) return 'intent';
+  if (/(^|\/)\.specify\/memory\/constitution\.md$/.test(lower)) return 'spec';
   if (/(^|\/)(spec|specs)(\/|$)/.test(lower) || base.endsWith('.spec.md')) return 'spec';
   if (/(^|\/)issues?(\/|$)/.test(lower)) return 'issue';
   return null;
 }
 
+function bodyHay(workspace, rel) {
+  const full = assertNoSymlinkAncestors(workspace, rel);
+  if (!full) return '';
+  const text = readFileNoFollow(full, {
+    root: workspace,
+    encoding: 'utf8',
+    prefix: true,
+    maxBytes: BODY_PREFIX_BYTES,
+  });
+  if (!text || text.includes('\0')) return '';
+  return text.toLowerCase();
+}
+
 function score(item, tokens) {
-  const hay = `${item.path} ${item.kind}`.toLowerCase();
+  const hay = `${item.path} ${item.kind} ${item.body || ''}`.toLowerCase();
   return tokens.reduce((n, token) => n + (hay.includes(token) ? 1 : 0), 0);
 }
 
@@ -38,12 +53,15 @@ export function discoverIntentSources(workspace, { query = '', limit = CAP } = {
     const posix = rel.replace(/\\/g, '/');
     const kind = kindOf(posix);
     if (!kind) continue;
-    found.push({ path: posix, kind });
+    found.push({ path: posix, kind, body: '' });
   }
   const tokens = String(query || '')
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((token) => token.length > 1);
+  if (tokens.length) {
+    for (const item of found) item.body = bodyHay(workspace, item.path);
+  }
   found.sort((a, b) => {
     if (tokens.length) {
       const delta = score(b, tokens) - score(a, tokens);
@@ -51,7 +69,7 @@ export function discoverIntentSources(workspace, { query = '', limit = CAP } = {
     }
     return a.path.localeCompare(b.path);
   });
-  return found.slice(0, limit);
+  return found.slice(0, limit).map(({ path: sourcePath, kind }) => ({ path: sourcePath, kind }));
 }
 
 export function sourcePath(value) {
