@@ -83,7 +83,7 @@ export function assertRealpathContained(root, rel) {
   return full;
 }
 
-export function readFileNoFollow(full, { maxBytes = DEFAULT_MAX_BYTES, root = null, encoding = 'utf8' } = {}) {
+export function readFileNoFollow(full, { maxBytes = DEFAULT_MAX_BYTES, root = null, encoding = 'utf8', prefix = false } = {}) {
   const realRoot = canonicalRoot(root);
     if (root != null && realRoot === null) return null;
 
@@ -96,10 +96,11 @@ export function readFileNoFollow(full, { maxBytes = DEFAULT_MAX_BYTES, root = nu
     }
     try {
       const stat = fs.fstatSync(fd);
-      if (!stat.isFile() || stat.size > maxBytes) return null;
+      if (!stat.isFile() || (!prefix && stat.size > maxBytes)) return null;
       if (realRoot !== null && !fdMatchesCanonicalUnderRoot(full, stat, realRoot)) return null;
-      const buf = Buffer.alloc(stat.size);
-      fs.readSync(fd, buf, 0, stat.size, 0);
+      const n = prefix ? Math.min(stat.size, maxBytes) : stat.size;
+      const buf = Buffer.alloc(n);
+      fs.readSync(fd, buf, 0, n, 0);
       return encoding == null ? buf : buf.toString(encoding);
     } catch {
       return null;
@@ -117,15 +118,16 @@ export function readFileNoFollow(full, { maxBytes = DEFAULT_MAX_BYTES, root = nu
   }
   try {
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > maxBytes) return null;
+    if (!stat.isFile() || (!prefix && stat.size > maxBytes)) return null;
         try {
       if (fs.lstatSync(full).isSymbolicLink()) return null;
     } catch {
       return null;
     }
     if (realRoot !== null && !fdMatchesCanonicalUnderRoot(full, stat, realRoot)) return null;
-    const buf = Buffer.alloc(stat.size);
-    fs.readSync(fd, buf, 0, stat.size, 0);
+    const n = prefix ? Math.min(stat.size, maxBytes) : stat.size;
+    const buf = Buffer.alloc(n);
+    fs.readSync(fd, buf, 0, n, 0);
     return encoding == null ? buf : buf.toString(encoding);
   } catch {
     return null;

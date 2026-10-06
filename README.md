@@ -2,7 +2,9 @@
 
 The Engineer decides. The Harness checks the work and keeps the record. You start with those two. Skills, specialist agents, and instructions are acquired when the work needs them.
 
-Read [how it grows](docs/adaptive-engineering.md).
+Product owners commit the spec in the repo. The chat message asks for a change against that file. The Harness runs the named checks and stores the evidence. After a pass, `/auto-compound` writes what the task taught and `harness compound` indexes it. A person approves any new skill or agent.
+
+Read [Adaptive Engineering](docs/adaptive-engineering.md).
 
 ```bash
 npm install -g harness

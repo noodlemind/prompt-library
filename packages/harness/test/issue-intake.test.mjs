@@ -446,6 +446,44 @@ test('orient, plan-new, and gate cap intent sources with the same query ranking'
   assert.equal(check?.pass, true, check?.message || gate.stderr);
 });
 
+test('a spec ranks by words in the file body when the path does not contain them', async () => {
+  const { discoverIntentSources } = await import('../lib/intent-sources.mjs');
+  const ws = planWorkspace();
+  for (let i = 1; i <= 12; i += 1) {
+    addTracked(ws, `docs/specs/a${String(i).padStart(2, '0')}.md`, `# a${i}\n`);
+  }
+  const withWord = `# n\n\nRefund the buyer when the capture fails.\n${'x'.repeat(9000)}\n`;
+  addTracked(ws, 'docs/specs/n13.md', withWord);
+  addTracked(ws, 'docs/specs/late.md', `${'x'.repeat(8192)}refund buyer\n`);
+  const ranked = discoverIntentSources(ws, { query: 'refund buyer' }).map((s) => s.path);
+  assert.equal(ranked[0], 'docs/specs/n13.md');
+  assert.equal(ranked.includes('docs/specs/late.md'), false);
+});
+
+test('a SpecKit constitution is an intent source and other .specify files are not', async () => {
+  const { discoverIntentSources } = await import('../lib/intent-sources.mjs');
+  const ws = planWorkspace();
+  addTracked(ws, '.specify/memory/constitution.md', '# Constitution\n\nBusiness owners require an audit trail.\n');
+  addTracked(ws, '.specify/scripts/setup.sh', 'echo not a spec\n');
+  const paths = discoverIntentSources(ws, { query: 'audit trail' }).map((s) => s.path);
+  assert.deepEqual(paths, ['.specify/memory/constitution.md']);
+});
+
+test('spec ranking does not read a symlink body', async () => {
+  const { discoverIntentSources } = await import('../lib/intent-sources.mjs');
+  const ws = planWorkspace();
+  const outside = path.join(tempDir('secret-rank-'), 'local.md');
+  fs.writeFileSync(outside, 'Refund the buyer from outside the checkout.\n');
+  fs.mkdirSync(path.join(ws, 'docs', 'specs'), { recursive: true });
+  fs.symlinkSync(outside, path.join(ws, 'docs', 'specs', 'link.md'));
+  assert.equal(git(ws, ['add', '--', 'docs/specs/link.md']).status, 0);
+  assert.equal(git(ws, ['commit', '-qm', 'link spec']).status, 0);
+  addTracked(ws, 'docs/specs/aaa.md', '# empty\n');
+  addTracked(ws, 'docs/specs/real.md', '# Real\n\nRefund the buyer inside the checkout.\n');
+  const ranked = discoverIntentSources(ws, { query: 'refund buyer' }).map((s) => s.path);
+  assert.equal(ranked[0], 'docs/specs/real.md');
+});
+
 test('plan-new does not hash a spec symlink that leaves the checkout', async () => {
   const { hashIntentFile } = await import('../lib/intent-sources.mjs');
   const ws = planWorkspace();
