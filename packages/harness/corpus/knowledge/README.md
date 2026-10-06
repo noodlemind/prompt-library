@@ -28,6 +28,6 @@ Do not put secrets, customer PII, or proprietary code blocks in global solutions
 ## Maintenance
 
 - After compounding: run `/index-memory` or let `/compound-learnings` update `manifest.yaml`.
-- Re-hydrate after pulling prompt-library updates.
+- Re-hydrate with `harness upgrade`.
 
 Context paths are defined by the hydrated shared reference `knowledge-locations.md`.

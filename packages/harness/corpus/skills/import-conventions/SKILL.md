@@ -145,7 +145,7 @@ Present the generated files to the user for review before writing.
 After creating new files:
 - Update CLAUDE.md instruction count if applicable
 - Update AGENTS.md if a new skill was created
-- Note the new instruction/skill in the repository-owned context docs, such as `docs/agent-context.md` for product repos or `.github/agent-context.md` when working in this prompt-library repo
+- Note the new instruction/skill in the repository-owned context docs, `.harness/agent-context.md` or committed `docs/agent-context.md`
 
 ## Non-Interactive Mode
 

@@ -35,7 +35,7 @@ Installed to `~/.copilot/bin/harness` on every `harness install`. Add to PATH wi
 **Per-repo bootstrap:** `harness init-repo` creates `.harness/run.mjs` (delegates to global harness + sets `--workspace`).
 
 - Pin version in product repos: `devDependencies`, a globally installed package, or `.harness-version` (see harness README).
-- If `harness` is not on `PATH`, install from a prompt-library clone: `npm install -g ./packages/harness`, or from registry: `npm install -g harness@latest`, then `harness install --configure-path`.
+- If `harness` is not on `PATH`, install from the registry with `npm install -g harness@latest`, then `harness install --configure-path`.
 - Do not use `npx harness` in agent runtime instructions; reserve `npx` for one-off bootstrap or pinned CI when a registry package is available.
 - **Read** `.harness/context-pack.md` after `orient` — do not paste full CLI stdout into chat.
 - Developers use Copilot agents/skills; they do not prompt the CLI directly.
@@ -389,4 +389,4 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 ## Related
 
 - [`tool-native-loop.md`](tool-native-loop.md)
-- [`packages/harness/README.md`](../../../packages/harness/README.md)
+- [`packages/harness/README.md`](../../../README.md)

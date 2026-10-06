@@ -1,8 +1,8 @@
 # Review Check Template
 
-Use this template when creating a review check. In this prompt-library repo, library-managed checks live under `packages/harness/corpus/skills/code-review/references/checks/<name>.md` and hydrate to `~/.copilot/skills/code-review/references/checks/`. Product repositories may use `.github/checks/<name>.md` for product-specific overlays.
+Use this template when creating a review check. Checks shipped with the harness live under `packages/harness/corpus/skills/code-review/references/checks/<name>.md` and hydrate to `~/.copilot/skills/code-review/references/checks/`. Product repositories may use `.github/checks/<name>.md` for product-specific overlays.
 
-Create a check when a concern is narrow, review-time oriented, and should be discovered by `/code-review`. Checks are prompt-library-native support artifacts, not universal host-native primitives.
+Create a check when a concern is narrow, review-time oriented, and should be discovered by `/code-review`. Checks are support artifacts shipped with the harness, not universal host-native primitives.
 
 ````markdown
 ---

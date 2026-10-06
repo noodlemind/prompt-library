@@ -2,7 +2,7 @@
 
 Use this template when creating a new skill. A personal skill is `harness resources create skill <name>` with the body on stdin. A skill for every install is a commit at `packages/harness/corpus/skills/<name>/SKILL.md`.
 
-Before creating a skill, confirm the primitive decision rule from `docs/architecture/skill-driven-prompt-library.md`: use a skill for reusable workflows, checklists, generators, reviewer protocols, and pipeline steps. If the artifact needs a separate role or permission boundary, create an agent instead.
+Before creating a skill, confirm the decision rule. Use a skill for reusable workflows, checklists, generators, reviewer protocols, and pipeline steps. If the artifact needs a separate role or permission boundary, create an agent instead.
 
 ## SKILL.md File Structure
 

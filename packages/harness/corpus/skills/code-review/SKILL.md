@@ -60,7 +60,7 @@ Determine what to review:
 ### 3. Gather Context and Detect Intent
 
 - Read modified files and understand the changes
-- Check available repository context for accumulated codebase knowledge: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When reviewing this prompt-library repo, also check `.github/agent-context.md`.
+- Check available repository context for accumulated codebase knowledge: `README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`.
 - Check `docs/solutions/` for prior solutions related to the changed areas
 - If a plan file is referenced, read `## Implementation Notes` for decisions and trade-offs
 - Detect project type (Java, Python, TypeScript, SQL/data, AWS) from project files

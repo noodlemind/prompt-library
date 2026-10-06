@@ -1,6 +1,6 @@
 ---
 name: capability-expansion-quality
-description: Review prompt-library primitive changes for missing capability-gap proposals, approval gates, overlap checks, and primitive boundary drift.
+description: Review harness primitive changes for missing capability-gap proposals, approval gates, overlap checks, and primitive boundary drift.
 severity-default: P2
 globs: ".github/**/*.md,docs/{architecture,solutions}/**/*.md"
 ---

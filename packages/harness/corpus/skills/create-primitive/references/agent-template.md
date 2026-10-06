@@ -2,7 +2,7 @@
 
 Use this template when creating a new agent. A personal agent is `harness resources create agent <name>` with the body on stdin. A ship-set agent is a commit at `packages/harness/corpus/agents/<name>.agent.md`.
 
-Before creating an agent, confirm the primitive decision rule from `docs/architecture/skill-driven-prompt-library.md`: create an agent only for separate judgment, tool authority, runtime profile, isolation, or accountability. Reusable procedures belong in skills; scoped conventions belong in instructions; narrow bundled review rules belong in the owning skill's references.
+Before creating an agent, confirm the decision rule. Create an agent only for separate judgment, tool authority, runtime profile, isolation, or accountability. Reusable procedures belong in skills. Scoped conventions belong in instructions. Narrow bundled review rules belong in the owning skill's references.
 
 ## Agent File Structure
 
@@ -35,7 +35,7 @@ Do not use this agent for [confusable workflow]; use `[skill/check/instruction]`
 ## Skills and Context
 
 - Apply `[relevant skill]` when [condition]
-- Read available repository context (`README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, `docs/solutions/`, and `.github/agent-context.md` only when working in this prompt-library repo) when project history matters
+- Read available repository context (`README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`) when project history matters
 - Keep long criteria in `references/`, not in this agent prompt
 
 ## What Matters

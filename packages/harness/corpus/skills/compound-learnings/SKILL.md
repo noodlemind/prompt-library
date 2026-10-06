@@ -57,11 +57,15 @@ Choose the most appropriate category (same folders under global and optional pro
 
 If none fit, create a new category directory.
 
-### 3. Create Global Solution File (team-wide)
+### 3. Write the solution
 
-**Canonical path** (prompt-library repo, hydrated globally):
+**Write paths:**
 
-`knowledge/solutions/<category>/<descriptive-slug>.md`
+- This machine, kept across upgrade: `~/.copilot/knowledge/solutions/<category>/<descriptive-slug>.md`
+- This product only: `~/.harness/projects/<repo-id>/docs/solutions/<category>/<descriptive-slug>.md`, or committed `docs/solutions/` when that directory is git-tracked
+- Next harness release, only when editing the harness package: `packages/harness/corpus/knowledge/solutions/<category>/<descriptive-slug>.md`
+
+Use the product path only when the learning is specific to one repository.
 
 Use `assets/solution-template.md`. Add optional frontmatter fields:
 
@@ -71,15 +75,7 @@ source_plan: "docs/plans/<file>.md in source repo"
 scope: global
 ```
 
-**Privacy:** No secrets, customer PII, or proprietary code blocks — patterns and symptoms only. See `knowledge/README.md`.
-
-### 3b. Optional Product-Local Copy
-
-When the learning is **repo-specific** (internal URLs, naming, deployment quirks):
-
-`docs/solutions/<category>/<descriptive-slug>.md`
-
-Skip this step when the fix applies across all product repositories.
+**Privacy:** No secrets, customer PII, or proprietary code blocks. Patterns and symptoms only. See `~/.copilot/knowledge/README.md`.
 
 ### 4. Update Knowledge Index (required)
 
@@ -87,13 +83,13 @@ Skip this step when the fix applies across all product repositories.
 
 **`@engineer`** chains this via internal **`/auto-compound`** after verify — manual index optional for power users.
 
-Remind the user to run **`harness upgrade`** (or `harness index`) so `~/.copilot/knowledge/` updates on other machines after publish.
+Run `harness index` so this machine can recall the new file. A solution committed under `packages/harness/corpus/knowledge/solutions/` reaches other machines on the next `harness upgrade`.
 
 ### 5. Graduate to Agent Context (Curation Step)
 
-Evaluate whether this learning should be **graduated** to **repository-owned** context (repo conventions only). For product repos, use `docs/agent-context.md`. When working in this prompt-library repo, use `.github/agent-context.md`.
+Evaluate whether this learning should be **graduated** to **repository-owned** context (repo conventions only). Write `.harness/agent-context.md`, or committed `docs/agent-context.md` when that file is git-tracked.
 
-**Do not** duplicate full global solutions in agent-context — link with one line: `See knowledge/solutions/<path>`.
+**Do not** duplicate full solutions in agent-context. Link with one line that names the solution file written above.
 
 **Graduate when** the learning reveals:
 - A project-level convention ("In this project, we always X because Y")
@@ -102,7 +98,7 @@ Evaluate whether this learning should be **graduated** to **repository-owned** c
 - An active decision ("We chose library X over Y because Z — don't switch without team discussion")
 
 **Don't graduate** when the learning is:
-- A one-time fix (the solution doc in `docs/solutions/` is sufficient)
+- A one-time fix (the product solution file is sufficient)
 - Too detailed for a one-liner (keep the detail in the solution doc, link from agent-context)
 - Already covered by existing conventions or instructions
 
@@ -110,7 +106,7 @@ Evaluate whether this learning should be **graduated** to **repository-owned** c
 
 ```markdown
 ### [Category]: [Brief finding]
-[One-sentence summary. See docs/solutions/<file> for details.]
+[One-sentence summary. See the solution file written above for details.]
 ```
 
 **Curation check**: If the context file exceeds ~200 lines, review for stale entries — patterns that are no longer accurate, decisions that have been superseded, or gotchas that have been fixed. Remove or archive stale entries to keep the file compact and high-signal.
@@ -124,7 +120,7 @@ If working from a plan file:
 
 ```markdown
 ### YYYY-MM-DD HH:MM — Issue completed
-- Global learning: `knowledge/solutions/<category>/<file>.md`
+- Learning: <path written above>
 - Product copy: [path or None]
 - Manifest updated: [Yes/No]
 - Agent context updated: [Yes/No]
@@ -133,7 +129,7 @@ If working from a plan file:
 
 ### 7. Print Summary
 
-Confirm: "Learning documented at `knowledge/solutions/<path>` (team-wide after hydrate). Run `/recall` on similar issues in any product repo."
+Confirm: "Learning documented at <path>. Run `/recall` on similar issues in any product repo."
 
 ## Trigger Examples
 

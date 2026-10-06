@@ -1,6 +1,6 @@
 ---
 name: primitive-boundary-quality
-description: "Verify new or changed prompt-library primitives use the right artifact type: skill, agent, instruction, or review check"
+description: "Verify new or changed primitives use the right artifact type: skill, agent, instruction, or review check"
 severity-default: P2
 globs: ".github/{agents,skills,instructions}/**/*.md"
 ---

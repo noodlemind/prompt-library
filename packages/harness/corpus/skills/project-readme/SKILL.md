@@ -49,7 +49,7 @@ Identify the target README path:
 
 Read high-signal files before editing:
 - Existing `README.md`
-- `AGENTS.md`, `.github/copilot-instructions.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `.github/agent-context.md` when present
+- `AGENTS.md`, `.github/copilot-instructions.md`, `.harness/agent-context.md` or `docs/agent-context.md`, and `docs/codebase-snapshot.md` when present
 - Build and dependency manifests (`package.json`, `pyproject.toml`, `pom.xml`, `build.gradle`, `requirements.txt`, `go.mod`, etc.)
 - Configuration files that reveal runtime, deployment, data stores, queues, or integrations
 - Source tree entry points and docs under `docs/`

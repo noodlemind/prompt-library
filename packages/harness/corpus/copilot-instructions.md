@@ -4,11 +4,11 @@ Shared context loaded into every agent and skill session.
 
 ## Project
 
-Skill-driven prompt library for software development using GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Teams hydrate agents, skills, and instructions globally from this repo; product repositories should not receive prompt-library source artifacts.
+Skill-driven prompt library for software development using GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Install hydrates agents, skills, and instructions into the user profile. Product repositories do not receive a copy of that corpus.
 
 ## Primitives
 
-Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rules. Details: `docs/architecture/skill-driven-prompt-library.md`.
+Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rules.
 
 ## Plans and knowledge
 
@@ -17,7 +17,7 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 - Team **`packages/harness/corpus/knowledge/solutions/`** — cross-repo learnings (hydrated to `~/.copilot/knowledge/`).
 - Lookup order: `~/.copilot/skills/references/knowledge-locations.md`.
 
-**`@engineer` only:** task modes, delivery lifecycle, capture gate, and checklist live in `engineer.agent.md` — not duplicated here. Onboarding: `docs/onboarding/harness-quickstart.md`.
+**`@engineer` only:** task modes, delivery lifecycle, capture gate, and checklist live in `engineer.agent.md`. They are not duplicated here.
 
 ## Conventions
 
@@ -32,10 +32,6 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` delegate to their coordinators (`plan-coordinator`, `code-review-coordinator`) when the `agent` tool is available. Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
 
 Engineer harness: `@engineer` agent file owns the only normative delivery lifecycle; read-only modes stay outside it. Runtime details: `harness-tool-contract.md`. Delegation: `subagent-context-packet.md`. Risky work: `human-approval-policy.md`.
-
-## Standardization
-
-Read `docs/architecture/skill-driven-prompt-library.md` before adding or substantially changing agents, skills, instructions, checks, plan structure, or solution templates.
 
 ## Cross-Environment Tool Compatibility
 

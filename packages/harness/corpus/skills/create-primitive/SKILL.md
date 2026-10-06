@@ -1,6 +1,6 @@
 ---
 name: create-primitive
-description: "Decide and create the right prompt-library primitive: skill, agent, instruction, check, reference, or solution doc. Not for importing external repos — use /import-conventions."
+description: "Decide and create the right skill, agent, instruction, check, reference, or solution doc. Not for importing external repos — use /import-conventions."
 user-invocable: false
 ---
 
@@ -8,7 +8,7 @@ user-invocable: false
 
 ## Pipeline Role
 
-Canonical primitive creator and maintainer for this prompt library. Use it to keep the library skill-driven: skills hold reusable workflows, agents hold isolated roles, instructions hold scoped conventions, checks hold narrow review criteria, references hold dense supporting material, and solution docs hold verified learnings.
+Canonical primitive creator and maintainer for the harness. Use it to keep the library skill-driven. Skills hold reusable workflows, agents hold isolated roles, instructions hold scoped conventions, checks hold narrow review criteria, references hold dense supporting material, and solution docs hold verified learnings.
 
 ## When to Use
 
@@ -16,8 +16,8 @@ Canonical primitive creator and maintainer for this prompt library. Use it to ke
 - A skill for every install is a commit under `packages/harness/corpus/skills/<name>/SKILL.md`. Agents use `packages/harness/corpus/agents/<name>.agent.md`. Instructions use `packages/harness/corpus/instructions/<name>.instructions.md`.
 - Creating a new review check (bundled under `packages/harness/corpus/skills/code-review/references/checks/*.md` or product-owned `.github/checks/*.md`)
 - Creating or moving dense supporting material into skill `references/` or `assets/`
-- Creating or updating a team solution under `packages/harness/corpus/knowledge/solutions/` (global, hydrated to `~/.copilot/knowledge/`) or product `docs/solutions/` (repo-private)
-- Modifying any prompt-library primitive
+- Creating or updating a machine-local solution under `~/.copilot/knowledge/solutions/` (kept across upgrade), a product solution under `~/.harness/projects/<repo-id>/docs/solutions/` or committed `docs/solutions/`, or a release solution under `packages/harness/corpus/knowledge/solutions/`
+- Modifying any skill, agent, instruction, check, reference, or solution doc
 - Understanding which primitive type should exist
 
 ## Trigger Examples
@@ -28,7 +28,7 @@ Canonical primitive creator and maintainer for this prompt library. Use it to ke
 - "Add a Java instruction file"
 - "Add a review check for Sonar complexity issues"
 - "Where should this new convention live?"
-- "How do I write a prompt-library primitive?"
+- "How do I write a skill, agent, or instruction?"
 
 **Should not trigger:**
 - "Import conventions from a repo" → use /import-conventions
@@ -36,8 +36,6 @@ Canonical primitive creator and maintainer for this prompt library. Use it to ke
 - "Plan a feature" → use /plan-issue
 
 ## Primitive Decision Rules
-
-Read `docs/architecture/skill-driven-prompt-library.md` before creating or substantially changing primitives.
 
 Default to a **skill** only when the request is a reusable workflow. Do not create any artifact before classifying the primitive:
 
@@ -54,15 +52,15 @@ Do not create a new agent just to store reference material. Put long criteria in
 
 ### Host Mapping
 
-This repository is host-neutral source material, but the current primary consumption target is GitHub Copilot in VS Code and IntelliJ IDEA:
+The harness corpus is host-neutral source material. The current primary consumption target is GitHub Copilot in VS Code and IntelliJ IDEA.
 
-| Prompt-library primitive | Host-native status |
+| Primitive | Host-native status |
 |---|---|
 | Agent | Native in VS Code Copilot custom agents; native in current JetBrains Copilot custom agents when global customizations are enabled |
 | Skill | Native in Copilot Agent Skills where available; hydrated globally for both VS Code and IntelliJ IDEA |
 | Instruction | Native as Copilot custom instructions / instruction files |
-| Review check | Prompt-library-native; consumed by `/code-review`, not a universal Copilot primitive |
-| Reference/asset | Prompt-library-native progressive disclosure material |
+| Review check | Shipped with the harness; consumed by `/code-review`, not a universal Copilot primitive |
+| Reference/asset | Shipped with the harness as progressive disclosure material |
 | Solution doc | Product-repo knowledge artifact, not a global prompt customization |
 
 Do not claim feature parity across hosts. When a host lacks a primitive, document the fallback behavior.
@@ -87,12 +85,11 @@ Before writing files:
 6. **Define outputs and verification**: generated files, state changes, review criteria, or acceptance checks.
 7. **Add eval scenarios**: for promoted or core/confusable skills, add 8–10 should-trigger prompts, 8–10 should-not/confusable prompts, outcome assertions, and supported-host coverage. Checks and instructions need good/bad examples.
 8. **Update docs** listed in the validation checklist.
-9. **Update growth inventory** when adding a skill or agent in this repo:
+9. **Update growth inventory** when adding a skill or agent to the ship set:
    - Append to `packages/harness/corpus/knowledge/capability-registry.yaml` under `starter_skills` or `starter_agents`.
    - If new agent is delegatable from `@engineer`, add to `engineer_allowlist` and `engineer.agent.md` frontmatter `agents:` (human-approved).
-   - Update `docs/architecture/engineer-harness.md` if runtime or capability boundaries changed.
 
-Before the first full `harness verify`, map every acceptance criterion to trusted checks from `.github/harness/checks.yaml`, complete only the tasks and criteria actually proven, and include `prompt-contracts` and `host-contracts` when those standard primitive checks are configured. Inspect candidate commands/assertions: a specialized check for another output (such as `schema-validation` with no schema artifact) is forbidden. In a product repo where standard primitive checks are absent, use only the generic or strongest relevant local named check and state that prompt-library registry/eval/build surfaces are not present; do not invent check names, run unrelated optional checks, repair their failures, widen scope for them, or fake registry updates.
+Before the first full `harness verify`, map every acceptance criterion to trusted checks from `.github/harness/checks.yaml`, complete only the tasks and criteria actually proven, and include `prompt-contracts` and `host-contracts` when those standard primitive checks are configured. Inspect candidate commands/assertions: a specialized check for another output (such as `schema-validation` with no schema artifact) is forbidden. In a product repo where standard primitive checks are absent, use only the generic or strongest relevant local named check and state that the harness contract checks are not present. Do not invent check names, run unrelated optional checks, repair their failures, widen scope for them, or fake registry updates.
 
 ## Capability Expansion Mode
 
@@ -163,7 +160,7 @@ Use for narrow review-time criteria that `/code-review` discovers, such as compl
 Read `references/check-template.md`.
 
 Required file:
-- `packages/harness/corpus/skills/code-review/references/checks/<name>.md` for prompt-library-managed checks
+- `packages/harness/corpus/skills/code-review/references/checks/<name>.md` for checks shipped with the harness
 - `.github/checks/<name>.md` only for product-repo overlays
 
 ### Reference or Asset
@@ -179,8 +176,9 @@ Required location:
 Use only for verified learnings from completed work. Prefer `/compound-learnings` when the learning came from a pipeline issue.
 
 Required locations:
-- **Team-wide:** `packages/harness/corpus/knowledge/solutions/<category>/<slug>.md` (preferred; hydrated to `~/.copilot/knowledge/`)
-- **Repo-private:** product `docs/solutions/<category>/<slug>.md` when the learning must not be shared
+- **This machine:** `~/.copilot/knowledge/solutions/<category>/<slug>.md` (upgrade keeps this prefix)
+- **This product:** `~/.harness/projects/<repo-id>/docs/solutions/<category>/<slug>.md`, or committed `docs/solutions/` when that directory is git-tracked
+- **Next harness release:** `packages/harness/corpus/knowledge/solutions/<category>/<slug>.md`
 
 ## Detailed creation paths
 
@@ -190,7 +188,7 @@ For per-type creation detail — agent classifications and templates, skill patt
 
 After creating an agent, skill, or instruction, verify:
 
-- [ ] Primitive type is justified against `docs/architecture/skill-driven-prompt-library.md`
+- [ ] Primitive type matches the decision rules in this skill
 - [ ] Description conveys WHAT + WHEN (agents ≤180 characters, skills ≤220 characters)
 - [ ] Correct tool classification (reviewer/researcher/actor)
 - [ ] No provider-specific model pinning; let GitHub Copilot choose the active model in VS Code or IntelliJ IDEA
@@ -204,4 +202,4 @@ After creating an agent, skill, or instruction, verify:
 - [ ] New or substantially expanded skills include recorded promotion or strategic evidence, 8–10 positive trigger evals, 8–10 negative/confusable trigger evals, outcome eval assertions, owner, and lifecycle state
 - [ ] For instructions: `applyTo` glob pattern matches target files, conventions are specific and actionable
 - [ ] For checks: follows `.github/checks/README.md` format, lives in the correct bundled or product-owned location, and stays focused on one concern
-- [ ] Documentation updated: CLAUDE.md, AGENTS.md, README.md, copilot-instructions.md, repository context docs, and architecture docs if the standard changed
+- [ ] Documentation updated in the product repo that owns the change, and in the ship-set file that changed, when the standard changed

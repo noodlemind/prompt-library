@@ -52,7 +52,7 @@ Build a context summary covering:
 - CI/CD pipeline structure
 
 #### Accumulated Knowledge
-- Read available repository context for previously discovered patterns: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When working in this prompt-library repo, also read `.github/agent-context.md`.
+- Read available repository context for previously discovered patterns: `README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`.
 - Read `docs/solutions/` index for documented learnings
 
 ### Step 2: Generate Architecture Diagrams

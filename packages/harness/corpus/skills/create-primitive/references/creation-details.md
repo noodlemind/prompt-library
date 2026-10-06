@@ -123,7 +123,7 @@ Five patterns for structuring SKILL.md content ([source](https://lavinigam.com/p
 
 ## Review Check Creation
 
-Create `packages/harness/corpus/skills/code-review/references/checks/<name>.md` when this prompt library ships a narrow review criterion that `/code-review` should discover. Product repositories may create `.github/checks/<name>.md` for product-owned overlays without modifying global prompt-library artifacts.
+Create `packages/harness/corpus/skills/code-review/references/checks/<name>.md` when the harness ships a narrow review criterion that `/code-review` should discover. Product repositories may create `.github/checks/<name>.md` for product-owned overlays without modifying the shipped corpus.
 
 Required shape:
 

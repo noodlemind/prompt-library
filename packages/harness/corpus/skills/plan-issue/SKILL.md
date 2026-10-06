@@ -61,7 +61,7 @@ Delegated research must use the shared subagent context packet contract; see `~/
 
 Run these research tasks:
 - **Intent sources**: Read plan `intent_sources` and any in-repo spec, ADR, RFC, intent file, or issue note that matches this work. Record the paths on `intent_sources`. If a source is ambiguous, set `status: needs-info` and stop with `## Missing` questions.
-- **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read available repository context (`README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, `.harness/codebase-map.md`, and `.github/agent-context.md` only when working in this prompt-library repo) for accumulated knowledge.
+- **Codebase analysis**: Search for related files, existing patterns, and conventions relevant to this issue. Read available repository context (`README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, and `.harness/codebase-map.md`) for accumulated knowledge.
 - **Solution history**: Run `/recall` or read `knowledge/manifest.yaml` (hydrated) and product episodes per `knowledge-locations.md`.
 - **Best practices**: Research industry best practices for the specific technology and pattern involved.
 - **Risk routing**: Identify security, performance, architecture, data integrity, or language-specific review needs.

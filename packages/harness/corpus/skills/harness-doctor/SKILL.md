@@ -53,4 +53,4 @@ If the host cannot run hooks, report degraded operation truthfully: explicit `ha
 
 ## Linux / cloud workspace
 
-If H1 fails globally, recommend copying or symlinking repo `knowledge/` as documented in `docs/onboarding/harness-quickstart.md`.
+If H1 fails globally, run `harness install` or `harness upgrade` so `~/.copilot/knowledge/manifest.yaml` is present.

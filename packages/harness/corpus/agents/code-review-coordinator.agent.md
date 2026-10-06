@@ -57,7 +57,7 @@ Identify the primary technologies by examining file extensions:
 - AWS SDK, IAM, SQS/SNS, S3, Lambda, EventBridge, CloudWatch, or infrastructure config → AWS integration present
 - Mixed → note all detected types
 
-Read available repository context for accumulated codebase knowledge and conventions: `README.md`, `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`. When reviewing this prompt-library repo, also read `.github/agent-context.md`.
+Read available repository context for accumulated codebase knowledge and conventions: `README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`.
 
 ### 3. Build Specialist Context
 

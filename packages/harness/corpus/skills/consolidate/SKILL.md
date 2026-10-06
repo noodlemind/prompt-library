@@ -19,7 +19,7 @@ Design §5 write path. Contract: [`harness-tool-contract.md`](../references/harn
 **Should not trigger:**
 
 - "Record this fix as a learning." → `harness compound --plan <path>` or `--insight` captures the episode; consolidation clusters episodes later.
-- "Edit this learning file directly." → a human hand edit is a supported path the store absorbs with `source: human` provenance on the next mutation (`docs/MEMORY-MODEL.md`, Hand-editability) — it is a user action, not a consolidation trigger; this skill itself never edits store files.
+- "Edit this learning file directly." → a human hand edit is a supported path the store absorbs with `source: human` provenance on the next mutation. It is a user action, not a consolidation trigger. This skill itself never edits store files.
 - `consolidate --status` reports `due: false` and no human asked.
 
 ## Confusable Boundaries
@@ -160,5 +160,5 @@ The codes above are this skill's apply-specific errors. For subagent failure, to
 ## Guardrails
 
 - Read-only through step 3; the only mutation these steps perform is writing `.harness/consolidate-ops.json`.
-- This skill never edits a file under the learnings store — `consolidate --apply` alone writes learning content on its behalf. Direct human hand edits to the store are a separate, supported path (absorbed with `source: human` provenance on the next mutation — `docs/MEMORY-MODEL.md`, Hand-editability), not something this skill performs, replicates, or reverts.
+- This skill never edits a file under the learnings store. `consolidate --apply` alone writes learning content on its behalf. Direct human hand edits to the store are a separate, supported path, absorbed with `source: human` provenance on the next mutation. This skill does not perform, replicate, or revert those edits.
 - The mode gate is authoritative: a non-`on`/`suggest` mode always stops before `--apply`, even mid-session; `suggest` stops too unless the human has explicitly approved and `--yes` is passed.
