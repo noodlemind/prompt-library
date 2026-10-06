@@ -18,7 +18,7 @@ import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
 import { inertLine } from './knowledge/store.mjs';
-import { discoverIntentSources } from './intent-sources.mjs';
+import { resolveObligation } from './intent-sources.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
 
@@ -141,14 +141,13 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     ? [`harness gate --phase implement --plan ${active?.path || '<path>'}`, 'read plan ## Impacted Files']
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
 
-  const intentSources = discoverIntentSources(workspace, { query: q });
+  const obligation = resolveObligation(workspace, active, q);
+  const intentSources = obligation.paths;
   const isolation = inspectIsolation({ workspace, home, allowInplace: flags.allowInplace });
   if (isolation.blocked) {
     nextTools.unshift(`harness worktree --slug ${planSlugFromPath(active?.path)}`);
   }
-  for (const source of intentSources.slice(0, 3)) {
-    nextTools.push(`read ${source.path}`);
-  }
+  if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
   if (!intentSources.length) nextTools.push(prepareNextTool(workspace));
 
   let index = { knowledge: 'missing', structural: 'missing' };

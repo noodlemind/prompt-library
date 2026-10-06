@@ -1,5 +1,6 @@
 import { inertLine } from './knowledge/store.mjs';
 import { redactSecrets } from './secret-scan.mjs';
+import { obligationLine } from './intent-sources.mjs';
 
 const MAX_BYTES = 2048;
 
@@ -102,15 +103,10 @@ export function buildContextPack({
     }
   }
 
-  if (intentSources?.length) {
-    lines.push('', '## Intent sources (read before implement)');
-    for (const source of intentSources.slice(0, 4)) {
-      lines.push(`- \`${inertLine(source.path)}\` (${source.kind})`);
-    }
-    if (intentSources.length > 4) lines.push(`- +${intentSources.length - 4} more`);
-    lines.push('If a source is ambiguous, set status needs-info and write ## Missing questions.');
-  } else if (Array.isArray(intentSources)) {
-    lines.push('', '## Intent sources (read before implement)', '- None yet. Run `harness prepare`, then edit the starter spec and ADR.');
+  const displayedIntent = intentSources?.map((item) => ({ path: inertLine(item.path), kind: item.kind }));
+  const pinnedIntent = displayedIntent?.length ? `## Intent sources\n${obligationLine(displayedIntent)}` : '';
+  if (!pinnedIntent && Array.isArray(intentSources)) {
+    lines.push('', '## Intent sources', '- None yet. Run `harness prepare`, then edit the starter spec and ADR.');
   }
 
   if (worktree?.blocked) {
@@ -173,6 +169,11 @@ export function buildContextPack({
   lines.push('', '---', `_Turn context — query: ${query || '(none)'}._`);
 
   let body = lines.join('\n');
+  if (pinnedIntent) {
+    body = placeBeforeHeading(body, '## Gate (preview)', pinnedIntent);
+    body = fitPinnedIntent(body);
+    return body;
+  }
   const gateAt = body.indexOf('\n## Gate (preview)');
   const routingAt = body.indexOf('\n## Routing');
   if (Array.isArray(routingLines) && gateAt !== -1 && Buffer.byteLength(body, 'utf8') > MAX_BYTES) {
@@ -200,6 +201,78 @@ export function buildContextPack({
     body = buf.subarray(0, end).toString('utf8') + '\n\n…(truncated to 2KB budget)\n';
   }
   return body;
+}
+
+function placeBeforeHeading(body, heading, block) {
+  const at = body.indexOf(heading);
+  if (at === -1) return `${body}\n\n${block}\n`;
+  return `${body.slice(0, at)}${block}\n\n${body.slice(at)}`;
+}
+
+function headingAt(body, heading) {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`(?:^|\\n)${escaped}(?=\\n|$)`).exec(body);
+  if (!match) return -1;
+  return match.index + (body[match.index] === '\n' ? 1 : 0);
+}
+
+function removeSection(body, heading) {
+  const start = headingAt(body, heading);
+  if (start === -1) return body;
+  const level = heading.startsWith('###') ? 3 : 2;
+  const re = level >= 3 ? /\n#{2,3} /g : /\n## /g;
+  re.lastIndex = start + heading.length;
+  const next = re.exec(body);
+  const cutEnd = next ? next.index : body.length;
+  const cutStart = start > 0 && body[start - 1] === '\n' ? start - 1 : start;
+  return body.slice(0, cutStart) + body.slice(cutEnd);
+}
+
+function fitPinnedIntent(body) {
+  const drops = [
+    '### Memory Cards (excerpt)',
+    '## Plan view (current phase)',
+    '### Intent Contract (excerpt)',
+    '## Recall (top matches)',
+    '## Learnings (memory)',
+    '## Plans',
+  ];
+  const over = () => Buffer.byteLength(body, 'utf8') > MAX_BYTES;
+  for (const heading of drops) {
+    if (!over()) return body;
+    body = removeSection(body, heading);
+  }
+  if (over()) body = removeSection(body, '## Routing');
+  if (over()) body = body.replace(/\n- blocked:[^\n]*/, '');
+  const later = [
+    '## Change neighborhood',
+    '## Repo map (code orientation)',
+    '## Next tools',
+    '## Worktree',
+  ];
+  for (const heading of later) {
+    if (!over()) return body;
+    body = removeSection(body, heading);
+  }
+  if (!over()) return body;
+  return clipUnpinned(body);
+}
+
+function clipUnpinned(body) {
+  const intentAt = headingAt(body, '## Intent sources');
+  const gateAt = headingAt(body, '## Gate (preview)');
+  if (intentAt === -1 || gateAt < intentAt) return body;
+  const pinned = body.slice(intentAt, gateAt);
+  const passAt = body.indexOf('\n- pass:', gateAt);
+  if (passAt === -1) return body;
+  const passEnd = body.indexOf('\n', passAt + 1);
+  const gateEnd = passEnd === -1 ? body.length : passEnd;
+  const reserved = pinned + body.slice(gateAt, gateEnd);
+  if (Buffer.byteLength(reserved, 'utf8') > MAX_BYTES) return reserved;
+  const room = MAX_BYTES - Buffer.byteLength(reserved, 'utf8');
+  const prefix = clipUtf8(body.slice(0, intentAt), room);
+  const tail = clipUtf8(body.slice(gateEnd), room - Buffer.byteLength(prefix, 'utf8'));
+  return prefix + reserved + tail;
 }
 
 function boundedNeighborhoodLines(prefixLines, neighborhood, learnings) {

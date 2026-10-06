@@ -83,6 +83,47 @@ export function assertRealpathContained(root, rel) {
   return full;
 }
 
+const PREFIX_BYTES = 8192;
+
+export function readPrefixNoFollow(full, { root = null } = {}) {
+  const realRoot = canonicalRoot(root);
+  if (root != null && realRoot === null) return null;
+
+  const flags = O_NOFOLLOW !== null ? fs.constants.O_RDONLY | O_NOFOLLOW : fs.constants.O_RDONLY;
+  let fd;
+  try {
+    fd = fs.openSync(full, flags);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return null;
+    if (O_NOFOLLOW === null) {
+      try {
+        if (fs.lstatSync(full).isSymbolicLink()) return null;
+      } catch {
+        return null;
+      }
+    }
+    if (realRoot !== null && !fdMatchesCanonicalUnderRoot(full, stat, realRoot)) return null;
+    const toRead = Math.min(stat.size, PREFIX_BYTES);
+    if (toRead === 0) return Buffer.alloc(0);
+    const buf = Buffer.alloc(toRead);
+    let offset = 0;
+    while (offset < toRead) {
+      const n = fs.readSync(fd, buf, offset, toRead - offset, offset);
+      if (n <= 0) break;
+      offset += n;
+    }
+    return buf.subarray(0, offset);
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export function readFileNoFollow(full, { maxBytes = DEFAULT_MAX_BYTES, root = null, encoding = 'utf8' } = {}) {
   const realRoot = canonicalRoot(root);
     if (root != null && realRoot === null) return null;

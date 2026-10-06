@@ -18,7 +18,7 @@ import { approvedBundleNames, syncBundles } from './bundle-sync.mjs';
 import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { leftoverWorkspaceArtifacts, runMigrateLayout } from './migrate-layout.mjs';
-import { discoverIntentSources } from './intent-sources.mjs';
+import { selectIntent } from './intent-sources.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
@@ -415,7 +415,7 @@ export async function cmdInitRepo(argv) {
       )
     );
     if (exitCode) printNext('harness migrate  # resolve leftover docs/ conflicts');
-    else if (!discoverIntentSources(workspace).length) printNext(prepareNextTool(workspace));
+    else if (!selectIntent(workspace, '').length) printNext(prepareNextTool(workspace));
     else printNext('harness index --status');
   }
   return exitCode;

@@ -33,7 +33,7 @@ Read-only tools are allowed before the gate for classification, recall, investig
 | **C2** | Plan created via **`/ensure-plan`** or **`/capture-issue`** (same schema — not ad-hoc engineer freeform) |
 | **C3** | `plan_lock: true` before implement (from **`/ensure-plan`** / **`/plan-issue`**) |
 | **C4** | Route in `## Activity` |
-| **C-intent-sources** | In-repo specs, ADRs, and intent files are read and listed on plan `intent_sources` (path plus `sha256` at lock) |
+| **C-intent-sources** | In-repo specs, ADRs, and intent files are listed on plan `intent_sources`. The check compares paths. `sha256` is the lock-time record and is not compared. |
 | **C-worktree** | Issue work is in a linked git worktree, not the default branch of the primary checkout |
 
 **Fail → invoke `/ensure-plan`** (preferred) or `/capture-issue`. **STOP** product edits.
