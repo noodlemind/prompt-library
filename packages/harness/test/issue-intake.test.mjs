@@ -65,14 +65,14 @@ function gateJson(ws, extra = [], env = {}) {
   return { result, body, plan };
 }
 
-test('discoverIntentSources lists tracked spec, adr, and intent files and ignores noise', async () => {
-  const { discoverIntentSources } = await import('../lib/intent-sources.mjs');
+test('selectIntent lists tracked spec, adr, and intent files and ignores noise', async () => {
+  const { selectIntent } = await import('../lib/intent-sources.mjs');
   const ws = planWorkspace();
   addTracked(ws, 'docs/specs/checkout.md', '# Checkout\n');
   addTracked(ws, 'docs/adr/0001-payments.md', '# ADR 1\n');
   addTracked(ws, 'docs/intents/billing.intent.md', '# Billing intent\n');
   addTracked(ws, 'docs/notes/readme.md', '# Notes\n');
-  const sources = discoverIntentSources(ws);
+  const sources = selectIntent(ws, '');
   assert.deepEqual(
     sources.map((s) => s.path).sort(),
     ['docs/adr/0001-payments.md', 'docs/intents/billing.intent.md', 'docs/specs/checkout.md']
@@ -415,15 +415,15 @@ test('plan-new without an origin remote stays visible from the linked worktree',
 });
 
 test('orient, plan-new, and gate cap intent sources with the same query ranking', async () => {
-  const { discoverIntentSources } = await import('../lib/intent-sources.mjs');
+  const { selectIntent } = await import('../lib/intent-sources.mjs');
   const ws = planWorkspace();
   for (let i = 1; i <= 12; i += 1) {
     addTracked(ws, `docs/specs/n${String(i).padStart(2, '0')}.md`, `# n${i}\n`);
   }
   addTracked(ws, 'docs/specs/zebra-billing.md', '# Zebra billing\n');
   const query = 'zebra billing';
-  const ranked = discoverIntentSources(ws, { query }).map((s) => s.path).sort();
-  const alpha = discoverIntentSources(ws).map((s) => s.path).sort();
+  const ranked = selectIntent(ws, query).map((s) => s.path).sort();
+  const alpha = selectIntent(ws, '').map((s) => s.path).sort();
   assert.ok(ranked.includes('docs/specs/zebra-billing.md'));
   assert.equal(alpha.includes('docs/specs/zebra-billing.md'), false);
 
@@ -576,4 +576,74 @@ test('plan-new fails when a discovered spec is missing on disk', () => {
   );
   assert.notEqual(created.status, 0);
   assert.match(`${created.stderr}\n${created.stdout}`, /intent source unreadable: docs\/specs\/gone\.md/);
+});
+
+test('implement gate passes after a locked body edit drops the query words from the winner among thirteen specs', () => {
+  const ws = planWorkspace();
+  for (let i = 1; i <= 12; i += 1) {
+    addTracked(ws, `docs/specs/n${String(i).padStart(2, '0')}.md`, `# n${i}\n`);
+  }
+  addTracked(ws, 'docs/specs/n13.md', '# n13\n\nrefund buyer\n');
+  const created = runHarness(
+    ['plan-new', '--type', 'feat', '--slug', 'refund-buyer', '--intent', 'refund buyer', '--date', '2026-10-05', '--verification-check', 'unit-tests', '--workspace', ws, '--json'],
+    { env: GIT_ENV },
+  );
+  assert.equal(created.status, 0, created.stderr + created.stdout);
+  const planPath = JSON.parse(created.stdout).path;
+  const locked = parseFrontmatter(fs.readFileSync(planPath, 'utf8')).intent_sources.map((source) => source.path);
+  assert.equal(locked[0], 'docs/specs/n13.md');
+  fs.writeFileSync(path.join(ws, 'docs/specs/n13.md'), '# n13\n\nno query words remain\n');
+  const gated = runHarness(['gate', '--phase', 'implement', '--plan', planPath, '--workspace', ws, '--json'], { env: GIT_ENV });
+  assert.equal(gated.status, 0, gated.stderr + gated.stdout);
+  const check = JSON.parse(gated.stdout).checks.find((item) => item.id === 'C-intent-sources');
+  assert.equal(check.pass, true);
+  assert.doesNotMatch(check.message || '', /Missing/);
+  assert.doesNotMatch(check.message || '', /docs\/specs\/n01\.md/);
+  assert.doesNotMatch(check.message || '', /drift|hash mismatch|needs-info/i);
+});
+
+test('equal token counts rank spec.md and the constitution ahead of sibling contracts', async () => {
+  const { selectIntent } = await import('../lib/intent-sources.mjs');
+  const ws = planWorkspace();
+  const shared = 'alpha beta\n';
+  addTracked(ws, 'specs/billing/spec.md', shared);
+  addTracked(ws, '.specify/memory/constitution.md', shared);
+  addTracked(ws, 'specs/billing/contracts/aaa.md', shared);
+  addTracked(ws, 'specs/billing/contracts/api.md', shared);
+  addTracked(ws, 'specs/billing/contracts/priority.md', 'alpha beta gamma\n');
+  const tied = selectIntent(ws, 'alpha beta').map((source) => source.path);
+  const specAt = tied.indexOf('specs/billing/spec.md');
+  const constitutionAt = tied.indexOf('.specify/memory/constitution.md');
+  const aaaAt = tied.indexOf('specs/billing/contracts/aaa.md');
+  const apiAt = tied.indexOf('specs/billing/contracts/api.md');
+  assert.ok(specAt !== -1 && constitutionAt !== -1 && aaaAt !== -1 && apiAt !== -1, tied.join(' | '));
+  assert.ok(specAt < aaaAt && specAt < apiAt, tied.join(' | '));
+  assert.ok(constitutionAt < aaaAt && constitutionAt < apiAt, tied.join(' | '));
+  const constitution = selectIntent(ws, 'alpha beta').find((source) => source.path === '.specify/memory/constitution.md');
+  assert.equal(constitution.kind, 'spec');
+  const higher = selectIntent(ws, 'alpha beta gamma').map((source) => source.path);
+  assert.equal(higher[0], 'specs/billing/contracts/priority.md');
+});
+
+test('orient with a frozen plan returns stored intent paths for a different query', () => {
+  const ws = planWorkspace();
+  addTracked(ws, 'docs/specs/alpha-locked.md', '# alpha locked\n');
+  addTracked(ws, 'docs/specs/beta-other.md', '# beta other\n');
+  const created = runHarness(
+    ['plan-new', '--type', 'feat', '--slug', 'alpha-locked', '--intent', 'alpha locked', '--date', '2026-10-05', '--verification-check', 'unit-tests', '--workspace', ws, '--json'],
+    { env: GIT_ENV },
+  );
+  assert.equal(created.status, 0, created.stderr + created.stdout);
+  const planPath = JSON.parse(created.stdout).path;
+  const stored = parseFrontmatter(fs.readFileSync(planPath, 'utf8')).intent_sources.map((source) => source.path);
+  assert.equal(stored[0], 'docs/specs/alpha-locked.md');
+  const orient = runHarness(['orient', '--query', 'beta other', '--workspace', ws, '--json'], { env: GIT_ENV });
+  assert.equal(orient.status, 0, orient.stderr + orient.stdout);
+  const body = JSON.parse(orient.stdout);
+  const orientPaths = body.intentSources.map((source) => source.path);
+  assert.deepEqual(orientPaths, stored);
+  assert.equal(body.intentSources[0].kind, 'spec');
+  assert.equal(Object.hasOwn(body.intentSources[0], 'sha256'), false);
+  const specReads = (body.nextTools || []).filter((tool) => tool.startsWith('read docs/specs/'));
+  assert.deepEqual(specReads, ['read docs/specs/alpha-locked.md']);
 });
