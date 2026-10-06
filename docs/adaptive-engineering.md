@@ -4,10 +4,6 @@ You start with two parts. The Engineer decides what to do. The Harness checks th
 
 The Engineer is the only entry. It answers a question, investigates a system, delivers a change, or reviews a result. The Harness orients the work, locks a plan, gates edits, runs the named checks, and stores the evidence. A change is done when that evidence passes.
 
-This page explains the delivery loop. After you read it, you should be able to answer four questions: what Adaptive Engineering is; what pain it removes versus chat-code or pasting a spec into an agent; how the self-improving loop feeds the next task and what counts as done; and how it compares with spec-driven development, BDD, and coding-agent harnesses that wrap those methods without lock, isolation, or a learning loop.
-
-Command flags, JSON envelopes, and exit codes live in [`packages/harness/README.md`](../packages/harness/README.md) and [`.github/skills/references/harness-tool-contract.md`](../.github/skills/references/harness-tool-contract.md). This page does not replace those manuals.
-
 ```bash
 npm install -g harness
 harness install --configure-vscode
@@ -15,187 +11,156 @@ harness install --configure-vscode
 
 Then select `@engineer` in Copilot Chat.
 
-## What Adaptive Engineering is
+Flags, JSON shapes, and exit codes are in the [harness README](../packages/harness/README.md) and the [tool contract](../.github/skills/references/harness-tool-contract.md).
 
-Adaptive Engineering is a host-first delivery loop with a deterministic kernel.
+## What breaks without the lock
 
-The Engineer (`@engineer`) classifies the request as **Answer**, **Investigate**, **Deliver**, or **Review**. Answer and Investigate stay read-only. Review sends finished changes to `/code-review`. Deliver is the only mode that mutates product files.
+A chat transcript is a bad contract. A spec that lives only in the prompt is the same kind of contract.
 
-On the Deliver path the Engineer calls orient, plan lock, gate, and verify. The kernel runs each command without starting a model. The optional `harness agent` loop is **Benchmark-test-only**. It is an opt-in add-on for a measured eval, not the product runtime.
+A later message changes the goal after files have already moved. Reviewers argue about the request.
 
-Four records make the work inspectable:
+Edge cases stay in the prompt. The plan never names a check for them. CI fails on a case nobody wrote down.
 
-1. **Intent.** What must be true when the work is done, written on the plan as `intent`, `success_criteria`, `expected_outputs`, and `## Intent Contract`.
-2. **Scope.** Which files may change, written as `## Impacted Files`.
-3. **Proof.** Which named checks must pass, written as `verification.required` and mapped from `.github/harness/checks.yaml`.
-4. **Learning.** What the task taught, written only after `harness verify` returns `passed`.
+The agent edits whatever checkout it was started in. That tree may be dirty, behind main, or the default branch itself.
 
-The Engineer grows the way a working engineer does. A repeated procedure becomes a skill. A judgment that needs its own reviewer becomes an agent. A rule for one kind of file becomes an instruction. A solved problem becomes a learning. None of these are required on the first day. The Engineer acquires them when the work shows they are needed. Installing the Harness does not require the specialist agents or the domain skills that may already be in this repository.
+A brownfield repo often has no spec and no ADR. The agent invents modules from file names. A reviewer cannot tell a guess from a decision the team made.
 
-## What pain it removes
+The next review repeats the same missing invariant.
 
-Chat-code and "paste a spec into an agent" fail in the same places.
+The Harness writes the contract before the edit. An edit waits for a passing implement gate. A completion claim waits for the named checks.
 
-**Intent drifts.** The request in chat is not the contract the agent implements. A later turn "clarifies" the goal after files have already moved. Reviewers then argue about what was asked, not about the diff.
+## The Engineer and the Harness
 
-**Edge cases stay implicit.** A spec that lives only in a prompt does not force acceptance criteria or named checks. The agent fills gaps with guesses. CI fails on the cases nobody wrote down.
+Adaptive Engineering is that loop. The Engineer works in the editor. The Harness runs the checks.
 
-**The agent edits the wrong checkout.** Work starts on a dirty local branch, a stale clone, or the default branch of the primary tree. The change is hard to review because it is mixed with unrelated files.
+Task modes are Answer, Investigate, Deliver, and Review. The Engineer picks the mode. Answer and Investigate only read. Review hands the diff to [`/code-review`](../.github/skills/code-review/SKILL.md). Deliver is the only mode that edits product files.
 
-**Brownfield repos have no source of truth.** Many product repos have no spec or ADR. The agent invents architecture from file names. Reviewers cannot tell a guess from a decision.
+Deliver is Host-first. The Engineer calls each Harness command. Kernel-always means orient, plan lock, gate, and verify still run when no specialist is loaded. Agent-optional means the Engineer asks a specialist only for a judgment the task needs. Benchmark-test-only means `harness agent` is the unattended loop for a measured eval. Delivery stays in `@engineer`.
 
-**Review and CI thrash.** Misread requirements produce a passing local story and a failing pipeline, or the reverse. Each retry spends another review cycle on the same missing invariant.
+The runtime has four postures. Standalone is the Engineer and the Harness, with no acquired specialist. Degraded means a missing check or index is reported as missing. Governed means a person has confirmed the learning. Bounded delegation means the specialist answers one question and the Engineer keeps the decision.
 
-Adaptive Engineering treats those as process failures, not model failures. The kernel records the contract, blocks unplanned edits, and refuses a completion claim without fresh evidence.
+Skill-first means a repeated procedure becomes a skill before it becomes another agent. The Engineer can start with no domain skill and no specialist. It acquires them when a task shows they are needed. The install does not add them for you.
 
-## Shipping state on `main` and PR #76
+## Main, and pull request 76
 
-This repository's Adaptive Engineering model is already on `main`: Engineer modes, plan lock, implement gate, named-check verify, and post-pass compounding.
+Main already has the modes, plan lock, the implement gate, named-check verify, and compound after a pass.
 
-Three kernel behaviors live on [PR #76](https://github.com/noodlemind/prompt-library/pull/76). They are not on `main` yet. This explainer names them as **Harness Adaptive Engineering (see also PR #76)**:
+[Pull request 76](https://github.com/noodlemind/prompt-library/pull/76) adds spec hashes, `harness prepare`, and `harness worktree`. Main does not have those three yet. This page calls that set Harness Adaptive Engineering. See also pull request 76.
 
-| Behavior | On `main` today | PR #76 |
+| Behavior | Main | Pull request 76 |
 | --- | --- | --- |
-| Plan lock | `plan_lock: true` plus intent fields and `## Intent Contract` | Also writes `{ path, sha256 }` for each readable in-checkout `intent_sources` file |
-| Checkout isolation | Structural index and knowledge store are keyed per worktree; there is no `harness worktree` command | `harness worktree --slug` opens a linked worktree from `origin/HEAD` |
-| Brownfield starters | Orient and plan-new do not seed specs | `harness prepare` writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` when those paths are missing |
+| Plan lock | `plan_lock: true`, the intent fields, and `## Intent Contract` | Also stores `{ path, sha256 }` of the file bytes for each readable `intent_sources` path in that checkout |
+| Checkout | You create the branch. The structural index and the knowledge store already include the worktree id. There is no `harness worktree` command. | `harness worktree --slug` opens a linked worktree from `origin/HEAD`. The implement gate fails when issue work is still on the default branch of the primary checkout. |
+| No spec yet | You write the spec. Lock still proceeds. | `harness prepare` writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` when those paths are missing. A second run leaves an existing file alone. A gitignored `docs/` directory is left unwritten. |
 
-When a sentence below depends on those three behaviors, it says so. Everything else is current `main` behavior.
-
-## How a task runs
-
-**Task modes** are Answer, Investigate, Deliver, and Review. The Engineer owns the decision. The Harness owns the gate.
-
-Deliver is **Host-first**. The Engineer works in the editor. **Kernel-always** means orient, plan lock, gate, and verify run in the Harness even when no extra agent is loaded. **Agent-optional** means a specialist is consulted only when the task needs that judgment. **Benchmark-test-only** means the unattended agent loop is for a measured eval, not for normal delivery.
-
-The runtime has four postures. **Standalone** is the Engineer with the Harness and no acquired specialist. **Degraded** is a missing check or index, reported rather than invented. **Governed** is a learning that a person has confirmed. **Bounded delegation** means a specialist receives a narrow question and does not take over the delivery.
+## How a delivery runs
 
 ```mermaid
 flowchart TD
-  request[Incoming request] --> classify{Engineer names the mode}
-  classify -->|Answer| answer[Read-only reply]
-  classify -->|Investigate| investigate[Evidence-backed report]
+  request[Request] --> classify{Engineer names the mode}
+  classify -->|Answer| answer[Read and reply]
+  classify -->|Investigate| investigate[Read and report evidence]
   classify -->|Review| review["/code-review"]
   classify -->|Deliver| orient[harness orient]
-  orient --> prepare{"Intent sources empty?<br/>PR #76"}
-  prepare -->|yes, and docs/ is tracked| seed[harness prepare]
-  seed --> editSpecs[Person edits starter spec and ADR]
-  editSpecs --> lock[Lock plan]
-  prepare -->|no, or main without prepare| lock
-  lock --> worktree["harness worktree --slug<br/>PR #76"]
-  worktree --> gate[harness gate --phase implement]
+  orient --> lock[Lock the plan]
+  lock --> gate[harness gate]
   gate -->|blocked| lock
-  gate -->|pass| implement[Edit scoped files]
-  implement --> codeReview["/code-review"]
+  gate -->|pass| edit[Edit files in scope]
+  edit --> codeReview["/code-review"]
   codeReview --> verify[harness verify]
-  verify -->|failed or inconclusive| implement
-  verify -->|passed| compound[compound / auto-compound]
-  compound --> report[Report with evidence]
+  verify -->|failed| edit
+  verify -->|passed| compound[harness compound]
 ```
 
-On `main`, lock goes to gate. `harness prepare` and `harness worktree` exist only on PR #76.
+On main, lock goes to the gate. Pull request 76 inserts `harness prepare` before the lock when `intentSources` is empty, and `harness worktree --slug` before the gate.
 
-Internal skills that already own pieces of this loop: [`/ensure-plan`](../.github/skills/ensure-plan/SKILL.md) (capture and lock), [`/capture-issue`](../.github/skills/capture-issue/SKILL.md), [`/plan-issue`](../.github/skills/plan-issue/SKILL.md), [`/recall`](../.github/skills/recall/SKILL.md), [`/architect`](../.github/skills/architect/SKILL.md) (shape before an unfamiliar edit), [`/code-review`](../.github/skills/code-review/SKILL.md), [`/auto-compound`](../.github/skills/auto-compound/SKILL.md), and [`/compound-learnings`](../.github/skills/compound-learnings/SKILL.md). [`/harness-doctor`](../.github/skills/harness-doctor/SKILL.md) diagnoses hydration and policy. Users invoke `@engineer`; those skills load on demand.
-
-## How a team uses it
-
-This is one Deliver pass on a product repository. The person owns the spec. The Engineer owns the change. The Harness owns the gate and the evidence.
-
-### 1. Orient
+### Orient
 
 ```bash
 harness orient --query "<task>" --workspace . --json
 ```
 
-Read `.harness/context-pack.md`. Do not paste the CLI stdout into chat. Orient writes `.harness/repo-map.md` from `git ls-files`. It uses a current structural index when one exists, otherwise a lexical extract. It injects the top matching learnings into a 2 KB pack. Insight-derived claims are fenced `[unverified memory — advisory]`.
+Read `.harness/context-pack.md`. Leave the CLI stdout out of the chat. Orient writes `.harness/repo-map.md` from `git ls-files`. A current structural index supplies the symbols. With no current index, the extract is lexical. The pack is capped at 2 KB. It includes the top matching learnings. Insight text is wrapped in the fence `[unverified memory — advisory]`.
 
-On PR #76, orient also lists in-repo specs as `intentSources` and says whether the checkout is isolated. If `intentSources` is empty it names `harness prepare`, unless `docs/` is gitignored, in which case it says to un-ignore `docs/specs` and `docs/adr`.
+[`/recall`](../.github/skills/recall/SKILL.md) is the same lookup when you already know the query.
 
-### 2. Prepare when the repo has no spec (PR #76)
+On pull request 76, orient lists specs as `intentSources`. An empty list names `harness prepare`. If `docs/` is gitignored, the message says to un-ignore `docs/specs` and `docs/adr`.
+
+### Prepare, pull request 76
 
 ```bash
 harness init-repo
 harness prepare
 ```
 
-`harness prepare` writes two starter files when those paths are missing: `docs/specs/overview.md` and `docs/adr/0000-architecture.md`. A later run leaves an existing file alone. Prepare does not call a model. It does not infer a full architecture from the tree. People edit those files afterward. Discovery uses `git ls-files`, so an ignored `docs/` directory is not written.
+Prepare writes those two files with an exclusive create. A file that appears during the write is left as it is. Prepare does not call a model. A person edits the starter afterward. The file lists top-level paths observed at the moment of the write. That person writes the architecture.
 
-On `main` today, a brownfield team still writes those docs by hand, or starts from whatever specs already exist. The plan lock can proceed without them.
+On main, write the spec yourself.
 
-### 3. Lock the plan
+### Lock
 
-Trackable Deliver work requires a locked plan. `@engineer` loads `/ensure-plan` and creates it with `harness plan-new`, then locks with `harness plan-update --lock`. Do not edit a `~/.harness` plan in the editor.
+Trackable Deliver work needs a locked plan. The Engineer follows [`/ensure-plan`](../.github/skills/ensure-plan/SKILL.md). [`/capture-issue`](../.github/skills/capture-issue/SKILL.md) opens the issue. [`/plan-issue`](../.github/skills/plan-issue/SKILL.md) fills the phases. `harness plan-new` writes the file. `harness plan-update --lock` sets `plan_lock: true`. Update the plan with `harness plan-update`. Do not open a `~/.harness` plan in the editor.
 
-The lock is the contract. It records intent, acceptance criteria, impacted files, and the named checks that will prove the change. Product plans list `code-review` in `reviews.required`. A docs plan may leave that list empty.
+The lock stores intent, acceptance criteria, impacted files, and the checks that prove the change. Product plans list `code-review` under `reviews.required`. A docs plan may leave that list empty.
 
-On PR #76, plan lock also records `{ path, sha256 }` of the file bytes for each readable in-checkout `intent_sources` path on that tip. A symlink or a missing file fails the lock. There is no mid-flight product-owner watcher. A later edit to those spec files does not fail the implement gate. If shipped behavior contradicts a locked spec, update the spec in the same PR or a stacked PR. Ambiguous specs become `needs-info` questions, not guesses.
+On pull request 76 the lock also stores `{ path, sha256 }` for each readable in-checkout `intent_sources` file. A symlink fails the lock. A missing file fails the lock. Nothing re-hashes the spec while you type. A later edit to those files does not fail the implement gate. When the code and the spec disagree, update the spec in the same pull request or a stacked pull request. An ambiguous spec is status `needs-info`.
 
-### 4. Isolate the checkout (PR #76)
+### Worktree, pull request 76
 
 ```bash
 harness worktree --slug <issue-slug>
 ```
 
-Issue work starts from latest `origin/HEAD`, then a branch, then a linked worktree. The implement gate fails when issue work is still on the default branch of the primary checkout. A plan that exists only as an uncommitted `docs/plans` file or a gitignored `.harness/plans` file is copied into the project store so the same `--plan` still resolves.
+Issue work starts from the latest `origin/HEAD`, then a branch, then a linked worktree. An uncommitted `docs/plans` file, or a gitignored `.harness/plans` file, is copied into the project store so the same `--plan` still resolves. A newer checkout copy replaces an older store copy. A newer store copy stays.
 
-On `main` today, the team still creates a branch by hand. The implement gate checks plan lock and status; it does not yet require a linked worktree.
+On main, create the branch yourself. The implement gate checks lock and status.
 
-### 5. Implement behind the gate
+### Edit
 
 ```bash
 harness gate --phase implement --plan <path> --workspace . --json
 ```
 
-A fresh implement gate must pass before product mutation. Hooks in VS Code (`harness install --configure-vscode`) enforce the same rule on supported edit tools. Scope is `## Impacted Files`. Before a product edit whose shape is not already the local pattern, the Engineer loads `/architect`. Before work on a skill, agent, instruction, check, reference, or solution, it loads `/create-primitive`.
+Wait for a pass, then edit. `harness install --configure-vscode` installs hooks that apply the same rule to supported editor tools. Stay inside `## Impacted Files`.
 
-### 6. Review, then verify
+Load [`/architect`](../.github/skills/architect/SKILL.md) before an edit whose shape is not already the local pattern. Load [`/create-primitive`](../.github/skills/create-primitive/SKILL.md) before a skill, agent, instruction, check, reference, or solution doc. A plan label does not activate the new file. A person approves a new skill or agent before it is installed.
 
-`/code-review` runs before `harness verify`. Fix the findings. Then:
+### Review, then verify
+
+Run [`/code-review`](../.github/skills/code-review/SKILL.md) and fix the findings. Then run verify.
 
 ```bash
 harness verify --plan <path> --workspace . --json
 ```
 
-Named checks are **argv arrays** in `.github/harness/checks.yaml`. The Harness runs them **without a shell**. Policy **exemptions** and **waivers** are explicit. A missing check is not a pass. Only outcome `passed`, bound to the current plan contract, base ref, changed-file set, and workspace contents, permits a completion claim or compound. `failed` and `inconclusive` do not.
+Named checks are argv arrays in `.github/harness/checks.yaml`. The Harness runs them without a shell. Policy exemptions and waivers are explicit. A missing check is not a pass. Outcome `passed` is bound to the plan digest, the base ref, the changed files, and the workspace digest. `failed` and `inconclusive` block compound. `harness verify` also fails while a required review is missing or `critical_open` is non-empty.
 
-### 7. Compound what the task taught
+### Compound
 
-After a pass, `/auto-compound` classifies the learning and `harness compound` records it. A detail that matters only for this task stays on the plan. A fact worth seeing again becomes a solution episode. A new skill or agent is a proposal. A person approves it before it is installed.
-
-Plans for a product repository live in `~/.harness/projects/<repo-id>/plans/`. `--harness-home <path>` uses that directory instead of `~/.harness` for one command. `HARNESS_HOME` does the same for every command. The flag wins. The knowledge search index for that repository lives at `index/<repo-id>/knowledge/` under the same root. Private solution episodes live in `~/.harness/projects/<repo-id>/docs/solutions/`. A reset of the product repository does not delete them. `harness migrate` copies existing plans, solutions, and `knowledge/solutions` into that store. Files already committed in the repository stay there until you remove them.
-
-## How the self-improving loop helps teams
-
-The loop is not "the agent gets smarter by chatting." It is a write path with one writer per store and a human on promotion.
+[`/auto-compound`](../.github/skills/auto-compound/SKILL.md) classifies the learning after a pass. `harness compound` records it. [`/compound-learnings`](../.github/skills/compound-learnings/SKILL.md) is the manual write-up of a solved problem. A detail that matters only for this task stays on the plan. A fact worth seeing again becomes a solution episode. A new skill or agent stays a proposal until a person approves it.
 
 ```mermaid
 flowchart LR
-  verifyPass[harness verify passed] --> classify[auto-compound classifies]
-  classify --> taskOnly[Task detail stays on the plan]
+  passed[verify passed] --> classify[auto-compound classifies]
+  classify --> planNote[Detail stays on the plan]
   classify --> episode[Solution episode]
-  classify --> proposal[Primitive proposal]
+  classify --> proposal[Skill or agent proposal]
   episode --> consolidate[harness consolidate]
   consolidate --> learning[Local learning]
-  learning --> confirmHuman[Person confirms or promotes the learning]
+  learning --> ledger[Person confirms or promotes]
   proposal --> createPrim["/create-primitive after approval"]
-  createPrim --> skillOrAgent[Active skill or agent]
-  confirmHuman --> nextOrient[Later orient recall]
-  skillOrAgent --> nextOrient
+  createPrim --> installed[Installed skill or agent]
+  ledger --> later[Later orient or recall]
+  installed --> later
 ```
 
-What that does for throughput:
+The next similar task starts from `harness orient` or `/recall`. The pack already ranks plans and learnings.
 
-- The next similar task starts from `harness orient` or `/recall`, not from a blank chat. Ranked plans and learnings are in the context pack.
-- A repeated procedure is a candidate skill, not another ad-hoc prompt. `/create-primitive` is the install path. The Engineer does not install a new skill or agent on its own.
-- When the product repo uses the supplied workflow template, reviewers see the same named checks in CI (`validate-plan`, `gate`, `verify`) that the Engineer ran locally. The retry is on a failed check, not on a restated wish.
+`/create-primitive` is how a repeated procedure becomes a skill you can load. The Engineer does not install that skill by itself.
 
-What that does for ship quality:
+When the product repo uses the workflow template in the harness README, CI runs `validate-plan`, `gate`, and `verify` on the plan. The retry reruns the check that failed.
 
-- Completion is evidence, not a claim. `harness verify` binds the plan digest, base ref, changed files, and workspace digest.
-- Required reviews stay open until they are recorded. `harness verify` fails while a required review is missing or `critical_open` is non-empty.
-- Learnings that a person has not confirmed stay advisory. Insight-derived claims are fenced. The governance ledger records retire, dispute, confirm, and **promote**.
-
-A capability moves through **candidate**, **experimental**, **active**, **deprecated**, and **retired**. Promotion needs a **trigger eval**, an **outcome eval**, and **promotion evidence**. Retirement leaves a **tombstone** so a later task can see the **overlap** with what replaced it.
+A capability moves through candidate, experimental, active, deprecated, and retired. Promotion needs a trigger eval, an outcome eval, and promotion evidence. Retirement leaves a tombstone so a later task can see the overlap with what replaced it.
 
 ```mermaid
 stateDiagram
@@ -207,60 +172,47 @@ stateDiagram
   retired --> [*]
 ```
 
-A person can promote a learning. The **governance** ledger records that decision.
+A person can promote a learning. The governance ledger records that decision.
 
-## Compared with adjacent approaches
+Plans for a product repository live in `~/.harness/projects/<repo-id>/plans/`. `--harness-home <path>` replaces `~/.harness` for one command. `HARNESS_HOME` replaces it for every command. The flag wins. The knowledge index for that repository lives at `index/<repo-id>/knowledge/` under the same root. Private solution episodes live in `~/.harness/projects/<repo-id>/docs/solutions/`. A reset of the product repository leaves them there. `harness migrate` copies existing plans, solutions, and `knowledge/solutions` into that store. Files already committed in the repository stay until you remove them.
 
-Adaptive Engineering composes with specs and with behavior examples. It is not a replacement brand for either.
+[`/harness-doctor`](../.github/skills/harness-doctor/SKILL.md) reports hydration and policy problems. It does not edit the product.
+
+## Next to a spec, BDD, and a wrapper
+
+A spec states the behavior. BDD turns examples into checks. Adaptive Engineering locks the material you already have, gates the edit, and writes a learning after the checks pass.
 
 ```mermaid
-flowchart TB
-  subgraph sdd [Spec-driven development alone]
-    s1[Write a spec] --> s2[Implement against it]
-    s2 --> s3[Review after the fact]
+flowchart LR
+  subgraph specOnly [Spec only]
+    s1[Write the spec] --> s2[Implement]
+    s2 --> s3[Review the diff]
   end
-  subgraph bdd [BDD alone]
-    b1[Write scenarios] --> b2[Automate Given/When/Then]
-    b2 --> b3[Passing scenarios, product questions still open]
+  subgraph bddOnly [BDD only]
+    b1[Write scenarios] --> b2[Automate them]
+    b2 --> b3[Scenario result]
   end
-  subgraph wrap [Agent harness that wraps SDD or BDD]
-    w1[Drop a spec beside the agent] --> w2[Agent edits the current tree]
-    w2 --> w3[Tests if the wrapper runs them]
-    w3 --> w4[No lock, no isolation, no compound]
+  subgraph wrapped [Wrapper around a spec or scenarios]
+    w1[Hand the file to the agent] --> w2[Edit the current tree]
+    w2 --> w3[Run tests if configured]
   end
-  subgraph ae [Adaptive Engineering]
-    a1[Discover intent] --> a2[Lock it on the plan]
-    a2 --> a3[Isolate the checkout on PR 76]
-    a3 --> a4[Gate edits]
-    a4 --> a5[Verify named checks]
-    a5 --> a6[Compound after a pass]
+  subgraph here [This repo]
+    a1[Lock intent on the plan] --> a2[Gate the edit]
+    a2 --> a3[Verify named checks]
+    a3 --> a4[Compound after a pass]
   end
 ```
 
-| Mechanism | Spec-driven development alone | BDD alone | Coding-agent harness that wraps SDD or BDD | Adaptive Engineering in this repo |
+| Question | Spec only | BDD only | Wrapper around a spec or scenarios | This repo |
 | --- | --- | --- | --- | --- |
-| Where intent lives | A spec document | Executable scenarios | A spec or feature file the agent is told to read | Plan frontmatter plus `## Intent Contract`; on PR #76, hashed `intent_sources` at lock |
-| Who updates the spec when behavior changes | Informal | Usually the same PR as the scenario | Often the agent, silently | The person. Same PR or a stacked PR. No silent rewrite from code |
-| Mid-flight watcher | None unless the team builds one | None | Sometimes a chat "PO" | None. Lock is a point-in-time hash (PR #76) or a locked plan (`main`) |
-| Checkout | Whatever the developer has open | Same | Whatever the agent was started in | Linked worktree from `origin/HEAD` on PR #76; branch-by-hand on `main` |
-| Edit gate | Review after the fact | Test failure after the fact | Host approvals, if any | `harness gate` plus optional VS Code hooks |
-| Proof | Narrative "done" | Scenario suite | Whatever tests the wrapper runs | Named checks as argv arrays, evidence-bound verify |
-| Learning | Wiki, if anyone writes it | More scenarios | Session memory or a pasted retrospective | Episodes → local learnings → human-approved primitives |
-| Brownfield with no source of truth | Blank page | Blank suite | Agent invents structure | `harness prepare` scaffolds two files (PR #76); it does not invent the architecture |
-
-Use SDD when you need a durable product spec. Use BDD when you need executable examples of behavior. Use Adaptive Engineering to lock that material, isolate the work, refuse a completion claim without named checks, and keep only the learnings a person will stand behind.
-
-**Skill-first** means a repeated procedure becomes a skill before it becomes another agent. The Engineer can start with no domain skill and no specialist. Those are acquired later.
-
-## What this system does not do
-
-- There is no mid-flight product-owner watcher. The lock does not re-hash specs on every keystroke. If the spec is wrong, a person updates it.
-- Specs are person-owned. The kernel does not rewrite a spec from the code. If shipped behavior contradicts the spec, change the spec in the same PR or a stacked PR.
-- `harness prepare` (PR #76) scaffolds two templates. It does not infer modules, types, or an architecture. `/architect` sketches boundaries only when the local pattern is missing, and it still does not invent a full system design.
-- The kernel does not call a model. Routing, plan creation, indexing, and projection stay deterministic.
-- `harness agent` is not the Adaptive Engineering product runtime. Host `@engineer` plus the kernel remain that.
-- A missing check, index, or specialist is reported. It is not invented. That is the Degraded posture.
-- Compounding after a pass is classification and recording. Promotion of a new skill or agent still needs a person.
+| Where intent lives | The spec file | The scenarios | The file the agent was told to read | Plan fields `intent`, `success_criteria`, `expected_outputs`, and `## Intent Contract`. Pull request 76 also hashes `intent_sources` at lock. |
+| Who updates the spec when behavior changes | No required step | Usually the same pull request as the scenario | No separate owner | A person, in the same pull request or a stacked pull request |
+| Re-check during the edit | None | None | A chat stand-in, if the wrapper has one | None. Main locks the plan once. Pull request 76 hashes the spec files once. |
+| Which checkout | The open tree | The open tree | The tree the agent started in | Pull request 76 opens a worktree from `origin/HEAD`. On main you create the branch. |
+| What blocks the edit | Later review | A failing scenario | Host approval, when the wrapper has it | `harness gate`, plus VS Code hooks after `harness install --configure-vscode` |
+| What counts as done | A written claim | The scenario suite | The tests the wrapper runs | Named checks and the evidence file from `harness verify` |
+| What the team keeps | A separate write-up, if the team keeps one | More scenarios | Session memory | An episode, then a local learning, then a skill or agent a person approved |
+| Repo with no spec | Empty docs | An empty suite | The agent invents modules | Pull request 76 writes two starter files. A person fills them in. |
 
 ## What a plan must contain
 
@@ -277,16 +229,6 @@ reviews:
   critical_open: []
 ```
 
-On PR #76 the same block also carries `intent_sources: []` until lock fills the hashes.
+Pull request 76 adds `intent_sources` and fills the hashes at lock.
 
-## Where to go next
-
-| Question | Place |
-| --- | --- |
-| Install and command summary | [`packages/harness/README.md`](../packages/harness/README.md) |
-| Agent-runtime command contract | [`.github/skills/references/harness-tool-contract.md`](../.github/skills/references/harness-tool-contract.md) |
-| Delivery principles the Engineer names | [`.github/skills/references/delivery-principles.md`](../.github/skills/references/delivery-principles.md) |
-| Capture, lock, review, compound | [`/ensure-plan`](../.github/skills/ensure-plan/SKILL.md), [`/plan-issue`](../.github/skills/plan-issue/SKILL.md), [`/code-review`](../.github/skills/code-review/SKILL.md), [`/auto-compound`](../.github/skills/auto-compound/SKILL.md) |
-| New primitive after approval | [`/create-primitive`](../.github/skills/create-primitive/SKILL.md) |
-| Hydration and policy health | [`/harness-doctor`](../.github/skills/harness-doctor/SKILL.md) |
-| Intent hashes, worktrees, prepare | [PR #76](https://github.com/noodlemind/prompt-library/pull/76) |
+Delivery rules the Engineer can cite are in [delivery principles](../.github/skills/references/delivery-principles.md).
