@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { collectEpisodes } from '../lib/knowledge/consolidate.mjs';
 import { runInsightCompound } from '../lib/compound.mjs';
@@ -13,6 +13,69 @@ import { trackWorkspaceSolutions } from './helpers/workspace.mjs';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
+
+for (const competingOperation of ['capture', 'index']) {
+  test(`capture and ${competingOperation} publish shared retrieval state in order`, async t => {
+    const dir = tempDir('insight-index-order-');
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const workspace = path.join(dir, 'product'), copilotHome = path.join(dir, 'copilot'), home = path.join(dir, 'harness');
+    fs.mkdirSync(workspace);
+    const worker = path.join(dir, 'worker.mjs');
+    fs.writeFileSync(worker, `
+import fs from 'node:fs';
+import path from 'node:path';
+import { runInsightCompound } from ${JSON.stringify(pathToFileURL(path.join(packageRoot, 'lib/compound.mjs')).href)};
+import { runIndexKnowledge } from ${JSON.stringify(pathToFileURL(path.join(packageRoot, 'lib/index-knowledge.mjs')).href)};
+const [dir, name, operation] = process.argv.slice(2);
+const workspace = path.join(dir, 'product'), copilotHome = path.join(dir, 'copilot'), home = path.join(dir, 'harness');
+const rename = fs.renameSync;
+fs.renameSync = (source, destination) => {
+  if (path.basename(destination) === 'manifest.yaml') {
+    if (name === 'first') {
+      fs.writeFileSync(path.join(dir, 'held'), '');
+      const deadline = Date.now() + 10000;
+      while (!fs.existsSync(path.join(dir, 'release'))) {
+        if (Date.now() > deadline) throw new Error('Publication barrier timed out');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+    fs.appendFileSync(path.join(dir, 'publications'), name + '\\n');
+  }
+  return rename(source, destination);
+};
+fs.writeFileSync(path.join(dir, name + '-started'), '');
+const options = { workspace, copilotHome, home, flags: { title: name, body: name + ' complete lesson' }, log: () => {} };
+const result = operation === 'index' ? runIndexKnowledge(options) : runInsightCompound(options);
+if (result.pass === false) throw new Error(result.blockedReason);
+`);
+    const children = [];
+    const launch = (name, operation) => {
+      const child = spawn(process.execPath, [worker, dir, name, operation]);
+      children.push(child);
+      let stderr = '';
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      return new Promise(resolve => child.on('close', status => resolve({ status, stderr })));
+    };
+    t.after(() => children.forEach(child => { if (child.exitCode === null) child.kill(); }));
+    const waitFor = async name => {
+      const deadline = Date.now() + 10000;
+      while (!fs.existsSync(path.join(dir, name))) {
+        assert.ok(Date.now() < deadline, `worker must reach ${name}`);
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    };
+    const first = launch('first', 'capture');
+    await waitFor('held');
+    const second = launch('second', competingOperation);
+    await waitFor('second-started');
+    await Promise.race([second, new Promise(resolve => setTimeout(resolve, 1000))]);
+    fs.writeFileSync(path.join(dir, 'release'), '');
+    for (const result of await Promise.all([first, second])) assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(fs.readFileSync(path.join(dir, 'publications'), 'utf8').trim().split('\n'), ['first', 'second']);
+    const manifest = fs.readFileSync(path.join(copilotHome, 'knowledge/manifest.yaml'), 'utf8');
+    assert.equal((manifest.match(/  - id:/g) || []).length, competingOperation === 'capture' ? 2 : 1);
+  });
+}
 
 test('interrupted episode content write leaves no final file and the same operation recovers', t => {
   const ws = tempDir('episode-interrupt-ws-'), copilotHome = tempDir('episode-interrupt-cp-'), home = tempDir('episode-interrupt-hh-');

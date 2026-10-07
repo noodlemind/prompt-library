@@ -4,6 +4,7 @@ import { runBuildPostingsIndex } from './postings-index.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { solutionsScanRoots } from './project-layout.mjs';
+import { withPlanUpdateLock } from './plan-update.mjs';
 
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -99,7 +100,20 @@ function collectSolutions(dir, scope, base) {
   return entries;
 }
 
-export function runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log, home }) {
+export function withKnowledgeIndexLock(options, action) {
+  const rebuild = () => rebuildKnowledgeIndex(options);
+  const manifestRoot = options.knowledgeRoot || (options.copilotHome ? path.join(options.copilotHome, 'knowledge') : null);
+  if (options.flags.dryRun || !manifestRoot) return action(rebuild);
+  fs.mkdirSync(manifestRoot, { recursive: true });
+  const manifestPath = path.join(fs.realpathSync(manifestRoot), 'manifest.yaml');
+  return withPlanUpdateLock(manifestPath, () => action(rebuild));
+}
+
+export function runIndexKnowledge(options) {
+  return withKnowledgeIndexLock(options, rebuild => rebuild());
+}
+
+function rebuildKnowledgeIndex({ knowledgeRoot, workspace, copilotHome, flags, log, home }) {
   const roots = [];
   const manifestRoot = knowledgeRoot || (copilotHome ? path.join(copilotHome, 'knowledge') : null);
   if (manifestRoot) {

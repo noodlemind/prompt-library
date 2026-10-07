@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'node:child_process';
-import { runIndexKnowledge } from './index-knowledge.mjs';
+import { runIndexKnowledge, withKnowledgeIndexLock } from './index-knowledge.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { readEvidence, validateEvidence } from './evidence.mjs';
@@ -196,113 +196,115 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
     };
   }
-  let rel;
-  let replayed = false;
-  if (flags.dryRun) {
-    // Dry run writes nothing, so a plain existence probe is enough to report a
-    // representative would-be name (no reservation, no file created).
-    rel = path.join(dirRel, `${base}.md`);
-    let n = 2;
-    while (fs.existsSync(path.join(target.base, rel))) {
-      rel = path.join(dirRel, `${base}-${n}.md`);
-      n += 1;
+  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
+  return withKnowledgeIndexLock({ knowledgeRoot, workspace, copilotHome, flags, log, home }, rebuild => {
+    let rel;
+    let replayed = false;
+    if (flags.dryRun) {
+      // Dry run writes nothing, so a plain existence probe is enough to report a
+      // representative would-be name (no reservation, no file created).
+      rel = path.join(dirRel, `${base}.md`);
+      let n = 2;
+      while (fs.existsSync(path.join(target.base, rel))) {
+        rel = path.join(dirRel, `${base}-${n}.md`);
+        n += 1;
+      }
+    } else {
+      const reserved = reserveEpisodePath(target.base, dirRel, base, doc, { replay: Boolean(flags.operationSuffix) });
+      if (!reserved.ok) {
+        return {
+          pass: false,
+          exitCode: 1,
+          kind,
+          path: null,
+          indexed: null,
+          blockedReason: reserved.error
+            ? `could not write episode file: ${reserved.error.message}`
+            : 'episode path escapes the workspace (symlinked docs/solutions?)',
+          nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+        };
+      }
+      rel = reserved.rel;
+      replayed = Boolean(reserved.replayed);
     }
-  } else {
-    const reserved = reserveEpisodePath(target.base, dirRel, base, doc, { replay: Boolean(flags.operationSuffix) });
-    if (!reserved.ok) {
+    // Under dryRun nothing was actually written (the write above is skipped), so
+    // the log line must not claim otherwise.
+    log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
+    // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
+    // unhandled throw here would leave the episode we JUST wrote orphaned on disk
+    // and, for the `remember` caller, skip its rollback path entirely (the throw
+    // never reaches `if (!episode.pass)`). Snapshot the ENTIRE retrieval state it
+    // writes — the manifest AND the postings (index-knowledge writes manifest
+    // then postings.json/meta.json, so a throw between them can leave postings
+    // referencing the rolled-back episode) — and on any index failure delete the
+    // just-written episode and restore all of it so retrieval state is exactly
+    // pre-write, then return a clean, recoverable failure the caller handles.
+    const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
+    const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
+    const snapshots = [
+      [manifestPath, snapshotFile(manifestPath)],
+      [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
+      [path.join(indexDir, 'meta.json'), snapshotFile(path.join(indexDir, 'meta.json'))],
+    ];
+    let indexed;
+    try {
+      indexed = rebuild();
+    } catch (err) {
+      // Rollback WITH verified postconditions (P2): the prior code swallowed
+      // every recovery error yet always reported "episode rolled back" /
+      // `path: null` — so a rollback that left the episode on disk or failed to
+      // restore retrieval state was indistinguishable from a clean one. Now each
+      // step is verified against disk and any residue is named in the result.
+      const episodeFull = path.join(target.base, rel);
+      let episodeRemains = false;
+      const unrestored = [];
+      if (!flags.dryRun) {
+        try {
+          if (!replayed) fs.rmSync(episodeFull, { force: true });
+        } catch {
+          // best effort — verified below regardless of whether rmSync threw
+        }
+        episodeRemains = fs.existsSync(episodeFull);
+        // Restore manifest + postings + meta to exactly pre-write (write back the
+        // snapshot, or delete if it was absent), then confirm each landed.
+        for (const [p, snap] of snapshots) {
+          restoreFile(p, snap);
+          if (!snapshotRestored(p, snap)) unrestored.push(p);
+        }
+      }
+      const recovered = !episodeRemains && unrestored.length === 0;
+      let blockedReason;
+      if (recovered) {
+        blockedReason = `knowledge index rebuild failed, episode rolled back: ${err.message}`;
+      } else {
+        const residue = [];
+        if (episodeRemains) residue.push(`episode still on disk at ${rel.split(path.sep).join('/')}`);
+        if (unrestored.length) residue.push(`retrieval state not restored: ${unrestored.join(', ')}`);
+        blockedReason = `knowledge index rebuild failed AND rollback incomplete (${residue.join('; ')}) — run: harness index. Original error: ${err.message}`;
+      }
       return {
         pass: false,
         exitCode: 1,
         kind,
         path: null,
         indexed: null,
-        blockedReason: reserved.error
-          ? `could not write episode file: ${reserved.error.message}`
-          : 'episode path escapes the workspace (symlinked docs/solutions?)',
-        nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+        blockedReason,
+        // Name the residue explicitly so a caller never treats a partial
+        // recovery as a clean one.
+        ...(recovered ? {} : { partialRecovery: { episodeRemains, unrestored } }),
+        nextTools: ['harness index'],
       };
     }
-    rel = reserved.rel;
-    replayed = Boolean(reserved.replayed);
-  }
-  // Under dryRun nothing was actually written (the write above is skipped), so
-  // the log line must not claim otherwise.
-  log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
-  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
-  // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
-  // unhandled throw here would leave the episode we JUST wrote orphaned on disk
-  // and, for the `remember` caller, skip its rollback path entirely (the throw
-  // never reaches `if (!episode.pass)`). Snapshot the ENTIRE retrieval state it
-  // writes — the manifest AND the postings (index-knowledge writes manifest
-  // then postings.json/meta.json, so a throw between them can leave postings
-  // referencing the rolled-back episode) — and on any index failure delete the
-  // just-written episode and restore all of it so retrieval state is exactly
-  // pre-write, then return a clean, recoverable failure the caller handles.
-  const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
-  const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
-  const snapshots = [
-    [manifestPath, snapshotFile(manifestPath)],
-    [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
-    [path.join(indexDir, 'meta.json'), snapshotFile(path.join(indexDir, 'meta.json'))],
-  ];
-  let indexed;
-  try {
-    indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log, home });
-  } catch (err) {
-    // Rollback WITH verified postconditions (P2): the prior code swallowed
-    // every recovery error yet always reported "episode rolled back" /
-    // `path: null` — so a rollback that left the episode on disk or failed to
-    // restore retrieval state was indistinguishable from a clean one. Now each
-    // step is verified against disk and any residue is named in the result.
-    const episodeFull = path.join(target.base, rel);
-    let episodeRemains = false;
-    const unrestored = [];
-    if (!flags.dryRun) {
-      try {
-        if (!replayed) fs.rmSync(episodeFull, { force: true });
-      } catch {
-        // best effort — verified below regardless of whether rmSync threw
-      }
-      episodeRemains = fs.existsSync(episodeFull);
-      // Restore manifest + postings + meta to exactly pre-write (write back the
-      // snapshot, or delete if it was absent), then confirm each landed.
-      for (const [p, snap] of snapshots) {
-        restoreFile(p, snap);
-        if (!snapshotRestored(p, snap)) unrestored.push(p);
-      }
-    }
-    const recovered = !episodeRemains && unrestored.length === 0;
-    let blockedReason;
-    if (recovered) {
-      blockedReason = `knowledge index rebuild failed, episode rolled back: ${err.message}`;
-    } else {
-      const residue = [];
-      if (episodeRemains) residue.push(`episode still on disk at ${rel.split(path.sep).join('/')}`);
-      if (unrestored.length) residue.push(`retrieval state not restored: ${unrestored.join(', ')}`);
-      blockedReason = `knowledge index rebuild failed AND rollback incomplete (${residue.join('; ')}) — run: harness index. Original error: ${err.message}`;
-    }
     return {
-      pass: false,
-      exitCode: 1,
+      pass: true,
+      exitCode: 0,
       kind,
-      path: null,
-      indexed: null,
-      blockedReason,
-      // Name the residue explicitly so a caller never treats a partial
-      // recovery as a clean one.
-      ...(recovered ? {} : { partialRecovery: { episodeRemains, unrestored } }),
-      nextTools: ['harness index'],
+      path: rel.split(path.sep).join('/'),
+      indexed,
+      blockedReason: null,
+      nextTools: ['harness consolidate --status'],
     };
-  }
-  return {
-    pass: true,
-    exitCode: 0,
-    kind,
-    path: rel.split(path.sep).join('/'),
-    indexed,
-    blockedReason: null,
-    nextTools: ['harness consolidate --status'],
-  };
+  });
 }
 
 async function runLearningDecision({ workspace, copilotHome, flags, log }) {
