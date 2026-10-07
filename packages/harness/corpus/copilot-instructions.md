@@ -15,7 +15,7 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 - Product **`.harness/plans/`** (gitignored) or committed **`docs/plans/`** when that directory already exists — per-issue context pack (`status`, `plan_lock`, `phase`, `## Memory Cards`).
 - Repo-private episodes **`~/.harness/projects/<repo-id>/docs/solutions/`** (or committed `docs/solutions/` if present).
 - Team **`packages/harness/corpus/knowledge/solutions/`** — cross-repo learnings (hydrated to `~/.copilot/knowledge/`).
-- Lookup order: `~/.copilot/skills/references/knowledge-locations.md`.
+- Lookup order: `<copilot-home>/skills/references/knowledge-locations.md` (the home defaults to `~/.copilot`).
 
 **`@engineer` only:** task modes, delivery lifecycle, capture gate, and checklist live in `engineer.agent.md`. They are not duplicated here.
 

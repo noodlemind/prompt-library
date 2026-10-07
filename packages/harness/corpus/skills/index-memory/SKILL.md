@@ -15,7 +15,7 @@ Rebuild `knowledge/manifest.yaml` deterministically. Contract: [`harness-tool-co
 harness index --workspace . --json
 ```
 
-Reports entry count and manifest path. Scans `~/.copilot/knowledge/solutions/` and repo `docs/solutions/` when present.
+Reports entry count and manifest path. Scans `<copilot-home>/knowledge/solutions/` (default `~/.copilot`; the home rule is in `knowledge-locations.md`) and repo `docs/solutions/` when present.
 
 ## When
 

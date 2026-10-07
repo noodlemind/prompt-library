@@ -12,7 +12,7 @@ Read-only diagnostics. **No** product code edits.
 
 | ID | Check | Pass criteria |
 |----|-------|---------------|
-| H1 | Global knowledge | `~/.copilot/knowledge/manifest.yaml` exists OR workspace `knowledge/manifest.yaml` |
+| H1 | Global knowledge | `<copilot-home>/knowledge/manifest.yaml` exists OR workspace `knowledge/manifest.yaml`. The home defaults to `~/.copilot`. The home rule is in `knowledge-locations.md` |
 | H2 | Profile | `profile.md` exists with `autonomy` set |
 | H3 | Engineer agent | `~/.copilot/agents/engineer.agent.md` (authored at `packages/harness/corpus/agents/engineer.agent.md`) |
 | H4 | Capture gate ref | `capture-gate.md` present in hydrated skills |
@@ -53,4 +53,4 @@ If the host cannot run hooks, report degraded operation truthfully: explicit `ha
 
 ## Linux / cloud workspace
 
-If H1 fails globally, run `harness install` or `harness upgrade` so `~/.copilot/knowledge/manifest.yaml` is present.
+If H1 fails globally, run `harness install` or `harness upgrade` so `<copilot-home>/knowledge/manifest.yaml` is present. The home defaults to `~/.copilot`.

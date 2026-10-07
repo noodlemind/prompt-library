@@ -2,6 +2,8 @@
 
 Where agents and skills load context. Do not duplicate this list elsewhere. Link here.
 
+The Copilot home defaults to `~/.copilot`. `--copilot-home` replaces it for one command. `COPILOT_HOME` replaces it for a process. When neither is set and `$XDG_CONFIG_HOME/copilot` already exists, that directory is the home. `--harness-home` and `HARNESS_HOME` do not move this directory. Knowledge is `<copilot-home>/knowledge`. A literal `~/.copilot/knowledge` path below is the default home.
+
 ## Recall order (default)
 
 1. **Global team index** — `~/.copilot/knowledge/manifest.yaml` (hydrated from `packages/harness/corpus/knowledge/manifest.yaml`); **fallback:** `packages/harness/corpus/knowledge/manifest.yaml` (cloud/Linux)
@@ -17,7 +19,7 @@ Where agents and skills load context. Do not duplicate this list elsewhere. Link
 
 | Learning type | Write to |
 |---------------|----------|
-| Cross-repo verified fix | `~/.copilot/knowledge/solutions/<category>/<slug>.md` then `/index-memory`. A fix for the next harness release is a commit under `packages/harness/corpus/knowledge/solutions/` |
+| Cross-repo verified fix | `<copilot-home>/knowledge/solutions/<category>/<slug>.md` then `/index-memory`. The home rule above applies. A fix for the next harness release is a commit under `packages/harness/corpus/knowledge/solutions/` |
 | Consolidated semantic learning | `~/.harness/knowledge/<repo-id>/` via `/consolidate`; `consolidate --apply` is the sole writer of learning content, and human retire/dispute/confirm/promote decisions land in the same store's governance ledger |
 | Repo-specific only | `~/.harness/projects/<repo-id>/docs/solutions/` (or committed `docs/solutions/` if git-tracked) |
 | Repo convention one-liner | `.harness/agent-context.md` (or committed `docs/agent-context.md` if git-tracked) |

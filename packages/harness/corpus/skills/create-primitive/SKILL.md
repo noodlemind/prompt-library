@@ -16,7 +16,7 @@ Canonical primitive creator and maintainer for the harness. Use it to keep the l
 - A skill for every install is a commit under `packages/harness/corpus/skills/<name>/SKILL.md`. Agents use `packages/harness/corpus/agents/<name>.agent.md`. Instructions use `packages/harness/corpus/instructions/<name>.instructions.md`.
 - Creating a new review check (bundled under `packages/harness/corpus/skills/code-review/references/checks/*.md` or product-owned `.github/checks/*.md`)
 - Creating or moving dense supporting material into skill `references/` or `assets/`
-- Creating or updating a machine-local solution under `~/.copilot/knowledge/solutions/` (kept across upgrade), a product solution under `~/.harness/projects/<repo-id>/docs/solutions/` or committed `docs/solutions/`, or a release solution under `packages/harness/corpus/knowledge/solutions/`
+- Creating or updating a machine-local solution under `<copilot-home>/knowledge/solutions/` (kept across upgrade; the home defaults to `~/.copilot`, and `--copilot-home`, `COPILOT_HOME`, or an existing `$XDG_CONFIG_HOME/copilot` directory replaces it; `--harness-home` does not), a product solution under `~/.harness/projects/<repo-id>/docs/solutions/` or committed `docs/solutions/`, or a release solution under `packages/harness/corpus/knowledge/solutions/`
 - Modifying any skill, agent, instruction, check, reference, or solution doc
 - Understanding which primitive type should exist
 
@@ -78,7 +78,7 @@ Inspect both repository-owned capabilities and the installed `~/.copilot/skills/
 Before writing files:
 
 1. **Classify the primitive** using the decision rules above.
-2. **Check for overlap** in `~/.copilot/skills/`, `~/.copilot/agents/`, `~/.copilot/instructions/`, skill `references/`, `~/.copilot/knowledge/solutions/`, optional product `.github/checks/`, and product `docs/solutions/`.
+2. **Check for overlap** in `<copilot-home>/skills/`, `<copilot-home>/agents/`, `<copilot-home>/instructions/`, skill `references/`, `<copilot-home>/knowledge/solutions/`, optional product `.github/checks/`, and product `docs/solutions/`. The home defaults to `~/.copilot`. The home rule is in `knowledge-locations.md`.
 3. **State the decision** before editing: "This should be a [primitive] because [boundary]."
 4. **Define triggers and negative triggers** for discovery when the primitive is user/model selectable.
 5. **Declare permissions/tool needs** using the smallest sufficient tool set.
@@ -176,7 +176,7 @@ Required location:
 Use only for verified learnings from completed work. Prefer `/compound-learnings` when the learning came from a pipeline issue.
 
 Required locations:
-- **This machine:** `~/.copilot/knowledge/solutions/<category>/<slug>.md` (upgrade keeps this prefix)
+- **This machine:** `<copilot-home>/knowledge/solutions/<category>/<slug>.md` (upgrade keeps this prefix). The home defaults to `~/.copilot`. `--copilot-home` or `COPILOT_HOME` replaces it. An existing `$XDG_CONFIG_HOME/copilot` directory is the home when neither is set. `--harness-home` does not move it.
 - **This product:** `~/.harness/projects/<repo-id>/docs/solutions/<category>/<slug>.md`, or committed `docs/solutions/` when that directory is git-tracked
 - **Next harness release:** `packages/harness/corpus/knowledge/solutions/<category>/<slug>.md`
 

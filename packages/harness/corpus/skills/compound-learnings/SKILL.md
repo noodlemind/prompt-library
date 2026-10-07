@@ -61,7 +61,7 @@ If none fit, create a new category directory.
 
 **Write paths:**
 
-- This machine, kept across upgrade: `~/.copilot/knowledge/solutions/<category>/<descriptive-slug>.md`
+- This machine, kept across upgrade: `<copilot-home>/knowledge/solutions/<category>/<descriptive-slug>.md`. The home defaults to `~/.copilot`. `--copilot-home` or `COPILOT_HOME` replaces it. An existing `$XDG_CONFIG_HOME/copilot` directory is the home when neither is set. `--harness-home` does not move it.
 - This product only: `~/.harness/projects/<repo-id>/docs/solutions/<category>/<descriptive-slug>.md`, or committed `docs/solutions/` when that directory is git-tracked
 - Next harness release, only when editing the harness package: `packages/harness/corpus/knowledge/solutions/<category>/<descriptive-slug>.md`
 
