@@ -65,6 +65,52 @@ function gateJson(ws, extra = [], env = {}) {
   return { result, body, plan };
 }
 
+test('selectIntent with an empty query does not read spec bytes', () => {
+  const ws = planWorkspace();
+  const rel = 'docs/specs/checkout.md';
+  addTracked(ws, rel, '# Checkout\nThe refund token is unique.\n');
+  const lib = new URL('../lib/intent-sources.mjs', import.meta.url).href;
+  const probe = `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    const ws = process.argv[1];
+    const rel = process.argv[2];
+    const full = path.resolve(ws, rel);
+    const opened = [];
+    const original = fs.openSync;
+    fs.openSync = function (file, ...args) {
+      if (path.resolve(String(file)) === full) opened.push(1);
+      return original.call(fs, file, ...args);
+    };
+    const { selectIntent } = await import(process.argv[3]);
+    const empty = selectIntent(ws, '');
+    const emptyOpens = opened.length;
+    opened.length = 0;
+    selectIntent(ws, 'a');
+    const blankOpens = opened.length;
+    opened.length = 0;
+    const ranked = selectIntent(ws, 'refund');
+    process.stdout.write(JSON.stringify({
+      empty: empty.map((source) => source.path),
+      emptyOpens,
+      blankOpens,
+      rankedOpens: opened.length,
+      top: ranked[0]?.path ?? null,
+    }));
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe, ws, rel, lib], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.ok(body.empty.includes(rel), JSON.stringify(body));
+  assert.equal(body.emptyOpens, 0);
+  assert.equal(body.blankOpens, 0);
+  assert.ok(body.rankedOpens > 0);
+  assert.equal(body.top, rel);
+});
+
 test('selectIntent lists tracked spec, adr, and intent files and ignores noise', async () => {
   const { selectIntent } = await import('../lib/intent-sources.mjs');
   const ws = planWorkspace();

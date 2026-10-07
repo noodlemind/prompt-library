@@ -204,7 +204,7 @@ export function buildContextPack({
 }
 
 function placeBeforeHeading(body, heading, block) {
-  const at = body.indexOf(heading);
+  const at = headingAt(body, heading);
   if (at === -1) return `${body}\n\n${block}\n`;
   return `${body.slice(0, at)}${block}\n\n${body.slice(at)}`;
 }
@@ -242,7 +242,6 @@ function fitPinnedIntent(body) {
     if (!over()) return body;
     body = removeSection(body, heading);
   }
-  if (over()) body = removeSection(body, '## Routing');
   if (over()) body = body.replace(/\n- blocked:[^\n]*/, '');
   const later = [
     '## Change neighborhood',
@@ -254,6 +253,7 @@ function fitPinnedIntent(body) {
     if (!over()) return body;
     body = removeSection(body, heading);
   }
+  if (over()) body = removeSection(body, '## Routing');
   if (!over()) return body;
   return clipUnpinned(body);
 }
@@ -270,7 +270,11 @@ function clipUnpinned(body) {
   const reserved = pinned + body.slice(gateAt, gateEnd);
   if (Buffer.byteLength(reserved, 'utf8') > MAX_BYTES) return reserved;
   const room = MAX_BYTES - Buffer.byteLength(reserved, 'utf8');
-  const prefix = clipUtf8(body.slice(0, intentAt), room);
+  let prefix = clipUtf8(body.slice(0, intentAt), room);
+  if (prefix && !prefix.endsWith('\n')) {
+    const kept = room > 1 ? clipUtf8(body.slice(0, intentAt), room - 1) : '';
+    prefix = kept ? (kept.endsWith('\n') ? kept : `${kept}\n`) : '';
+  }
   const tail = clipUtf8(body.slice(gateEnd), room - Buffer.byteLength(prefix, 'utf8'));
   return prefix + reserved + tail;
 }

@@ -97,7 +97,9 @@ function takeLine(ranked) {
 export function selectIntent(workspace, text = '') {
   const tokens = queryTokens(text);
   const ranked = catalog(workspace);
-  for (const item of ranked) item.score = scoreSource(item, tokens, prefixText(workspace, item.path));
+  for (const item of ranked) {
+    item.score = tokens.length === 0 ? 0 : scoreSource(item, tokens, prefixText(workspace, item.path));
+  }
   ranked.sort((a, b) => {
     if (a.score !== b.score) return b.score - a.score;
     const prefer = preferredBasename(a) - preferredBasename(b);

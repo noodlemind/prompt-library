@@ -258,3 +258,68 @@ test('an intent line that cannot fit beside the gate pass line stays whole', () 
   assert.match(body, /- pass: true/);
   assert.ok(Buffer.byteLength(body, 'utf8') > 2048);
 });
+
+test('intent sources sit on their own line before the gate heading when the goal names that heading', () => {
+  const body = buildContextPack({
+    recall: [],
+    plans: [],
+    planGoal: {
+      planPath: 'docs/plans/active.md',
+      intent: 'Fix the ## Gate (preview) output',
+    },
+    gatePreview: { pass: true },
+    intentSources: [{ path: 'specs/refund/spec.md', kind: 'spec' }],
+  });
+  assert.match(body, /- intent: Fix the ## Gate \(preview\) output/);
+  const goal = body.indexOf('- intent:');
+  const sources = body.indexOf('\n## Intent sources\n');
+  const gate = body.indexOf('\n## Gate (preview)\n');
+  assert.ok(goal !== -1 && sources !== -1 && gate !== -1);
+  assert.ok(goal < sources && sources < gate, body);
+});
+
+test('a clipped goal stays off the intent-sources heading', () => {
+  const body = buildContextPack({
+    recall: [],
+    plans: [],
+    planGoal: {
+      planPath: 'docs/plans/active.md',
+      intent: 'x'.repeat(4000),
+    },
+    gatePreview: { pass: true },
+    intentSources: [{ path: 'specs/refund/spec.md', kind: 'spec' }],
+  });
+  const at = body.indexOf('## Intent sources');
+  assert.ok(at > 0, body);
+  assert.equal(body[at - 1], '\n');
+  const intentLine = body.split('\n').find((row) => row.startsWith('- intent:'));
+  assert.ok(intentLine, body);
+  assert.match(intentLine, /^- intent: x{32,}$/);
+  assert.ok(intentLine.length < 4000);
+  assert.match(body, /- pass: true/);
+  assert.ok(Buffer.byteLength(body, 'utf8') <= CONTEXT_PACK_MAX_BYTES, `bytes=${Buffer.byteLength(body, 'utf8')}`);
+});
+
+test('a short routing section survives when the repo map and tool list are the overflow', () => {
+  const mapPath = `docs/${'m'.repeat(400)}.md`;
+  const body = buildContextPack({
+    learnings: [],
+    recall: [],
+    plans: [],
+    gatePreview: { pass: true },
+    routingLines: ['read spec.md'],
+    repoMapRef: { path: mapPath, files: 10, totalFiles: 100 },
+    neighborhood: {
+      files: Array.from({ length: 40 }, (_, i) => ({ rel: `src/area/file-${String(i).padStart(2, '0')}.js` })),
+    },
+    nextTools: Array.from({ length: 30 }, (_, i) => (
+      `harness read docs/plans/very-long-tool-name-${String(i).padStart(2, '0')}.md --phase implement`
+    )),
+    intentSources: [{ path: 'specs/refund/spec.md', kind: 'spec' }],
+  });
+  assert.ok(Buffer.byteLength(body, 'utf8') <= CONTEXT_PACK_MAX_BYTES);
+  assert.match(body, /## Routing\n- read spec\.md/);
+  assert.equal(body.includes(mapPath), false);
+  assert.equal(body.includes('## Change neighborhood'), false);
+  assert.equal(body.includes('## Next tools'), false);
+});
