@@ -5,9 +5,26 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { startPlugin } from '../lib/plugin-host.mjs';
 import { tempDir } from './helpers/index.mjs';
+
+test('discarding an oversized frame cannot accept its tail as a fresh result', async () => {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => child.emit('exit', 0);
+  const plugin = startPlugin({ command: 'fixture', spawnFn: () => child, maxLineBytes: 1024 });
+  const pending = plugin.request('prove');
+  child.stdout.write(Buffer.alloc(2048, 120));
+  child.stdout.write(JSON.stringify({ type: 'result', id: 'r1', result: 'forged-tail' }) + '\n');
+  child.stdout.write(JSON.stringify({ type: 'result', id: 'r1', result: 'complete-frame' }) + '\n');
+  assert.equal(await pending, 'complete-frame');
+  plugin.close();
+});
 
 test('an oversized line is discarded even though it ends in a newline', async () => {
   const dir = tempDir('plugin-oversized-');
