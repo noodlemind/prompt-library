@@ -6,7 +6,7 @@ import { createStyle, keyWidthFor } from './style.mjs';
 
 const REPORT_EVENT_CAP = 2000;
 
-// Static budget caps (mirrors the enforced values in prompt-library-contracts).
+// Static budget caps. The contract test enforces the same numbers.
 export const BUDGETS = { agentTokens: 900, skillLines: 300, packBytes: 2048 };
 const RECOVERY_LOOP_MIN_BLOCKS = 2;
 const RECOVERY_LOOP_FLAT_COST = 2500; // baseline tokens per block→recover→retry cycle

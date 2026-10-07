@@ -1,12 +1,22 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, readFileNoFollow, readPrefixNoFollow } from './fs-safe.mjs';
 
-const CAP = 12;
+const PATH_CAP = 8;
+const LINE_BUDGET = 512;
+const LINE_SEPARATOR = ', ';
+
+/**
+ * @typedef {'frozen'|'selected'|'missing'|'none'} ObligationReason
+ * @typedef {{ path: string, kind: string|null }} IntentSource
+ * @typedef {{ reason: ObligationReason, paths: IntentSource[] }} IntentObligation
+ */
 
 function kindOf(rel) {
-  const lower = String(rel || '').replace(/\\/g, '/').toLowerCase();
+  const posix = String(rel || '').replace(/\\/g, '/');
+  if (posix === '.specify/memory/constitution.md') return 'spec';
+  const lower = posix.toLowerCase();
   const base = lower.slice(lower.lastIndexOf('/') + 1);
   if (/(^|\/)(adr|adrs|decisions)(\/|$)/.test(lower) || /^adr[-.]/.test(base) || base.endsWith('.adr.md')) return 'adr';
   if (/(^|\/)(rfc|rfcs)(\/|$)/.test(lower) || base.endsWith('.rfc.md')) return 'rfc';
@@ -16,22 +26,47 @@ function kindOf(rel) {
   return null;
 }
 
-function score(item, tokens) {
-  const hay = `${item.path} ${item.kind}`.toLowerCase();
-  return tokens.reduce((n, token) => n + (hay.includes(token) ? 1 : 0), 0);
+function queryTokens(text) {
+  const seen = new Set();
+  const tokens = [];
+  for (const token of String(text || '').toLowerCase().split(/[^a-z0-9]+/)) {
+    if (token.length <= 1 || seen.has(token)) continue;
+    seen.add(token);
+    tokens.push(token);
+  }
+  return tokens;
 }
 
-export function rankIntentSources(workspace, intent) {
-  return discoverIntentSources(workspace, { query: typeof intent === 'string' ? intent : '' });
+function prefixText(workspace, rel) {
+  try {
+    const full = assertNoSymlinkAncestors(workspace, rel);
+    if (!full) return '';
+    const buf = readPrefixNoFollow(full, { root: workspace });
+    if (!buf || buf.length === 0) return '';
+    return buf.toString('utf8');
+  } catch {
+    return '';
+  }
 }
 
-export function discoverIntentSources(workspace, { query = '', limit = CAP } = {}) {
+function scoreSource(item, tokens, prefix) {
+  const body = prefix.includes('\0') ? '' : prefix;
+  const hay = `${item.path} ${item.kind} ${body}`.toLowerCase();
+  return tokens.reduce((count, token) => count + (hay.includes(token) ? 1 : 0), 0);
+}
+
+function preferredBasename(item) {
+  const base = item.path.slice(item.path.lastIndexOf('/') + 1);
+  return base === 'spec.md' || base === 'constitution.md' ? 0 : 1;
+}
+
+function catalog(workspace) {
   if (!workspace) return [];
   const listed = spawnSync('git', ['-C', workspace, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     encoding: 'buffer',
     timeout: 10_000,
   });
-  if (listed.status !== 0) return [];
+  if (listed.status !== 0 || !listed.stdout) return [];
   const found = [];
   for (const rel of listed.stdout.toString('utf8').split('\0')) {
     if (!rel) continue;
@@ -40,18 +75,52 @@ export function discoverIntentSources(workspace, { query = '', limit = CAP } = {
     if (!kind) continue;
     found.push({ path: posix, kind });
   }
-  const tokens = String(query || '')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length > 1);
-  found.sort((a, b) => {
-    if (tokens.length) {
-      const delta = score(b, tokens) - score(a, tokens);
-      if (delta) return delta;
-    }
+  return found;
+}
+
+export function obligationLine(paths) {
+  return (paths || []).map((item) => item.path).join(LINE_SEPARATOR);
+}
+
+function takeLine(ranked) {
+  if (!ranked.length) return [];
+  const kept = [ranked[0]];
+  for (let i = 1; i < ranked.length; i += 1) {
+    if (kept.length >= PATH_CAP) break;
+    const next = kept.concat(ranked[i]);
+    if (Buffer.byteLength(obligationLine(next), 'utf8') > LINE_BUDGET) break;
+    kept.push(ranked[i]);
+  }
+  return kept.map(({ path, kind }) => ({ path, kind }));
+}
+
+export function selectIntent(workspace, text = '') {
+  const tokens = queryTokens(text);
+  const ranked = catalog(workspace);
+  for (const item of ranked) {
+    item.score = tokens.length === 0 ? 0 : scoreSource(item, tokens, prefixText(workspace, item.path));
+  }
+  ranked.sort((a, b) => {
+    if (a.score !== b.score) return b.score - a.score;
+    const prefer = preferredBasename(a) - preferredBasename(b);
+    if (prefer) return prefer;
     return a.path.localeCompare(b.path);
   });
-  return found.slice(0, limit);
+  return takeLine(ranked);
+}
+
+export function resolveObligation(workspace, plan, text = '') {
+  const stored = listedIntentSources(plan);
+  if (plan && stored && stored.length) {
+    return {
+      reason: 'frozen',
+      paths: stored.map((path) => ({ path, kind: kindOf(path) })),
+    };
+  }
+  const selected = selectIntent(workspace, plan ? (typeof plan.fm?.intent === 'string' ? plan.fm.intent : '') : text);
+  if (!selected.length) return { reason: 'none', paths: [] };
+  if (plan) return { reason: 'missing', paths: selected };
+  return { reason: 'selected', paths: selected };
 }
 
 export function sourcePath(value) {
@@ -101,7 +170,10 @@ export function lockIntentSources(workspace, entries, { rehash = true } = {}) {
 }
 
 export function bindLockedIntentSources(workspace, entries, { query = '' } = {}) {
-  return lockIntentSources(workspace, [...(entries || []), ...discoverIntentSources(workspace, { query })], { rehash: true });
+  const explicit = entries || [];
+  const seen = new Set(explicit.map(sourcePath).filter(Boolean));
+  const rest = selectIntent(workspace, query).filter((item) => !seen.has(item.path));
+  return lockIntentSources(workspace, [...explicit, ...rest], { rehash: true });
 }
 
 export function listedIntentSources(plan) {
@@ -110,24 +182,23 @@ export function listedIntentSources(plan) {
   return raw.map(sourcePath).filter(Boolean);
 }
 
-export function intentSourcesCheck(plan, discovered) {
-  if (!discovered.length) {
-    return { id: 'C-intent-sources', pass: true, message: 'no in-repo spec or intent sources', severity: 'ok' };
-  }
-  const listed = listedIntentSources(plan);
-  const missing = discovered.filter((item) => !listed || !listed.includes(item.path));
-  if (missing.length) {
+export function intentSourcesCheck(plan, workspace) {
+  const obligation = resolveObligation(workspace, plan);
+  if (obligation.reason === 'missing') {
     return {
       id: 'C-intent-sources',
       pass: false,
-      message: `Read in-repo specs before implementing and record them on intent_sources. Missing: ${missing.map((item) => item.path).join(', ')}`,
+      message: `Read in-repo specs before implementing and record them on intent_sources. Missing: ${obligationLine(obligation.paths)}`,
       severity: 'fail',
     };
+  }
+  if (obligation.reason === 'none') {
+    return { id: 'C-intent-sources', pass: true, message: 'no in-repo spec or intent sources', severity: 'ok' };
   }
   return {
     id: 'C-intent-sources',
     pass: true,
-    message: `intent_sources covers ${discovered.length} source(s)`,
+    message: `intent_sources covers ${obligation.paths.length} source(s)`,
     severity: 'ok',
   };
 }

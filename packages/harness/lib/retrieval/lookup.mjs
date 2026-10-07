@@ -9,6 +9,7 @@ import { storeDir, listLearnings } from '../knowledge/store.mjs';
 import { collectEpisodes } from '../knowledge/consolidate.mjs';
 import { readStructuralIndex } from '../structural/shape.mjs';
 import { planReadDirs } from '../project-layout.mjs';
+import { getCorpusRoot } from '../assets.mjs';
 
 /** The settled kind list, in the order the architecture doc states it. */
 export const LOOKUP_KINDS = Object.freeze([
@@ -30,7 +31,7 @@ export const LOOKUP_KIND_SUMMARIES = Object.freeze({
   symbol: 'a declaration by name, from the structural index',
   document: 'a knowledge doc by manifest docid',
   plan: 'a plan under .harness/plans or docs/plans by filename',
-  skill: 'a skill by its directory name under .github/skills',
+  skill: 'a skill by its directory name under the Copilot home or the packaged corpus',
   check: 'a named check from the trusted check config',
   run: 'a recorded run (Phase 4a)',
   event: 'the events of one session id',
@@ -186,24 +187,34 @@ function planEntity({ workspace, identifier }) {
   };
 }
 
-function skillEntity({ workspace, identifier }) {
-  const rel = path.posix.join('.github/skills', identifier, 'SKILL.md');
-  const { escaped, raw } = readUnderWorkspace(workspace, rel);
-  if (escaped || raw === null) {
-    throw notFound({ kind: 'skill', identifier, hint: 'a directory name under .github/skills/' });
+function skillEntity({ identifier, copilotHome }) {
+  const rel = path.posix.join('skills', identifier, 'SKILL.md');
+  const roots = [];
+  if (copilotHome) roots.push({ root: path.resolve(copilotHome), source: 'copilot-home' });
+  try {
+    roots.push({ root: getCorpusRoot(), source: 'corpus' });
+  } catch {
+    // A missing corpus still lets a home skill resolve.
   }
-  const fm = raw.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
-  const field = (name) => fm.match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1]?.trim().replace(/^["']|["']$/g, '') ?? null;
-  return {
-    kind: 'skill',
-    id: identifier,
-    location: rel,
-    title: field('name') ?? identifier,
-    provenance: { source: 'workspace', root: path.resolve(workspace) },
-    metadata: { description: field('description'), userInvocable: field('user-invocable') },
-    preview: preview(raw),
-    related: [],
-  };
+  for (const candidate of roots) {
+    const full = safeResolveUnderRoot(candidate.root, rel);
+    if (!full) continue;
+    const raw = readFileNoFollow(full, { root: candidate.root });
+    if (raw === null) continue;
+    const fm = raw.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
+    const field = (name) => fm.match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1]?.trim().replace(/^["']|["']$/g, '') ?? null;
+    return {
+      kind: 'skill',
+      id: identifier,
+      location: full,
+      title: field('name') ?? identifier,
+      provenance: { source: candidate.source, root: candidate.root },
+      metadata: { description: field('description'), userInvocable: field('user-invocable') },
+      preview: preview(raw),
+      related: [],
+    };
+  }
+  throw notFound({ kind: 'skill', identifier, hint: 'a skill directory name under the Copilot home or the packaged corpus' });
 }
 
 function checkEntity({ workspace, identifier }) {

@@ -1,14 +1,14 @@
-import { getAssetsRoot } from './assets.mjs';
+import { getCorpusRoot } from './assets.mjs';
 import { collectAllAssetFiles } from './sync.mjs';
 import { readLock } from './lock.mjs';
 import { placedFiles } from './bundle-sync.mjs';
 import { localPrimitiveStatus } from './local-primitives.mjs';
 
-/** Files the package ships. Empty when assets are unavailable — listing then
+/** Files the package ships. Empty when the corpus is unavailable — listing then
  * treats everything under the home as local rather than crashing a picker. */
 export function shippedAssetFiles() {
   try {
-    return new Set(collectAllAssetFiles(getAssetsRoot()));
+    return new Set(collectAllAssetFiles(getCorpusRoot()));
   } catch {
     return new Set();
   }

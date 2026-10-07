@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
 import { storeDir } from '../lib/knowledge/store.mjs';
 import { structuralIndexDir } from '../lib/repo-map/structural-index.mjs';
+import { getCorpusRoot } from '../lib/assets.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -162,14 +163,15 @@ routing:
 # Fix example
 `);
     const out = orientJson(c, ['--file', 'a.js']);
-    const real = (rel) => fs.realpathSync(path.join(c.ws, rel));
-    assert.deepEqual(out.skills, [{ id: 'java', path: real('.github/skills/java/SKILL.md') }]);
-    assert.deepEqual(out.instructions, [{ id: 'java', path: real('.github/instructions/java.instructions.md') }]);
+    const corpusFile = (rel) => fs.realpathSync(path.join(getCorpusRoot(), rel));
+    assert.deepEqual(out.skills, [{ id: 'java', path: corpusFile('skills/java/SKILL.md') }]);
+    assert.deepEqual(out.instructions, [{ id: 'java', path: corpusFile('instructions/java.instructions.md') }]);
     assert.deepEqual(out.contacts, [{
       id: 'java-reviewer',
-      path: real('.github/agents/java-reviewer.agent.md'),
+      path: corpusFile('agents/java-reviewer.agent.md'),
       when: null,
     }]);
+    assert.equal(out.skills[0].path.includes(`${path.sep}.github${path.sep}`), false);
   } finally {
     fs.rmSync(c.ws, { recursive: true, force: true });
     fs.rmSync(c.home, { recursive: true, force: true });
@@ -211,14 +213,14 @@ routing:
 # Fix example
 `);
     const out = orientJson(c, []);
-    const real = (rel) => fs.realpathSync(path.join(c.ws, rel));
+    const corpusFile = (rel) => fs.realpathSync(path.join(getCorpusRoot(), rel));
     assert.equal(out.gateStatus, 'blocked');
     assert.match(out.blockedReason, /must be lists/);
     assert.deepEqual(out.skills, []);
-    assert.deepEqual(out.instructions, [{ id: 'java', path: real('.github/instructions/java.instructions.md') }]);
+    assert.deepEqual(out.instructions, [{ id: 'java', path: corpusFile('instructions/java.instructions.md') }]);
     assert.deepEqual(out.contacts, [{
       id: 'java-reviewer',
-      path: real('.github/agents/java-reviewer.agent.md'),
+      path: corpusFile('agents/java-reviewer.agent.md'),
       when: null,
     }]);
     const pack = fs.readFileSync(path.join(c.ws, '.harness', 'context-pack.md'), 'utf8');

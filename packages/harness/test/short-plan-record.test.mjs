@@ -5,12 +5,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { externalPlansDir } from '../../../.github/hooks/lib/external-plans.mjs';
+import { externalPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(packageRoot, '../..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
-const gateHook = path.join(repoRoot, '.github', 'hooks', 'require-plan-gate.mjs');
+const gateHook = path.join(repoRoot, 'packages', 'harness', 'corpus', 'hooks', 'require-plan-gate.mjs');
 const GOAL = 'Ship the edit';
 const ACCEPTANCE = 'The edit is allowed';
 const CONSTRAINT = 'Do not invent plan text';

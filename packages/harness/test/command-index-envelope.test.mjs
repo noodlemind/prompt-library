@@ -6,19 +6,26 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { ENVELOPE_SCHEMA_VERSION, STATUS, STATUS_VALUES } from '../lib/envelope.mjs';
-import { SKILLS_DIR, buildCommandIndex, commandIndexEnvelope } from '../lib/command-index.mjs';
+import { SKILLS_REL, buildCommandIndex, commandIndexEnvelope } from '../lib/command-index.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
-function seedSkills(workspace, dirs) {
+function seedSkills(home, dirs) {
   for (const dir of dirs) {
-    const full = path.join(workspace, SKILLS_DIR, dir);
+    const full = path.join(home, SKILLS_REL, dir);
     fs.mkdirSync(full, { recursive: true });
     fs.writeFileSync(path.join(full, 'SKILL.md'), `---\nname: ${dir}\ndescription: does ${dir}\n---\n\nBody.\n`, 'utf8');
   }
-  return workspace;
+  return home;
+}
+
+const CORPUS_INVOCABLE = ['engineer', 'harness-doctor', 'project-readme', 'triage-issues'];
+
+function expectedSkillIds(homeDirs) {
+  const ids = new Set([...homeDirs, ...CORPUS_INVOCABLE]);
+  return [...ids].sort().map((id) => `skill:${id}`);
 }
 
 function runHarness(args, { cwd = packageRoot, home } = {}) {
@@ -46,7 +53,7 @@ function listTree(root) {
 // --- AC10: the envelope shape --------------------------------------------
 
 test('AC10: the index is emitted as a versioned envelope, summary scalars before detail', () => {
-  const envelope = commandIndexEnvelope({ workspace: packageRoot });
+  const envelope = commandIndexEnvelope({ workspace: packageRoot, copilotHome: tempDir('cmdindex-env-shape-') });
     assert.deepEqual(Object.keys(envelope), [
     'schema',
     'command',
@@ -68,9 +75,10 @@ test('AC10: the index is emitted as a versioned envelope, summary scalars before
 });
 
 test('AC10: the envelope scalars are a faithful summary of its own rows', () => {
-  const workspace = seedSkills(tempDir('cmdindex-env-'), ['brainstorming', 'triage-issues']);
-  const envelope = commandIndexEnvelope({ workspace });
-  const index = buildCommandIndex({ surface: 'tui', workspace });
+  const workspace = tempDir('cmdindex-env-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-env-'), ['brainstorming', 'triage-issues']);
+  const envelope = commandIndexEnvelope({ workspace, copilotHome });
+  const index = buildCommandIndex({ surface: 'tui', workspace, copilotHome });
 
   assert.equal(envelope.count, envelope.rows.length);
   assert.equal(envelope.count, index.rows.length);
@@ -78,24 +86,27 @@ test('AC10: the envelope scalars are a faithful summary of its own rows', () => 
   for (const [kind, expected] of [['command', envelope.commands], ['verb', envelope.verbs], ['skill', envelope.skills]]) {
     assert.equal(envelope.rows.filter((r) => r.kind === kind).length, expected, `${kind} count`);
   }
-  assert.equal(envelope.skills, 2);
-  assert.equal(envelope.skillsRoot, SKILLS_DIR);
+  assert.deepEqual(envelope.rows.filter((row) => row.kind === 'skill').map((row) => row.id).sort(), expectedSkillIds(['brainstorming', 'triage-issues']));
+  assert.equal(envelope.skills, expectedSkillIds(['brainstorming', 'triage-issues']).length);
+  assert.equal(envelope.skillsRoot, SKILLS_REL);
   assert.deepEqual(envelope.collisions, index.collisions);
   assert.deepEqual(envelope.rows, index.rows);
 });
 
 test('AC10: the envelope is pure data — JSON round-trips it losslessly', () => {
-  const workspace = seedSkills(tempDir('cmdindex-json-'), ['consolidate']);
-  const envelope = commandIndexEnvelope({ workspace });
+  const workspace = tempDir('cmdindex-json-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-json-'), ['consolidate']);
+  const envelope = commandIndexEnvelope({ workspace, copilotHome });
   const serialized = JSON.stringify(envelope);
     assert.deepEqual(JSON.parse(serialized), envelope);
-  assert.equal(JSON.stringify(commandIndexEnvelope({ workspace })), serialized, 'byte-identical across calls');
+  assert.equal(JSON.stringify(commandIndexEnvelope({ workspace, copilotHome })), serialized, 'byte-identical across calls');
   assert.deepEqual(envelope.collisions, ['consolidate']);
 });
 
 test('AC10: a non-tui surface envelope reports that surface and carries no skills', () => {
-  const workspace = seedSkills(tempDir('cmdindex-envcli-'), ['brainstorming']);
-  const envelope = commandIndexEnvelope({ surface: 'cli', workspace });
+  const workspace = tempDir('cmdindex-envcli-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-envcli-'), ['brainstorming']);
+  const envelope = commandIndexEnvelope({ surface: 'cli', workspace, copilotHome });
   assert.equal(envelope.surface, 'cli');
   assert.equal(envelope.status, STATUS.OK);
   assert.equal(envelope.skills, 0);
@@ -106,15 +117,16 @@ test('AC10: a non-tui surface envelope reports that surface and carries no skill
 // --- AC10: the CLI palette branch ----------------------------------------
 
 test('AC10: the CLI palette branch emits parseable JSON on stdout and exits 0', () => {
-  const workspace = seedSkills(tempDir('cmdindex-cli-'), ['brainstorming', 'consolidate', 'recall']);
+  const workspace = tempDir('cmdindex-cli-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-cli-'), ['brainstorming', 'consolidate', 'recall']);
   const home = tempDir('cmdindex-cli-home-');
-  const run = runHarness(['palette', '--workspace', workspace], { home });
+  const run = runHarness(['palette', '--workspace', workspace, '--copilot-home', copilotHome], { home });
 
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, '', 'the palette lane writes nothing to stderr');
   const payload = JSON.parse(run.stdout);
 
-    assert.deepEqual(payload, JSON.parse(JSON.stringify(commandIndexEnvelope({ workspace }))));
+    assert.deepEqual(payload, JSON.parse(JSON.stringify(commandIndexEnvelope({ workspace, copilotHome }))));
   assert.equal(payload.command, 'palette');
   assert.equal(payload.status, 'ok');
   assert.equal(payload.schema, ENVELOPE_SCHEMA_VERSION);
@@ -126,29 +138,34 @@ test('AC10: the CLI palette branch emits parseable JSON on stdout and exits 0', 
   assert.equal(knowledge.picker, 'verbs', 'its verbs open via the action sheet, not as top-level rows');
   assert.equal(payload.rows.some((r) => r.id === 'verb:knowledge:promote'), false);
 
-    assert.deepEqual(fs.readdirSync(workspace), ['.github']);
+    assert.deepEqual(fs.readdirSync(workspace), []);
   assert.deepEqual(listTree(home), []);
+  assert.ok(fs.existsSync(path.join(copilotHome, 'skills', 'brainstorming', 'SKILL.md')));
 });
 
-test('AC10: the CLI palette branch degrades to commands-only in a repo with no skills', () => {
+test('AC10: the CLI palette branch reads corpus skills when the Copilot home has none', () => {
   const workspace = tempDir('cmdindex-cli-bare-');
+  const copilotHome = tempDir('cmdindex-cli-bare-copilot-');
   const home = tempDir('cmdindex-cli-bare-home-');
-  const run = runHarness(['palette', '--workspace', workspace], { home });
+  const run = runHarness(['palette', '--workspace', workspace, '--copilot-home', copilotHome], { home });
 
   assert.equal(run.status, 0, run.stderr);
   const payload = JSON.parse(run.stdout);
-  assert.equal(payload.skills, 0);
-  assert.equal(payload.skillsRoot, null);
+  assert.deepEqual(payload.rows.filter((row) => row.kind === 'skill').map((row) => row.id).sort(), expectedSkillIds([]));
+  assert.equal(payload.skills, CORPUS_INVOCABLE.length);
+  assert.equal(payload.skillsRoot, SKILLS_REL);
   assert.deepEqual(payload.collisions, []);
   assert.ok(payload.commands > 0, 'commands are still enumerated');
   assert.deepEqual(fs.readdirSync(workspace), [], 'nothing was created in the workspace');
+  assert.deepEqual(fs.readdirSync(copilotHome), [], 'nothing was created in the Copilot home');
   assert.deepEqual(listTree(home), [], 'nothing was created under the harness home');
 });
 
 test('AC10: palette output is stable across invocations', () => {
-  const workspace = seedSkills(tempDir('cmdindex-cli-stable-'), ['alpha', 'beta']);
-  const first = runHarness(['palette', '--workspace', workspace]);
-  const second = runHarness(['palette', '--workspace', workspace]);
+  const workspace = tempDir('cmdindex-cli-stable-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-cli-stable-'), ['alpha', 'beta']);
+  const first = runHarness(['palette', '--workspace', workspace, '--copilot-home', copilotHome]);
+  const second = runHarness(['palette', '--workspace', workspace, '--copilot-home', copilotHome]);
   assert.equal(first.status, 0, first.stderr);
   assert.equal(second.status, 0, second.stderr);
   assert.equal(first.stdout, second.stdout, 'same registry + same skills ⇒ byte-identical bytes on the wire');

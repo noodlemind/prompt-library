@@ -4,6 +4,26 @@ import { createHash } from 'crypto';
 import { findEntryByDocid, resolveDocPath } from './recall-rank.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
+import { getCorpusRoot } from './assets.mjs';
+
+const PACKAGED_REL = /^(skills|agents|instructions)\//;
+
+function resolvePackagedRel(relPath, copilotHome) {
+  const normalized = String(relPath).replace(/\\/g, '/');
+  if (!PACKAGED_REL.test(normalized)) return null;
+  const roots = [];
+  if (copilotHome) roots.push(path.resolve(copilotHome));
+  try {
+    roots.push(getCorpusRoot());
+  } catch {
+    // Fall through to the workspace when the package corpus is missing.
+  }
+  for (const root of roots) {
+    const fullPath = safeResolveUnderRoot(root, normalized);
+    if (fullPath && fs.existsSync(fullPath)) return { fullPath, readRoot: root };
+  }
+  return null;
+}
 
 export const GET_DEFAULT_LINES = 40;
 export const GET_DEFAULT_MAX_BYTES = 2048;
@@ -42,9 +62,15 @@ export function runGet({ workspace, copilotHome, flags, home }) {
     fullPath = resolved?.full ?? null;
     readRoot = resolved?.root ?? null;
   } else if (relPath) {
-    fullPath = safeResolveUnderRoot(workspaceResolved, relPath);
-    if (!fullPath) throw new Error(`path escapes workspace: ${relPath}`);
-    readRoot = workspaceResolved;
+    const packaged = resolvePackagedRel(relPath, copilotHome);
+    if (packaged) {
+      fullPath = packaged.fullPath;
+      readRoot = packaged.readRoot;
+    } else {
+      fullPath = safeResolveUnderRoot(workspaceResolved, relPath);
+      if (!fullPath) throw new Error(`path escapes workspace: ${relPath}`);
+      readRoot = workspaceResolved;
+    }
     entry = findEntryByDocid(copilotHome, workspace, path.basename(relPath, '.md')) || {
       docid: null,
       path: relPath,

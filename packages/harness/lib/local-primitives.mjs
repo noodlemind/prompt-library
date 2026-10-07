@@ -188,6 +188,98 @@ export function localPrimitiveStatus({ copilotHome, shippedFiles = new Set(), lo
   });
 }
 
+const CREATE_KINDS = Object.freeze({
+  skill: (name) => `skills/${name}/SKILL.md`,
+  agent: (name) => `agents/${name}.agent.md`,
+  instruction: (name) => `instructions/${name}.instructions.md`,
+});
+
+const CREATE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export function createPersonalPrimitive({
+  copilotHome,
+  kind,
+  name,
+  text,
+  shippedFiles = new Set(),
+  lockFiles = new Set(),
+  now = new Date().toISOString(),
+}) {
+  if (!Object.prototype.hasOwnProperty.call(CREATE_KINDS, kind)) {
+    throw Object.assign(new Error(`unknown primitive kind: ${JSON.stringify(kind)}`), {
+      code: 'E_USAGE',
+      exit: 2,
+      hint: 'harness resources create <skill|agent|instruction> <name>',
+    });
+  }
+  if (typeof name !== 'string' || !CREATE_NAME.test(name)) {
+    throw Object.assign(new Error(`invalid primitive name: ${JSON.stringify(name)}`), {
+      code: 'E_USAGE',
+      exit: 2,
+      hint: 'harness resources create <skill|agent|instruction> <name>',
+    });
+  }
+  const rel = CREATE_KINDS[kind](name);
+  if (shippedFiles.has(rel) || lockFiles.has(rel)) {
+    throw Object.assign(new Error(`${rel} is shipped with the harness`), {
+      code: 'E_TARGET',
+      exit: 1,
+      hint: 'a skill for every install is a commit under packages/harness/corpus',
+    });
+  }
+  const bytes = Buffer.from(String(text ?? ''), 'utf8');
+  const digest = `sha256-${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+  const validation = validatePrimitive(copilotHome, rel, { text: bytes.toString('utf8'), digest, bytes });
+  if (!validation.valid) {
+    throw Object.assign(new Error(validation.errors[0]), {
+      code: 'E_USAGE',
+      exit: 2,
+      hint: 'harness resources create <skill|agent|instruction> <name>',
+    });
+  }
+  const full = assertNoSymlinkAncestors(copilotHome, rel);
+  if (!full) {
+    throw Object.assign(new Error(`refusing to write ${rel}: path escapes the Copilot home or is a symlink`), {
+      code: 'E_TARGET',
+      exit: 1,
+    });
+  }
+  let stat = null;
+  try {
+    stat = fs.lstatSync(full);
+  } catch {
+    stat = null;
+  }
+  if (stat?.isSymbolicLink()) {
+    throw Object.assign(new Error(`refusing to write ${rel}: is a symlink`), { code: 'E_TARGET', exit: 1 });
+  }
+  if (stat && !stat.isFile()) {
+    throw Object.assign(new Error(`refusing to write ${rel}: is not a regular file`), { code: 'E_TARGET', exit: 1 });
+  }
+  if (stat?.isFile()) {
+    const current = readPrimitiveOnce(copilotHome, rel);
+    if (current.digest === digest) {
+      const registry = readRegistry(copilotHome);
+      const record = registry.primitives?.[rel];
+      if (!registry.unreadable && record?.digest === digest) {
+        return { path: rel, state: 'unchanged', kind: validation.kind, name: validation.name };
+      }
+      const registered = registerPrimitive({ copilotHome, rel, now, shippedFiles, lockFiles });
+      return { ...registered, state: 'registered' };
+    }
+  }
+  const written = writeFileContained(copilotHome, rel, bytes.toString('utf8'));
+  if (!written) {
+    throw Object.assign(new Error(`could not write ${rel}`), {
+      code: 'E_TARGET',
+      exit: 1,
+      hint: 'the path is not writable, or an ancestor is a symlink out of the home directory',
+    });
+  }
+  const registered = registerPrimitive({ copilotHome, rel, now, shippedFiles, lockFiles });
+  return { ...registered, state: stat?.isFile() ? 'replaced' : 'created' };
+}
+
 export function registerPrimitive({ copilotHome, rel, now = new Date().toISOString(), shippedFiles = new Set(), lockFiles = new Set() }) {
   const { local } = classifyPrimitives({ copilotHome, shippedFiles, lockFiles });
   if (!local.includes(rel)) {

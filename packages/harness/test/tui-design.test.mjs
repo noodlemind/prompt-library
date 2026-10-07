@@ -981,12 +981,12 @@ test('FIELD: the default search reaches code — no flags, no index, no skip', a
 // ── the model picker, and the skill row that used to go nowhere ─────────
 
 test('FIELD: a skill row resolves to reading the skill instead of nowhere', async () => {
-    const { buildCommandIndex } = await import('../lib/command-index.mjs');
-  const rows = buildCommandIndex({ surface: 'tui', workspace: process.cwd() }).rows;
-  const skill = rows.find((r) => r.kind === 'skill');
-  if (!skill) return; // a workspace with no skills has nothing to assert
-  assert.deepEqual(skill.argv.slice(0, 2), ['get', '--path']);
-  assert.match(skill.argv[2], /SKILL\.md$/);
+  const { buildCommandIndex } = await import('../lib/command-index.mjs');
+  const copilotHome = mkdtempSync(path.join(tmpdir(), 'tui-skill-row-'));
+  const rows = buildCommandIndex({ surface: 'tui', workspace: process.cwd(), copilotHome }).rows;
+  const skill = rows.find((r) => r.id === 'skill:engineer');
+  assert.ok(skill, 'the packaged engineer skill is on the palette');
+  assert.deepEqual(skill.argv, ['get', '--path', 'skills/engineer/SKILL.md']);
   assert.equal(skill.sideEffect, 'read', 'reading is what actually happens');
 });
 

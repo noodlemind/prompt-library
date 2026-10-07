@@ -45,8 +45,6 @@ jobs:
       # that must actually be present (treesitter-extractor's "runtime
       # integrity mismatch" case asserts on the runtime rather than skipping);
       # it is pure WASM/JS with no install script, so it resolves everywhere.
-      # `npm ci` also runs the package's `prepare` script, which builds
-      # packages/harness/assets from the repo sources.
       - name: Install harness dependencies
         run: npm ci --prefix packages/harness
 
@@ -55,6 +53,3 @@ jobs:
 
       - name: Prompt library contracts
         run: node --test packages/harness/test/prompt-library-contracts.test.mjs
-
-      - name: Build harness assets
-        run: node scripts/build-harness-assets.mjs

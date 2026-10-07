@@ -3,7 +3,7 @@
 > Deterministic lexical map of 282 tracked source files.
 
 - `lib/agent-loop.mjs` — resolveProfile, listProfileIds, resolvePersona, buildSystemPrompt, resolveToolTimeout, exploreStreakOf
-- `lib/commands.mjs` — readPkgVersion, getAssetsRoot, computeStatusResult, pkgRoot, cmdInstallOrUpgrade, cmdDoctor
+- `lib/commands.mjs` — readPkgVersion, getCorpusRoot, computeStatusResult, pkgRoot, cmdInstallOrUpgrade, cmdDoctor
 - `lib/edit-cmd.mjs` — syntaxCheckContent, sha256, literalFlag, readUndoStack, runEdit, runWrite
 - `lib/knowledge/consolidate.mjs` — collectEpisodes, splitLedger, isActiveFm, activeLearnings, bucketCounts, verifiedAndPlans
 - `lib/knowledge/overlay.mjs` — isProtectedFm, branchesRoot, isSafeBucketKey, bucketDirFor, safeBranchName, readBucketMeta
@@ -49,7 +49,7 @@
 - `lib/repo-map/structural-index.mjs` — structuralIndexDir, readStructuralIndex, readStructuralIndexIfCurrent, validateSinceRef, renderStructuralDigest, STRUCTURAL_INDEX_VERSION
 - `lib/retrieval/tree.mjs` — runTree, TREE_SCHEMA, TREE_SUBJECTS, PENDING_SUBJECTS, DEFAULT_DEPTH, MAX_DEPTH
 - `lib/tui/palette.mjs` — containsFlagSyntax, openPalette, resolveSelection, signatureOf, promptsFor, selectionPlan
-- `lib/command-index.mjs` — buildCommandIndex, resolveArgv, commandIndexEnvelope, ROW_KINDS, TOKEN_KINDS, SKILLS_DIR
+- `lib/command-index.mjs` — buildCommandIndex, resolveArgv, commandIndexEnvelope, ROW_KINDS, TOKEN_KINDS, SKILLS_REL
 - `lib/config-cmd.mjs` — normalizeConfigPositionals, configExitFor, CONFIG_VERBS, configResultOf, cmdConfig, configPathFor
 - `lib/context-pack.mjs` — buildLearningsLines, learningsSectionBytes, buildContextPack, CONTEXT_PACK_MAX_BYTES, LEARNINGS_DATA_PREAMBLE, RECALL_DATA_PREAMBLE
 - `lib/evidence.mjs` — writeEvidence, readEvidence, planContractText, planDigest, createEvidenceBinding, validateEvidence

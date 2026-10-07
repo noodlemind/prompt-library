@@ -37,11 +37,11 @@ ${body}
     'utf8'
   );
   fs.copyFileSync(
-    path.join(packageRoot, '../../knowledge/collections.yaml'),
+    path.join(packageRoot, 'corpus', 'knowledge', 'collections.yaml'),
     path.join(knowledgeRoot, 'collections.yaml')
   );
   fs.copyFileSync(
-    path.join(packageRoot, '../../knowledge/recall-synonyms.yaml'),
+    path.join(packageRoot, 'corpus', 'knowledge', 'recall-synonyms.yaml'),
     path.join(knowledgeRoot, 'recall-synonyms.yaml')
   );
   return `${scope}-${category}-${slug}`;
@@ -207,7 +207,7 @@ export function initGit(workspace) {
 }
 
 export function runHook(name, workspace, toolInput = {}) {
-  return spawnSync(process.execPath, [path.join(packageRoot, '../../.github/hooks', name)], {
+  return spawnSync(process.execPath, [path.join(packageRoot, 'corpus', 'hooks', name)], {
     cwd: workspace,
     input: JSON.stringify({ workspace, tool_input: toolInput }),
     encoding: 'utf8',
@@ -218,7 +218,7 @@ export function runHook(name, workspace, toolInput = {}) {
 export function runHookWithPolicy(name, workspace, toolInput = {}) {
   const env = { ...process.env };
   delete env.HARNESS_ENFORCEMENT;
-  return spawnSync(process.execPath, [path.join(packageRoot, '../../.github/hooks', name)], {
+  return spawnSync(process.execPath, [path.join(packageRoot, 'corpus', 'hooks', name)], {
     cwd: workspace,
     input: JSON.stringify({ workspace, tool_input: toolInput }),
     encoding: 'utf8',

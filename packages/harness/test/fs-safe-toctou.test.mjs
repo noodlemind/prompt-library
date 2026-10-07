@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { readFileNoFollow, writeFileContained, assertRealpathContained, realpathParentContained, copyFileContainedExclusive } from '../lib/fs-safe.mjs';
+import { spawnSync } from 'node:child_process';
+import { readFileNoFollow, readPrefixNoFollow, writeFileContained, assertRealpathContained, realpathParentContained, copyFileContainedExclusive } from '../lib/fs-safe.mjs';
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const SENTINEL = 'OUTSIDE_SECRET_SENTINEL must never be read through a swapped ancestor.\n';
@@ -32,6 +33,68 @@ test('read: a symlinked LEAF pointing outside is refused with or without a root 
 
   assert.equal(readFileNoFollow(full, { root: ws }), null, 'symlinked leaf refused (with root)');
   assert.equal(readFileNoFollow(full), null, 'symlinked leaf refused (without root — O_NOFOLLOW/lstat leaf guard)');
+});
+
+test('readPrefixNoFollow returns null for a fifo without waiting for a writer', { timeout: 2000 }, () => {
+  if (process.platform === 'win32') return;
+  const ws = tmp('toctou-fifo-');
+  const full = path.join(ws, 'spec.md');
+  assert.equal(spawnSync('mkfifo', [full]).status, 0);
+  const started = Date.now();
+  assert.equal(readPrefixNoFollow(full, { root: ws }), null);
+  assert.equal(readPrefixNoFollow(full), null);
+  assert.ok(Date.now() - started < 1000);
+});
+
+test('readPrefixNoFollow does not block when a regular file becomes a fifo before open', { timeout: 5000 }, () => {
+  if (process.platform === 'win32') return;
+  const ws = tmp('toctou-fifo-swap-');
+  const lib = new URL('../lib/fs-safe.mjs', import.meta.url).href;
+  const probe = `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { spawnSync } from 'node:child_process';
+    const dir = process.argv[1];
+    const full = path.join(dir, 'spec.md');
+    const fifo = path.join(dir, 'pipe');
+    fs.writeFileSync(full, 'hello spec\\n');
+    if (spawnSync('mkfifo', [fifo]).status !== 0) process.exit(2);
+    const original = fs.lstatSync;
+    let swapped = false;
+    fs.lstatSync = function (file, ...args) {
+      const stat = original.call(fs, file, ...args);
+      if (!swapped && path.resolve(String(file)) === full && stat.isFile()) {
+        swapped = true;
+        fs.renameSync(full, full + '.real');
+        fs.renameSync(fifo, full);
+      }
+      return stat;
+    };
+    const { readPrefixNoFollow } = await import(process.argv[2]);
+    const started = Date.now();
+    const got = readPrefixNoFollow(full);
+    process.stdout.write(JSON.stringify({
+      got: got == null ? null : got.toString('utf8'),
+      elapsed: Date.now() - started,
+      swapped,
+    }));
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe, ws, lib], {
+    encoding: 'utf8',
+    timeout: 2000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.swapped, true);
+  assert.equal(body.got, null);
+  assert.ok(body.elapsed < 1000, `elapsed=${body.elapsed}`);
+});
+
+test('readPrefixNoFollow reads a regular file prefix', () => {
+  const ws = tmp('toctou-prefix-ok-');
+  const full = path.join(ws, 'spec.md');
+  fs.writeFileSync(full, 'hello spec\n');
+  assert.equal(readPrefixNoFollow(full, { root: ws }).toString('utf8'), 'hello spec\n');
 });
 
 test('read: a legitimately deep all-real path (no symlinks) still reads — no false refusal', () => {

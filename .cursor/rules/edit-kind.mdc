@@ -14,7 +14,7 @@ Engineer still chooses Answer, Investigate, Deliver, or Review. A write in this 
 | Sketch of a change that is not already the local pattern | architect |
 | Explanation of how a subsystem works, or where a responsibility lives now | how |
 | Explanation of why a past decision was made | why |
-| Behavior change in `packages/harness`, `scripts`, or `.github/hooks` that extends a pattern already in the repo | tdd |
+| Behavior change in `packages/harness`, `scripts`, or `packages/harness/corpus/hooks` that extends a pattern already in the repo | tdd |
 | Wording change in a skill, agent, instruction, or doc this repo ships | unslop |
 
 A skill with no row is not a procedure for this repo. Leave pstack skills, playbooks, and model pins out of `.github/` and `packages/harness`. This file names no model.

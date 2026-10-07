@@ -4,7 +4,7 @@ import YAML from 'yaml';
 import { createStyle } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { loadConfiguredChecks } from './plan-readiness.mjs';
-import { isPrimitivePath } from './primitive-governance.mjs';
+import { assertNoPersonalWrite, isPrimitivePath } from './primitive-governance.mjs';
 import { plansWriteTarget } from './project-layout.mjs';
 import { harnessGlobalHome } from './paths.mjs';
 import { ensureHarnessDir } from './session.mjs';
@@ -56,11 +56,13 @@ function scalar(value, name, { multiline = false, required = false } = {}) {
 }
 
 function classify(primitivePath) {
-  if (/(?:^\.github|^enterprise)\/skills\//.test(primitivePath)) return 'skill';
-  if (/\.github\/agents\//.test(primitivePath)) return 'agent';
-  if (/\.github\/instructions\//.test(primitivePath)) return 'instruction';
-  if (/\.github\/checks\//.test(primitivePath)) return 'check';
-  if (primitivePath === 'knowledge/capability-registry.yaml') return 'capability registry';
+  const normalized = String(primitivePath || '').replace(/\\/g, '/');
+  if (/^packages\/harness\/corpus\/skills\//.test(normalized)) return 'skill';
+  if (/^packages\/harness\/corpus\/agents\//.test(normalized)) return 'agent';
+  if (/^packages\/harness\/corpus\/instructions\//.test(normalized)) return 'instruction';
+  if (/^\.github\/checks\//.test(normalized)) return 'check';
+  if (normalized === 'packages/harness/corpus/knowledge/capability-registry.yaml') return 'capability registry';
+  if (/^packages\/harness\/corpus\/enterprise\//.test(normalized)) return 'enterprise';
   return 'primitive';
 }
 
@@ -83,6 +85,7 @@ export function buildPlanSkeleton({
   playbook = null,
   intentSources = [],
 } = {}) {
+  assertNoPersonalWrite([...(impacted || []), gap?.primitive]);
   scalar(slug, 'slug', { required: true });
   scalar(title, 'title');
   scalar(intent, 'intent', { multiline: true, required: true });
@@ -247,6 +250,7 @@ export async function cmdPlanNew(argv) {
 
   if (!opts.date) opts.date = new Date().toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.date)) throw new Error('plan-new: date must be YYYY-MM-DD');
+  assertNoPersonalWrite([...(opts.impacted || []), opts.gap?.primitive]);
   if (opts.goal !== undefined) {
     if (opts.type || opts.risk || opts.status || opts.impacted.length > 0) {
       throw new Error('plan-new: --goal does not take --type, --risk, --status, or --impacted');

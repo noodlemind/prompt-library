@@ -26,10 +26,10 @@ function gitWorkspace(remote) {
 }
 
 test('repoId normalizes ssh and https forms of the same remote to one id', () => {
-  const a = gitWorkspace('git@github.com:noodlemind/prompt-library.git');
-  const b = gitWorkspace('https://github.com/noodlemind/prompt-library.git');
+  const a = gitWorkspace('git@github.com:example/widgets.git');
+  const b = gitWorkspace('https://github.com/example/widgets.git');
   assert.equal(repoId(a), repoId(b));
-  assert.match(repoId(a), /^github\.com-noodlemind-prompt-library-[0-9a-f]{8}$/);
+  assert.match(repoId(a), /^github\.com-example-widgets-[0-9a-f]{8}$/);
 });
 
 test('repoId disambiguates remotes whose lossy slugs would otherwise collide', () => {

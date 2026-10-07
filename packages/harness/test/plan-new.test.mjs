@@ -54,9 +54,38 @@ test('scaffolded feat plan passes validate-plan and the implement gate', () => {
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-test('scaffolded primitive plan includes governance and passes the gate', () => {
+test('a personal skill path is refused and no plan file is written', () => {
   const ws = workspace();
-  const rel = writePlan(ws, { type: 'feat', slug: 'payment-check-skill', intent: 'Create the payment-check skill', date: '2026-07-21', impacted: ['.github/skills/payment-check/SKILL.md'] });
+  assert.throws(
+    () => buildPlanSkeleton({
+      check: 'unit-tests',
+      type: 'feat',
+      slug: 'payment-check-skill',
+      intent: 'Create the payment-check skill',
+      date: '2026-07-21',
+      impacted: ['.github/skills/payment-check/SKILL.md'],
+    }),
+    (err) => {
+      assert.equal(err.code, 'E_USAGE');
+      assert.equal(err.exit, 1);
+      assert.match(err.message, /harness resources create/);
+      assert.match(err.message, /\.github\/skills\/payment-check\/SKILL\.md/);
+      return true;
+    },
+  );
+  const cli = harness(ws, [
+    'plan-new', '--type', 'feat', '--slug', 'payment-check-skill', '--intent', 'Create the payment-check skill',
+    '--date', '2026-07-21', '--impacted', '.github/skills/payment-check/SKILL.md', '--json',
+  ]);
+  assert.equal(cli.status, 1, cli.stdout + cli.stderr);
+  assert.match(`${cli.stdout}\n${cli.stderr}`, /harness resources create/);
+  assert.deepEqual(fs.readdirSync(path.join(ws, 'docs', 'plans')), []);
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+test('scaffolded corpus skill plan includes governance and the gate requires create-primitive', () => {
+  const ws = workspace();
+  const rel = writePlan(ws, { type: 'feat', slug: 'payment-check-skill', intent: 'Create the payment-check skill', date: '2026-07-21', impacted: ['packages/harness/corpus/skills/payment-check/SKILL.md'] });
   const content = fs.readFileSync(path.join(ws, rel), 'utf8');
   assert.match(content, /## Primitive Governance/);
   assert.match(content, /Primitive classification: skill/);
@@ -75,7 +104,7 @@ test('scaffolded capability-gap plan is blocked-capability and the gate denies i
     intent: 'Add audit logging',
     date: '2026-07-21',
     impacted: ['src/PaymentController.java'],
-    gap: { id: 'payment-audit-skill', primitive: '.github/skills/payment-audit/SKILL.md' },
+    gap: { id: 'payment-audit-skill', primitive: 'src/PaymentAudit.java' },
   });
   const content = fs.readFileSync(path.join(ws, rel), 'utf8');
   assert.match(content, /status: blocked-capability/);
@@ -211,9 +240,9 @@ test('product plans require code-review and docs plans do not', () => {
 });
 
 test('plan-new reuses the canonical primitive path classifier', () => {
-  for (const impacted of ['enterprise/skills/payment/SKILL.md', 'knowledge/capability-registry.yaml']) {
+  for (const impacted of ['packages/harness/corpus/enterprise/skills/payment/SKILL.md', 'packages/harness/corpus/knowledge/capability-registry.yaml']) {
     const { content } = buildPlanSkeleton({
-      slug: impacted.startsWith('enterprise') ? 'enterprise-skill' : 'capability-registry',
+      slug: impacted.includes('/enterprise/') ? 'enterprise-skill' : 'capability-registry',
       intent: 'Update the governed primitive',
       date: '2026-07-21',
       impacted: [impacted],

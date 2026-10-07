@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { parseFlags } from '../lib/flags.mjs';
 import { SIDE_EFFECTS, getCommand, hasCommand, listCommands, validateArgs } from '../lib/registry.mjs';
-import { ROW_KINDS, SKILLS_DIR, buildCommandIndex, resolveArgv } from '../lib/command-index.mjs';
+import { ROW_KINDS, SKILLS_REL, buildCommandIndex, resolveArgv } from '../lib/command-index.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -23,10 +23,10 @@ function isolatedHome(t, prefix) {
   return home;
 }
 
-/** Seed `<ws>/.github/skills/<dir>/SKILL.md` in the given order. */
-function seedSkills(workspace, skills) {
+/** Seed `<home>/skills/<dir>/SKILL.md`. */
+function seedSkills(home, skills) {
   for (const { dir, name, description, userInvocable, noFile } of skills) {
-    const full = path.join(workspace, SKILLS_DIR, dir);
+    const full = path.join(home, SKILLS_REL, dir);
     fs.mkdirSync(full, { recursive: true });
     if (noFile) continue;
     const invocable = userInvocable === false ? 'user-invocable: false\n' : '';
@@ -36,7 +36,13 @@ function seedSkills(workspace, skills) {
       'utf8'
     );
   }
-  return workspace;
+  return home;
+}
+
+const CORPUS_INVOCABLE = ['engineer', 'harness-doctor', 'project-readme', 'triage-issues'];
+
+function skillIds(rows) {
+  return rows.filter((row) => row.kind === 'skill').map((row) => row.id).sort();
 }
 
 /** Every path under `root`, relative and sorted — a filesystem fingerprint. */
@@ -78,29 +84,35 @@ function fillEveryValue(row, entry) {
 // --- determinism ----------------------------------------------------------
 
 test('the index is byte-identical across repeated builds', () => {
-  const workspace = seedSkills(tempDir('cmdindex-det-'), [
+  const workspace = tempDir('cmdindex-det-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-det-'), [
     { dir: 'zeta' },
     { dir: 'alpha' },
     { dir: 'consolidate' },
   ]);
-  const first = buildCommandIndex({ surface: 'tui', workspace });
-  const second = buildCommandIndex({ surface: 'tui', workspace });
+  const first = buildCommandIndex({ surface: 'tui', workspace, copilotHome });
+  const second = buildCommandIndex({ surface: 'tui', workspace, copilotHome });
   assert.notEqual(first, second, 'a fresh object each call — not a memoized reference');
   assert.equal(JSON.stringify(first), JSON.stringify(second));
-  assert.equal(JSON.stringify(buildCommandIndex({ surface: 'cli', workspace })), JSON.stringify(buildCommandIndex({ surface: 'cli', workspace })));
+  assert.equal(JSON.stringify(buildCommandIndex({ surface: 'cli', workspace, copilotHome })), JSON.stringify(buildCommandIndex({ surface: 'cli', workspace, copilotHome })));
 });
 
 test('the index does not depend on filesystem enumeration order', () => {
-    const forward = seedSkills(tempDir('cmdindex-order-a-'), [{ dir: 'alpha' }, { dir: 'middle' }, { dir: 'zeta' }]);
+  const workspace = tempDir('cmdindex-order-ws-');
+  const forward = seedSkills(tempDir('cmdindex-order-a-'), [{ dir: 'alpha' }, { dir: 'middle' }, { dir: 'zeta' }]);
   const backward = seedSkills(tempDir('cmdindex-order-b-'), [{ dir: 'zeta' }, { dir: 'middle' }, { dir: 'alpha' }]);
   assert.equal(
-    JSON.stringify(buildCommandIndex({ surface: 'tui', workspace: forward })),
-    JSON.stringify(buildCommandIndex({ surface: 'tui', workspace: backward }))
+    JSON.stringify(buildCommandIndex({ surface: 'tui', workspace, copilotHome: forward })),
+    JSON.stringify(buildCommandIndex({ surface: 'tui', workspace, copilotHome: backward }))
   );
 });
 
 test('rows are totally ordered by label then id, by codepoint', () => {
-  const { rows } = buildCommandIndex({ surface: 'tui', workspace: seedSkills(tempDir('cmdindex-sort-'), [{ dir: 'zeta' }, { dir: 'alpha' }]) });
+  const { rows } = buildCommandIndex({
+    surface: 'tui',
+    workspace: tempDir('cmdindex-sort-ws-'),
+    copilotHome: seedSkills(tempDir('cmdindex-sort-'), [{ dir: 'zeta' }, { dir: 'alpha' }]),
+  });
   for (let i = 1; i < rows.length; i++) {
     const prev = rows[i - 1];
     const cur = rows[i];
@@ -123,10 +135,11 @@ test('rows are totally ordered by label then id, by codepoint', () => {
 // --- no flag syntax in labels --------------------------------------------
 
 test('no row label contains flag syntax', () => {
-  const workspace = seedSkills(tempDir('cmdindex-labels-'), [{ dir: 'consolidate' }, { dir: 'recall' }]);
+  const workspace = tempDir('cmdindex-labels-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-labels-'), [{ dir: 'consolidate' }, { dir: 'recall' }]);
   let flagBacked = 0;
   for (const surface of ['tui', 'cli', 'agent']) {
-    const { rows } = buildCommandIndex({ surface, workspace });
+    const { rows } = buildCommandIndex({ surface, workspace, copilotHome });
     for (const row of rows) {
       assert.ok(!row.label.includes('--'), `${surface} row ${row.id} leaks flag syntax in its label: ${row.label}`);
       assert.ok(ROW_KINDS.includes(row.kind));
@@ -139,7 +152,8 @@ test('no row label contains flag syntax', () => {
 // --- argv round-trip ------------------------------------------------------
 
 test('every row resolves to argv the registry accepts and dispatch will run', () => {
-  const workspace = seedSkills(tempDir('cmdindex-argv-'), [{ dir: 'consolidate' }, { dir: 'plain' }]);
+  const workspace = tempDir('cmdindex-argv-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-argv-'), [{ dir: 'consolidate' }, { dir: 'plain' }]);
   let withValueToken = 0;
   let withPrompt = 0;
   let withRefinement = 0;
@@ -149,7 +163,7 @@ test('every row resolves to argv the registry accepts and dispatch will run', ()
   let withPositional = 0;
 
   for (const surface of ['tui', 'cli']) {
-    const { rows } = buildCommandIndex({ surface, workspace });
+    const { rows } = buildCommandIndex({ surface, workspace, copilotHome });
     for (const row of rows) {
       if (row.argv === null) {
         // A skill has no harness argv at all — it is host-run.
@@ -162,7 +176,7 @@ test('every row resolves to argv the registry accepts and dispatch will run', ()
 
             if (row.kind === 'skill') {
         assert.deepEqual(row.argv.slice(0, 2), ['get', '--path'], `${row.id} must resolve to reading the skill`);
-        assert.match(row.argv[2], /^\.github\/skills\/.+\/SKILL\.md$/, `${row.id} points at its own SKILL.md`);
+        assert.match(row.argv[2], /^skills\/.+\/SKILL\.md$/, `${row.id} points at its own SKILL.md`);
         assert.equal(row.sideEffect, 'read');
         assert.ok(hasCommand('get'));
         continue;
@@ -297,16 +311,18 @@ test('resolveArgv omits unanswered pickers and emits booleans as bare flags', ()
 // --- collision policy -----------------------------------------------------
 
 test('a command and a skill sharing a name both stay in the one flat namespace', () => {
-  const workspace = seedSkills(tempDir('cmdindex-collide-'), [
+  const workspace = tempDir('cmdindex-collide-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-collide-'), [
     { dir: 'consolidate', description: 'the consolidation workflow' },
     { dir: 'recall', description: 'the recall workflow' },
     { dir: 'brainstorming', description: 'no command owns this name' },
     { dir: 'ensure-plan', userInvocable: false },
+    { dir: 'engineer', userInvocable: false },
     { dir: 'references', noFile: true },
   ]);
-  const { rows, collisions, skillsRoot } = buildCommandIndex({ surface: 'tui', workspace });
+  const { rows, collisions, skillsRoot } = buildCommandIndex({ surface: 'tui', workspace, copilotHome });
 
-  assert.equal(skillsRoot, SKILLS_DIR);
+  assert.equal(skillsRoot, SKILLS_REL);
   assert.deepEqual(collisions, ['consolidate', 'recall'], 'both overlaps are reported, sorted');
 
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -322,8 +338,16 @@ test('a command and a skill sharing a name both stay in the one flat namespace',
     assert.notEqual(command.label, skill.label);
   }
 
-  assert.equal(rows.filter((r) => r.kind === 'skill').length, 3, 'brainstorming + the two colliding skills');
+  assert.deepEqual(skillIds(rows), [
+    'skill:brainstorming',
+    'skill:consolidate',
+    'skill:harness-doctor',
+    'skill:project-readme',
+    'skill:recall',
+    'skill:triage-issues',
+  ]);
   assert.equal(byId.has('skill:ensure-plan'), false, 'user-invocable: false is excluded');
+  assert.equal(byId.has('skill:engineer'), false, 'a home id claimed as not invocable hides the corpus skill');
   assert.equal(byId.has('skill:references'), false, 'a directory with no SKILL.md is not a skill');
   assert.equal(byId.get('skill:brainstorming').summary, 'no command owns this name');
 
@@ -332,50 +356,61 @@ test('a command and a skill sharing a name both stay in the one flat namespace',
 });
 
 test('with no name overlap, collisions is empty but skills are still listed', () => {
-  const workspace = seedSkills(tempDir('cmdindex-nocollide-'), [{ dir: 'brainstorming' }, { dir: 'triage-issues' }]);
-  const { rows, collisions } = buildCommandIndex({ surface: 'tui', workspace });
+  const workspace = tempDir('cmdindex-nocollide-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-nocollide-'), [{ dir: 'brainstorming' }, { dir: 'triage-issues' }]);
+  const { rows, collisions } = buildCommandIndex({ surface: 'tui', workspace, copilotHome });
   assert.deepEqual(collisions, []);
-  assert.deepEqual(rows.filter((r) => r.kind === 'skill').map((r) => r.id), ['skill:brainstorming', 'skill:triage-issues']);
+  assert.deepEqual(skillIds(rows), [
+    'skill:brainstorming',
+    'skill:engineer',
+    'skill:harness-doctor',
+    'skill:project-readme',
+    'skill:triage-issues',
+  ]);
 });
 
 // --- graceful degradation -------------------------------------------------
 
-test('a workspace with no .github/skills yields commands only and creates nothing', (t) => {
+test('a bare workspace is not a skill root and an empty Copilot home still indexes the corpus', (t) => {
   const workspace = tempDir('cmdindex-bare-');
+  const copilotHome = tempDir('cmdindex-bare-copilot-');
   const home = isolatedHome(t, 'cmdindex-bare-home-');
   assert.deepEqual(fs.readdirSync(workspace), [], 'precondition: the workspace is empty');
 
-  const index = buildCommandIndex({ surface: 'tui', workspace });
-  assert.equal(index.skillsRoot, null, 'null distinguishes "not scanned" from "scanned, nothing found"');
+  const index = buildCommandIndex({ surface: 'tui', workspace, copilotHome });
+  assert.equal(index.skillsRoot, SKILLS_REL);
   assert.deepEqual(index.collisions, []);
-  assert.equal(index.rows.filter((r) => r.kind === 'skill').length, 0);
-  assert.ok(index.rows.length > 0, 'commands are still indexed');
+  assert.deepEqual(skillIds(index.rows), CORPUS_INVOCABLE.map((id) => `skill:${id}`));
+  assert.ok(index.rows.length > CORPUS_INVOCABLE.length, 'commands are still indexed');
 
   assert.deepEqual(fs.readdirSync(workspace), [], 'a read must create nothing in the workspace');
-    assert.deepEqual(listTree(home), [], 'a read must create nothing under the harness home');
+  assert.deepEqual(fs.readdirSync(copilotHome), [], 'a read must create nothing in the Copilot home');
+  assert.deepEqual(listTree(home), [], 'a read must create nothing under the harness home');
 });
 
-test('an empty .github/skills is reported as scanned-and-empty', (t) => {
+test('an empty skills directory on the Copilot home still reports the corpus skills', (t) => {
   const workspace = tempDir('cmdindex-emptyskills-');
+  const copilotHome = tempDir('cmdindex-emptyskills-copilot-');
   const home = isolatedHome(t, 'cmdindex-emptyskills-home-');
-  fs.mkdirSync(path.join(workspace, SKILLS_DIR), { recursive: true });
-  const before = listTree(workspace);
+  fs.mkdirSync(path.join(copilotHome, SKILLS_REL), { recursive: true });
+  const before = listTree(copilotHome);
 
-  const index = buildCommandIndex({ surface: 'tui', workspace });
-  assert.equal(index.skillsRoot, SKILLS_DIR, 'the directory exists, so it was scanned');
-  assert.equal(index.rows.filter((r) => r.kind === 'skill').length, 0);
+  const index = buildCommandIndex({ surface: 'tui', workspace, copilotHome });
+  assert.equal(index.skillsRoot, SKILLS_REL, 'a skills directory was scanned');
+  assert.deepEqual(skillIds(index.rows), CORPUS_INVOCABLE.map((id) => `skill:${id}`));
 
-  assert.deepEqual(listTree(workspace), before, 'the read left the tree untouched');
+  assert.deepEqual(listTree(copilotHome), before, 'the read left the Copilot home untouched');
   assert.deepEqual(listTree(home), [], 'and left the harness home untouched');
 });
 
 test('a skills tree is never mutated by a read', (t) => {
-  const workspace = seedSkills(tempDir('cmdindex-readonly-'), [{ dir: 'alpha' }, { dir: 'beta' }, { dir: 'refs', noFile: true }]);
+  const workspace = tempDir('cmdindex-readonly-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-readonly-'), [{ dir: 'alpha' }, { dir: 'beta' }, { dir: 'refs', noFile: true }]);
   const home = isolatedHome(t, 'cmdindex-readonly-home-');
-  const before = listTree(workspace);
-  buildCommandIndex({ surface: 'tui', workspace });
-  buildCommandIndex({ surface: 'cli', workspace });
-  assert.deepEqual(listTree(workspace), before);
+  const before = listTree(copilotHome);
+  buildCommandIndex({ surface: 'tui', workspace, copilotHome });
+  buildCommandIndex({ surface: 'cli', workspace, copilotHome });
+  assert.deepEqual(listTree(copilotHome), before);
   assert.deepEqual(listTree(home), []);
 });
 
@@ -388,8 +423,9 @@ test('an unknown surface is rejected rather than silently defaulted', () => {
 const LIFECYCLE_ONLY = ['install', 'upgrade', 'uninstall', 'resolve', 'tui'];
 
 test('the palette omits lifecycle and machine-only commands; the CLI keeps them', () => {
-  const tui = buildCommandIndex({ surface: 'tui', workspace: packageRoot });
-  const cli = buildCommandIndex({ surface: 'cli', workspace: packageRoot });
+  const copilotHome = tempDir('cmdindex-surface-home-');
+  const tui = buildCommandIndex({ surface: 'tui', workspace: packageRoot, copilotHome });
+  const cli = buildCommandIndex({ surface: 'cli', workspace: packageRoot, copilotHome });
   for (const name of LIFECYCLE_ONLY) {
     assert.ok(hasCommand(name), `${name} must be registered for this test to mean anything`);
     assert.equal(tui.rows.some((r) => r.noun === name), false, `${name} must not appear on the palette`);
@@ -425,17 +461,19 @@ test('nothing marked userInvocable: false reaches the tui surface', () => {
   assert.ok(internal.length > 0, 'the rule is vacuous unless at least one command opts out');
   assert.deepEqual(internal, ['resolve']);
 
-  const { rows } = buildCommandIndex({ surface: 'tui', workspace: packageRoot });
+  const copilotHome = tempDir('cmdindex-invocable-home-');
+  const { rows } = buildCommandIndex({ surface: 'tui', workspace: packageRoot, copilotHome });
   for (const name of internal) {
     assert.equal(rows.some((r) => r.noun === name), false, `${name} is harness-invoked, not user-invoked`);
   }
-    assert.ok(buildCommandIndex({ surface: 'cli', workspace: packageRoot }).rows.some((r) => r.noun === 'resolve'));
-  assert.equal(buildCommandIndex({ surface: 'agent', workspace: packageRoot }).rows.some((r) => r.noun === 'resolve'), false);
+    assert.ok(buildCommandIndex({ surface: 'cli', workspace: packageRoot, copilotHome }).rows.some((r) => r.noun === 'resolve'));
+  assert.equal(buildCommandIndex({ surface: 'agent', workspace: packageRoot, copilotHome }).rows.some((r) => r.noun === 'resolve'), false);
 });
 
 test('every row on a surface belongs to a command declaring that surface', () => {
+  const copilotHome = tempDir('cmdindex-belong-home-');
   for (const surface of ['tui', 'cli', 'agent']) {
-    const { rows } = buildCommandIndex({ surface, workspace: packageRoot });
+    const { rows } = buildCommandIndex({ surface, workspace: packageRoot, copilotHome });
     for (const row of rows.filter((r) => r.kind !== 'skill')) {
       const entry = getCommand(row.noun);
       assert.ok(entry, `${row.id} must map to a registered command`);
@@ -446,14 +484,18 @@ test('every row on a surface belongs to a command declaring that surface', () =>
 });
 
 test('skills are a tui-only concept', () => {
-  const workspace = seedSkills(tempDir('cmdindex-surfskills-'), [{ dir: 'brainstorming' }]);
+  const workspace = tempDir('cmdindex-surfskills-ws-');
+  const copilotHome = seedSkills(tempDir('cmdindex-surfskills-'), [{ dir: 'brainstorming' }]);
   for (const surface of ['cli', 'agent']) {
-    const index = buildCommandIndex({ surface, workspace });
+    const index = buildCommandIndex({ surface, workspace, copilotHome });
     assert.equal(index.skillsRoot, null, `${surface} does not scan for skills`);
     assert.deepEqual(index.collisions, []);
     assert.equal(index.rows.filter((r) => r.kind === 'skill').length, 0);
   }
-  assert.equal(buildCommandIndex({ surface: 'tui', workspace }).rows.filter((r) => r.kind === 'skill').length, 1);
+  assert.deepEqual(skillIds(buildCommandIndex({ surface: 'tui', workspace, copilotHome }).rows), [
+    'skill:brainstorming',
+    ...CORPUS_INVOCABLE.map((id) => `skill:${id}`),
+  ]);
 });
 
 function declaredClassOf(entry, row) {

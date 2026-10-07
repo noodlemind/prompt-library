@@ -3,7 +3,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { parseFlags, hasFlag } from './flags.mjs';
 import { resolveCopilotHome, resolveIntelliJHome } from './paths.mjs';
-import { pkgRoot, readPkgVersion, getAssetsRoot } from './assets.mjs';
+import { pkgRoot, readPkgVersion, getCorpusRoot } from './assets.mjs';
 import { readLock, writeLock, LOCK_NAME } from './lock.mjs';
 import {
   loadRetired,
@@ -18,7 +18,7 @@ import { approvedBundleNames, syncBundles } from './bundle-sync.mjs';
 import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { leftoverWorkspaceArtifacts, runMigrateLayout } from './migrate-layout.mjs';
-import { discoverIntentSources } from './intent-sources.mjs';
+import { selectIntent } from './intent-sources.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
@@ -37,7 +37,7 @@ import { redactedJson } from './redact.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
-export { pkgRoot, readPkgVersion, getAssetsRoot };
+export { pkgRoot, readPkgVersion, getCorpusRoot };
 
 function log(flags, msg) {
   if (flags.json) return;
@@ -101,7 +101,7 @@ function learningNote(l) {
 export async function cmdInstallOrUpgrade(command, argv) {
   const flags = parseFlags(argv);
   const version = readPkgVersion();
-  const assets = getAssetsRoot();
+  const assets = getCorpusRoot();
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const previousLock = readLock(copilotHome);
   const retired = loadRetired(pkgRoot);
@@ -263,7 +263,7 @@ export async function cmdDoctor(argv) {
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   let assets = pkgRoot;
   try {
-    assets = getAssetsRoot();
+    assets = getCorpusRoot();
   } catch {
     /* doctor still runs */
   }
@@ -415,7 +415,7 @@ export async function cmdInitRepo(argv) {
       )
     );
     if (exitCode) printNext('harness migrate  # resolve leftover docs/ conflicts');
-    else if (!discoverIntentSources(workspace).length) printNext(prepareNextTool(workspace));
+    else if (!selectIntent(workspace, '').length) printNext(prepareNextTool(workspace));
     else printNext('harness index --status');
   }
   return exitCode;

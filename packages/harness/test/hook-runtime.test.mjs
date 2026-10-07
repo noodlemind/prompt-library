@@ -7,18 +7,18 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import YAML from 'yaml';
-import { planContractText } from '../../../.github/hooks/lib/evidence-binding.mjs';
-import { externalPlansDir } from '../../../.github/hooks/lib/external-plans.mjs';
+import { planContractText } from '../corpus/hooks/lib/evidence-binding.mjs';
+import { externalPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
 import {
   activatedSkillFromPayload,
   analyzeShellMutation,
   normalizeToolPayload,
   planUsesCreatePrimitive,
   toolMutationSucceeded,
-} from '../../../.github/hooks/lib/tool-payload.mjs';
+} from '../corpus/hooks/lib/tool-payload.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const hooksRoot = path.join(repoRoot, '.github', 'hooks');
+const hooksRoot = path.join(repoRoot, 'packages', 'harness', 'corpus', 'hooks');
 const binPath = path.join(repoRoot, 'packages', 'harness', 'bin', 'harness.mjs');
 
 function tempWorkspace() {
@@ -88,6 +88,8 @@ Fixture plan.
 
 - \`src/schema.json\`
 - \`.github/skills/example/SKILL.md\`
+- \`.github/checks/example.md\`
+- \`packages/harness/corpus/skills/example/SKILL.md\`
 
 ## Verification Plan
 
@@ -509,7 +511,7 @@ test('passed gate allows scoped mutation and primitive target requires current-s
 
   const primitiveBlocked = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
-    tool_input: { filePath: '.github/skills/example/SKILL.md' },
+    tool_input: { filePath: 'packages/harness/corpus/skills/example/SKILL.md' },
   });
   assert.equal(outputJson(primitiveBlocked).hookSpecificOutput.permissionDecision, 'deny');
   assert.match(outputJson(primitiveBlocked).hookSpecificOutput.permissionDecisionReason, /create-primitive/i);
@@ -518,7 +520,7 @@ test('passed gate allows scoped mutation and primitive target requires current-s
   writePassedGate(workspace, plan);
   const notActivated = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
-    tool_input: { filePath: '.github/skills/example/SKILL.md' },
+    tool_input: { filePath: 'packages/harness/corpus/skills/example/SKILL.md' },
   });
   assert.equal(outputJson(notActivated).hookSpecificOutput.permissionDecision, 'deny');
   assert.match(outputJson(notActivated).hookSpecificOutput.permissionDecisionReason, /create-primitive-activation/i);
@@ -538,7 +540,7 @@ test('passed gate allows scoped mutation and primitive target requires current-s
 
   const primitiveAllowed = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
-    tool_input: { filePath: '.github/skills/example/SKILL.md' },
+    tool_input: { filePath: 'packages/harness/corpus/skills/example/SKILL.md' },
   });
   assert.notEqual(outputJson(primitiveAllowed).hookSpecificOutput?.permissionDecision, 'deny');
 });
@@ -557,7 +559,7 @@ test('scoped shell creation permits only ancestor directories of planned files',
   const allowed = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'run_in_terminal',
     tool_input: {
-      command: "mkdir -p .github/skills/example && printf '%s' skill > .github/skills/example/SKILL.md",
+      command: "mkdir -p packages/harness/corpus/skills/example && printf '%s' skill > packages/harness/corpus/skills/example/SKILL.md",
     },
   });
   assert.notEqual(outputJson(allowed).hookSpecificOutput?.permissionDecision, 'deny');
@@ -904,7 +906,7 @@ test('hook configuration registers official lifecycle events from a deterministi
   assert.ok(config.hooks.Stop?.length);
   for (const event of ['PreToolUse', 'PostToolUse', 'Stop']) {
     const commands = config.hooks[event].flatMap((entry) => entry.hooks || [entry]);
-    assert.ok(commands.every((command) => command.cwd === '.github/hooks'), `${event} cwd`);
+    assert.ok(commands.every((command) => command.cwd === 'hooks'), `${event} cwd`);
   }
 });
 
@@ -1301,7 +1303,7 @@ test('primitive activation without a host session id is accepted only while fres
       cwd: workspace,
       hook_event_name: 'PreToolUse',
       tool_name: 'replace_string_in_file',
-      tool_input: { filePath: '.github/skills/example/SKILL.md' },
+      tool_input: { filePath: '.github/checks/example.md' },
     }),
     encoding: 'utf8',
     env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
@@ -1316,22 +1318,41 @@ test('primitive activation without a host session id is accepted only while fres
       cwd: workspace,
       hook_event_name: 'PreToolUse',
       tool_name: 'replace_string_in_file',
-      tool_input: { filePath: '.github/skills/example/SKILL.md' },
+      tool_input: { filePath: '.github/checks/example.md' },
     }),
     encoding: 'utf8',
     env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
   });
   assert.equal(outputJson(stale).hookSpecificOutput?.permissionDecision, 'deny');
+
+  const personal = spawnSync(process.execPath, [path.join(hooksRoot, 'require-plan-gate.mjs')], {
+    cwd: workspace,
+    input: JSON.stringify({
+      cwd: workspace,
+      hook_event_name: 'PreToolUse',
+      tool_name: 'replace_string_in_file',
+      tool_input: { filePath: '.github/skills/example/SKILL.md' },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+  });
+  assert.equal(outputJson(personal).hookSpecificOutput?.permissionDecision, 'deny');
+  assert.match(outputJson(personal).hookSpecificOutput?.permissionDecisionReason || '', /harness resources create/);
 });
 
 test('hook and CLI primitive path rules and plan digests stay in parity', async () => {
   const cliGovernance = await import('../lib/primitive-governance.mjs');
   const cliEvidence = await import('../lib/evidence.mjs');
-  const hookPayload = await import('../../../.github/hooks/lib/tool-payload.mjs');
+  const hookPayload = await import('../corpus/hooks/lib/tool-payload.mjs');
   const samples = [
     '.github/skills/example/SKILL.md',
     '.github/agents/engineer.agent.md',
     '.github/instructions/global.instructions.md',
+    'packages/harness/corpus/skills/example/SKILL.md',
+    'packages/harness/corpus/agents/engineer.agent.md',
+    'packages/harness/corpus/instructions/global.instructions.md',
+    'packages/harness/corpus/enterprise/skills/example/SKILL.md',
+    'packages/harness/corpus/knowledge/capability-registry.yaml',
     '.github/prompts/example.prompt.md',
     '.github/checks/example.md',
     'enterprise/skills/example/SKILL.md',

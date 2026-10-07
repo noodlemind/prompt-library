@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import { test } from 'node:test';
-import { validateEvidenceBinding } from '../../../.github/hooks/lib/evidence-binding.mjs';
+import { validateEvidenceBinding } from '../corpus/hooks/lib/evidence-binding.mjs';
 import { runNamedCheck, validateCommand } from '../lib/checks.mjs';
 import { createEvidenceBinding } from '../lib/evidence.mjs';
 import { loadPlan } from '../lib/plan-parse.mjs';

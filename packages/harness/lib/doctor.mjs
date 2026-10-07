@@ -673,9 +673,9 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
 
   checks.push({
     id: 'H8',
-    name: 'Assets bundle in package',
-    pass: fs.existsSync(assetsRoot),
-    hint: 'Maintainer: npm run build:assets before publish',
+    name: 'Corpus in package',
+    pass: fs.existsSync(path.join(assetsRoot, 'skills', 'engineer', 'SKILL.md')),
+    hint: 'Reinstall the packaged CLI',
   });
 
     const lock = readLock(copilotHome);
@@ -766,7 +766,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     id: 'H14',
     name: 'Lifecycle hooks bundle',
     pass: fs.existsSync(hooksJson) || fs.existsSync(hooksAsset),
-    hint: 'Re-run harness install to sync .github/hooks/',
+    hint: 'Re-run harness install to sync hooks/',
     optional: true,
   });
 

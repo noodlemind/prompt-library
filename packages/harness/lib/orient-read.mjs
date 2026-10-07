@@ -6,7 +6,7 @@ import { buildNeighborhood } from './repo-map/index.mjs';
 import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
-import { discoverInventory, routingCards, workspaceRoutingRoots } from './route.mjs';
+import { discoverInventory, routingCards, primitiveReadRoots } from './route.mjs';
 
 const INDEX_MISSING = { knowledge: 'missing', structural: 'missing' };
 
@@ -76,7 +76,7 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
   let contacts = [];
   if (active?.fm?.routing) {
     try {
-      const inventory = discoverInventory(workspaceRoutingRoots(workspace, [copilotHome]));
+      const inventory = discoverInventory(primitiveReadRoots(copilotHome));
       ({ skills, instructions, contacts } = routingCards(active.fm.routing, inventory));
     } catch {
       skills = [];

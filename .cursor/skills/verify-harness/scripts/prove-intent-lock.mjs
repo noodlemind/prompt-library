@@ -157,6 +157,39 @@ Relock hashes.
   assertEqual(missingCheck.pass, false, 'C-intent-sources missing source');
   assertMatch(missingCheck.message, /docs\/specs\/checkout\.md/, 'C-intent-sources names the spec');
 
+  for (let i = 1; i <= 12; i += 1) {
+    writeTracked(ctx.ws, `docs/specs/n${String(i).padStart(2, '0')}.md`, `# n${i}\n`);
+  }
+  const winnerRel = 'docs/specs/n13.md';
+  writeTracked(ctx.ws, winnerRel, '# n13\n\nrefund buyer\n');
+  const siblingPlan = runHarness(
+    [
+      'plan-new',
+      '--type',
+      'feat',
+      '--slug',
+      'refund-buyer',
+      '--intent',
+      'refund buyer',
+      '--date',
+      '2026-10-05',
+      '--verification-check',
+      'unit-tests',
+    ],
+    ctx
+  );
+  assertEqual(siblingPlan.status, 0, `sibling plan-new exit (${siblingPlan.stderr})`);
+  const siblingPlanPath = parseJson(siblingPlan, 'sibling-plan-new').path;
+  const siblingLocked = parseFrontmatter(fs.readFileSync(siblingPlanPath, 'utf8'));
+  assertEqual(siblingLocked.intent_sources[0].path, winnerRel, 'sibling plan records the body winner');
+  fs.writeFileSync(path.join(ctx.ws, winnerRel), '# n13\n\nno query words remain\n');
+  const siblingGate = runHarness(['gate', '--phase', 'implement', '--plan', siblingPlanPath], ctx);
+  assertEqual(siblingGate.status, 0, `sibling gate exit (${siblingGate.stderr} ${siblingGate.stdout})`);
+  const siblingCheck = parseJson(siblingGate, 'sibling-gate').checks.find((item) => item.id === 'C-intent-sources');
+  assertEqual(siblingCheck.pass, true, 'sibling C-intent-sources');
+  assertMatch(siblingCheck.message || '', /^(?!.*(Missing|drift|hash mismatch|needs-info))/is, 'sibling check does not name a missing spec');
+  assertEqual(String(siblingCheck.message || '').includes('docs/specs/n01.md'), false, 'sibling check does not name n01');
+
   const evidence = writeEvidence('intent-lock', {
     feature: 'intent-lock',
     specPath: SPEC_REL,
@@ -183,6 +216,12 @@ Relock hashes.
         command: 'gate --phase implement with empty intent_sources',
         exit: missing.status,
         check: missingCheck,
+      },
+      {
+        command: 'gate --phase implement after sibling body edit',
+        exit: siblingGate.status,
+        check: siblingCheck,
+        winner: siblingLocked.intent_sources[0].path,
       },
     ],
   });

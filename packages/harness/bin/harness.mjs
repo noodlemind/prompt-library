@@ -7,7 +7,7 @@ import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
 import { dispatch as dispatchRegistered, hasCommand, describeCommand, getCommand } from '../lib/registry.mjs';
 import { createProcessEventRegistry, detectActor } from '../lib/event-registry.mjs';
 import { parseFlags, hasFlag } from '../lib/flags.mjs';
-import { applyHarnessHomeFlag } from '../lib/paths.mjs';
+import { applyHarnessHomeFlag, resolveCopilotHome } from '../lib/paths.mjs';
 import { commandIndexEnvelope } from '../lib/command-index.mjs';
 import { createRedactor, redactedJson } from '../lib/redact.mjs';
 import { readPkgVersion } from '../lib/commands.mjs';
@@ -185,7 +185,10 @@ async function main() {
       }
     } else if (command === 'palette') {
             const flags = parseFlags(args);
-      console.log(redactedJson(commandIndexEnvelope({ workspace: path.resolve(flags.workspace) })));
+      console.log(redactedJson(commandIndexEnvelope({
+        workspace: path.resolve(flags.workspace),
+        copilotHome: resolveCopilotHome(flags.copilotHome),
+      })));
     } else if (hasCommand(command)) {
       const { args: laneArgs, output } = extractOutputLane(args);
       const runFlags = parseFlags(args);

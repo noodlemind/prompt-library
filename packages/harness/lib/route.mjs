@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getAssetsRoot } from './assets.mjs';
+import { getCorpusRoot } from './assets.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { createStyle } from './style.mjs';
 import { loadPlan } from './plan-parse.mjs';
@@ -162,12 +162,13 @@ function pointer(inventory, kind, id) {
   return full ? `read ${full}` : `unavailable ${kind.replace(/s$/, '')} ${id}`;
 }
 
-export function workspaceRoutingRoots(workspace, extraRoots = []) {
-  const roots = [path.join(workspace, '.github'), ...extraRoots];
+export function primitiveReadRoots(copilotHome) {
+  const roots = [];
+  if (copilotHome) roots.push(copilotHome);
   try {
-    roots.push(getAssetsRoot());
+    roots.push(getCorpusRoot());
   } catch {
-    // Packaged assets are optional in a source checkout before the asset build.
+    // A missing corpus must not stop policy evaluation.
   }
   return roots;
 }
@@ -180,7 +181,7 @@ export function routeWorkspace({ workspace, impacted, risk, domains, primitive, 
   const loaded = loadRoutingPolicy(workspace);
   if (loaded.missing) return { ok: true, errors: [], snapshot: emptySnapshot('missing policy') };
   if (loaded.errors.length) return { ok: false, errors: loaded.errors, snapshot: null };
-  const inventory = discoverInventory(roots || workspaceRoutingRoots(workspace, copilotHome ? [copilotHome] : []));
+  const inventory = discoverInventory(roots || primitiveReadRoots(copilotHome));
   return evaluateRouting({
     policy: loaded.policy,
     impacted,

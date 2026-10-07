@@ -84,7 +84,7 @@ test('VS Code doctor proves discovery, gate, post-tool, and completion behavior'
   const copilotHome = tempDir('harness-copilot-');
   const assetsRoot = tempDir('harness-assets-');
   const workspace = tempDir('harness-workspace-');
-  const sourceHooks = path.resolve(packageRoot, '../../.github/hooks');
+  const sourceHooks = path.join(packageRoot, 'corpus', 'hooks');
   fs.cpSync(sourceHooks, path.join(assetsRoot, 'hooks'), { recursive: true });
   syncAssetsToTarget(assetsRoot, copilotHome, { dryRun: false, preserveKnowledge: true, verbose: false }, () => {});
   const settingsPath = path.join(tempDir('harness-vscode-'), 'settings.json');
@@ -105,7 +105,7 @@ test('VS Code doctor proves discovery, gate, post-tool, and completion behavior'
 
 test('pre-edit hook fails closed on malformed input payloads', () => {
   const workspace = tempDir('harness-workspace-');
-  const result = spawnSync(process.execPath, [path.join(packageRoot, '../../.github/hooks', 'require-plan-gate.mjs')], {
+  const result = spawnSync(process.execPath, [path.join(packageRoot, 'corpus', 'hooks', 'require-plan-gate.mjs')], {
     cwd: workspace,
     input: '{not-json',
     encoding: 'utf8',

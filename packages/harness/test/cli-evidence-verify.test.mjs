@@ -252,7 +252,7 @@ const primitiveAnalysis = `
 test('verification rejects nested skill changes without existing primitive evidence checks', () => {
   const workspace = tempDir('harness-workspace-');
   const plan = writeVersionedPlan(workspace, {
-    impacted: ['.github/skills/example/references/guide.md'],
+    impacted: ['packages/harness/corpus/skills/example/references/guide.md'],
     skillsUsed: ['engineer', 'create-primitive'],
     technicalNotes: primitiveAnalysis,
     required: ['unit-tests'],
@@ -264,7 +264,7 @@ test('verification rejects nested skill changes without existing primitive evide
     'host-contracts': { command: [process.execPath, '-e', 'process.exit(0)'] },
     'build-assets': { command: [process.execPath, '-e', 'process.exit(0)'] },
   });
-  const skill = path.join(workspace, '.github', 'skills', 'example', 'references', 'guide.md');
+  const skill = path.join(workspace, 'packages', 'harness', 'corpus', 'skills', 'example', 'references', 'guide.md');
   fs.mkdirSync(path.dirname(skill), { recursive: true });
   fs.writeFileSync(skill, '# Guide\n');
   initGit(workspace);
@@ -278,7 +278,7 @@ test('verification rejects nested skill changes without existing primitive evide
   assert.match(body.checks.find((check) => check.id === 'primitive-evidence')?.message, /prompt-contracts|host-contracts|build-assets/);
 });
 
-test('product-local skill verification uses configured local evidence when standard primitive checks are absent', () => {
+test('a product skill edit is refused and names harness resources create', () => {
   const workspace = tempDir('harness-workspace-');
   const plan = writeVersionedPlan(workspace, {
     impacted: ['.github/skills/example/SKILL.md'],
@@ -297,11 +297,11 @@ test('product-local skill verification uses configured local evidence when stand
   fs.appendFileSync(skill, '\nChanged guidance.\n');
 
   const result = runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']);
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 1, result.stderr);
   const body = JSON.parse(result.stdout);
   const primitive = body.checks.find((check) => check.id === 'primitive-evidence');
-  assert.equal(primitive?.status, 'passed');
-  assert.match(primitive?.message || '', /applicable named evidence/i);
+  assert.equal(primitive?.status, 'failed');
+  assert.match(primitive?.message || '', /harness resources create/);
 });
 
 test('harness verify passes named checks, validates scope, and writes evidence', () => {
