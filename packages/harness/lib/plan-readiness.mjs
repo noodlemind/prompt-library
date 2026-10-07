@@ -1,3 +1,4 @@
+import { readFileNoFollow } from './fs-safe.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -14,7 +15,9 @@ export function loadConfiguredChecks(workspace) {
   const full = path.join(workspace, CHECKS_REL);
   if (!fs.existsSync(full)) return { present: false, checks: null, error: null };
   try {
-    const parsed = YAML.parse(fs.readFileSync(full, 'utf8'), { maxAliasCount: 50 });
+    const content = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024 });
+    if (content === null) throw new Error('Named check source is unreadable or nonregular');
+    const parsed = YAML.parse(content, { maxAliasCount: 50 });
     if (parsed?.version !== 1 || !parsed.checks || typeof parsed.checks !== 'object' || Array.isArray(parsed.checks)) {
       return { present: true, checks: null, error: `${CHECKS_REL} must declare version: 1 and checks` };
     }
@@ -30,7 +33,7 @@ export function configuredCheckSnapshot(workspace) {
   const full = path.join(workspace, CHECKS_REL);
   const loaded = loadConfiguredChecks(workspace);
   if (loaded.error) return { digest: null, commands: [], error: loaded.error };
-  const source = fs.existsSync(full) ? fs.readFileSync(full, 'utf8') : null;
+  const source = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024 });
   const commands = Object.entries(loaded.checks || {})
     .filter(([, config]) => Array.isArray(config?.command)
       && config.command.length > 0
@@ -85,6 +88,8 @@ export function validatePlanReadiness(workspace, plan) {
   const required = Array.isArray(plan.fm.verification?.required) ? plan.fm.verification.required : [];
   const criteria = extractAcceptanceCriteria(plan);
   const mappings = plan.fm.verification?.criteria || {};
+  checks.push(result('proof-obligation', criteria.length > 0 && new Set(criteria).size === criteria.length && required.length > 0,
+    'Delivery requires nonempty unique criteria and required named checks'));
   const invalidMappings = criteria.filter((id) => {
     const mapped = mappings[id];
     return !Array.isArray(mapped) || mapped.length === 0 || mapped.some((name) => !required.includes(name));
@@ -103,7 +108,10 @@ export function validatePlanReadiness(workspace, plan) {
   if (configured.error) {
     checks.push(result('configured-checks', false, configured.error));
   } else if (configured.present) {
-    const missing = required.filter((name) => !Object.hasOwn(configured.checks, name));
+    const missing = required.filter((name) => {
+      const command = configured.checks[name]?.command;
+      return !Array.isArray(command) || !command.length || !command.every(part => typeof part === 'string' && part.trim());
+    });
     checks.push(
       result(
         'configured-checks',
@@ -126,7 +134,7 @@ export function validatePlanReadiness(workspace, plan) {
           : 'Required checks are relevant to the expected output types'
       )
     );
-  }
+  } else checks.push(result('configured-checks', false, 'No configured named checks; configure .github/harness/checks.yaml'));
 
   return { pass: checks.every((check) => check.pass), checks };
 }

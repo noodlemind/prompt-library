@@ -25,6 +25,11 @@ export function writePlan(workspace, {
 } = {}) {
   const plansDir = path.join(workspace, 'docs', 'plans');
   fs.mkdirSync(plansDir, { recursive: true });
+  const checksPath = path.join(workspace, '.github/harness/checks.yaml');
+  if (!fs.existsSync(checksPath)) {
+    fs.mkdirSync(path.dirname(checksPath), { recursive: true });
+    fs.writeFileSync(checksPath, `version: 1\nchecks:\n  fixture:\n    command: ${JSON.stringify([process.execPath, '-e', 'process.exit(0)'])}\n`);
+  }
   const planPath = path.join(plansDir, name);
   fs.writeFileSync(
     planPath,
@@ -33,6 +38,9 @@ title: "${title}"
 status: in-progress
 plan_lock: true
 phase: 1
+verification:
+  required: [fixture]
+  criteria: {AC1: [fixture]}
 ${frontmatter}---
 
 # ${title}
@@ -49,7 +57,7 @@ Do the work.
 
 ## Acceptance Criteria
 
-- [ ] Example is fixed.
+- [ ] **AC1** Example is fixed.
 
 ## Verification Plan
 

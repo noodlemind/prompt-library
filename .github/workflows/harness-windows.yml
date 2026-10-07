@@ -10,9 +10,10 @@
 name: Harness on Windows
 
 on:
+  pull_request:
   workflow_dispatch:
   push:
-    branches: ['feat/**']
+    branches: ['feat/**', 'feature/**']
 
 permissions:
   contents: read

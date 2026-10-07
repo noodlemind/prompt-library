@@ -61,7 +61,7 @@ test('evidence metadata is authoritative and malformed hashed evidence falls bac
     checks: [],
   });
   const generated = JSON.parse(fs.readFileSync(path.join(workspace, rel), 'utf8'));
-  assert.equal(generated.version, 3);
+  assert.equal(generated.version, 4);
   assert.notEqual(generated.verifiedAt, '2000-01-01T00:00:00.000Z');
   assert.equal(generated.evidencePath, rel);
 
@@ -106,9 +106,10 @@ test('evidence binding records the git head and rejects a different or invalid h
   assert.equal(binding.head, head.stdout.trim());
 
   const evidence = {
-    version: 3,
+    version: 4,
     plan: plan.path,
     outcome: 'passed',
+    checks: [{ id: 'unit-tests', status: 'passed', proof: 'behavior' }, { id: 'criteria-evidence', status: 'passed' }],
     verifiedAt: new Date().toISOString(),
     binding,
   };

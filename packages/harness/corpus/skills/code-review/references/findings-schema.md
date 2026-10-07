@@ -87,7 +87,7 @@ Each persona returns a single JSON object:
 
 ### Routing Guidelines
 
-- A typo fix, missing null check on an internal method, or adding a missing test → `safe_auto`
+- A typo or another demonstrated behavior-preserving local correction may be `safe_auto`; a missing null check requires judgment about valid inputs and behavior. Classification never grants tool authority.
 - Changing a public API response format, modifying auth permissions, altering database constraints → `gated_auto`
 - Architectural refactoring, redesigning a module boundary, rewriting a test strategy → `manual`
 - "This area has historically been fragile", deployment considerations, monitoring suggestions → `advisory`

@@ -1,3 +1,4 @@
+import { readFileNoFollow } from './fs-safe.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
@@ -28,7 +29,9 @@ export function loadNamedChecks(workspace) {
   const full = path.join(workspace, CHECKS_REL);
   if (!fs.existsSync(full)) return { checks: null, error: `Trusted check config not found: ${CHECKS_REL}` };
   try {
-        const parsed = YAML.parse(fs.readFileSync(full, 'utf8'), { maxAliasCount: 50 });
+        const content = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024 });
+    if (content === null) throw new Error('Named check source is unreadable or nonregular');
+    const parsed = YAML.parse(content, { maxAliasCount: 50 });
     if (parsed?.version !== 1 || !parsed.checks || typeof parsed.checks !== 'object') {
       return { checks: null, error: `${CHECKS_REL} must declare version: 1 and checks` };
     }

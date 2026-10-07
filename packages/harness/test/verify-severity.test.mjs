@@ -215,6 +215,8 @@ test('the advisory-by-default structural check stays downgradable, and v1 polici
   assert.deepEqual(loadPolicy(v1), {
     version: 1,
     enforcement: 'warn',
+    enforcementSource: 'trusted-project',
+    rules: { plan: 'warn', completion: 'warn', critical: 'enforce', destructive: 'enforce' },
         projectPolicyIgnored: false,
         projectPolicyError: null,
     policyPath: path.join(v1, '.github', 'harness', 'policy.yaml'),

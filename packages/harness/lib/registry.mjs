@@ -7,6 +7,7 @@ import {
   cmdLearnings,
   cmdStatus,
   computeStatusResult,
+  statusDomainResult,
   cmdInstallOrUpgrade,
   cmdDoctor,
   cmdInitRepo,
@@ -41,6 +42,7 @@ import { cmdConfig, configResultOf, configExitFor, CONFIG_VERBS } from './config
 import { cmdTrust, trustResultOf, TRUST_VERBS } from './trust-cmd.mjs';
 import { cmdRun, runResultOf, runExitFor, runRequireArgs, RUN_VERBS } from './run-cmd.mjs';
 import { cmdResources, resourcesResultOf, resourcesExitFor, RESOURCES_VERBS } from './resources-cmd.mjs';
+import { cmdReview, reviewResultOf, REVIEW_VERBS } from './review.mjs';
 import { CONFIG_KEYS, SCOPES } from './config.mjs';
 import { RUN_STATUSES } from './run-journal.mjs';
 import { cmdExec, execResultOf, cmdBash, bashResultOf, exitFor as execExitFor } from './exec-cmd.mjs';
@@ -481,8 +483,8 @@ async function learningsResultOf(argv) {
 }
 
 async function statusResultOf(argv) {
-  const { copilotHome, lock, version } = computeStatusResult(argv);
-  return { packageVersion: version, copilotHome, lock };
+  const { flags, copilotHome, lock, version } = computeStatusResult(argv);
+  return statusDomainResult(flags, copilotHome) || { packageVersion: version, copilotHome, lock };
 }
 
 function recallRequireArgs(rest, flags) {
@@ -672,9 +674,27 @@ registerCommand({
   sideEffect: 'read',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-  args: { positionals: [], flags: [] },
+  args: { positionals: [], flags: [
+    { name: '--effective-policy', type: 'boolean', description: 'Resolve and publish the environment-scoped policy snapshot for installed hooks' },
+    { name: '--contract-digest', type: 'boolean', description: 'Compute the current canonical work contract digest' },
+    { name: '--validate-evidence', type: 'boolean', description: 'Validate current proof without rerunning checks' },
+    { name: '--validate-completion', type: 'boolean', description: 'Validate the current bound completion record' },
+    { name: '--plan', type: 'string', valueName: 'path', description: 'Plan to inspect' },
+  ] },
   handler: cmdStatus,
   resultOf: statusResultOf,
+});
+
+registerCommand({
+  name: 'review', summary: 'Capture review obligations and collect bound specialist results', group: 'engineer loop', sideEffect: 'mutate', capabilities: [], outputModes: ['ledger', 'json'],
+  verbs: REVIEW_VERBS.map(verb => ({ verb, summary: verb === 'prepare' ? 'Capture current review scope' : 'Validate and record collected results' })),
+  usage: '<prepare|assemble> --plan <plan> [--packet <id> --file <results.json>]',
+  args: { positionals: [{ name: 'verb', required: true, description: REVIEW_VERBS.join('|') }], flags: [
+    { name: '--plan', type: 'string', valueName: 'plan', required: true, description: 'Plan whose work is reviewed' },
+    { name: '--base', type: 'string', valueName: 'ref', description: 'Captured comparison revision' },
+    { name: '--packet', type: 'string', valueName: 'id', description: 'Prepared packet identity' },
+    { name: '--file', type: 'string', valueName: 'results.json', description: 'JSON results file (default: stdin)' },
+  ] }, handler: cmdReview, resultOf: reviewResultOf, exitOf: result => result.status === 'blocked' ? 1 : 0,
 });
 
 registerCommand({
@@ -994,6 +1014,7 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
+      { name: '--learning-decision', type: 'string', valueName: 'path', description: 'Structured verified learning decision JSON file, or - for stdin' },
       { name: '--plan', type: 'string', valueName: 'path', description: 'explicit plan file', required: false, default: null, tui: 'prompt', choices: 'plan' },
             { name: '--insight', type: 'boolean', description: 'evidence-free investigation capture (kind: insight, secret-scanned)', required: false, default: false, tui: 'verb' },
             { name: '--title', type: 'string', valueName: 't', description: 'insight title (required with --insight)', required: false, default: null, tui: 'prompt' },

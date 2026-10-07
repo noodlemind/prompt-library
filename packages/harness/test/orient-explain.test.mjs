@@ -242,12 +242,13 @@ function singleLearningContext() {
 }
 
 function writePaddedActivePlan(ws, n) {
+  writeFile(ws, '.github/harness/checks.yaml', 'version: 1\nchecks:\n  behavior:\n    command: [node, -e, process.exit(0)]\n');
   const plansDir = path.join(ws, 'docs', 'plans');
   fs.mkdirSync(plansDir, { recursive: true });
   const planPath = path.join(plansDir, '2026-05-22-fix-example-plan.md');
   fs.writeFileSync(
     planPath,
-    `---\ntitle: "Fix example"\nstatus: in-progress\nplan_lock: true\nphase: 1\n---\n\n# Fix example\n\n## Overview\n\nDo the work.\n\n## Memory Cards\n\n${'x'.repeat(n)}\n\n## Intent Contract\n\n- **Goal:** Fix example\n- **Expected outputs:** code change\n- **Success criteria:** tests pass\n\n## Acceptance Criteria\n\n- [ ] Example is fixed.\n\n## Verification Plan\n\nRun the relevant test command.\n\n## Impacted Files\n\n- src/example.ts\n\n## Activity\n\n- Plan created.\n`,
+    `---\ntitle: "Fix example"\nstatus: in-progress\nplan_lock: true\nphase: 1\nverification:\n  required: [behavior]\n  criteria: {AC1: [behavior]}\n---\n\n# Fix example\n\n## Overview\n\nDo the work.\n\n## Memory Cards\n\n${'x'.repeat(n)}\n\n## Intent Contract\n\n- **Goal:** Fix example\n- **Expected outputs:** code change\n- **Success criteria:** tests pass\n\n## Acceptance Criteria\n\n- [ ] **AC1** Example is fixed.\n\n## Verification Plan\n\nRun the relevant test command.\n\n## Impacted Files\n\n- src/example.ts\n\n## Activity\n\n- Plan created.\n`,
     'utf8'
   );
   return planPath;

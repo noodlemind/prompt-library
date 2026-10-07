@@ -25,6 +25,7 @@ function hasValue(value) {
 }
 
 export function extractAcceptanceCriteria(plan) {
+  if (readPlanRecord(plan.text)) return Array.isArray(plan.fm?.acceptance_ids) ? plan.fm.acceptance_ids.slice() : [];
   const body = plan.sections?.acceptanceText || extractSection(plan.text, 'Acceptance Criteria');
   return [...body.matchAll(/^-\s*\[[ xX]\]\s*\*\*([A-Za-z]+\d+)\*\*/gm)].map((match) => match[1]);
 }
@@ -32,19 +33,30 @@ export function extractAcceptanceCriteria(plan) {
 export function validatePlanSchema(plan) {
   const checks = [];
   if (!plan) return { pass: false, version: null, checks: [{ id: 'schema', pass: false, message: 'Plan not found' }] };
-  if (readPlanRecord(plan.text)) {
-    return {
-      pass: true,
-      version: null,
-      checks: [{ id: 'short-record', pass: true, message: 'Short plan record present' }],
-    };
-  }
   if (plan.fm?.__parseError) {
     return {
       pass: false,
       version: null,
       checks: [{ id: 'schema-yaml', pass: false, message: `Invalid YAML frontmatter: ${plan.fm.__parseError}` }],
     };
+  }
+
+  const record = readPlanRecord(plan.text);
+  if (record) {
+    const criteria = extractAcceptanceCriteria(plan);
+    const required = plan.fm.verification?.required;
+    const valid = plan.fm.plan_format === 'short-v1'
+      && criteria.length === record.acceptance.length
+      && criteria.length > 0
+      && criteria.every((id, i) => typeof id === 'string' && /^[A-Za-z]+\d+$/.test(id)
+        && plan.fm.acceptance_text?.[id] === record.acceptance[i])
+      && new Set(criteria).size === criteria.length
+      && Array.isArray(required) && (!plan.plan_lock || required.length > 0)
+      && plan.fm.verification?.criteria && typeof plan.fm.verification.criteria === 'object'
+      && !Array.isArray(plan.fm.verification.criteria)
+      && ['open', 'planned', 'in-progress', 'review', 'done'].includes(plan.status)
+      && [plan.fm.reviews?.required, plan.fm.reviews?.completed, plan.fm.reviews?.critical_open].every(Array.isArray);
+    return { pass: Boolean(valid), version: 'short-v1', criteria, checks: [{ id: 'short-contract', pass: Boolean(valid), message: valid ? 'Short plan proof contract valid' : 'Short plan requires stable acceptance IDs/text and verification bindings; repair and reverify' }] };
   }
 
   const version = Number(plan.fm.plan_schema);

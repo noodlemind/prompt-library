@@ -373,7 +373,7 @@ const RUNGS = [
       assert(body.outcome === 'passed', 'clean verify did not pass', body);
       const evidence = JSON.parse(fs.readFileSync(path.join(fx.workspace, body.evidencePath), 'utf8'));
       const current = head(fx);
-      assert(evidence.version === 3, 'evidence version is not 3', evidence);
+      assert(evidence.version === 4, 'evidence version is not 4', evidence);
       assert(evidence.binding?.head === current, 'evidence head does not match git HEAD', { bound: evidence.binding?.head, current });
       return { version: evidence.version, head: current };
     },
@@ -458,6 +458,7 @@ const RUNGS = [
       writeSource(fx, 'src/example.js', CLEAR);
       const passed = expectExit(verify(fx, plan), 0, 'cleared verify');
       assert(passed.outcome === 'passed', 'cleared diff did not pass', passed);
+      expectExit(harness(fx, ['plan-update', '--plan', plan, '--status', 'done', '--json']), 0, 'complete the verified unit');
       const continued = stop(fx);
       assert(continued.continue === true, 'stop blocked a passed unit', continued);
       assert(hookDecision(continued).decision !== 'block', 'passed stop still blocked', continued);
@@ -472,6 +473,7 @@ const RUNGS = [
       assert(/changed after verification/.test(staleDecision.reason || ''), 'stale stop did not require a fresh verify', stale);
       const again = expectExit(verify(fx, plan), 0, 'verify after the later edit');
       assert(again.outcome === 'passed', 'the later edit did not pass', again);
+      expectExit(harness(fx, ['plan-update', '--plan', plan, '--status', 'done', '--json']), 0, 'complete the later verified unit');
       const finished = stop(fx);
       assert(finished.continue === true, 'stop blocked the verified later edit', finished);
       assert(hookDecision(finished).decision !== 'block', 'verified later edit still blocked', finished);

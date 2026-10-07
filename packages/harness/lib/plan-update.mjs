@@ -4,7 +4,10 @@ import YAML from 'yaml';
 import { createStyle, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { externalPlansDir, planReadDirs } from './project-layout.mjs';
-import { harnessGlobalHome } from './paths.mjs';
+import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
+import { parseFlags } from './flags.mjs';
+import { loadPlan, parsePlanFrontmatter } from './plan-parse.mjs';
+import { completeWork } from './completion.mjs';
 import { bindLockedIntentSources, lockIntentSources, sourcePath } from './intent-sources.mjs';
 
 const PLAN_STATUSES = ['open', 'planned', 'in-progress', 'review', 'done', 'blocked-capability', 'needs-info'];
@@ -402,6 +405,7 @@ export async function cmdPlanUpdate(argv) {
   let written;
   let original = '';
   let next = '';
+  let completion = null;
   try {
     original = fs.readFileSync(full, 'utf8');
     next = applyPlanUpdate(original, change);
@@ -410,6 +414,11 @@ export async function cmdPlanUpdate(argv) {
         rehash: Boolean(change.lock),
         mergeDiscovered: Boolean(change.lock),
       });
+    }
+    if (change.status === 'done') {
+      const plan = loadPlan(workspace, full);
+      const fm = parsePlanFrontmatter(next);
+      completion = completeWork({ workspace, plan: { ...plan, text: next, fm, status: fm.status }, copilotHome: resolveCopilotHome(parseFlags(argv).copilotHome), dryRun });
     }
     if (!dryRun && next !== original) {
       const mode = fs.statSync(full).mode & 0o777;
@@ -435,6 +444,7 @@ export async function cmdPlanUpdate(argv) {
       dryRun,
       status: fm.status,
       reviews: fm.reviews,
+      completion: completion?.id || null,
     }));
   } else {
     const ui = createStyle();

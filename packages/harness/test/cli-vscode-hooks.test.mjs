@@ -125,6 +125,7 @@ test('hooks honor repository enforcement and freshness policy', () => {
     'utf8'
   );
 
+  assert.equal(runHarness(['trust', 'approve', '--workspace', workspace]).status, 0);
   const warning = runHookWithPolicy('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' });
   const warningResponse = hookResponse(warning);
   assert.match(warningResponse.systemMessage, /missing-implement-gate/i);
@@ -141,6 +142,7 @@ test('hooks honor repository enforcement and freshness policy', () => {
     'utf8'
   );
 
+  assert.equal(runHarness(['trust', 'approve', '--workspace', workspace]).status, 0);
   const stale = runHookWithPolicy('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' });
   assertHookBlocked(stale, /stale/i);
 });
@@ -221,9 +223,10 @@ test('completion hook bypasses read-only work and enforces each new recorded edi
   assert.equal(runHook('require-plan-gate.mjs', workspace, { file_path: 'src/example.js' }).status, 0);
   recordSuccessfulEdit(workspace, { file_path: 'src/example.js' });
   const unverified = runHook('require-verification.mjs', workspace);
-  assertHookBlocked(unverified, /verification outcome is inconclusive/i);
+  assertHookBlocked(unverified, /No current bound completion record/i);
 
   assert.equal(runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']).status, 0);
+  assert.equal(runHarness(['plan-update', '--plan', plan, '--status', 'done', '--workspace', workspace, '--json']).status, 0);
   const sessionPath = path.join(workspace, '.harness', 'session.json');
   let session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
   const evidencePath = path.join(workspace, session.lastEvidencePath);

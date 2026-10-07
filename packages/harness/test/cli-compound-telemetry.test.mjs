@@ -144,7 +144,7 @@ test('gate and compound reject evidence after the plan or scoped workspace chang
     assert.equal(runHarness(['verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace, '--json']).status, 0);
 
     const target = mutation === 'plan' ? path.join(workspace, plan) : path.join(workspace, 'src', 'example.js');
-    fs.appendFileSync(target, `\n// ${mutation} changed after verification\n`, 'utf8');
+    fs.appendFileSync(target, mutation === 'plan' ? '\n## Added obligation\n\nChanged after verification.\n' : '\n// workspace changed after verification\n', 'utf8');
 
     const gate = runHarness(['gate', '--phase', 'verify', '--plan', plan, '--workspace', workspace, '--json']);
     assert.equal(gate.status, 1, gate.stderr);

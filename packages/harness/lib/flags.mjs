@@ -53,6 +53,7 @@ export function parseFlags(argv) {
     const boundary = argv.indexOf('--');
   const scan = boundary === -1 ? argv : argv.slice(0, boundary);
   const flags = {
+    effectivePolicy: false,
     dryRun: false,
     verbose: false,
     json: false,
@@ -127,6 +128,12 @@ export function parseFlags(argv) {
     if (a === '--dry-run') flags.dryRun = true;
     else if (a === '--verbose' || a === '-v') flags.verbose = true;
     else if (a === '--json') flags.json = true;
+    else if (a === '--effective-policy') flags.effectivePolicy = true;
+    else if (a === '--contract-digest') flags.contractDigest = true;
+    else if (a === '--validate-evidence') flags.validateEvidence = true;
+    else if (a === '--validate-completion') flags.validateCompletion = true;
+    else if (a === '--packet') flags.packet = scan[++i];
+    else if (a === '--learning-decision') flags.learningDecision = scan[++i];
     else if (a === '--explain') flags.explain = true;
     else if (a === '--read') flags.read = true;
     else if (a === '--refresh') flags.refresh = true;

@@ -139,15 +139,15 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   assert.match(engineer, /read `~\/\.copilot\/skills\/create-primitive\/SKILL\.md`[\s\S]{0,180}not activation/i);
   assert.match(engineer, /Capture for Later[\s\S]{0,120}Plan and Fix[\s\S]{0,120}Leave in Chat/i);
   assert.match(engineer, /Name the mode first/i);
-  assert.match(engineer, /check\/action\/mark[\s\S]{0,100}confirmed race\/retry defect[\s\S]{0,100}atomicity is proven/i);
-  assert.match(engineer, /check\/action\/mark[\s\S]{0,160}thread-safe/i);
+  assert.match(engineer, /shared state and interleavings[\s\S]{0,100}confirmed only when evidence demonstrates/i);
+  assert.doesNotMatch(engineer, /MUST call.*confirmed race/i);
   assert.match(engineer, /evidence, impact, confidence, and recommendation/i);
   assert.equal(handoffs.get('Capture for Later')?.send, false);
   assert.match(handoffs.get('Capture for Later')?.prompt || '', /open, unlocked issue/i);
   assert.equal(handoffs.get('Plan and Fix')?.send, false);
   assert.match(handoffs.get('Plan and Fix')?.prompt || '', /proportional plan/i);
   assert.match(globalWorkflow, /@engineer[\s\S]{0,160}name the mode first/i);
-  assert.match(globalWorkflow, /check\/action\/mark[\s\S]{0,100}confirmed race\/retry defect/i);
+  assert.match(globalWorkflow, /call a defect confirmed only when evidence demonstrates/i);
 });
 
 test('every agent handoff declares a target agent that exists', () => {
@@ -279,7 +279,7 @@ test('execution, gap resolution, and compounding skills have distinct boundaries
   ]) {
     assert.match(compound, new RegExp(field), `compound classification missing ${field}`);
   }
-  assert.match(compound, /harness verify --plan/i);
+  assert.match(compound, /harness status --validate-evidence --plan/i);
 
   const primitive = read('packages/harness/corpus/skills/create-primitive/SKILL.md');
   assert.match(primitive, /promotion evidence/i);

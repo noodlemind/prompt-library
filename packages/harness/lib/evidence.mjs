@@ -4,10 +4,15 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { ensureHarnessDir } from './session.mjs';
 import { collectChangedFiles } from './plan-scope.mjs';
-import { assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, writeFileContained, readFileNoFollow } from './fs-safe.mjs';
 import { createRedactor } from './redact.mjs';
+import { planContractText } from './work-contract.mjs';
+import { policyDigest, trustStatus } from './trust.mjs';
+import { resolveCopilotHome } from './paths.mjs';
+import { loadPolicy } from './policy.mjs';
 
-const EVIDENCE_VERSION = 3;
+export const EVIDENCE_VERSION = 4;
+export { planContractText } from './work-contract.mjs';
 
 function evidenceRel(planPath) {
   if (!planPath) return '.harness/evidence/unresolved-plan.json';
@@ -28,22 +33,17 @@ export function writeEvidence(workspace, result, dryRun = false) {
   if (ensureHarnessDir(workspace, dryRun) === null) return null;
   const rel = evidenceRel(result.plan);
   if (!dryRun) {
-    const full = path.join(workspace, rel);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-        const redactor = createRedactor();
+    const redactor = createRedactor();
     const payload = {
       ...redactor.redactValue(result),
       version: EVIDENCE_VERSION,
       verifiedAt: new Date().toISOString(),
       evidencePath: rel,
     };
-    const temporary = `${full}.${process.pid}.${Date.now()}.tmp`;
-    try {
-      fs.writeFileSync(temporary, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-      fs.renameSync(temporary, full);
-    } finally {
-      fs.rmSync(temporary, { force: true });
-    }
+    const observation = digest(JSON.stringify(payload));
+    const history = `.harness/evidence/history/${observation}.json`;
+    const content = `${JSON.stringify(payload, null, 2)}\n`;
+    if (!writeFileContained(workspace, history, content) || !writeFileContained(workspace, rel, content)) throw new Error('Could not publish verification evidence; retry after repairing the evidence store');
   }
   return rel;
 }
@@ -53,7 +53,7 @@ export function readEvidence(workspace, planPath) {
     const full = path.join(workspace, rel);
     if (!fs.existsSync(full)) continue;
     try {
-      return JSON.parse(fs.readFileSync(full, 'utf8'));
+      return JSON.parse(readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024 }) || 'null');
     } catch {
       continue;
     }
@@ -89,10 +89,6 @@ function gitHead(workspace) {
   const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 });
   if (head.error || head.status !== 0) return null;
   return String(head.stdout || '').trim();
-}
-
-export function planContractText(text) {
-  return String(text || '').replace(/\n## Activity\s*\n[\s\S]*?(?=\n## |$)/gi, '');
 }
 
 /** Canonical plan digest: SHA-256 of the Activity-stripped contract text.
@@ -139,9 +135,20 @@ function workspaceDigest(workspace, files, planPath) {
   return hash.digest('hex');
 }
 
-export function createEvidenceBinding({ workspace, plan, base = null, changedFiles = [] }) {
-  const files = normalizedFiles(changedFiles);
+export function proofPolicyDigest(workspace, copilotHome = resolveCopilotHome()) {
+  const policy = loadPolicy(workspace, null, { copilotHome });
+  const trust = trustStatus({ workspace, copilotHome });
+  return digest(JSON.stringify({ source: policyDigest(workspace), trust: trust.state, approval: trust.approvedDigest, enforcement: policy.enforcement, rules: policy.rules, checks: policy.checkSeverities, ttl: policy.evidenceTtlHours }));
+}
+
+export function createEvidenceBinding({ workspace, plan, base = null, changedFiles = [], copilotHome }) {
+  // The plan has its own semantic binding. Lifecycle-only edits must not add
+  // it to the product diff and invalidate otherwise current product proof.
+  const files = normalizedFiles(changedFiles).filter(file => file !== plan.path);
   return {
+    contractVersion: 1,
+    executionPhase: String(plan.phase ?? 0),
+    policyDigest: proofPolicyDigest(workspace, copilotHome),
     base: base || null,
     planDigest: digest(planContractText(plan.text)),
     changedFiles: files,
@@ -150,14 +157,18 @@ export function createEvidenceBinding({ workspace, plan, base = null, changedFil
   };
 }
 
-export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24 }) {
+export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24, copilotHome }) {
   if (!evidence) return { pass: false, message: 'No harness verify evidence artifact for this plan' };
   if (evidence.outcome !== 'passed') {
     return { pass: false, message: `Latest harness verify outcome is ${evidence.outcome || 'unknown'}` };
   }
-  if (evidence.version !== EVIDENCE_VERSION || !validBinding(evidence.binding)) {
+  if (evidence.version !== EVIDENCE_VERSION || !validBinding(evidence.binding) || evidence.binding.contractVersion !== 1) {
     return { pass: false, message: 'Verification evidence is not bound to the current plan and workspace' };
   }
+  const required = plan.fm.verification?.required;
+  if (!Array.isArray(evidence.checks) || !Array.isArray(required) || !required.length || required.some(id => !evidence.checks.some(check => check.id === id && check.status === 'passed' && ['behavior', 'type-check'].includes(check.proof))) || !evidence.checks.some(check => required.includes(check.id) && check.status === 'passed' && check.proof === 'behavior') || !evidence.checks.some(check => check.id === 'criteria-evidence' && check.status === 'passed')) return { pass: false, message: 'Verification record lacks executed proof for the current acceptance criteria' };
+  if (evidence.binding.policyDigest !== proofPolicyDigest(workspace, copilotHome)) return { pass: false, message: 'Policy or trust changed after verification; refresh trust and reverify' };
+  if (evidence.binding.executionPhase !== String(plan.phase ?? 0)) return { pass: false, message: 'Execution phase changed after verification' };
   if (gitHead(workspace) !== evidence.binding.head) {
     return { pass: false, message: 'Verification evidence was recorded at a different head' };
   }
@@ -165,7 +176,7 @@ export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24 }
     return { pass: false, message: 'Verification evidence belongs to a different plan' };
   }
   const verifiedAt = Date.parse(evidence.verifiedAt || '');
-  if (!Number.isFinite(verifiedAt)) return { pass: false, message: 'Verification timestamp is missing or invalid' };
+  if (!Number.isFinite(verifiedAt) || verifiedAt > Date.now() + 1000) return { pass: false, message: 'Verification timestamp is missing or invalid' };
   if (Date.now() - verifiedAt > maxAgeHours * 60 * 60 * 1000) {
     return { pass: false, message: 'Verification evidence is stale' };
   }
@@ -175,7 +186,7 @@ export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24 }
 
   const changed = collectChangedFiles(workspace, evidence.binding.base || null);
   if (changed.error) return { pass: false, message: changed.error };
-  const currentFiles = normalizedFiles(changed.files);
+  const currentFiles = normalizedFiles(changed.files).filter(file => file !== plan.path);
   const evidenceFiles = normalizedFiles(evidence.binding.changedFiles);
   if (JSON.stringify(currentFiles) !== JSON.stringify(evidenceFiles)) {
     return { pass: false, message: 'Workspace scope changed after verification' };

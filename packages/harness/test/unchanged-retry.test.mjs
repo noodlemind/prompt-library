@@ -108,6 +108,8 @@ test('verify stores the normalized diff and the next unchanged edit is unchanged
   const again = harness(c, ['verify', '--plan', c.plan, '--base', 'HEAD']);
   assert.equal(again.status, 0, again.stderr + again.stdout);
   assert.equal(JSON.parse(again.stdout).outcome, 'passed');
+  const completed = harness(c, ['plan-update', '--plan', c.plan, '--status', 'done']);
+  assert.equal(completed.status, 0, completed.stdout + completed.stderr);
 
   const stopped = jsonLine(stop(c));
   assert.equal(stopped.continue, true);

@@ -48,27 +48,19 @@ Never use Tier 2 for Tier 3 topics.
 
 ## Tier 3 — Hard consent (block)
 
-Follow `human-approval-policy.md` approval format. Block until approved:
-
-- New/changed **agents** or engineer `agents:` allowlist
-- Schema, migration, production data, backfill
-- Auth, secrets, IAM, tenant isolation, public API contract breaks
-- Destructive operations, force push, mass delete
-- Concurrency strategy choice (locks, isolation, idempotency)
-- Edits outside `## Impacted Files` or broad refactor
-- `autonomy: strict` profile — treat capture/plan/implement as Tier 3
+The gates and approval interpretation are defined only in [Human Approval Policy](human-approval-policy.md). That policy is authoritative for primitives, scope expansion, data/security/concurrency changes, and destructive actions. Honor authorization already supplied by the user and record its scope; do not ask for the same decision again.
 
 ### Primitives
 
 | Change | Autonomous? |
 |--------|-------------|
 | Solution + manifest + memory cards | Yes (Tier 0) |
-| Review check from repeated pattern | Yes + notify (Tier 1) |
+| Review check from repeated pattern | Draft proposal; activate under Human Approval Policy |
 | New skill from approved proposal | Yes if proposal approved |
 | New skill/agent without proposal | No (Tier 3) |
 | New agent | **Never** auto (Tier 3) |
 
-Capability-gap proposals may be **auto-drafted** after repeat failures; merging into repo still Tier 3 for agents, Tier 1 notify for skills/checks under `full` profile.
+Capability-gap proposals may be drafted after repeat failures. Repetition is a candidate signal. Creation or activation follows Human Approval Policy for every primitive type.
 
 ## Risk tier (plan frontmatter)
 

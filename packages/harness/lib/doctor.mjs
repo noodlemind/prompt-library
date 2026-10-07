@@ -3,6 +3,9 @@ import path from 'path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'node:url';
+import { completeWork } from './completion.mjs';
+import { loadPolicy } from './policy.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
 import { resolveHarnessBin, RUNNER_VERSION } from './resolve-harness-bin.mjs';
@@ -161,7 +164,7 @@ Exercise installed hooks in an isolated fixture.
 `;
 }
 
-function runHook(script, workspace, payload) {
+function runHook(script, workspace, payload, env = {}) {
   return spawnSync(process.execPath, [script], {
     cwd: workspace,
     input: JSON.stringify({
@@ -170,7 +173,7 @@ function runHook(script, workspace, payload) {
       ...payload,
     }),
     encoding: 'utf8',
-    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce', ...env },
     timeout: 15_000,
   });
 }
@@ -200,6 +203,9 @@ export async function runVSCodeHookProbe(hookRoot) {
   // fixture and must not accumulate temp-directory entries in the real
   // ~/.copilot trust store every time someone runs `harness doctor`.
   const doctorCopilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-home-'));
+  const previousHome = process.env.HARNESS_HOME;
+  process.env.HARNESS_HOME = doctorCopilotHome;
+  const probeHook = (script, workspace, payload) => runHook(script, workspace, payload, { COPILOT_HOME: doctorCopilotHome, HARNESS_HOME: doctorCopilotHome, HARNESS_BIN: fileURLToPath(new URL('../bin/harness.mjs', import.meta.url)) });
   const planRel = 'docs/plans/vscode-hook-doctor-plan.md';
   const result = {
     recognized: false,
@@ -252,7 +258,7 @@ export async function runVSCodeHookProbe(hookRoot) {
       tool_name: 'replace_string_in_file',
       tool_input: { filePath: 'src/schema.json' },
     };
-    const missing = runHook(pre, workspace, mutation);
+    const missing = probeHook(pre, workspace, mutation);
     result.missingGateDenied = hookBlocked(missing, 'PreToolUse');
     const eventsPath = path.join(workspace, '.harness', 'events.jsonl');
     if (fs.existsSync(eventsPath)) {
@@ -270,10 +276,10 @@ export async function runVSCodeHookProbe(hookRoot) {
       gateStatus: 'pass',
       lastGateAt: new Date().toISOString(),
     });
-    const allowed = runHook(pre, workspace, mutation);
+    const allowed = probeHook(pre, workspace, mutation);
     result.gatedAllowed = allowed.status === 0 && !hookBlocked(allowed, 'PreToolUse');
 
-    const postResult = runHook(post, workspace, {
+    const postResult = probeHook(post, workspace, {
       hook_event_name: 'PostToolUse',
       tool_name: 'replace_string_in_file',
       tool_input: { filePath: 'src/schema.json' },
@@ -282,7 +288,7 @@ export async function runVSCodeHookProbe(hookRoot) {
     const afterPost = readSession(workspace);
     result.postRecorded = postResult.status === 0 && Boolean(afterPost?.lastEditAt);
 
-    const deniedStop = runHook(stop, workspace, { hook_event_name: 'Stop', stop_hook_active: false });
+    const deniedStop = probeHook(stop, workspace, { hook_event_name: 'Stop', stop_hook_active: false });
     result.unverifiedDenied = hookBlocked(deniedStop, 'Stop');
 
     const plan = loadPlan(workspace, planRel);
@@ -298,7 +304,9 @@ export async function runVSCodeHookProbe(hookRoot) {
         lastVerifyOutcome: verification.outcome,
         lastEvidencePath: verification.evidencePath,
       });
-      const allowedStop = runHook(stop, workspace, { hook_event_name: 'Stop', stop_hook_active: false });
+      completeWork({ workspace, plan, copilotHome: doctorCopilotHome });
+      fs.writeFileSync(path.join(workspace, planRel), plan.text.replace(/^status: in-progress$/m, 'status: done'));
+      const allowedStop = probeHook(stop, workspace, { hook_event_name: 'Stop', stop_hook_active: false });
       const endEvents = fs.existsSync(eventsPath)
         ? fs.readFileSync(eventsPath, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
         : [];
@@ -316,6 +324,8 @@ export async function runVSCodeHookProbe(hookRoot) {
     // of ~/.copilot, which is a move rather than a fix.
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(doctorCopilotHome, { recursive: true, force: true });
+    if (previousHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previousHome;
   }
 }
 
@@ -817,6 +827,8 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   });
 
   checks.push(routingPolicyCheck(workspace));
+  const effectivePolicy = loadPolicy(workspace, flags.enforcement, { copilotHome });
+  checks.push({ id: 'P0', name: `Installed effective policy: ${effectivePolicy.enforcement}`, pass: true, optional: true, hint: `${effectivePolicy.enforcementSource}; critical=${effectivePolicy.rules.critical}; destructive=${effectivePolicy.rules.destructive}`, policy: effectivePolicy });
   checks.push(...knowledgeChecks({ workspace, copilotHome }));
   checks.push(...structuralChecks({ workspace }));
 
