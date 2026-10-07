@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { authorityBin } from './authority-bin.mjs';
 import { harnessHome } from './external-plans.mjs';
 import { policySourceBinding, snapshotRel, validPolicySnapshot, readPolicySource } from './policy-snapshot.mjs';
 
@@ -17,8 +17,7 @@ export function loadHookPolicy(workspace, { ttlKey = 'gate_ttl_minutes', ttlDefa
     snapshot = JSON.parse(readPolicySource(full)?.toString('utf8') || 'null');
   } catch { /* A cold or invalid cache must be refreshed by the authority. */ }
   if (!validPolicySnapshot(snapshot, binding)) {
-    const sourceBin = fileURLToPath(new URL('../../../bin/harness.mjs', import.meta.url));
-    const bin = process.env.HARNESS_BIN || (fs.existsSync(sourceBin) ? sourceBin : null);
+    const bin = authorityBin();
     const result = spawnSync(bin ? process.execPath : 'harness', [...(bin ? [bin] : []), 'status', '--effective-policy', '--json', '--no-events', '--workspace', workspace], {
       cwd: workspace, encoding: 'utf8', timeout: 2500, maxBuffer: 128 * 1024,
     });

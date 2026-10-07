@@ -95,6 +95,13 @@ export function writeChecks(workspace, checks) {
   );
 }
 
+export function writeNoLearningDecision(workspace) {
+  const full = path.join(workspace, '.harness/fixture-no-learning.json');
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, JSON.stringify({ operation: 'fixture-no-learning', decision: 'no-learning', rationale: 'Disposable test fixture has no durable product lesson.' }));
+  return full;
+}
+
 export function writeVersionedPlan(workspace, {
   name = '2026-07-13-feat-verify-plan.md',
   required = ['unit-tests'],

@@ -29,7 +29,9 @@ export function readReviewRecord(workspace, rel) {
 }
 
 export function publishReviewRecord(workspace, rel, record) {
-  if (!ensureHarnessDir(workspace) || !writeFileContained(workspace, rel, `${JSON.stringify(record, null, 2)}\n`)) throw new Error(`Could not publish ${rel}`);
+  const serialized = `${JSON.stringify(record, null, 2)}\n`;
+  if (Buffer.byteLength(serialized) > 1024 * 1024) throw usage(`Record exceeds the 1 MiB storage/read limit: ${rel}; reduce review input size`);
+  if (!ensureHarnessDir(workspace) || !writeFileContained(workspace, rel, serialized)) throw new Error(`Could not publish ${rel}`);
   return rel;
 }
 

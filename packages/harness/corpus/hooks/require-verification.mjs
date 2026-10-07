@@ -10,6 +10,7 @@ import { stopBlockOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy } from './lib/policy.mjs';
 import { writeSessionState } from './lib/session-state.mjs';
 import { resolveHookWorkspace } from './lib/tool-payload.mjs';
+import { authorityBin } from './lib/authority-bin.mjs';
 
 const startedAt = Date.now();
 
@@ -46,7 +47,7 @@ function event(fields) {
 
 function deny(message) {
   const planFlag = session?.activePlan ? ` --plan ${session.activePlan}` : '';
-  const recipe = `; next: run \`harness verify${planFlag} --workspace . --json\` after the edit is complete, then stop`;
+  const recipe = `; next: run \`harness verify${planFlag} --workspace . --json\` after the edit is complete, record a publish or no-learning decision, and complete the plan with \`harness plan-update${planFlag} --status done\` before stopping`;
   const base = input.stop_hook_active
     ? `${message}; verification is still pending after the prior Stop block`
     : message;
@@ -80,7 +81,7 @@ try {
 }
 
 function refreshVerification(current) {
-  const bin = process.env.HARNESS_BIN;
+  const bin = authorityBin();
   const command = bin ? process.execPath : 'harness';
   const args = [...(bin ? [bin] : []), 'verify', '--json', '--no-events', '--workspace', workspace];
   if (current?.activePlan) args.push('--plan', current.activePlan);

@@ -13,6 +13,32 @@ import { trackWorkspaceSolutions } from './helpers/workspace.mjs';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
+
+test('interrupted episode content write leaves no final file and the same operation recovers', t => {
+  const ws = tempDir('episode-interrupt-ws-'), copilotHome = tempDir('episode-interrupt-cp-'), home = tempDir('episode-interrupt-hh-');
+  t.after(() => [ws, copilotHome, home].forEach(dir => fs.rmSync(dir, { recursive: true, force: true })));
+  const args = { workspace: ws, copilotHome, home, kind: 'insight', flags: { title: 'Interrupted content', body: 'One complete published lesson.', operationSuffix: 'same-operation', captureDate: '2026-10-07' } };
+  const original = fs.writeFileSync;
+  let interrupted = false;
+  fs.writeFileSync = (file, data, ...rest) => {
+    if (!interrupted && typeof file === 'number' && typeof data === 'string' && data.includes('One complete published lesson.')) {
+      interrupted = true;
+      original(file, data.slice(0, 25), ...rest);
+      throw new Error('Injected interruption during episode bytes');
+    }
+    return original(file, data, ...rest);
+  };
+  let failed;
+  try { failed = runInsightCompound(args); } finally { fs.writeFileSync = original; }
+  assert.equal(interrupted, true);
+  assert.equal(failed.pass, false);
+  const dir = path.join(projectStoreDir(ws, { home }), 'docs/solutions/insights');
+  assert.deepEqual(fs.readdirSync(dir).filter(f => f.endsWith('.md')), []);
+  const recovered = runInsightCompound(args);
+  assert.equal(recovered.pass, true, recovered.blockedReason);
+  assert.equal(runInsightCompound(args).path, recovered.path);
+  assert.equal(fs.readdirSync(dir).filter(f => f.endsWith('.md')).length, 1);
+});
 function keepSolutionsInWorkspace(ws) {
   return trackWorkspaceSolutions(ws);
 }

@@ -12,12 +12,12 @@ import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
 import { deriveGitContext } from './git-context.mjs';
-import { assertNoSymlinkAncestors, realpathParentContained } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, writeFileContainedExclusive, readFileNoFollow } from './fs-safe.mjs';
 import { solutionsWriteTarget } from './project-layout.mjs';
-import { readFileNoFollow } from './fs-safe.mjs';
 import { withPlanUpdateLock } from './plan-update.mjs';
-import { completionPrerequisites } from './completion.mjs';
+import { proofPrerequisites } from './completion.mjs';
 import { recordHash, readReviewRecord, publishReviewRecord } from './review.mjs';
+import { learningPointerRel } from './learning-record.mjs';
 
 function snapshotFile(p) {
   try {
@@ -50,41 +50,18 @@ function reserveEpisodePath(baseRoot, dirRel, base, doc, { replay = false } = {}
   fs.mkdirSync(dirFull, { recursive: true });
   let candidate = `${base}.md`;
   let n = 2;
-    for (let attempt = 0; attempt < 100000; attempt++) {
+  for (let attempt = 0; attempt < 100000; attempt++) {
     const rel = path.join(dirRel, candidate);
     const full = assertNoSymlinkAncestors(baseRoot, rel);
     if (!full) return { ok: false };
-    try {
-            const fd = fs.openSync(full, 'wx');
-            if (!realpathParentContained(baseRoot, full)) {
-        try {
-          fs.closeSync(fd);
-        } catch {
-          // fd may already be gone if the leaf was swapped away
-        }
-        try {
-          fs.unlinkSync(full);
-        } catch {
-          // best effort — a swapped-away leaf is not ours to chase
-        }
-        return { ok: false };
-      }
-      // Verify passed: write the content THROUGH the verified descriptor.
-      try {
-        fs.writeFileSync(fd, doc);
-      } finally {
-        fs.closeSync(fd);
-      }
-      return { ok: true, rel };
-    } catch (err) {
-      if (err.code === 'EEXIST') {
-        if (replay) return readFileNoFollow(full, { root: baseRoot }) === doc ? { ok: true, rel, replayed: true } : { ok: false, error: new Error('Learning operation conflicts with existing episode bytes') };
-        candidate = `${base}-${n}.md`;
-        n += 1;
-        continue;
-      }
-      return { ok: false, error: err };
+    if (writeFileContainedExclusive(baseRoot, rel, doc)) return { ok: true, rel };
+    if (fs.existsSync(full)) {
+      if (replay) return readFileNoFollow(full, { root: baseRoot }) === doc ? { ok: true, rel, replayed: true } : { ok: false, error: new Error('Learning operation conflicts with existing episode bytes') };
+      candidate = `${base}-${n}.md`;
+      n += 1;
+      continue;
     }
+    return { ok: false, error: new Error('Atomic episode publication failed before the final file was published') };
   }
   return { ok: false };
 }
@@ -119,7 +96,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   if (kind === 'fix') {
     const selected = selectPlan(workspace, { planPath: flags.plan, requireUnique: true });
     if (!selected.plan) return { pass: false, exitCode: 2, kind, path: null, blockedReason: 'Verified fix requires a selected plan' };
-    const checked = completionPrerequisites({ workspace, plan: selected.plan, copilotHome });
+    const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
     if (!checked.pass) return { pass: false, exitCode: 2, kind, path: null, blockedReason: checked.message };
     verifiedProof = checked.value;
   }
@@ -231,9 +208,6 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       n += 1;
     }
   } else {
-    // Atomic exclusive-create reservation (P1#1): claims a unique suffix with
-    // O_EXCL so concurrent captures of the same title can never overwrite each
-    // other. Containment is re-validated before each create.
     const reserved = reserveEpisodePath(target.base, dirRel, base, doc, { replay: Boolean(flags.operationSuffix) });
     if (!reserved.ok) {
       return {
@@ -340,28 +314,33 @@ async function runLearningDecision({ workspace, copilotHome, flags, log }) {
     || typeof decision.rationale !== 'string' || !decision.rationale.trim() || (decision.scope && decision.scope !== 'private')) throw new Error('Learning decision requires operation, decision, rationale, and private scope');
   const selected = selectPlan(workspace, { planPath: flags.plan, session: readSession(workspace), requireUnique: true });
   if (!selected.plan) throw new Error('Learning decision requires an unambiguous plan');
-  const checked = completionPrerequisites({ workspace, plan: selected.plan, copilotHome });
+  const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
   if (!checked.pass) return { pass: false, exitCode: 2, blockedReason: checked.message, plan: selected.plan.path, path: null };
   const operation = recordHash(decision.operation);
   const digest = recordHash({ decision, proof: checked.value.verificationIdentity });
   const rel = `.harness/learning/${operation}.json`;
   if (flags.dryRun) return { pass: true, exitCode: 0, dryRun: true, decision: decision.decision, path: null, indexed: null };
   publishReviewRecord(workspace, '.harness/learning/.ready.json', { version: 1 });
-  return withPlanUpdateLock(path.join(workspace, rel), () => {
+  const pointer = learningPointerRel(selected.plan.path);
+  return withPlanUpdateLock(path.join(workspace, pointer), () => withPlanUpdateLock(path.join(workspace, rel), () => {
     const prior = readReviewRecord(workspace, rel);
     if (prior && prior.digest !== digest) throw new Error('Learning operation identity conflicts with a different decision or proof');
-    if (prior?.state === 'done') return { ...prior.result, replayed: true };
+    if (prior?.state === 'done') {
+      publishReviewRecord(workspace, pointer, { version: 1, operation, record: rel });
+      return { ...prior.result, learningRecord: rel, replayed: true };
+    }
     if (prior?.state === 'blocked') return { pass: false, exitCode: 1, blockedReason: prior.result.blockedReason, partialRecovery: prior.result.partialRecovery };
     const pending = prior || { version: 1, operation, digest, decision, proof: checked.value, captureDate: new Date().toISOString().slice(0, 10), state: 'pending' };
-    const fresh = completionPrerequisites({ workspace, plan: selected.plan, copilotHome });
+    const fresh = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
     if (!fresh.pass || fresh.id !== checked.id) throw new Error('Work changed before learning publication');
+    publishReviewRecord(workspace, pointer, { version: 1, operation, record: rel });
     publishReviewRecord(workspace, rel, pending);
     const result = decision.decision === 'no-learning'
       ? { pass: true, exitCode: 0, decision: 'no-learning', path: null, indexed: null, plan: selected.plan.path, verificationEvidence: checked.value.evidencePath }
       : runInsightCompound({ workspace, copilotHome, flags: { ...flags, plan: selected.plan.path, title: decision.title, body: decision.body, category: decision.category, tags: Array.isArray(decision.tags) ? decision.tags.join(',') : '', captureDate: pending.captureDate, operationSuffix: operation.slice(0, 16) }, log, kind: 'fix', home: flags.harnessHome || process.env.HARNESS_HOME });
     publishReviewRecord(workspace, rel, { ...pending, state: result.pass ? 'done' : result.partialRecovery ? 'blocked' : 'pending', result });
     return { ...result, learningRecord: rel };
-  });
+  }));
 }
 
 export async function runCompound({ workspace, copilotHome, flags, log = () => {} }) {

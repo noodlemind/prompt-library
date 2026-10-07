@@ -74,7 +74,7 @@ jobs:
         shell: bash
         env:
           HARNESS_PROOF_LOG: delivery-transcripts.jsonl
-        run: node --test packages/harness/test/deterministic-delivery.test.mjs > delivery-proof.log 2>&1
+        run: node --test packages/harness/test/deterministic-delivery.test.mjs packages/harness/test/insight-compound.test.mjs > delivery-proof.log 2>&1
       - name: Preserve proof output
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

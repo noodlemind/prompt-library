@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { listLearnings, storeDir } from '../lib/knowledge/store.mjs';
 import { binPath, runHarness } from './helpers/cli.mjs';
-import { initGit, recordSuccessfulEdit, writeChecks, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
+import { initGit, recordSuccessfulEdit, writeChecks, writeVersionedPlan, writeNoLearningDecision } from './helpers/cli-fixtures.mjs';
 import { trackWorkspaceSolutions } from './helpers/workspace.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -181,6 +181,7 @@ test('a served lesson the diff did not use still stops cleanly', () => {
   recordSuccessfulEdit(c.ws, { file_path: 'src/example.js' });
   orient(c);
   assert.equal(verify(c).status, 0);
+  assert.equal(harness(c, ['compound', '--plan', c.plan, '--learning-decision', writeNoLearningDecision(c.ws)]).status, 0);
   const completed = harness(c, ['plan-update', '--plan', c.plan, '--status', 'done']);
   assert.equal(completed.status, 0, completed.stdout + completed.stderr);
   const allowed = stopJson(stop(c, 'enforce'));

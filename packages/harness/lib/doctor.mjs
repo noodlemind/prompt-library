@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'node:url';
 import { completeWork } from './completion.mjs';
+import { runCompound } from './compound.mjs';
 import { loadPolicy } from './policy.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
@@ -304,6 +305,10 @@ export async function runVSCodeHookProbe(hookRoot) {
         lastVerifyOutcome: verification.outcome,
         lastEvidencePath: verification.evidencePath,
       });
+      const decisionPath = path.join(workspace, '.harness/doctor-learning.json');
+      fs.writeFileSync(decisionPath, JSON.stringify({ operation: 'doctor-fixture-learning', decision: 'no-learning', rationale: 'Disposable verification fixture has no durable product lesson.' }));
+      const learning = await runCompound({ workspace, copilotHome: doctorCopilotHome, flags: { plan: planRel, learningDecision: decisionPath } });
+      if (!learning.pass) return result;
       completeWork({ workspace, plan, copilotHome: doctorCopilotHome });
       fs.writeFileSync(path.join(workspace, planRel), plan.text.replace(/^status: in-progress$/m, 'status: done'));
       const allowedStop = probeHook(stop, workspace, { hook_event_name: 'Stop', stop_hook_active: false });

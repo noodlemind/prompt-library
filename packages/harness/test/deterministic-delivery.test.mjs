@@ -34,7 +34,13 @@ test('installed package proves behavior, hook layout, stale replay and completio
   const hooks = path.join(f.copilot, 'hooks');
   assert.ok(fs.existsSync(path.join(hooks, 'lib/proof-authority.mjs')));
   assert.equal(fs.existsSync(path.join(hooks, 'lib/evidence-binding.mjs')), false);
-  const installedHook = (name) => spawnSync(process.execPath, [path.join(hooks, name)], { cwd: f.ws, env: f.env, input: JSON.stringify({ cwd: f.ws, hook_event_name: 'Stop' }), encoding: 'utf8', timeout: 15000 });
+  const installedEnv = { ...f.env };
+  delete installedEnv.HARNESS_BIN;
+  const gitPath = spawnSync(process.platform === 'win32' ? 'where.exe' : 'which', ['git'], { encoding: 'utf8' });
+  assert.equal(gitPath.status, 0, gitPath.stderr);
+  installedEnv.PATH = path.dirname(gitPath.stdout.trim().split(/\r?\n/)[0]);
+  assert.ok(spawnSync('harness', ['--version'], { env: installedEnv }).error, 'installed hook proof must not depend on harness in PATH');
+  const installedHook = (name) => f.receipt('installed-hook', [name], spawnSync(process.execPath, [path.join(hooks, name)], { cwd: f.ws, env: installedEnv, input: JSON.stringify({ cwd: f.ws, hook_event_name: 'Stop' }), encoding: 'utf8', timeout: 15000 }));
   const plan = JSON.parse(f.cli('plan-new', '--goal', 'Return two', '--acceptance', 'value is two', '--constraint', 'Preserve API', '--verification-check', 'behavior', '--json').stdout).path;
   assert.equal(f.cli('gate', '--plan', plan, '--json').status, 0);
   f.hook('record-successful-edit.mjs', { tool_name: 'replace_string_in_file', tool_input: { filePath: 'src/example.js' }, tool_response: 'File edited successfully' });
@@ -46,6 +52,9 @@ test('installed package proves behavior, hook layout, stale replay and completio
   fs.writeFileSync(input, JSON.stringify({ packet: packet.id, results: packet.required.map(reviewer => ({ reviewer, status: 'completed', findings: [], residual_risks: [], testing_gaps: [] })) }));
   assert.equal(f.cli('review', 'assemble', '--plan', plan, '--packet', packet.id, '--file', input, '--json').status, 0);
   assert.equal(f.cli('verify', '--plan', plan, '--base', 'HEAD', '--json').status, 0);
+  const learning = path.join(f.ws, '.harness/no-learning.json');
+  fs.writeFileSync(learning, JSON.stringify({ operation: 'installed-proof-learning', decision: 'no-learning', rationale: 'Disposable fixture has no durable learning.' }));
+  assert.equal(f.cli('compound', '--plan', plan, '--learning-decision', learning, '--json').status, 0);
   const beforeCompletion = fs.readFileSync(plan, 'utf8');
   const done = f.cli('plan-update', '--plan', plan, '--status', 'done', '--json');
   assert.equal(done.status, 0, done.stdout + done.stderr);
@@ -55,6 +64,50 @@ test('installed package proves behavior, hook layout, stale replay and completio
   assert.equal(JSON.parse(installedHook('require-verification.mjs').stdout).continue, true);
   fs.appendFileSync(path.join(f.ws, '.github/harness/policy.yaml'), '# policy changed\n');
   assert.equal(JSON.parse(installedHook('require-verification.mjs').stdout).hookSpecificOutput.decision, 'block');
+});
+
+test('completion requires a current finished learning decision and binds it into the receipt', t => {
+  const f = deliveryFixture(t);
+  const plan = writeVersionedPlan(f.ws, { required: ['behavior'], criteria: { AC1: ['behavior'] } });
+  fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 2;\n');
+  assert.equal(f.cli('verify', '--plan', plan, '--base', 'HEAD', '--json').status, 0);
+  const before = fs.readFileSync(path.join(f.ws, plan), 'utf8');
+  assert.notEqual(f.cli('plan-update', '--plan', plan, '--status', 'done', '--json').status, 0);
+  assert.equal(fs.readFileSync(path.join(f.ws, plan), 'utf8'), before);
+  const file = path.join(f.ws, '.harness/learning-input.json');
+  fs.writeFileSync(file, JSON.stringify({ operation: 'finish-learning', decision: 'no-learning', rationale: 'No reusable lesson from this fixture.' }));
+  const compounded = f.cli('compound', '--plan', plan, '--learning-decision', file, '--json');
+  assert.equal(compounded.status, 0, compounded.stderr);
+  const recordPath = path.join(f.ws, JSON.parse(compounded.stdout).learningRecord);
+  const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+  fs.writeFileSync(recordPath, JSON.stringify({ ...record, state: 'pending' }));
+  assert.notEqual(f.cli('plan-update', '--plan', plan, '--status', 'done', '--json').status, 0);
+  fs.writeFileSync(recordPath, JSON.stringify(record));
+  assert.equal(f.cli('plan-update', '--plan', plan, '--status', 'done', '--json').status, 0);
+  const completionFiles = fs.readdirSync(path.join(f.ws, '.harness/completions'));
+  const completion = JSON.parse(fs.readFileSync(path.join(f.ws, '.harness/completions', completionFiles[0]), 'utf8'));
+  assert.equal(completion.value.learning.operation, record.operation);
+  fs.writeFileSync(recordPath, JSON.stringify({ ...record, state: 'blocked' }));
+  assert.equal(JSON.parse(f.cli('status', '--validate-completion', '--plan', plan, '--json').stdout).pass, false);
+});
+
+test('oversized serialized review records reject without changing current coverage', t => {
+  const f = deliveryFixture(t);
+  const plan = JSON.parse(f.cli('plan-new', '--goal', 'Review bytes', '--acceptance', 'Behavior works', '--constraint', 'Keep API', '--verification-check', 'behavior', '--json').stdout).path;
+  const packet = JSON.parse(f.cli('review', 'prepare', '--plan', plan, '--base', 'HEAD', '--json').stdout);
+  const results = packet.required.map(reviewer => ({ reviewer, status: 'completed', findings: [], residual_risks: [], testing_gaps: [] }));
+  const input = path.join(f.ws, '.harness/results.json');
+  fs.writeFileSync(input, JSON.stringify({ packet: packet.id, results }));
+  assert.equal(f.cli('review', 'assemble', '--plan', plan, '--packet', packet.id, '--file', input, '--json').status, 0);
+  const latestDir = path.join(f.ws, '.harness/reviews/latest');
+  const pointer = path.join(latestDir, fs.readdirSync(latestDir)[0]);
+  const before = fs.readFileSync(pointer, 'utf8');
+  results[0].findings = [{ file: 'src/example.js', line: 1, severity: 'P2', confidence: 0.8, title: 'Large finding', description: 'x'.repeat(600 * 1024), suggested_fix: 'Inspect behavior.', autofix_class: 'manual', evidence: ['src/example.js:1'] }];
+  fs.writeFileSync(input, JSON.stringify({ packet: packet.id, results }));
+  const rejected = f.cli('review', 'assemble', '--plan', plan, '--packet', packet.id, '--file', input, '--json');
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr + rejected.stdout, /size|limit|large/);
+  assert.equal(fs.readFileSync(pointer, 'utf8'), before);
 });
 
 export function deliveryFixture(t, runtimeRoot = root) {
@@ -75,10 +128,10 @@ export function deliveryFixture(t, runtimeRoot = root) {
     if (process.env.HARNESS_PROOF_LOG) fs.appendFileSync(process.env.HARNESS_PROOF_LOG, JSON.stringify({ fixture: dir, runtimeRoot, platform: process.platform, node: process.version, kind, args, status: result.status, stdout: String(result.stdout || '').slice(0, 262144), stderr: String(result.stderr || '').slice(0, 262144) }) + '\n');
     return result;
   };
-  const cli = (...args) => receipt('cli', args, spawnSync(process.execPath, [path.join(runtimeRoot, 'bin/harness.mjs'), ...args, '--workspace', ws, '--harness-home', home, '--copilot-home', copilot], { cwd: ws, env, encoding: 'utf8', timeout: 30000 }));
+  const cli = (...args) => receipt('cli', args, spawnSync(process.execPath, [path.join(runtimeRoot, 'bin/harness.mjs'), ...args, '--workspace', ws, '--harness-home', home, '--copilot-home', copilot], { cwd: ws, env, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 }));
   const hook = (name, input = {}) => receipt('hook', [name, input], spawnSync(process.execPath, [path.join(runtimeRoot, 'corpus/hooks', name)], { cwd: ws, env, input: JSON.stringify({ cwd: ws, workspace: ws, session_id: 'delivery-proof', ...input }), encoding: 'utf8', timeout: 30000 }));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return { ws, home, copilot, cli, hook, env };
+  return { ws, home, copilot, cli, hook, env, receipt };
 }
 
 test('short plans without proof are unlocked drafts and cannot verify', (t) => {

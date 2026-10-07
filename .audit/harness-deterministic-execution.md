@@ -16,6 +16,7 @@ Done means the CLI and installed hooks reject broken, missing, stale and incompl
 - [x] P1.5 Bind review and completion records.
 - [x] P1.6 Publish learning decisions and repair corpus instructions.
 - [ ] Prove the complete Phase 1 exit sequence before Phase 2.
+- [ ] Resolve relevant Phase 1 PR comments and reprove the updated head before resuming Phase 2.
 - [ ] P2.1 Deterministic review preparation and assembly.
 - [ ] P2.2 Structured lifecycle operations and intent amendments.
 - [ ] P2.3 Learning publication and consolidation packets.
@@ -33,3 +34,7 @@ Phase 1 local required suite: 2293 tests, 2292 passed, zero failed, one optional
 Exact baseline: detached checkout 85f062f, Node 22, 2278 passed, zero failed, one optional skip. The earlier Git archive baseline is superseded because it lacked Git metadata. Required Node 26 run: 2293 passed, zero failed, one optional skip. Latest Node 22 release run includes the additional FIFO regression. No timing comparison is valid between the concurrent runs.
 
 Release checkpoint: Node 22 required suite 2295 tests, 2294 passed, zero failed, one optional skip (`phase1-ci-runtime-release.log`). Prompt contracts: 35 passed. Node 26 required suite: 2293 passed, zero failed, one optional skip before the final pinned-source read hardening; the FIFO case separately passed on Node 26. CLI and hook transcripts contain 105 recorded invocations on 10 disposable fixture identities. Platform gate is still pending.
+
+The initial platform gate passed on b5e1b094d8b28be31b726ed4f9d686c08463cbe3 in run 37640029336 (required Linux suite and critical Windows/Linux delivery proofs). Phase 2 was started in a separate branch. The user then requested resolution of Phase 1 PR comments before continuing. Five Greptile findings were confirmed: installed authority discovery, completion learning prerequisite, interrupted episode publication, serialized review size, and missing schema status. Phase 2 edits remain isolated; this feedback pass must establish a new green gate before resumption.
+
+Feedback release candidate 0.9.1 passes the local Node 22 full suite (2298 tests, 2297 passed, zero failed, one optional skip), prompt contracts (35 passed), and all 31 delivery/episode tests. Raw exit receipts capture 120 CLI/hook invocations including 4 installed-hook calls without HARNESS_BIN or a global CLI, across 15 disposable identities. Four executable regressions failed before repair. The first full run exposed a missing no-learning call in the adaptive ladder; that caller was repaired and the final full run passed. The new head still requires platform CI before Phase 2 resumes.

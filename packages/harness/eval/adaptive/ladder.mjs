@@ -102,6 +102,12 @@ function verify(fx, plan) {
   return harness(fx, ['verify', '--plan', plan, '--base', 'HEAD']);
 }
 
+function recordNoLearning(fx, plan, operation) {
+  const file = path.join(fx.workspace, '.harness/no-learning.json');
+  fs.writeFileSync(file, JSON.stringify({ operation, decision: 'no-learning', rationale: 'Disposable ladder unit has no durable product lesson.' }));
+  expectExit(harness(fx, ['compound', '--plan', plan, '--learning-decision', file, '--json']), 0, 'record no-learning decision');
+}
+
 function writeSource(fx, rel, body) {
   fs.writeFileSync(path.join(fx.workspace, rel), body);
 }
@@ -458,6 +464,7 @@ const RUNGS = [
       writeSource(fx, 'src/example.js', CLEAR);
       const passed = expectExit(verify(fx, plan), 0, 'cleared verify');
       assert(passed.outcome === 'passed', 'cleared diff did not pass', passed);
+      recordNoLearning(fx, plan, 'ladder-cleared-unit');
       expectExit(harness(fx, ['plan-update', '--plan', plan, '--status', 'done', '--json']), 0, 'complete the verified unit');
       const continued = stop(fx);
       assert(continued.continue === true, 'stop blocked a passed unit', continued);
@@ -473,6 +480,7 @@ const RUNGS = [
       assert(/changed after verification/.test(staleDecision.reason || ''), 'stale stop did not require a fresh verify', stale);
       const again = expectExit(verify(fx, plan), 0, 'verify after the later edit');
       assert(again.outcome === 'passed', 'the later edit did not pass', again);
+      recordNoLearning(fx, plan, 'ladder-later-unit');
       expectExit(harness(fx, ['plan-update', '--plan', plan, '--status', 'done', '--json']), 0, 'complete the later verified unit');
       const finished = stop(fx);
       assert(finished.continue === true, 'stop blocked the verified later edit', finished);

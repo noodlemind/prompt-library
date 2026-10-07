@@ -1,11 +1,9 @@
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { authorityBin } from './authority-bin.mjs';
 
 export function callProofAuthority(workspace, args) {
-  const sourceBin = fileURLToPath(new URL('../../../bin/harness.mjs', import.meta.url));
-  const bin = process.env.HARNESS_BIN || (fs.existsSync(sourceBin) ? sourceBin : null);
+  const bin = authorityBin();
   const result = spawnSync(bin ? process.execPath : 'harness', [...(bin ? [bin] : []), 'status', ...args, '--json', '--no-events', '--workspace', workspace], {
     cwd: workspace, encoding: 'utf8', timeout: 2500, maxBuffer: 256 * 1024,
   });

@@ -9,6 +9,7 @@ Each persona returns a single JSON object:
 ```json
 {
   "reviewer": "architecture-strategist",
+  "status": "completed",
   "findings": [
     {
       "file": "path/to/file.rb",
@@ -55,6 +56,7 @@ Each persona returns a single JSON object:
 | Field | Type | Description |
 |-------|------|-------------|
 | `reviewer` | string | Name of the persona that produced these findings |
+| `status` | enum | `completed` for a complete result; otherwise the actual failed or timed-out status |
 | `findings` | array | List of finding objects |
 | `residual_risks` | array[string] | Risks that remain even after all findings are addressed |
 | `testing_gaps` | array[string] | Areas where test coverage is insufficient |

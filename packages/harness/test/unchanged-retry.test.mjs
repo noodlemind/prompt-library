@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { binPath, runHarness } from './helpers/cli.mjs';
-import { initGit, recordSuccessfulEdit, writeChecks, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
+import { initGit, recordSuccessfulEdit, writeChecks, writeVersionedPlan, writeNoLearningDecision } from './helpers/cli-fixtures.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(packageRoot, '../..');
@@ -108,6 +108,7 @@ test('verify stores the normalized diff and the next unchanged edit is unchanged
   const again = harness(c, ['verify', '--plan', c.plan, '--base', 'HEAD']);
   assert.equal(again.status, 0, again.stderr + again.stdout);
   assert.equal(JSON.parse(again.stdout).outcome, 'passed');
+  assert.equal(harness(c, ['compound', '--plan', c.plan, '--learning-decision', writeNoLearningDecision(c.ws)]).status, 0);
   const completed = harness(c, ['plan-update', '--plan', c.plan, '--status', 'done']);
   assert.equal(completed.status, 0, completed.stdout + completed.stderr);
 
