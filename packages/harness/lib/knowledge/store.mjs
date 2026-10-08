@@ -29,7 +29,7 @@ function gitOut(cwd, args) {
 function resolvedGitPath(workspace, raw) {
   const abs = path.resolve(workspace, raw);
   try {
-    return fs.realpathSync(abs);
+    return fs.realpathSync.native(abs);
   } catch {
     return abs;
   }
@@ -55,7 +55,7 @@ export function localRepoId(workspace) {
   const basis = linkedPrimaryCheckout(workspace) || workspace;
   let real = basis;
   try {
-    real = fs.realpathSync(basis);
+    real = fs.realpathSync.native(basis);
   } catch {
     // keep the given path
   }

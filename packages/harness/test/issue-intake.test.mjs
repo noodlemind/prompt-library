@@ -622,8 +622,10 @@ for (const name of ['checkout with spaces é', 'checkout\nwith newline']) {
     initGit(ws);
     const tree = addWorktree(ws, 'share-path');
     try {
-      assert.equal(linkedPrimaryCheckout(tree.path), ws);
+      assert.equal(linkedPrimaryCheckout(tree.path), fs.realpathSync.native(ws));
       assert.equal(localRepoId(tree.path), localRepoId(ws));
+      assert.equal(localRepoId(fs.realpathSync.native(ws)), localRepoId(ws));
+      if (process.platform === 'win32') assert.equal(localRepoId(ws.toUpperCase()), localRepoId(ws));
     } finally {
       git(ws, ['worktree', 'remove', '--force', tree.path]);
     }

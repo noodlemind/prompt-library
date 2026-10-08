@@ -409,8 +409,10 @@ test('the shared adapter does not attach a stdin listener when merely imported',
 // --- folded from review souvenirs -----------------------------------------
 
 test('an installed provider under a path with a space starts its adapter and completes', async () => {
-  const installed = path.join(tempDir('provider-install-'), 'Jane Doe é', 'harness');
-  fs.cpSync(path.join(packageRoot, 'lib'), path.join(installed, 'lib'), { recursive: true });
+  const destination = path.join(tempDir('provider-install-'), 'Jane Doe é', 'harness');
+  fs.cpSync(path.join(packageRoot, 'lib'), path.join(destination, 'lib'), { recursive: true });
+  const installed = fs.realpathSync.native(destination);
+  assert.equal(fs.statSync(path.join(installed, 'lib', 'provider.mjs')).isFile(), true);
   const stub = await stubServer(() => [200, openAiText('installed adapter replied')]);
   try {
     const program = `
