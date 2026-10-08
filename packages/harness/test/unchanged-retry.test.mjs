@@ -162,9 +162,12 @@ test('the edit hook denies when the current diff cannot be read', () => {
   const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
   session.diffFingerprint = 'diff --git a/src/example.js\n';
   fs.writeFileSync(sessionPath, JSON.stringify(session));
-  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'unchanged-retry-git-'));
-  fs.writeFileSync(path.join(fakeBin, 'git'), '#!/bin/sh\nexit 1\n');
-  fs.chmodSync(path.join(fakeBin, 'git'), 0o755);
+  const unavailableGitEnv = hookEnv(c);
+  for (const key of Object.keys(unavailableGitEnv)) {
+    if (key.toUpperCase() === 'PATH') delete unavailableGitEnv[key];
+  }
+  unavailableGitEnv.PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'unchanged-retry-no-git-'));
+  assert.equal(spawnSync('git', ['--version'], { env: unavailableGitEnv }).error?.code, 'ENOENT');
   const denied = jsonLine(spawnSync(process.execPath, [editHook], {
     cwd: c.ws,
     input: JSON.stringify({
@@ -175,7 +178,7 @@ test('the edit hook denies when the current diff cannot be read', () => {
       tool_input: { filePath: 'src/example.js' },
     }),
     encoding: 'utf8',
-    env: { ...hookEnv(c), PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` },
+    env: unavailableGitEnv,
   }));
   assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(denied.hookSpecificOutput.permissionDecisionReason, /^unreadable-diff\b/);

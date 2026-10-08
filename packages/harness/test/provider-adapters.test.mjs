@@ -3,14 +3,17 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { agentResultOf } from '../lib/agent-cmd.mjs';
 import { PROVIDERS, providerEnv, resolveBaseUrl, startProvider } from '../lib/provider.mjs';
 import { AGENT_TOOLS } from '../lib/agent-loop.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
+const execFileAsync = promisify(execFile);
 
 async function stubServer(reply) {
   const seen = [];
@@ -405,15 +408,27 @@ test('the shared adapter does not attach a stdin listener when merely imported',
 
 // --- folded from review souvenirs -----------------------------------------
 
-test('the provider root is decoded, so an install under a path with a space works', () => {
-  const encoded = 'file:///Users/Jane%20Doe/harness/lib/provider.mjs';
-  assert.equal(path.dirname(new URL(encoded).pathname), '/Users/Jane%20Doe/harness/lib',
-    'this is the value the old code used');
-  assert.equal(path.dirname(fileURLToPath(encoded)), '/Users/Jane Doe/harness/lib');
-
-  const source = fs.readFileSync(path.join(packageRoot, 'lib', 'provider.mjs'), 'utf8');
-  assert.equal(/new URL\(import\.meta\.url\)\.pathname/.test(source), false,
-    'provider path resolution must percent-decode so spaces work');
+test('an installed provider under a path with a space starts its adapter and completes', async () => {
+  const installed = path.join(tempDir('provider-install-'), 'Jane Doe é', 'harness');
+  fs.cpSync(path.join(packageRoot, 'lib'), path.join(installed, 'lib'), { recursive: true });
+  const stub = await stubServer(() => [200, openAiText('installed adapter replied')]);
+  try {
+    const program = `
+      import { startProvider } from ${JSON.stringify(pathToFileURL(path.join(installed, 'lib', 'provider.mjs')).href)};
+      const provider = startProvider({ provider: 'ollama', parentEnv: { ...process.env, OLLAMA_BASE_URL: ${JSON.stringify(stub.base)} } });
+      try {
+        const result = await provider.complete({ messages: [{ role: 'user', text: 'hi' }] }, { timeout: 15000 });
+        process.stdout.write(JSON.stringify(result));
+      } finally { provider.close(); }
+    `;
+    const result = await execFileAsync(process.execPath, ['--input-type=module', '-e', program], { timeout: 20_000 });
+    assert.equal(JSON.parse(result.stdout).text, 'installed adapter replied');
+    assert.equal(stub.seen[0].url, '/v1/chat/completions');
+    assert.equal(stub.seen[0].body.messages[0].content, 'hi');
+  } finally {
+    await stub.close();
+    fs.rmSync(path.dirname(installed), { recursive: true, force: true });
+  }
 });
 
 test('a base URL may not embed credentials', async () => {

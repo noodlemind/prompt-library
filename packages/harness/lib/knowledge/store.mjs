@@ -45,9 +45,9 @@ export function linkedPrimaryCheckout(workspace) {
   const common = gitOut(workspace, ['rev-parse', '--git-common-dir']);
   if (!gitDir || !common) return null;
   if (resolvedGitPath(workspace, gitDir) === resolvedGitPath(workspace, common)) return null;
-  const listed = gitOut(workspace, ['worktree', 'list', '--porcelain']);
-  const first = listed?.split('\n').find((line) => line.startsWith('worktree '));
-  if (first) return first.slice('worktree '.length);
+  const listed = gitOut(workspace, ['worktree', 'list', '--porcelain', '-z']);
+  const first = listed?.split('\0').find((line) => line.startsWith('worktree '));
+  if (first) return resolvedGitPath(workspace, first.slice('worktree '.length));
   return path.resolve(resolvedGitPath(workspace, common), '..');
 }
 

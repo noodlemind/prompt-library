@@ -39,8 +39,7 @@ jobs:
       - name: Install harness dependencies
         run: npm ci --prefix packages/harness
 
-      # The suite has never run on Windows. Failures here are the point of the
-      # job, so they must not hide the CLI scenarios below.
+      # Collect diagnostics after a failed suite; the final gate enforces its outcome.
       - name: Harness test suite (Windows)
         id: suite
         continue-on-error: true
@@ -82,8 +81,7 @@ jobs:
 
       # Redaction and descendant termination are the two win32 paths with the
       # least coverage, so they are exercised directly rather than inferred.
-      # Unlike the diagnostic steps above, these two are pass/fail assertions
-      # and they GATE the job — each writes an explicit verdict to
+      # Alongside the test suite, these two assertions GATE the job — each writes an explicit verdict to
       # $GITHUB_OUTPUT and the "Windows probe gate" step at the end turns any
       # non-pass into a red job. `continue-on-error` stays on for ordering
       # only: a failing probe must not skip the probe after it, the
@@ -303,12 +301,7 @@ jobs:
       # after the artifact upload, so a red gate never costs us the captured
       # output that explains it.
       #
-      # This shape exists so that two things stay true at once: a failing suite
-      # must never skip the CLI scenario and probe steps below it (hence
-      # `continue-on-error` on every step above), AND a real redaction leak or
-      # a broken taskkill path must never ship green (hence this gate). Only
-      # the two security-relevant probes gate; the suite outcome is reported,
-      # never enforced, exactly as the header comment describes.
+      # A failed suite must not skip diagnostics, and must still fail this job.
       #
       # It fails CLOSED: a probe that reported no verdict at all — it crashed,
       # or never ran — is a failure, not a pass. Verdicts arrive through `env`
@@ -325,9 +318,10 @@ jobs:
           CANCELLATION_REASON: ${{ steps.cancellation.outputs.reason }}
         run: |
           $ErrorActionPreference = 'Continue'
-          $names = @('Redaction on Windows', 'Runner descendant termination via taskkill')
-          $results = @($env:REDACTION_RESULT, $env:CANCELLATION_RESULT)
-          $reasons = @($env:REDACTION_REASON, $env:CANCELLATION_REASON)
+          $suiteResult = if ($env:SUITE_OUTCOME -eq 'success') { 'pass' } else { 'fail' }
+          $names = @('Harness test suite (Windows)', 'Redaction on Windows', 'Runner descendant termination via taskkill')
+          $results = @($suiteResult, $env:REDACTION_RESULT, $env:CANCELLATION_RESULT)
+          $reasons = @(('step outcome: ' + $env:SUITE_OUTCOME), $env:REDACTION_REASON, $env:CANCELLATION_REASON)
 
           $rows = @()
           $failed = @()
@@ -358,12 +352,10 @@ jobs:
           $lines += '| --- | --- | --- |'
           $lines += $rows
           $lines += ''
-          $lines += ('Harness test suite (Windows): **' + $env:SUITE_OUTCOME + '** - reported, never gating. A red suite must not hide the CLI scenario and probe steps that follow it; see the header comment in this workflow.')
-          $lines += ''
           if ($failed.Count -gt 0) {
             $lines += ('**GATE FAILED** - ' + ($failed -join ', ') + '. Full console capture is in the harness-windows-output artifact.')
           } else {
-            $lines += 'Both gating probes passed.'
+            $lines += 'The full test suite and both gating probes passed.'
           }
 
           $lines | ForEach-Object { Write-Host $_ }

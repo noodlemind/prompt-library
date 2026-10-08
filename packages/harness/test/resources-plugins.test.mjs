@@ -318,7 +318,8 @@ test('P5AC3: a bundle cannot transfer approval to another by naming itself after
   const home = tempDir('res-crosskey-');
   makeBundle(home, 'grant', { manifest: { name: 'decoy' }, enabled: true });
   makeBundle(home, 'other', { manifest: { name: 'grant' } });
-  const states = Object.fromEntries(discoverBundles(home, { trustedNames: trusted(home) }).map((b) => [b.dir.split('/').pop(), b.state]));
+  const states = Object.fromEntries(discoverBundles(home, { trustedNames: trusted(home) }).map((b) => [path.basename(b.dir), b.state]));
+  assert.equal(states.grant, 'enabled');
   assert.equal(states.other, 'untrusted',
     'approval belongs to the directory the operator approved, not to a name its contents claim');
 });
