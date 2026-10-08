@@ -69,7 +69,7 @@ jobs:
           node-version: '22'
       - run: npm ci --prefix packages/harness
       - name: Worktree and platform contracts
-        run: node --test packages/harness/test/issue-intake.test.mjs packages/harness/test/corpus-home.test.mjs packages/harness/test/provider-adapters.test.mjs packages/harness/test/resources-plugins.test.mjs packages/harness/test/unchanged-retry.test.mjs packages/harness/test/windows-workflow.test.mjs packages/harness/test/fs-copy.test.mjs packages/harness/test/vscode-lm-bridge.test.mjs
+        run: node --test packages/harness/test/issue-intake.test.mjs packages/harness/test/corpus-home.test.mjs packages/harness/test/provider-adapters.test.mjs packages/harness/test/resources-plugins.test.mjs packages/harness/test/unchanged-retry.test.mjs packages/harness/test/windows-workflow.test.mjs packages/harness/test/fs-copy.test.mjs packages/harness/test/vscode-lm-bridge.test.mjs packages/harness/test/storage-aliases.test.mjs
       - name: CLI and installed delivery contracts
         id: proof
         continue-on-error: true

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from './paths.mjs';
-import { repoId } from './knowledge/store.mjs';
+import { workspaceStorageId } from './knowledge/store.mjs';
 
 /** Committed change-contract location (this library, teams that check plans in). */
 export const WORKSPACE_PLANS_REL = 'docs/plans';
@@ -17,7 +17,7 @@ export const SESSION_AGENT_CTX_REL = '.harness/agent-context.md';
 const PLAN_FILE = /^\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.md$/;
 
 export function projectStoreDir(workspace, { home } = {}) {
-  return path.join(home || harnessGlobalHome(), 'projects', repoId(workspace));
+  return path.join(home || harnessGlobalHome(), 'projects', workspaceStorageId(workspace, { home }));
 }
 
 export function dirExists(root, rel) {

@@ -1,8 +1,16 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { authorityBin } from './authority-bin.mjs';
+
+let layout = null;
+for (const bin of new Set([authorityBin(), authorityBin({ includeOverride: false })].filter(Boolean))) {
+  try {
+    layout = await import(pathToFileURL(path.resolve(path.dirname(bin), '../lib/project-layout.mjs')).href);
+    break;
+  } catch { /* a diagnostic CLI override may have no runtime modules */ }
+}
 
 /** Same root the CLI uses. HARNESS_HOME wins over ~/.harness. */
 export function harnessHome() {
@@ -10,43 +18,9 @@ export function harnessHome() {
   return path.join(os.homedir(), '.harness');
 }
 
-function gitOut(cwd, args) {
-  const res = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000 });
-  return res.status === 0 ? res.stdout.trim() : null;
-}
-
-function localRepoId(workspace) {
-  let real = workspace;
-  try {
-    real = fs.realpathSync(workspace);
-  } catch {
-    // keep the given path
-  }
-  return `local-${crypto.createHash('sha256').update(real).digest('hex').slice(0, 12)}`;
-}
-
-/** Keep this identical to packages/harness/lib/knowledge/store.mjs repoId. */
-export function repoId(workspace) {
-  const remote = gitOut(workspace, ['remote', 'get-url', 'origin']);
-  if (remote) {
-    const canonical = remote
-      .trim()
-      .replace(/\.git$/, '')
-      .replace(/^[a-z+]+:\/\//i, '')
-      .replace(/^[^@/]+@/, '')
-      .replace(/:/g, '/')
-      .toLowerCase();
-    const slug = canonical.replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
-    if (slug) {
-      const suffix = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 8);
-      return `${slug}-${suffix}`;
-    }
-  }
-  return localRepoId(workspace);
-}
-
 export function externalPlansDir(workspace) {
-  return path.join(harnessHome(), 'projects', repoId(workspace), 'plans');
+  if (!layout) throw new Error('Harness project-layout authority is unavailable; upgrade Harness');
+  return layout.externalPlansDir(workspace);
 }
 
 function isDirectory(full) {
@@ -81,14 +55,14 @@ export function planDisplayPath(workspace, target) {
 export function resolveAcceptedPlan(workspace, planPath) {
   let candidate;
   try {
-    candidate = fs.realpathSync(path.resolve(workspace, planPath));
+    candidate = fs.realpathSync.native(path.resolve(workspace, planPath));
   } catch {
     return null;
   }
   for (const root of planRoots(workspace)) {
     let plansRoot;
     try {
-      plansRoot = fs.realpathSync(root);
+      plansRoot = fs.realpathSync.native(root);
     } catch {
       continue;
     }

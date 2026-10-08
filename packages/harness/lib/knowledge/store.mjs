@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
+import { storageIdForRepo } from '../storage-aliases.mjs';
 import { assertNoSymlinkAncestors, assertRealpathContained, readFileNoFollow } from '../fs-safe.mjs';
 import {
   readLearningFile,
@@ -62,6 +63,25 @@ export function localRepoId(workspace) {
   return `local-${crypto.createHash('sha256').update(real).digest('hex').slice(0, 12)}`;
 }
 
+export function legacyLocalRepoIds(workspace) {
+  if (process.platform !== 'win32') return [];
+  const primary = linkedPrimaryCheckout(workspace) || workspace;
+  const candidates = [primary];
+  try {
+    candidates.push(path.resolve(workspace, path.relative(fs.realpathSync.native(workspace), fs.realpathSync.native(primary))));
+  } catch { /* the existing path is the only candidate */ }
+  return [...new Set(candidates.flatMap((candidate) => {
+    try {
+      return [`local-${crypto.createHash('sha256').update(fs.realpathSync(candidate)).digest('hex').slice(0, 12)}`];
+    } catch { return []; }
+  }))];
+}
+
+export function workspaceStorageId(workspace, { home } = {}) {
+  const id = repoId(workspace);
+  return storageIdForRepo(id, { home, legacyIds: id.startsWith('local-') ? legacyLocalRepoIds(workspace) : [] });
+}
+
 export function repoId(workspace) {
   const remote = gitOut(workspace, ['remote', 'get-url', 'origin']);
   if (remote) {
@@ -82,11 +102,11 @@ export function repoId(workspace) {
 }
 
 export function storeDirForId(id, { home } = {}) {
-  return path.join(home || harnessGlobalHome(), 'knowledge', id);
+  return path.join(home || harnessGlobalHome(), 'knowledge', storageIdForRepo(id, { home }));
 }
 
 export function storeDir(workspace, { home } = {}) {
-  return storeDirForId(repoId(workspace), { home });
+  return path.join(home || harnessGlobalHome(), 'knowledge', workspaceStorageId(workspace, { home }));
 }
 
 export const STORE_SCHEMA = 2;

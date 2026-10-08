@@ -64,6 +64,7 @@ export function parseFlags(argv) {
     autonomy: null,
     copilotHome: null,
     harnessHome: null,
+    fromId: null,
     targets: new Set(['vscode', 'cli', 'intellij']),
     workspace: process.cwd(),
     query: null,
@@ -173,6 +174,11 @@ export function parseFlags(argv) {
     else if (a === '--autonomy') flags.autonomy = scan[++i];
     else if (a.startsWith('--copilot-home=')) flags.copilotHome = a.split('=')[1];
     else if (a === '--copilot-home') flags.copilotHome = scan[++i];
+    else if (a.startsWith('--from-id=') || a === '--from-id') {
+      const value = a === '--from-id' ? scan[++i] : a.slice('--from-id='.length);
+      if (typeof value !== 'string' || !/^local-[0-9a-f]{12}$/.test(value)) invalidFlag('--from-id', value, 'requires local-<12 hex digits>');
+      flags.fromId = value;
+    }
     else if (a.startsWith('--harness-home=')) {
       const value = a.split('=').slice(1).join('=');
       if (!value) invalidFlag('--harness-home', value, 'requires a directory path');

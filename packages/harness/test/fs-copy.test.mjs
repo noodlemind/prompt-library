@@ -32,3 +32,41 @@ test('directory copying preserves every file and byte under accented paths', () 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('directory copying refuses identical and hard-linked destinations without losing source bytes', () => {
+  const root = tempDir('copy-identity-');
+  const source = path.join(root, 'source');
+  const target = path.join(root, 'target');
+  fs.mkdirSync(source);
+  fs.mkdirSync(target);
+  const original = path.join(source, 'value.txt');
+  fs.writeFileSync(original, 'keep source\n');
+  fs.linkSync(original, path.join(target, 'value.txt'));
+  try {
+    assert.throws(() => copyDirectorySync(source, source));
+    assert.throws(() => copyDirectorySync(source, target), { code: 'EINVAL' });
+    assert.equal(fs.readFileSync(original, 'utf8'), 'keep source\n');
+    assert.equal(fs.readFileSync(path.join(target, 'value.txt'), 'utf8'), 'keep source\n');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('directory copying honors refusal to overwrite existing files', () => {
+  const root = tempDir('copy-no-overwrite-');
+  const source = path.join(root, 'source');
+  const target = path.join(root, 'target');
+  fs.mkdirSync(source);
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(source, 'value.txt'), 'new bytes\n');
+  fs.writeFileSync(path.join(target, 'value.txt'), 'keep target\n');
+  try {
+    copyDirectorySync(source, target, { force: false });
+    assert.equal(fs.readFileSync(path.join(target, 'value.txt'), 'utf8'), 'keep target\n');
+    assert.throws(() => copyDirectorySync(source, target, { force: false, errorOnExist: true }), { code: 'ERR_FS_CP_EEXIST' });
+    assert.equal(fs.readFileSync(path.join(source, 'value.txt'), 'utf8'), 'new bytes\n');
+    assert.equal(fs.readFileSync(path.join(target, 'value.txt'), 'utf8'), 'keep target\n');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

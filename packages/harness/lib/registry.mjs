@@ -1594,7 +1594,7 @@ registerCommand({
     ['purge <file>', 'cascade-delete an episode and dependent learnings'],
     ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
     ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
-    ['migrate-store', "move a stranded path-keyed store to this workspace's current (remote-keyed) store id; refuses if the target already exists"],
+    ['migrate-store [--from-id <id>]', 'recover saved storage after an ID change; --from-id preserves old knowledge and plans in place'],
   ],
     verbs: [
     { verb: 'on', summary: 'default mode: orient injects, and every writer (remember, compound --insight, consolidate --apply) is open' },
@@ -1619,7 +1619,7 @@ registerCommand({
     {
       verb: 'migrate-store',
       summary:
-        "move a stranded path-keyed store to this workspace's current (remote-keyed) store id; refuses if the target already exists",
+        'recover saved storage after an ID change; --from-id preserves old knowledge and plans in place',
     },
   ],
   args: {
@@ -1633,6 +1633,7 @@ registerCommand({
       { name: 'target', description: 'purge target, or the commit mode (none|repo)', required: false, default: null },
     ],
     flags: [
+      { name: '--from-id', type: 'string', valueName: 'id', description: 'adopt an existing local storage ID without moving knowledge or plans; refuses conflicting data', required: false, default: null, tui: 'prompt', verbs: ['migrate-store'] },
             { name: '--status', type: 'boolean', description: 'show the active mode (default)', required: false, default: false, tui: 'cli-only' },
             {
         name: '--all',

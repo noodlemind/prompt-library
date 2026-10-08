@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { copyDirectorySync } from '../fs-copy.mjs';
+import { adoptStorageAlias, storageIdForRepo } from '../storage-aliases.mjs';
 import {
   withStoreTransaction,
   StoreTransactionAbort,
@@ -12,6 +13,7 @@ import {
   storeDirForId,
   repoId,
   localRepoId,
+  legacyLocalRepoIds,
   acquireStoreLock,
   releaseStoreLock,
   listLearnings,
@@ -1092,8 +1094,21 @@ function isNonEmptyDir(dir) {
   return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
 }
 
-export function migrateStrandedStore({ workspace, home, log = () => {} }) {
+export function migrateStrandedStore({ workspace, home, fromId, log = () => {} }) {
   const currentId = repoId(workspace);
+  try {
+    const sourceId = fromId || (currentId.startsWith('local-')
+      ? storageIdForRepo(currentId, { home, legacyIds: legacyLocalRepoIds(workspace) }) : currentId);
+    if (sourceId !== currentId) {
+      const adopted = adoptStorageAlias(currentId, sourceId, { home });
+      log(`preserved saved knowledge and plans in storage ${sourceId}`);
+      return { pass: true, exitCode: 0, migrated: true, preservedInPlace: true, repoId: currentId, fromId: sourceId,
+        ...adopted, from: sourceId, to: currentId, blockedReason: null };
+    }
+    if (fromId) throw new Error('source storage ID is already the canonical ID');
+  } catch (error) {
+    return { pass: false, exitCode: 1, migrated: false, blockedReason: error.message };
+  }
   if (currentId.startsWith('local-')) {
     return {
       pass: false,

@@ -20,7 +20,8 @@ import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
-import { storeDir, storeDirForId, repoId, localRepoId, listLearnings } from './knowledge/store.mjs';
+import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings } from './knowledge/store.mjs';
+import { storageIdForRepo } from './storage-aliases.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { loadRoutingPolicy } from './routing-policy.mjs';
 import { listBuckets } from './knowledge/overlay.mjs';
@@ -407,53 +408,40 @@ function knowledgeChecks({ workspace, copilotHome }) {
     // Advisory; never fail doctor on a knowledge-check error.
   }
 
-  // K4 (P2, design §2): repoId (store.mjs) switches from a path-keyed
-  // local-<hash> id to a remote-keyed id the instant this workspace gains an
-  // origin remote — a store built BEFORE that switch is left on disk under
-  // the OLD id, silently orphaned (every mutator now resolves storeDir
-  // against the NEW id, so the old store is never read or written again).
-  // DETECTS only — never auto-migrates; a human runs the printed command.
-  //
-  // Two distinct FAILING shapes, not one — the common sequence (add remote,
-  // then do one more consolidate --apply/remember before anyone notices) is
-  // what makes this matter: the FRESH store materializes under the new id,
-  // and a check that only fired on "legacy exists, current doesn't" would go
-  // permanently blind at exactly that point — the orphaned legacy store
-  // would sit there forever with K4 reporting a clean pass. Both shapes fail
-  // (never silently clear once a second store exists), each with its own
-  // hint:
-  //   - legacy exists, current does NOT: the pre-write window — migrate-store
-  //     will succeed cleanly.
-  //   - legacy exists AND current exists: the post-write window — migrate-
-  //     store now refuses (a non-empty target), so the hint routes to manual
-  //     reconciliation instead of a command that would just fail.
+  // Both legacy-only and split-store states require recovery after an ID change.
   try {
     const currentId = repoId(workspace);
     const hasRemote = !currentId.startsWith('local-');
     let stranded = false;
     let hint = 'harness knowledge migrate-store';
-    if (hasRemote) {
+    if (!hasRemote) {
+      const selected = workspaceStorageId(workspace);
+      if (selected !== storageIdForRepo(currentId)) {
+        stranded = true;
+        hint = `saved knowledge or plans use the old Windows path ID ${selected}; preserve the binding with: harness knowledge migrate-store --from-id ${selected}`;
+      }
+    } else {
       const legacyDir = storeDirForId(localRepoId(workspace));
       const currentDir = storeDirForId(currentId);
       const legacyExists = fs.existsSync(path.join(legacyDir, 'consolidated.jsonl'));
       const currentExists = fs.existsSync(path.join(currentDir, 'consolidated.jsonl'));
-      if (legacyExists && !currentExists) {
+      if (legacyDir !== currentDir && legacyExists && !currentExists) {
         stranded = true;
         hint = `a path-keyed store exists at ${legacyDir} but this workspace now resolves to ${currentDir} — run: harness knowledge migrate-store`;
-      } else if (legacyExists && currentExists) {
+      } else if (legacyDir !== currentDir && legacyExists && currentExists) {
         stranded = true;
         hint = `both a legacy path-keyed store and the remote-keyed store exist — reconcile manually (migrate-store will refuse a non-empty target); inspect ${legacyDir}`;
       }
     }
     checks.push({
       id: 'K4',
-      name: 'Knowledge store not stranded behind a newly-added origin remote',
+      name: 'Saved storage remains bound after a repository ID change',
       pass: !stranded,
       hint,
       optional: true,
     });
-  } catch {
-    // Advisory; never fail doctor on a knowledge-check error.
+  } catch (error) {
+    checks.push({ id: 'K4', name: 'Saved storage remains bound after a repository ID change', pass: false, hint: error.message, optional: true });
   }
 
   // K5 (blueprint P6): a bucket whose branch no longer exists locally or on

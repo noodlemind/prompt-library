@@ -2,7 +2,7 @@ export const VALUE_FLAGS = Object.freeze(new Set([
   '--acceptance', '--activity', '--adapter', '--agent', '--allow-env', '--applies', '--authority', '--autonomy', '--base', '--body', '--body-file', '--branch',
   '--category', '--changes', '--claim', '--classification', '--collection', '--command', '--constraint', '--content', '--copilot-home', '--criteria', '--critical-open',
   '--cursor', '--cwd', '--date', '--depth', '--docid', '--does-not-apply', '--domain', '--enforcement',
-  '--expect', '--expected-output', '--file', '--from', '--gap', '--gap-fulfillment', '--goal', '--harness-home', '--host', '--id', '--ids', '--impacted', '--intent', '--intent-source', '--layer', '--learnings',
+  '--expect', '--expected-output', '--file', '--from', '--from-id', '--gap', '--gap-fulfillment', '--goal', '--harness-home', '--host', '--id', '--ids', '--impacted', '--intent', '--intent-source', '--layer', '--learnings',
   '--limit', '--lines', '--match', '--max-bytes', '--max-seconds', '--max-turns',
   '--min-score', '--model', '--new', '--offset', '--old', '--ops', '--output', '--path', '--phase', '--plan',
   '--profile', '--provider', '--query', '--reason', '--review-completed', '--risk', '--scope', '--session', '--shows', '--since',

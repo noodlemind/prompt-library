@@ -36,6 +36,7 @@ import { configuredCheckSnapshot } from './plan-readiness.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { planDigest, readEvidence, validateEvidence } from './evidence.mjs';
 import { validateCompletion } from './completion.mjs';
+import { migrateStrandedStore } from './knowledge/admin.mjs';
 import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 
@@ -1665,9 +1666,8 @@ export async function cmdKnowledge(argv) {
   }
 
     if (subcommand === 'migrate-store') {
-    const { migrateStrandedStore } = await import('./knowledge/admin.mjs');
     const logger = (m) => log(flags, m);
-    const result = migrateStrandedStore({ workspace, log: logger });
+    const result = migrateStrandedStore({ workspace, home: flags.harnessHome, fromId: flags.fromId, log: logger });
     writeEvent(workspace, flags, {
       type: 'knowledge',
       command: 'knowledge',

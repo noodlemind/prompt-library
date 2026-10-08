@@ -26,6 +26,8 @@ harness prepare
 
 Then select `@engineer` in Copilot Chat.
 
+Windows checkouts use one canonical repository ID across long paths, short aliases, casing, and linked worktrees. Existing local storage under a known older spelling remains discoverable. Run `harness knowledge migrate-store` from that spelling to bind it permanently. If the old spelling is unavailable, run `harness knowledge migrate-store --from-id local-<12 hex digits>`. The command preserves knowledge, plans, and their absolute references in place. It refuses a non-empty canonical destination, unsafe paths, and replacement of an existing binding. The CLI and installed hooks share the project-layout resolver.
+
 ## How a task runs
 
 Task modes are Answer, Investigate, Deliver, and Review. The Engineer owns the decision. The Harness owns the gate.
