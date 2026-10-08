@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { copyDirectorySync } from '../fs-copy.mjs';
 import {
   withStoreTransaction,
   StoreTransactionAbort,
@@ -1153,7 +1154,7 @@ export function migrateStrandedStore({ workspace, home, log = () => {} }) {
     } catch (err) {
       if (err.code !== 'EXDEV') throw err;
             try {
-        fs.cpSync(legacyDir, targetDir, { recursive: true });
+        copyDirectorySync(legacyDir, targetDir);
         if (storeFileState(path.join(targetDir, 'consolidated.jsonl')) !== 'file') {
           throw new Error('cross-device copy did not verify — legacy store left untouched');
         }

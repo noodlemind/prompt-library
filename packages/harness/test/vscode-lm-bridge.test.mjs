@@ -118,9 +118,10 @@ test('VS Code extension installation is cross-platform, owned, and reversible', 
     'C:\\Users\\Ada\\.vscode\\extensions',
   );
 
-  const extensionsDir = tempDir('bridge-extensions-');
+  const extensionsDir = path.join(tempDir('bridge-extensions-'), 'VS Code é');
   const installed = installVSCodeBridge({ packageRoot, extensionsDir, dryRun: false });
   assert.ok(fs.existsSync(path.join(installed.path, 'extension.cjs')));
+  assert.deepEqual(fs.readFileSync(path.join(installed.path, 'extension.cjs')), fs.readFileSync(path.join(packageRoot, 'vscode-extension', 'extension.cjs')));
   const manifest = JSON.parse(fs.readFileSync(path.join(installed.path, 'package.json'), 'utf8'));
   assert.equal(manifest.publisher, 'harness');
   assert.equal(manifest.name, 'harness-copilot-bridge');

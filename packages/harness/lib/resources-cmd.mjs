@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { copyDirectorySync } from './fs-copy.mjs';
 import { parseFlags } from './flags.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
@@ -92,7 +93,7 @@ function addBundle(copilotHome, source) {
     const dest = resolveBundleDir(copilotHome, manifest.name);
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.cpSync(from, dest, { recursive: true });
+  copyDirectorySync(from, dest);
     for (const marker of ['.enabled', '.disabled']) {
     fs.rmSync(path.join(dest, marker), { force: true });
   }

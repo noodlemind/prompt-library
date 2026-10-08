@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { agentResultOf } from '../lib/agent-cmd.mjs';
 import { PROVIDERS, providerEnv, resolveBaseUrl, startProvider } from '../lib/provider.mjs';
 import { AGENT_TOOLS } from '../lib/agent-loop.mjs';
+import { copyDirectorySync } from '../lib/fs-copy.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
@@ -410,7 +411,7 @@ test('the shared adapter does not attach a stdin listener when merely imported',
 
 test('an installed provider under a path with a space starts its adapter and completes', async () => {
   const destination = path.join(tempDir('provider-install-'), 'Jane Doe é', 'harness');
-  fs.cpSync(path.join(packageRoot, 'lib'), path.join(destination, 'lib'), { recursive: true });
+  copyDirectorySync(path.join(packageRoot, 'lib'), path.join(destination, 'lib'));
   const installed = fs.realpathSync.native(destination);
   assert.equal(fs.statSync(path.join(installed, 'lib', 'provider.mjs')).isFile(), true);
   const stub = await stubServer(() => [200, openAiText('installed adapter replied')]);
