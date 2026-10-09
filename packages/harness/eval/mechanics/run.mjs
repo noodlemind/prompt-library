@@ -16,7 +16,8 @@ for (let i = 2; i < process.argv.length; i += 2) {
   if (!allowed.has(key) || !value || value.startsWith('--') || flags[key]) throw new Error('Use --root <package-root> --out <empty-directory> --label <label> --lane common|phase2 --runs 3');
   flags[key] = value;
 }
-const root = path.resolve(flags['--root'] || '.'), out = path.resolve(flags['--out'] || 'eval/results/mechanics');
+if (!flags['--out']) throw new Error('Use --out <new-directory-outside-candidate-checkout> to preserve receipts without changing the candidate');
+const root = path.resolve(flags['--root'] || '.'), out = path.resolve(flags['--out']);
 const lane = flags['--lane'] || 'common', runs = Number(flags['--runs'] || 3);
 if (!suites[lane] || !Number.isInteger(runs) || runs < 1 || runs > 10 || !flags['--label']) throw new Error('A label, supported lane and 1–10 runs are required');
 if (fs.existsSync(out)) throw new Error('Use a new output directory to preserve prior receipts');
@@ -25,6 +26,10 @@ const fixtures = [...files, ...fs.readdirSync(path.join(root, 'test/helpers')).f
 const fixtureHashes = Object.fromEntries(fixtures.map(rel => [rel, createHash('sha256').update(fs.readFileSync(path.join(root, rel))).digest('hex')]));
 const git = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
 if (git.status !== 0) throw new Error('Evaluation requires an exact Git revision');
+const checkout = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8' });
+if (checkout.status !== 0) throw new Error('Evaluation requires a candidate checkout');
+const relative = path.relative(checkout.stdout.trim(), out);
+if (!relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) throw new Error('Receipts must be outside the candidate checkout; use --out <new-external-directory>');
 const dirty = spawnSync('git', ['status', '--porcelain', '--', '.'], { cwd: root, encoding: 'utf8' });
 if (dirty.status !== 0 || dirty.stdout.trim()) throw new Error('Commit the package candidate before recording an exact-revision comparison');
 fs.mkdirSync(out, { recursive: true });

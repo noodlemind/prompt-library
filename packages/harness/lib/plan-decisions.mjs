@@ -80,7 +80,7 @@ export function scopePaths(values) {
 
 export function validatePlanDecision(input) {
   fields(input, ['version', 'id', 'action', 'expect', 'rationale', 'authority', 'changes', 'intentSources', 'finding', 'gap', 'migrateIntent', 'progress'], 'operation');
-  if (input.version !== 1 || !ID.test(input.id || '') || !PLAN_ACTIONS.includes(input.action) || !HASH.test(input.expect || '')) fail('operation requires version 1, id, action and observed plan sha256 in expect');
+  if (input.version !== 1 || typeof input.id !== 'string' || !ID.test(input.id) || !PLAN_ACTIONS.includes(input.action) || !HASH.test(input.expect || '')) fail('operation requires version 1, id, action and observed plan sha256 in expect');
   if (input.migrateIntent !== undefined && typeof input.migrateIntent !== 'boolean') fail('migrateIntent must be boolean');
   if (['amend', 'gap'].includes(input.action)) text(input.rationale, 'rationale');
   const allowed = { start: ['migrateIntent'], amend: ['changes', 'intentSources', 'migrateIntent'], progress: ['progress'], finding: ['finding'], gap: ['gap'], complete: [] }[input.action];
@@ -134,6 +134,7 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
   if (input.changes !== undefined) {
     fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps'], 'changes');
     const changes = input.changes, record = readPlanRecord(plan.text);
+    let criterionIds = extractAcceptanceCriteria(plan);
     if (changes.notes !== undefined) body = applyPlanNotes(body, changes.notes);
     if (changes.phases !== undefined) body = section(body, 'Plan', renderPlanPhases(changes.phases));
     if (changes.scope !== undefined) body = section(body, 'Impacted Files', scopePaths(changes.scope).map(value => `- \`${value}\``).join('\n'));
@@ -155,11 +156,12 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
       const criteria = changes.criteria.map(criterion => {
         fields(criterion, ['id', 'text', 'checks'], 'criterion');
         const value = text(criterion.text, 'criterion text');
-        const id = criterion.id || (record ? existingIds[record.acceptance.indexOf(value)] : null) || `AC${++number}`;
-        if (!/^[A-Za-z]+\d+$/.test(id) || !Array.isArray(criterion.checks) || !criterion.checks.length || !criterion.checks.every(check => typeof check === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(check))) fail('criterion requires a stable ID and named check bindings');
+        const id = criterion.id !== undefined ? criterion.id : (record ? existingIds[record.acceptance.indexOf(value)] : null) || `AC${++number}`;
+        if (typeof id !== 'string' || !/^[A-Za-z]+\d+$/.test(id) || !Array.isArray(criterion.checks) || !criterion.checks.length || !criterion.checks.every(check => typeof check === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(check))) fail('criterion requires a stable ID and named check bindings');
         return { id, text: value, checks: [...new Set(criterion.checks)] };
       });
       if (new Set(criteria.map(c => c.id)).size !== criteria.length) fail('criterion IDs must be unique');
+      criterionIds = criteria.map(c => c.id);
       fm.verification = { ...fm.verification, required: [...new Set(criteria.flatMap(c => c.checks))].sort(), criteria: Object.fromEntries(criteria.map(c => [c.id, c.checks])) };
       if (!record) fm.success_criteria = criteria.map(c => `${c.id} ${c.text}`);
       if (record) {
@@ -181,10 +183,10 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
       const ids = new Set(gaps.map(gap => gap.id));
       for (const gap of changes.gaps) {
         fields(gap, ['id', 'class', 'scope', 'required_for', 'evidence'], 'gap declaration');
-        if (!ID.test(gap.id || '') || ids.has(gap.id)) fail('gap IDs must be new and unique; existing gaps cannot be overwritten');
+        if (typeof gap.id !== 'string' || !ID.test(gap.id) || ids.has(gap.id)) fail('gap IDs must be new and unique; existing gaps cannot be overwritten');
         if (!['soft', 'bridge', 'hard'].includes(gap.class) || !['operation', 'criterion', 'plan'].includes(gap.scope)) fail('gap requires a supported class and scope');
         const required = text(gap.required_for, 'affected criterion or operation');
-        if (gap.scope === 'criterion' && !extractAcceptanceCriteria(plan).includes(required)) fail('gap names an unknown criterion');
+        if (gap.scope === 'criterion' && !criterionIds.includes(required)) fail('gap names an unknown criterion');
         if (!Array.isArray(gap.evidence) || !gap.evidence.length || gap.evidence.length > 32) fail('gap requires bounded authored evidence observations');
         gaps.push({ id: gap.id, class: gap.class, scope: gap.scope, required_for: required, fulfillment: 'pending', evidence: gap.evidence.map(value => text(value, 'gap observation')) });
         if (gap.class === 'hard' && gap.scope === 'plan') fm.status = 'blocked-capability';
@@ -210,7 +212,7 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
   }
   if (input.action === 'finding') {
     fields(input.finding, ['id', 'text'], 'finding');
-    if (!ID.test(input.finding.id || '')) fail('finding requires an ID');
+    if (typeof input.finding.id !== 'string' || !ID.test(input.finding.id)) fail('finding requires an ID');
     const line = `- ${input.finding.id}: ${text(input.finding.text, 'finding text')}`;
     const accepted = body.match(/(?:^|\n)## Accepted Findings[^\n]*\n([\s\S]*?)(?=\n## |$)/)?.[1] || '';
     const previous = accepted.split('\n').find(value => value.startsWith(`- ${input.finding.id}: `));
