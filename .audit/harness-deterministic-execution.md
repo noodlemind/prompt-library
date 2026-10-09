@@ -20,7 +20,7 @@ Done means the CLI and installed hooks reject broken, missing, stale and incompl
 - [x] P2.1 Deterministic review preparation and assembly.
 - [x] P2.2 Structured lifecycle operations and intent amendments.
 - [x] P2.3 Learning publication and consolidation packets.
-- [ ] P2.4 Primitive validation and recurrence proposals.
+- [x] P2.4 Primitive validation and recurrence proposals.
 - [ ] P2.5 Factual context and reports.
 - [ ] P2.6 Installed product proof.
 - [ ] P2.7 Extraction ledger, evaluation and cleanup.
@@ -64,3 +64,7 @@ P2.2 review repair release suite passed 2358/2361, zero failures, three skips (`
 P2.3 local Node22 release suite: 2374 tests, 2371 passed, zero failures, three skipped (`phase2-learning-release-node22.log`). Accepted publication binds destination, decision, proof, provenance and bytes; private/global publication and dormant ship-set proposals use the existing writer. Frozen consolidation packets expand episode IDs, revalidate under the store transaction and persist one repair opportunity; committed store receipts recover interrupted outer receipts without duplicate consumption. Skills relinquish serialization, hashes, caps, lint arithmetic and index bookkeeping. A subsequent candidate dry-run regression caught unwanted packet publication; dry-run now leaves no packet and the registry accurately declares preparation as a mutation. Platform checks for the published head are pending; editor integration remains unverified.
 
 PR82 feedback: three findings reproduced and repaired: changed resolved publication home, wrong consolidation layer with a changed golden target, and lost receipt after an accepted second attempt. Full Node22 release passes 2375/2378, zero failures, three skipped (`phase2-learning-feedback-release.log`). The wrong-layer reproduction against the prior packet implementation committed the unintended STRENGTHEN; the repaired implementation blocks it. A related first-branch case failed before repair; candidate packets now derive the future write layer before its bucket exists. Its packet/status/layer subset passes35/35; legacy schema1 read behavior remains compatible. CI also diagnosed the old palette test expectation for read-only candidate preparation; it now reflects frozen packet publication. Updated platform certification is pending.
+
+P2.2 repaired head536cf20753a97e80228118a492e286732a49e3db passed Linux, full Windows and both delivery gates in runs37935775398/37935775257. P2.3 CI identified a fixture-only reliance on local Git identity; head29453a6 configures that fixture explicitly. Its11 packet regressions pass locally; platform checks rerun against that head.
+
+P2.4 full Node22 suite passed2385/2388, zero failures, three skips (`phase2-resources-release-final.log`). Further admission checks reproduced dry-run shipped collision, missing instruction examples and installed shipped metadata rejection; the corresponding focused suite passes after repair. Resource proposals remain dormant, exact recurrence is separate from suspected semantic similarity, and global-tag clustering never asserts verified use. Caller confirmation is recorded by --yes; payload approval fields cannot grant permission. Actual editor integration remains unverified.

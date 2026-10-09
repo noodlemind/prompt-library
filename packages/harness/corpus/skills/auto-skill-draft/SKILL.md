@@ -1,24 +1,25 @@
 ---
 name: auto-skill-draft
-description: Internal — draft enterprise skill from repeated solutions (Phase G). Platform reviews before merge.
+description: Assess recurring knowledge as a dormant capability proposal. Use when recorded recurrence suggests missing reusable judgment; counters do not authorize activation.
 user-invocable: false
 ---
 
-# Auto Skill Draft (internal)
+# Capability proposal judgment
 
-Hermes-style: after **3+** global solutions share tags/domain, draft a skill. A personal draft uses `harness resources create skill <name>` with the body on stdin. A skill for every install is a commit under `packages/harness/corpus/skills/<name>/SKILL.md`.
+Read `harness resources candidates --json`. Exact recorded claim identity and suspected semantic recurrence are different signals. Global tag clustering is evidence of shared vocabulary; verified-use promotion requires reviewing passed proof and distinct real uses. Neither signal authorizes creation.
 
-## Trigger
+Judge whether the gap belongs in Harness, an existing skill reference, a regression test, a product check, an instruction, or a separate agent. Prefer an existing owner when its boundary fits. A deterministic reusable operation belongs in Harness. Author the intervention, concrete evaluation cases, overlap analysis and minimum permissions.
 
-`/auto-compound` or maintainer invokes when `packages/harness/corpus/knowledge/manifest.yaml` shows ≥3 entries with same primary tag and `scope: global`.
+Use the versioned dormant proposal contract in [resource-operations.md](../references/resource-operations.md). `resources propose` preserves frozen evidence and does not install or register anything. Follow the single [human approval policy](../references/human-approval-policy.md) before activation. Existing direct authorization persists within its scope. A model-authored approval field grants no authority.
 
-## Steps
+## Trigger Examples
 
-1. Load matching solution paths (titles + prevention sections only)
-2. Draft skill using `create-primitive/references/skill-template.md`
-3. Commit a ship-set draft under `packages/harness/corpus/skills/<name>/SKILL.md`.
-4. Register a ship-set skill in `packages/harness/corpus/knowledge/capability-registry.yaml`. Register an enterprise overlay skill in `packages/harness/corpus/enterprise/capability-registry.enterprise.yaml`.
-5. **Never** auto-create agents or change `engineer.agent.md` allowlist
-6. Tier 1 notify platform in Activity / PR description
+**Should trigger:**
+- "Assess the recorded repeated-mistake candidate."
+- "Propose a reusable judgment protocol from these recurring review claims."
+- "Evaluate whether these global-tag episodes justify a capability."
 
-Human merges + hydrate before production routing.
+**Should not trigger:**
+- "Install any skill whose counter reaches three."
+- "Answer a one-off library question."
+- "Merge a capability proposal without authorization."

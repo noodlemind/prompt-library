@@ -10,8 +10,8 @@ Use this template when `@engineer` believes the current prompt library lacks a r
 2. Run the overlap check in the `## Existing Primitive Check` table before proposing anything new.
 3. Fill out this template (Summary, Trigger Evidence, Proposed Primitive, Behavior Contract, Risks, Validation Coverage).
 4. State the primitive type and boundary reason.
-5. Ask the human liaison for approval; do not edit any primitive yet.
-6. After approval, route the proposal to `/create-primitive`.
+5. Apply [human-approval-policy.md](human-approval-policy.md): record prior direct authorization when it covers the proposed action; ask only when activation lacks authorization.
+6. Once authorization covers activation, route the proposal to `/create-primitive`.
 
 ### `/create-primitive`
 
@@ -101,9 +101,11 @@ Minimum: list at least 3 should-trigger and 3 should-not-trigger scenarios for s
 
 ## Decision Handling
 
+The single authority contract is [human-approval-policy.md](human-approval-policy.md). Inspect and record prior direct authorization before requesting new approval. Authorization persists within its stated scope; this template records it and does not require the human to repeat it. A payload approval field is not authority.
+
 Agents must interpret `## Human Decision` as follows:
 
 - **Approved**: proceed to `/create-primitive`; treat all listed conditions as constraints.
 - **Rejected**: log the rejection and stop the capability-expansion path.
 - **Needs changes**: address the listed conditions and re-present the proposal for review.
-- **Blank or incomplete**: treat as pending approval; do not create or modify primitives.
+- **Blank or incomplete**: inspect prior direct authorization under the linked policy. Record it when it covers the action; otherwise treat activation as pending approval.

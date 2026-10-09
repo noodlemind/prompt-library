@@ -26,3 +26,15 @@ Reports entry count and manifest path. Scans `<copilot-home>/knowledge/solutions
 
 - Does not delete solution files — index only.
 - Do not rebuild YAML by hand in chat.
+
+## Trigger Examples
+
+**Should trigger:**
+- "Index the learning just published."
+- "Rebuild the stale knowledge index."
+- "Refresh lookup after an accepted solution."
+
+**Should not trigger:**
+- "Write a new learning."
+- "Implement a product feature."
+- "Choose which learning is relevant."

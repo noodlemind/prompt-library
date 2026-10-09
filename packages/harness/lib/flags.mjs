@@ -238,6 +238,7 @@ export function parseFlags(argv) {
     else if (a === '--session') flags.session = scan[++i];
     else if (a === '--insight') flags.insight = true;
     else if (a === '--growth') flags.growth = true;
+    else if (a === '--corpus') flags.corpus = true;
     else if (a.startsWith('--title=')) flags.title = a.split('=').slice(1).join('=');
     else if (a === '--title') flags.title = scan[++i];
     else if (a.startsWith('--category=')) flags.category = a.split('=').slice(1).join('=');

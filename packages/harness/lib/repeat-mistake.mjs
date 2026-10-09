@@ -1,5 +1,6 @@
 import { tokenize } from './tokenize.mjs';
 import { rankLearnings } from './knowledge/retrieve.mjs';
+import { reviewHash } from './review-preparation.mjs';
 
 function text(value) {
   if (value == null) return '';
@@ -49,7 +50,7 @@ function showsLiterally(shows, added) {
   return added.includes(shows);
 }
 
-export function repeatedFromServed({ workspace, home, session, delivered }) {
+export function repeatEvidenceFromServed({ workspace, home, session, delivered }) {
   let served = [];
   try {
     const files = Array.isArray(session?.files) ? session.files : [];
@@ -60,10 +61,10 @@ export function repeatedFromServed({ workspace, home, session, delivered }) {
       ...(files.length ? { signals: files } : {}),
     });
   } catch {
-    return false;
+    return [];
   }
   const added = addedDiffText(delivered);
-  return served.some((learning) => {
+  return served.flatMap((learning) => {
     const shows = learning.authority === 'correction' ? text(learning.shows) : '';
     const verdict = judgeRepeat({
       testsPassed: true,
@@ -72,9 +73,13 @@ export function repeatedFromServed({ workspace, home, session, delivered }) {
       applies: learning.applies,
       doesNotApply: learning.does_not_apply,
     });
-    if (verdict.reason === 'repeated-mistake') return true;
-    if (verdict.reason !== 'clear') return false;
-    if (blank(learning.applies) || tokenize(shows).length > 0) return false;
-    return showsLiterally(shows, added);
+    const method = verdict.reason === 'repeated-mistake' ? 'token-containment' : verdict.reason === 'clear' && !blank(learning.applies) && tokenize(shows).length === 0 && showsLiterally(shows, added) ? 'literal-containment' : null;
+    if (!method) return [];
+    const claim = { learning: learning.id, shows, applies: learning.applies, doesNotApply: learning.does_not_apply };
+    return [{ identity: reviewHash(claim), ...claim, method, applicability: 'heuristic; agent must assess scope' }];
   });
+}
+
+export function repeatedFromServed(options) {
+  return repeatEvidenceFromServed(options).length > 0;
 }

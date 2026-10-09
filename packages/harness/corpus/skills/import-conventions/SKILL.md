@@ -1,6 +1,6 @@
 ---
 name: import-conventions
-description: Generate instructions and skills from a custom framework, library, or repo. Use when onboarding a new dependency, capturing team conventions, or creating a Tool Wrapper from an existing codebase. Not for creating primitives from scratch — use /create-primitive.
+description: Adapt conventions from an existing framework, library or repository. Use when onboarding a dependency or importing team practices. Create new primitives through /create-primitive.
 argument-hint: "[repo URL, path, or framework name]"
 user-invocable: false
 ---

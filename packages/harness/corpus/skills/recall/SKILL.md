@@ -32,3 +32,15 @@ harness recall "<keywords>" --limit 3 --workspace . --json
 Produce ≤15 bullets with `source:` paths. Recommend next step (resume plan, `/capture-issue`, `/code-review`).
 
 Do not edit product code. Do not manually scan manifest or all plans — harness already ranked them.
+
+## Trigger Examples
+
+**Should trigger:**
+- "Find lessons relevant to this race."
+- "Recall evidence before planning a migration."
+- "Retrieve prior solutions for the failing check."
+
+**Should not trigger:**
+- "Write an implementation."
+- "Publish a new solution."
+- "Approve a capability expansion."

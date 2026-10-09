@@ -135,6 +135,8 @@ test('verify marks repeated-mistake from the diff tokens and leaves the lesson f
   const repeated = verify(c);
   assert.equal(repeated.status, 2, repeated.stderr + repeated.stdout);
   assert.equal(JSON.parse(repeated.stdout).outcome, 'repeated-mistake');
+  assert.match(JSON.parse(repeated.stdout).repeatEvidence[0].identity, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.parse(repeated.stdout).repeatEvidence[0].method, 'token-containment');
   const learning = listLearnings(storeDir(c.ws, { home: c.harnessHome })).find((row) => row.id === 'sql/raw-concatenation');
   assert.equal(fs.readFileSync(learning.file).equals(before), true);
 

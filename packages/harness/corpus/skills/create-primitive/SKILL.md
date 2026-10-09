@@ -37,11 +37,12 @@ Canonical primitive creator and maintainer for the harness. Use it to keep the l
 
 ## Primitive Decision Rules
 
-Default to a **skill** only when the request is a reusable workflow. Do not create any artifact before classifying the primitive:
+Put deterministic reusable operations in Harness. Use a **skill** for a contextual judgment protocol. Do not create any artifact before classifying the primitive:
 
 | Question | If yes, create |
 |---|---|
-| Is this a repeated workflow, checklist, generator, reviewer protocol, or pipeline step? | Skill |
+| Is this a reusable deterministic operation? | Harness CLI
+| Is this a contextual judgment protocol or reviewer workflow? | Skill |
 | Does it need separate judgment, tool authority, isolation, runtime profile, or accountability? | Agent |
 | Should it load automatically for matching file patterns? | Instruction |
 | Is it a narrow review-time rule? | Review check |
@@ -126,7 +127,7 @@ Promotion is never automatic — the CLI only records history after a human has 
 
 ### Skill
 
-Use for reusable workflows, generators, reviewer protocols, or pipeline steps. Read `references/skill-template.md`.
+Use for contextual judgment protocols and reviewer workflows. Deterministic generators belong in Harness. Read `references/skill-template.md`.
 
 A personal skill is `harness resources create skill <name>` with the body on stdin.
 
@@ -184,22 +185,8 @@ Required locations:
 
 For per-type creation detail — agent classifications and templates, skill patterns, cross-tool frontmatter, token budgets, review-check, and instruction creation — read `references/creation-details.md` on demand.
 
-## Validation Checklist
+## Validation
 
-After creating an agent, skill, or instruction, verify:
+Delegate mechanical checks, scaffolding and generated inventory to Harness through [resource-operations.md](../references/resource-operations.md). Use the versioned creation input for metadata, reference and permission checks; use `resources validate --corpus` for ship-set edits. Registry and delegation drift are diagnosed from source declarations. Do not maintain inventory counts by hand.
 
-- [ ] Primitive type matches the decision rules in this skill
-- [ ] Description conveys WHAT + WHEN (agents ≤180 characters, skills ≤220 characters)
-- [ ] Correct tool classification (reviewer/researcher/actor)
-- [ ] No provider-specific model pinning; let GitHub Copilot choose the active model in VS Code or IntelliJ IDEA
-- [ ] `user-invocable: false` set for specialist/leaf-node agents
-- [ ] `agents: []` set for non-coordinator agents (prevents accidental subagent spawning)
-- [ ] Guardrails section present (for reviewers and actors)
-- [ ] Output format defined with markdown template
-- [ ] "What NOT to Report" section present (for reviewers)
-- [ ] File in correct directory with correct naming
-- [ ] For skills: inputs, outputs, mode behavior, gates, verification, error handling, and trigger examples are present
-- [ ] New or substantially expanded skills include recorded promotion or strategic evidence, 8–10 positive trigger evals, 8–10 negative/confusable trigger evals, outcome eval assertions, owner, and lifecycle state
-- [ ] For instructions: `applyTo` glob pattern matches target files, conventions are specific and actionable
-- [ ] For checks: follows `.github/checks/README.md` format, lives in the correct bundled or product-owned location, and stays focused on one concern
-- [ ] Documentation updated in the product repo that owns the change, and in the ship-set file that changed, when the standard changed
+Judge description usefulness, artifact boundary, overlap, evaluation adequacy and minimum authority from evidence. A passing structural validator does not establish that a capability is useful. Follow [human-approval-policy.md](../references/human-approval-policy.md) for activation; existing direct authorization covers necessary work within its scope.

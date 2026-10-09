@@ -9,6 +9,10 @@ import { inertLine } from './knowledge/store.mjs';
 import { approvedBundleNames, readPlacements, syncBundles } from './bundle-sync.mjs';
 import { listLocalPrimitives, primitiveOrigins, shippedAssetFiles } from './primitive-origins.mjs';
 import { bundleDigest, discoverBundles, parseManifest, MANIFEST_FILE, resourcesRoot } from './resources.mjs';
+import { getCorpusRoot } from './assets.mjs';
+import { resourceInput, scaffoldPrimitive, createStructuredPrimitive, validateResourceInventory } from './resource-validation.mjs';
+import { resourceCandidates, proposeResource } from './resource-candidates.mjs';
+import { readBoundedInput } from './fs-safe.mjs';
 import {
   createPersonalPrimitive,
   discardPrimitive,
@@ -22,7 +26,7 @@ import {
 const ui = createStyle({ argv: process.argv.slice(2) });
 
 export const RESOURCES_VERBS = Object.freeze([
-  'list', 'show', 'register', 'unregister', 'discard', 'create',
+  'list', 'show', 'register', 'unregister', 'discard', 'create', 'validate', 'scaffold', 'candidates', 'propose',
     'add', 'update', 'remove', 'bundles',
 ]);
 
@@ -32,7 +36,7 @@ function usageError(message, hint) {
 
 /** Flags on this entry that take a value — a BOOLEAN flag before the verb must
  * not swallow it, which is the bug the same parser had in `run`. */
-const VALUE_FLAGS = new Set(['--workspace', '--copilot-home', '--harness-home']);
+const VALUE_FLAGS = new Set(['--workspace', '--copilot-home', '--harness-home', '--file', '--path']);
 
 function context(argv) {
   const flags = parseFlags(argv);
@@ -52,7 +56,7 @@ function context(argv) {
       'harness resources create <skill|agent|instruction> <name>',
     );
   }
-  if (flags.files?.length) {
+  if (flags.files?.length && !['create', 'propose'].includes(positionals[0])) {
     throw usageError(
       'resources create reads the primitive body from stdin',
       'harness resources create <skill|agent|instruction> <name>',
@@ -119,10 +123,14 @@ export function resolveBundleDir(copilotHome, name) {
 }
 
 export async function resourcesResultOf(argv, ctx = {}) {
-  const { verb, target, name, copilotHome } = context(argv);
+  const { flags, verb, target, name, copilotHome } = context(argv);
   if (!RESOURCES_VERBS.includes(verb)) {
     throw usageError(`unknown resources verb: ${verb}`, `one of ${RESOURCES_VERBS.join(', ')}`);
   }
+  if (verb === 'scaffold') return scaffoldPrimitive(target, name);
+  if (verb === 'validate') return validateResourceInventory(flags.corpus ? getCorpusRoot() : flags.path ? path.resolve(flags.workspace, flags.path) : copilotHome, { shipped: flags.corpus, shippedFiles: !flags.path ? shippedAssetFiles() : new Set() });
+  if (verb === 'candidates') return resourceCandidates({ workspace: path.resolve(flags.workspace), copilotHome, home: flags.harnessHome, dryRun: flags.dryRun });
+  if (verb === 'propose') return proposeResource({ workspace: path.resolve(flags.workspace), copilotHome, input: resourceInput(flags), dryRun: flags.dryRun });
   const { shippedFiles, lockFiles } = primitiveOrigins(copilotHome);
   const primitives = localPrimitiveStatus({ copilotHome, shippedFiles, lockFiles });
 
@@ -177,15 +185,16 @@ export async function resourcesResultOf(argv, ctx = {}) {
         'harness resources create <skill|agent|instruction> <name>',
       );
     }
+    if (flags.files?.length) return createStructuredPrimitive({ flags, copilotHome, type: target, name, input: resourceInput(flags), shippedFiles, lockFiles });
     if (process.stdin.isTTY) {
       throw usageError(
         'resources create reads the primitive body from stdin',
         'harness resources create <skill|agent|instruction> <name>',
       );
     }
-    const text = fs.readFileSync(0, 'utf8');
+    const text = readBoundedInput();
     const primitive = createPersonalPrimitive({ copilotHome, kind: target, name, text, shippedFiles, lockFiles });
-    return { schema: 1, verb: 'create', primitive };
+    return { schema: 1, verb: 'create', primitive, assurance: 'legacy discovery validation; use --file for complete validation and permission checks' };
   }
 
   if (verb === 'list') {
@@ -268,6 +277,8 @@ export async function cmdResources(argv, ctx = {}) {
 
   if (flags.json) {
     console.log(redactedJson(result, { pretty: flags.verbose }));
+  } else if (['validate', 'scaffold', 'candidates', 'propose'].includes(result.verb) || result.validation) {
+    console.log(redactedJson(result, { pretty: true }));
   } else if (result.verb === 'list') {
     const keyWidth = keyWidthFor(['primitives', ...result.primitives.map((p) => p.path)]);
     const c = result.counts;
@@ -337,6 +348,7 @@ export async function cmdResources(argv, ctx = {}) {
 }
 
 export function resourcesExitFor(result) {
+    if (result?.verb === 'validate' && result.status !== 'ok') return 1;
     if ((result?.verb === 'list' || result?.verb === 'bundles') && result.status !== 'ok') return 1;
     if (result?.sync?.refused?.length) return 1;
   return EXIT.ok;

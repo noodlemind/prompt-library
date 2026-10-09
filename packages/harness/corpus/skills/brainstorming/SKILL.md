@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: Explore requirements and approaches through collaborative dialogue before planning. Use when a feature request has multiple valid interpretations or approaches. Not for planning implementation — use /plan-issue after brainstorming.
+description: Explore ambiguous requirements and compare approaches before planning. Use when a feature has multiple valid interpretations. After choosing an approach, use /plan-issue.
 user-invocable: false
 ---
 

@@ -160,7 +160,7 @@ const DECLARED_VERBS = Object.freeze({
   // `register`/`unregister` change what the harness recognizes; `list`/`show`
   // override DOWN to read.
   model: ['show', 'set', 'clear', 'refresh'],
-  resources: ['list', 'show', 'register', 'unregister', 'discard', 'create', 'bundles', 'add', 'update', 'remove'],
+  resources: ['validate', 'scaffold', 'candidates', 'propose', 'list', 'show', 'register', 'unregister', 'discard', 'create', 'bundles', 'add', 'update', 'remove'],
   review: ['prepare', 'assemble'],
   undo: ['list'],
   todo: ['list', 'add', 'complete', 'clear'],
@@ -215,7 +215,7 @@ const VERB_POSITIONALS = Object.freeze({
   // other forgets the choice.
   model: { set: ['provider', 'model'], refresh: ['provider'] },
   // `list` takes no name — it is the query over all of them.
-  resources: { show: ['path'], register: ['path'], unregister: ['path'], discard: ['path'], create: ['path', 'name'], add: ['bundle'], update: ['bundle'], remove: ['bundle'] },
+  resources: { scaffold: ['path', 'name'], show: ['path'], register: ['path'], unregister: ['path'], discard: ['path'], create: ['path', 'name'], add: ['bundle'], update: ['bundle'], remove: ['bundle'] },
   inspect: { config: ['key'] },
 });
 
@@ -252,7 +252,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 67, '65 existing verbs plus review prepare and assemble');
+  assert.equal(Object.values(actual).flat().length, 71, '67 existing verbs plus four resource governance actions');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -312,7 +312,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
   // Modal families leave the verb strip; remaining verb rows + flag-verbs only.
   const tuiVerbs = rows.filter((r) => r.kind === 'verb').length;
   assert.ok(tuiVerbs < 40, `TUI verb strip should fold heavily (got ${tuiVerbs})`);
-  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 81, 'the CLI surface keeps every declared verb including review');
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 85, 'the CLI surface keeps every declared verb including review');
 });
 
 /**

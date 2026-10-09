@@ -1247,13 +1247,17 @@ registerCommand({
 
 registerCommand({
   name: 'resources',
-  summary: 'list, inspect, register, create, unregister, or discard locally-added skills and agents',
+  summary: 'validate, scaffold, propose, and manage skills, agents, instructions and bundles',
   group: 'setup',
     sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-  usage: '<list|show|register|unregister|discard|create|bundles|add|update|remove> [path] [name]',
+  usage: '<list|show|register|unregister|discard|create|validate|scaffold|candidates|propose|bundles|add|update|remove> [path] [name]',
   verbs: [
+    { verb: 'validate', summary: 'check metadata, references, registry and delegation declarations', sideEffect: 'read' },
+    { verb: 'scaffold', summary: 'emit a dormant template requiring authored judgment', sideEffect: 'read', positionals: ['path', 'name'] },
+    { verb: 'candidates', summary: 'freeze recurring claim evidence; counters never activate a primitive' },
+    { verb: 'propose', summary: 'package a dormant authored intervention with frozen evidence' },
     { verb: 'list', summary: 'skills and agents added by hand, with whether each is registered and valid', sideEffect: 'read' },
     { verb: 'show', summary: 'one added primitive: its kind, name, digest, and why it is in that state', sideEffect: 'read', positionals: ['path'] },
     { verb: 'register', summary: 'validate an added primitive and record that this machine recognizes it', positionals: ['path'] },
@@ -1272,7 +1276,12 @@ registerCommand({
       { name: 'bundle', description: 'bundle directory or installed bundle name', required: false, default: null },
       { name: 'name', description: 'primitive name for resources create', required: false, default: null },
     ],
-    flags: [],
+    flags: [
+      { name: '--file', type: 'string', valueName: 'path', description: 'Versioned creation or dormant proposal JSON input', required: false, default: null, tui: 'cli-only' },
+      { name: '--path', type: 'string', valueName: 'directory', description: 'Root to inspect with validate', required: false, default: null, tui: 'cli-only' },
+      { name: '--corpus', type: 'boolean', description: 'Validate shipped corpus and capability registry', required: false, default: false, tui: 'cli-only' },
+      { name: '--yes', type: 'boolean', description: 'Caller confirmation of human-authorized tool or delegation expansion', required: false, default: false, tui: 'cli-only' },
+    ],
   },
   bareSideEffect: 'read',
   handler: cmdResources,

@@ -125,6 +125,7 @@ export function writeEvent(workspace, flags, payload) {
         'file',
     'removed',
     'reason',
+    'repeatEvidence',
     // The trust-change descriptor: which project, and which way it moved.
     'trust',
   ]) {

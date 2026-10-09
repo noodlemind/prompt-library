@@ -21,6 +21,8 @@ Route the user's outcome and any explicit plan path to `@engineer`. The agent se
 **Should not trigger:**
 
 - "Review this diff only." → use `/code-review`
+- "Diagnose the installed Harness hooks." → use `/harness-doctor`
+- "Refresh the project README only." → use `/project-readme`
 
 ## Confusable Boundaries
 
