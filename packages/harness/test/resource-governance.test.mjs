@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { getCorpusRoot } from '../lib/assets.mjs';
+import { validatePrimitiveContent } from '../lib/resource-validation.mjs';
 import { reviewHash } from '../lib/review-preparation.mjs';
 
 function fixture(t) {
@@ -139,4 +140,77 @@ test('installed shipped resources retain shipped metadata while personal resourc
   fs.mkdirSync(path.join(f.copilot, 'instructions/personal-boundary'), { recursive: true });
   fs.writeFileSync(path.join(f.copilot, 'instructions/personal-boundary.instructions.md'), '---\nname: Wrong name\ndescription: Personal boundary\napplyTo: "**/*.js"\n---\n');
   assert.equal(f.cli('validate').status, 1);
+});
+
+
+test('a registered personal capability validates alongside the shipped corpus', t => {
+  const f = fixture(t);
+  fs.cpSync(getCorpusRoot(), f.copilot, { recursive: true });
+  assert.equal(f.cli('create', 'skill', 'focused-review', '--file', f.input({ schema: 1, text: skill })).status, 0);
+  const r = f.cli('validate');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+
+test('observed inventory digest replaces matching bytes and rejects a removed destination', t => {
+  const f = fixture(t);
+  assert.equal(f.cli('create', 'skill', 'focused-review', '--file', f.input({ schema: 1, text: skill })).status, 0);
+  const inventory = JSON.parse(f.cli('validate').stdout), expectedDigest = inventory.primitives[0].digest;
+  const replacement = f.input({ schema: 1, text: skill.replace('Evidence and a judgment.', 'Explain accepted evidence and uncertainty.'), expectedDigest });
+  assert.equal(f.cli('create', 'skill', 'focused-review', '--file', replacement).status, 0);
+});
+
+test('removed destination conflicts with an observed replacement even under caller confirmation', t => {
+  const f = fixture(t), created = JSON.parse(f.cli('create', 'skill', 'focused-review', '--file', f.input({ schema: 1, text: skill })).stdout);
+  fs.rmSync(path.join(f.copilot, created.primitive.path));
+  assert.notEqual(f.cli('create', 'skill', 'focused-review', '--file', f.input({ schema: 1, text: skill, expectedDigest: created.primitive.digest }), '--yes').status, 0);
+  assert.equal(fs.existsSync(path.join(f.copilot, created.primitive.path)), false);
+});
+
+test('global tag evidence is selectable and changed global bytes reject dormant proposal replay', t => {
+  const f = fixture(t), dir = path.join(f.copilot, 'knowledge/solutions/design');
+  fs.mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < 3; i++) fs.writeFileSync(path.join(dir, `lesson-${i}.md`), `---\ntags: [publication]\n---\nLesson ${i}.\n`);
+  const packet = JSON.parse(f.cli('candidates').stdout), candidate = packet.globalTagClustering[0];
+  assert.match(candidate.id, /^[a-f0-9]{64}$/);
+  const proposal = { schema: 1, operation: 'global-cluster', type: 'skill', name: 'focused-review', text: skill, rationale: 'Reusable judgment.', candidatePacket: packet.id, candidate: candidate.id };
+  assert.equal(f.cli('propose', '--file', f.input(proposal)).status, 0);
+  fs.appendFileSync(path.join(f.copilot, candidate.evidence[0].path), 'Human refinement.');
+  assert.notEqual(f.cli('propose', '--file', f.input(proposal)).status, 0);
+});
+
+test('all candidate result lists fit the response bound and preserve full packet retrieval', t => {
+  const f = fixture(t), dir = path.join(f.workspace, '.github/harness');
+  fs.mkdirSync(dir, { recursive: true });
+  const checks = Array.from({ length: 700 }, (_, i) => `  check-${i}-${'x'.repeat(120)}: {command: [node, test.js]}`).join('\n');
+  fs.writeFileSync(path.join(dir, 'checks.yaml'), `version: 1\nchecks:\n${checks}\n`);
+  const r = f.cli('candidates');
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(Buffer.byteLength(r.stdout) <= 65536);
+  const value = JSON.parse(r.stdout);
+  assert.ok(value.omitted.existingChecks > 0);
+  const full = JSON.parse(fs.readFileSync(path.join(f.workspace, value.packetPath)));
+  assert.equal(full.existingChecks.length, 700);
+});
+
+test('parseable malformed registry declarations return diagnostics instead of throwing', t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.copilot, 'knowledge'), { recursive: true });
+  fs.writeFileSync(path.join(f.copilot, 'knowledge/capability-registry.yaml'), 'version: 2\ncapabilities: {ghost: null}\nengineer_allowlist: {bad: shape}\n');
+  const r = f.cli('validate');
+  assert.equal(r.status, 1, r.stderr + r.stdout);
+  const result = JSON.parse(r.stdout);
+  assert.ok(result.diagnostics.some(d => /registry|declaration|allowlist/.test(d.reason)));
+});
+
+test('filling a scaffold description does not authorize unfinished agent sections', t => {
+  const f = fixture(t), scaffold = JSON.parse(f.cli('scaffold', 'agent', 'bounded-expert').stdout);
+  const text = scaffold.text.replace('TODO: state what this capability judges and when it applies.', 'Judge a bounded engineering question.');
+  assert.notEqual(f.cli('create', 'agent', 'bounded-expert', '--file', f.input({ schema: 1, text })).status, 0);
+});
+
+test('shared validation rejects unsupported host tools independently of creation', () => {
+  const text = '---\nname: bounded-expert\ndescription: Judge a bounded engineering question.\nuser-invocable: false\ntools: [nonexistent-tool]\nagents: []\n---\n\n## Judgment\nAssess evidence.\n\n## Guardrails\nHonor scope.\n\n## Output\nExplain the finding.\n';
+  const result = validatePrimitiveContent({ type: 'agent', name: 'bounded-expert', text });
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some(e => /Unsupported host tool/.test(e)));
 });

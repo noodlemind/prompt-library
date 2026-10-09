@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { readFileNoFollow, readBoundedInput, writeFileContained, assertNoSymlinkAncestors } from './fs-safe.mjs';
-import { getCorpusRoot } from './assets.mjs';
+import { createHash } from 'node:crypto';
 import { createPersonalPrimitive, readPrimitiveOnce, registeredPath } from './local-primitives.mjs';
 import { withPlanUpdateLock } from './plan-update.mjs';
-import { reviewHash } from './review-preparation.mjs';
+const primitiveDigest = text => `sha256-${createHash('sha256').update(text).digest('hex')}`;
+const SUPPORTED_HOST_TOOLS = new Set(['agent', 'edit/editFiles', 'execute', 'execute/getTerminalOutput', 'githubRepo', 'read', 'read/problems', 'read/terminalLastCommand', 'search', 'search/changes', 'search/codebase', 'search/usages', 'web/fetch']);
 
 export const primitivePath = (type, name) => ({ skill: `skills/${name}/SKILL.md`, agent: `agents/${name}.agent.md`, instruction: `instructions/${name}.instructions.md` })[type];
 const namePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -39,7 +40,10 @@ export function validatePrimitiveContent({ type, name, text, root, rel, shipped 
   if (type === 'agent') {
     for (const key of ['tools', 'agents']) if (!Array.isArray(fm[key]) || fm[key].some(v => typeof v !== 'string' || !v.trim())) errors.push(`${key} must be an explicit array of names`);
     if (!shipped && fm['user-invocable'] !== false) errors.push('Personal specialists must declare user-invocable: false');
-    if (!/\n## (?:Guardrails|Safety|Boundaries)/i.test(text)) errors.push('Agent needs an explicit guardrail section');
+    const guardrail = /\n## (?:Guardrails|Safety|Boundaries)\s*\n([\s\S]*?)(?=\n## |$)/i.exec(text)?.[1]?.trim();
+    if (!guardrail || /^TODO\b/i.test(guardrail)) errors.push('Agent needs an authored guardrail section');
+    if (/^\s*TODO\s*$/m.test(text)) errors.push('Agent has unfinished placeholder sections');
+    if (Array.isArray(fm.tools) && fm.tools.some(tool => !SUPPORTED_HOST_TOOLS.has(tool))) errors.push('Unsupported host tool declaration');
   }
   if (type === 'instruction' && (typeof fm.applyTo !== 'string' || !fm.applyTo.trim() || /^TODO\b/i.test(fm.applyTo))) errors.push('Instruction needs an applyTo glob');
   if (!shipped && type === 'instruction') for (const label of ['Good example', 'Bad example']) {
@@ -83,17 +87,10 @@ export function createStructuredPrimitive({ flags, copilotHome, type, name, inpu
     if (!assertNoSymlinkAncestors(copilotHome, rel)) throw fail('Primitive destination is unsafe');
     let prior = null;
     try { prior = readPrimitiveOnce(copilotHome, rel); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    if (prior && input.expectedDigest && prior.digest !== input.expectedDigest) throw fail('Expected primitive bytes are stale');
+    if (input.expectedDigest !== undefined && prior?.digest !== input.expectedDigest) throw fail('Expected primitive bytes are stale');
     if (prior && prior.text !== input.text && !input.expectedDigest) throw fail('Replacing a primitive requires its expectedDigest');
     const old = prior ? primitiveFrontmatter(prior.text) : { tools: [], agents: [] };
     if (type === 'agent') {
-      const known = new Set(['read', 'search', 'execute', 'agent', 'edit/editFiles', 'web/fetch']);
-      for (const entry of fs.readdirSync(path.join(getCorpusRoot(), 'agents'))) {
-        if (!entry.endsWith('.agent.md')) continue;
-        const text = readFileNoFollow(path.join(getCorpusRoot(), 'agents', entry), { root: getCorpusRoot(), maxBytes: 65536 });
-        for (const tool of primitiveFrontmatter(text).tools || []) known.add(tool);
-      }
-      if (validation.frontmatter.tools.some(tool => !known.has(tool))) throw fail('Unsupported host tool declaration');
       for (const agent of validation.frontmatter.agents) {
         if (!namePattern.test(agent) || readFileNoFollow(path.join(copilotHome, 'agents', `${agent}.agent.md`), { root: copilotHome, maxBytes: 65536 }) === null) throw fail(`Delegation target is absent or unsafe: ${agent}`);
       }
@@ -123,7 +120,7 @@ export function validateResourceInventory(root, { shipped = false, shippedFiles 
       const rel = primitivePath(type, name), text = readFileNoFollow(path.join(root, rel), { root, maxBytes: 65536 });
       if (text === null) { diagnostics.push({ path: rel, reason: 'missing, unsafe or exceeds 64 KiB' }); continue; }
       const validation = validatePrimitiveContent({ type, name, text, root, rel, shipped: shipped || shippedFiles.has(rel) });
-      primitives.push({ type, name, path: rel, digest: reviewHash(text), ...validation });
+      primitives.push({ type, name, path: rel, digest: primitiveDigest(text), ...validation });
     }
   }
   let registry = null;
@@ -133,14 +130,30 @@ export function validateResourceInventory(root, { shipped = false, shippedFiles 
     try { registry = YAML.parse(text, { maxAliasCount: 50 }); } catch { diagnostics.push({ path: registryRel, reason: 'unreadable registry' }); }
   }
   if (shipped && !registry) diagnostics.push({ path: registryRel, reason: 'required registry is absent' });
+  const isMapping = value => value && typeof value === 'object' && !Array.isArray(value);
   if (registry) {
-    const live = Object.entries(registry.capabilities || {}).filter(([, v]) => v.status !== 'retired' && ['skill', 'agent'].includes(v.type));
-    for (const p of primitives.filter(p => p.type !== 'instruction')) if (!live.some(([key, v]) => (v.name || key) === p.name && v.type === p.type)) diagnostics.push({ path: p.path, reason: 'missing live capability registry entry' });
+    if (!isMapping(registry) || !isMapping(registry.capabilities)) diagnostics.push({ path: registryRel, reason: 'invalid registry capabilities declaration' });
+    const live = [];
+    for (const [key, value] of Object.entries(isMapping(registry.capabilities) ? registry.capabilities : {})) {
+      if (!isMapping(value)) { diagnostics.push({ path: registryRel, reason: `invalid registry entry: ${key}` }); continue; }
+      if (value.status !== 'retired' && ['skill', 'agent'].includes(value.type)) live.push([key, value]);
+    }
+    const managed = primitives.filter(p => (shipped || shippedFiles.has(p.path)) && p.type !== 'instruction');
+    for (const p of managed) if (!live.some(([key, v]) => (v.name || key) === p.name && v.type === p.type)) diagnostics.push({ path: p.path, reason: 'missing live capability registry entry' });
     for (const [key, value] of live) if (!primitives.some(p => p.type === value.type && p.name === (value.name || key))) diagnostics.push({ path: registryRel, reason: `live entry has no source: ${key}` });
     const engineer = primitives.find(p => p.type === 'agent' && p.name === 'engineer');
-    const declared = engineer?.frontmatter?.agents || [], indexed = registry.engineer_allowlist || [];
+    const declared = Array.isArray(engineer?.frontmatter?.agents) ? engineer.frontmatter.agents : [];
+    const indexed = Array.isArray(registry.engineer_allowlist) && registry.engineer_allowlist.every(v => typeof v === 'string') ? registry.engineer_allowlist : [];
+    if (!Array.isArray(registry.engineer_allowlist)) diagnostics.push({ path: registryRel, reason: 'invalid engineer allowlist declaration' });
     if (JSON.stringify([...new Set(declared)].sort()) !== JSON.stringify([...new Set(indexed)].sort())) diagnostics.push({ path: registryRel, reason: 'Engineer delegation registry differs from declared agents' });
-    for (const p of primitives.filter(p => p.type === 'agent')) for (const target of p.frontmatter?.agents || []) if (!primitives.some(q => q.type === 'agent' && q.name === target)) diagnostics.push({ path: p.path, reason: `delegation target absent: ${target}` });
+  }
+  for (const p of primitives.filter(p => p.type === 'agent')) for (const target of Array.isArray(p.frontmatter?.agents) ? p.frontmatter.agents : []) if (!primitives.some(q => q.type === 'agent' && q.name === target)) diagnostics.push({ path: p.path, reason: `delegation target absent: ${target}` });
+  const personal = primitives.filter(p => !shipped && !shippedFiles.has(p.path));
+  if (personal.length) {
+    const registeredRel = 'harness/registered.yaml', raw = readFileNoFollow(path.join(root, registeredRel), { root, maxBytes: 1024 * 1024 });
+    let registered = null;
+    try { registered = raw === null ? null : YAML.parse(raw, { maxAliasCount: 50 }); } catch { /* diagnostic below */ }
+    for (const p of personal) if (!isMapping(registered?.primitives) || registered.primitives[p.path]?.digest !== p.digest) diagnostics.push({ path: p.path, reason: 'personal registration absent, damaged or stale', registry: registeredRel });
   }
   return { schema: 1, verb: 'validate', status: diagnostics.length || primitives.some(p => !p.valid) ? 'failed' : 'ok', root, counts: Object.fromEntries(['skill', 'agent', 'instruction'].map(type => [type, primitives.filter(p => p.type === type).length])), primitives, diagnostics, registry: registry ? { path: registryRel, version: registry.version } : null, hostSupport: { vscode: 'declared; live integration unverified', intellij: 'declared; live integration unverified' } };
 }

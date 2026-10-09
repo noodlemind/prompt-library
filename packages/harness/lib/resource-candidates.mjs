@@ -67,7 +67,7 @@ export function resourceCandidates({ workspace, copilotHome, home, dryRun = fals
       for (const tag of new Set(values.filter(t => typeof t === 'string' && t.trim()))) observe(tags, tag, digest(text), { source: 'copilot', path: `knowledge/${rel}`, sha256: digest(text) }, { kind: 'global-tag-cluster' });
     }
   }
-  const globalTagClustering = [...tags.values()].filter(e => e.observations.size >= 3).map(e => ({ tag: e.identity, count: e.observations.size, evidence: [...e.observations.values()], eligibleToPropose: true, verifiedUse: false }));
+  const globalTagClustering = [...tags.values()].filter(e => e.observations.size >= 3).map(e => { const value = { tag: e.identity, count: e.observations.size, evidence: [...e.observations.values()], eligibleToPropose: true, verifiedUse: false }; return { ...value, id: reviewHash(value) }; });
   const { checks, error } = loadNamedChecks(workspace);
   const existingChecks = checks ? Object.keys(checks).sort() : [];
   const candidates = [...rows, ...related].map(e => ({ ...e, id: reviewHash(e), existingChecks, checkRelevance: 'unassessed; agent decides' })).sort((a, b) => a.id.localeCompare(b.id));
@@ -75,8 +75,8 @@ export function resourceCandidates({ workspace, copilotHome, home, dryRun = fals
   const packet = { schema: 1, verb: 'candidates', status: 'ok', candidates, globalTagClustering, verifiedUsePromotion: { source: 'consolidate --status', assurance: 'legacy fix/plan declarations; audit passed proof before promotion', candidates: promotion }, existingChecks, diagnostics: [...diagnostics, ...(error ? [{ path: '.github/harness/checks.yaml', reason: error }] : [])], activated: false };
   const id = reviewHash(packet), packetPath = `.harness/proposals/candidates/${id}.json`;
   if (!dryRun) publishReviewRecord(workspace, packetPath, packet);
-  const bounded = { ...packet, candidates: candidates.slice(0, 100), globalTagClustering: globalTagClustering.slice(0, 100), diagnostics: packet.diagnostics.slice(0, 100), omitted: { candidates: Math.max(0, candidates.length - 100), globalTagClustering: Math.max(0, globalTagClustering.length - 100), diagnostics: Math.max(0, packet.diagnostics.length - 100) }, id, packetPath, persisted: !dryRun };
-  if (Buffer.byteLength(JSON.stringify(bounded)) > 65536) return { ...bounded, candidates: [], globalTagClustering: [], diagnostics: [], omitted: { candidates: candidates.length, globalTagClustering: globalTagClustering.length, diagnostics: packet.diagnostics.length }, detail: 'Rows exceed 64 KiB; retrieve the frozen packet by packetPath' };
+  const bounded = { ...packet, candidates: candidates.slice(0, 100), globalTagClustering: globalTagClustering.slice(0, 100), diagnostics: packet.diagnostics.slice(0, 100), existingChecks: existingChecks.slice(0, 100), verifiedUsePromotion: { ...packet.verifiedUsePromotion, candidates: promotion.slice(0, 100) }, omitted: { candidates: Math.max(0, candidates.length - 100), globalTagClustering: Math.max(0, globalTagClustering.length - 100), diagnostics: Math.max(0, packet.diagnostics.length - 100), existingChecks: Math.max(0, existingChecks.length - 100), verifiedUsePromotion: Math.max(0, promotion.length - 100) }, id, packetPath, persisted: !dryRun };
+  if (Buffer.byteLength(JSON.stringify(bounded)) > 65536) return { schema: 1, verb: 'candidates', status: 'ok', candidates: [], globalTagClustering: [], diagnostics: [], existingChecks: [], verifiedUsePromotion: { ...packet.verifiedUsePromotion, candidates: [] }, activated: false, omitted: { candidates: candidates.length, globalTagClustering: globalTagClustering.length, diagnostics: packet.diagnostics.length, existingChecks: existingChecks.length, verifiedUsePromotion: promotion.length }, id, packetPath, persisted: !dryRun, detail: 'Rows exceed 64 KiB; retrieve the frozen packet by packetPath' };
   return bounded;
 }
 
@@ -99,7 +99,7 @@ export function proposeResource({ workspace, copilotHome, input, dryRun = false 
     if (!/^[a-f0-9]{64}$/.test(input.candidatePacket || '')) throw fail('Candidate requires a frozen candidate packet');
     const packet = readReviewRecord(workspace, `.harness/proposals/candidates/${input.candidatePacket}.json`);
     if (!packet || reviewHash(packet) !== input.candidatePacket) throw fail('Candidate packet is absent or damaged');
-    const candidate = packet.candidates.find(e => e.id === input.candidate);
+    const candidate = [...packet.candidates, ...packet.globalTagClustering].find(e => e.id === input.candidate);
     if (!candidate) throw fail('Candidate identity is absent from the packet');
     evidence.push(...candidate.evidence);
   }
