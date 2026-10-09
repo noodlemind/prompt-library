@@ -98,7 +98,7 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
   validatePlanDecision(input);
   const change = { activity: [`${recordedAt} ${input.action} (${input.id})${input.rationale ? `: ${text(input.rationale, 'rationale')}` : ''}`] };
   if (input.action === 'start') {
-    if (!['open', 'planned', 'in-progress'].includes(plan.status)) fail(`cannot start from ${plan.status}`);
+    if (!['open', 'needs-info', 'planned', 'in-progress'].includes(plan.status)) fail(`cannot start from ${plan.status}`);
     change.status = 'in-progress';
     change.lock = true;
   }
@@ -106,6 +106,7 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
   let output = applyUpdate(plan.text, change);
   const match = output.match(/^---\n([\s\S]*?)\n---\n/);
   const fm = YAML.parse(match[1]);
+  if (input.action === 'start' && !(Number(plan.phase) > 0)) fm.phase = Number(plan.sections.plan?.match(/^###\s+Phase\s+(\d+)/m)?.[1] || 1);
   let body = output.slice(match[0].length);
   const amendments = [];
   if (input.migrateIntent) {
@@ -205,8 +206,11 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     const bytes = readFileNoFollow(path.resolve(workspace, rel), { root: workspace, maxBytes: 1024 * 1024, encoding: null });
     if (bytes === null) fail('gap evidence is unavailable, unsafe or oversized');
     gap.fulfillment = 'done';
-    gap.evidence = { path: rel, sha256: planRevision(bytes) };
-    if (fm.status === 'blocked-capability' && fm.capability_gaps.every(item => item.class !== 'hard' || item.fulfillment === 'done')) fm.status = 'planned';
+    gap.evidence_binding = { path: rel, sha256: planRevision(bytes) };
+    if (fm.status === 'blocked-capability' && fm.capability_gaps.every(item => item.class !== 'hard' || item.fulfillment === 'done')) {
+      const completed = /^-\s*\[[xX]\]\s/m.test(plan.sections.acceptanceText || '') || /^-\s*\[[xX]\]\s/m.test(plan.sections.plan || '') || (fm.progress?.criteria || []).length > 0;
+      fm.status = completed ? 'in-progress' : 'planned';
+    }
   }
   output = `---\n${YAML.stringify(fm, { lineWidth: 0 })}---\n${body}`;
   return { text: output, amendments, authority: input.authority ? { ...input.authority, provenance: 'declared decision scope; does not grant tool permissions' } : null };

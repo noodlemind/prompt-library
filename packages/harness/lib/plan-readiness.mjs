@@ -13,8 +13,11 @@ function result(id, pass, message) {
 }
 
 export function gapEvidenceCheck(workspace, plan) {
-  const bound = (plan.fm.capability_gaps || []).filter(gap => gap?.evidence !== undefined);
-  const stale = bound.filter(gap => typeof gap.evidence?.path !== 'string' || !/^[a-f0-9]{64}$/.test(gap.evidence?.sha256 || '') || hashIntentFile(workspace, gap.evidence.path) !== gap.evidence.sha256);
+  const bound = (plan.fm.capability_gaps || []).filter(gap => gap?.evidence_binding !== undefined || gap?.evidence && typeof gap.evidence === 'object' && !Array.isArray(gap.evidence));
+  const stale = bound.filter(gap => {
+    const binding = gap.evidence_binding ?? gap.evidence;
+    return typeof binding?.path !== 'string' || !/^[a-f0-9]{64}$/.test(binding?.sha256 || '') || hashIntentFile(workspace, binding.path) !== binding.sha256;
+  });
   return result('gap-evidence', !stale.length, stale.length ? `Capability gap evidence changed or is unavailable: ${stale.map(gap => gap.id).join(', ')}` : `${bound.length} capability gap evidence bindings are current`);
 }
 

@@ -41,6 +41,8 @@ Supported decisions:
 | progress | Accepted criterion/task IDs and optional current phase | Record checked state and phase without fabricating proof |
 | finding | Stable finding ID and accepted text | Append once; reject conflicting content under the same finding ID |
 | gap | Existing gap ID, done fulfillment, evidence path, and rationale | Bind the evidence hash, update the gap and resulting state; leave waivers and bridges to trusted policy |
+
+Start accepts a resolved `open` or `needs-info` draft only after readiness passes and sets its initial execution phase. Closing the final hard gap returns new work to `planned` and preserves partially completed work as `in-progress`. New gap file bindings use `evidence_binding`; existing `evidence` observations remain authored observations and do not claim verified bytes.
 | complete | Decision to finish | Require current review, executed proof, learning decision, and completed tasks across all phases; publish completion and done state |
 
 An amendment's `changes` can contain `scope`, `goal`, `constraints`, `criteria`, `reviews`, `notes`, or `phases`. Criteria use `{ "id": "AC1", "text": "...", "checks": ["named-check"] }`; omit a new ID to let Harness allocate it. Reviews cannot remove an existing code-review baseline. Phases use `{ "title": "...", "tasks": ["..."] }`; Harness numbers phases and generates task IDs such as P1T1. Existing unlabelled tasks can be addressed by their list IDs T1, T2, and so on.

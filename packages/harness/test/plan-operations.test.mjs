@@ -11,6 +11,40 @@ import { approveProject } from '../lib/trust.mjs';
 
 const bin = path.resolve(import.meta.dirname, '../bin/harness.mjs');
 const hash = value => createHash('sha256').update(value).digest('hex');
+for (const status of ['open', 'needs-info']) test(`resolved ${status} full drafts start with the initial execution phase`, t => {
+  const f = fixture(t), file = path.join(f.ws, '.harness/draft.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ version: 1, format: 'full', slug: `resolved-${status}`, status, goal: 'Return two.', acceptance: ['Returns two.'], scope: ['src/example.js'], check: 'unit-tests' }));
+  const created = f.cli('plan-new', '--file', file);
+  assert.equal(created.status, 0, created.stderr);
+  const plan = JSON.parse(created.stdout).path;
+  fs.writeFileSync(file, JSON.stringify({ version: 1, id: 'resolved-draft', action: 'start', expect: hash(fs.readFileSync(plan)) }));
+  const started = f.cli('plan-update', '--plan', plan, '--file', file);
+  assert.equal(started.status, 0, started.stdout + started.stderr);
+  const fm = YAML.parse(fs.readFileSync(plan, 'utf8').split('---')[1]);
+  assert.equal(fm.status, 'in-progress');
+  assert.equal(fm.phase, 1);
+});
+
+test('closing a hard gap preserves prior progress and does not check unfinished tasks', t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.ws, '.harness'), { recursive: true });
+  fs.writeFileSync(path.join(f.ws, '.harness/proof.md'), 'Capability proof.\n');
+  fs.writeFileSync(f.full, f.text().replace('status: planned', 'status: blocked-capability').replace('- [ ] **AC1**', '- [x] **AC1**').replace('capability_gaps: []', 'capability_gaps: [{id: dependency, class: hard, fulfillment: pending}]'));
+  const closed = f.op(f.decision('gap', { rationale: 'Capability supplied.', gap: { id: 'dependency', fulfillment: 'done', evidence: '.harness/proof.md' } }));
+  assert.equal(closed.status, 0, closed.stderr + closed.stdout);
+  assert.equal(YAML.parse(f.text().split('---')[1]).status, 'in-progress');
+  assert.match(f.text(), /- \[ \] .+/);
+  assert.equal(f.op(f.decision('start')).status, 0);
+});
+
+test('legacy gap observations retain their meaning without pretending to be file bindings', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.full, f.text().replace('capability_gaps: []', 'capability_gaps: [{id: dependency, class: soft, fulfillment: done, evidence: ["docs inspected", "reviewer supplied"]}]'));
+  const started = f.op(f.decision('start'));
+  assert.equal(started.status, 0, started.stderr + started.stdout);
+  assert.ok(JSON.parse(f.cli('status', '--contract-digest', '--plan', f.plan).stdout).digest);
+});
 test('structured creation refuses absent criteria and fields it cannot preserve', t => {
   const f = fixture(t), file = path.join(f.ws, '.harness/create-invalid.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -372,7 +406,7 @@ test('gap fulfillment binds current evidence and stale evidence blocks readiness
   fs.writeFileSync(path.join(f.ws, evidence), 'Accepted capability proof.');
   const resolved = f.op(f.decision('gap', { rationale: 'The accepted proof resolves the required capability.', gap: { id: 'parser-proof', fulfillment: 'done', evidence } }));
   assert.equal(resolved.status, 0, resolved.stderr + resolved.stdout);
-  assert.equal(YAML.parse(f.text().split('---')[1]).capability_gaps[0].evidence.sha256, hash('Accepted capability proof.'));
+  assert.equal(YAML.parse(f.text().split('---')[1]).capability_gaps[0].evidence_binding.sha256, hash('Accepted capability proof.'));
   fs.writeFileSync(path.join(f.ws, evidence), 'Different proof.');
   const gate = JSON.parse(f.cli('gate', '--plan', f.plan).stdout);
   assert.equal(gate.pass, false);
