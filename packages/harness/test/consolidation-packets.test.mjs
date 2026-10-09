@@ -169,7 +169,7 @@ test('a frozen branch packet cannot modify a changed golden copy of its target',
   assert.ok(writeStoreFile(path.join(branch, 'learnings/design/claim.md'), doc));
   assert.ok(writeStoreFile(path.join(dir, 'learnings/design/claim.md'), doc));
   assert.equal(spawnSync('git', ['add', '.'], { cwd: dir }).status, 0);
-  assert.equal(spawnSync('git', ['commit', '-qm', 'seed learning layers'], { cwd: dir }).status, 0);
+  assert.equal(spawnSync('git', ['-c', 'user.name=Harness fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'seed learning layers'], { cwd: dir }).status, 0);
   const packet = f.candidates();
   assert.equal(packet.layer, 'branch');
   assert.ok(packet.clusters.length);
