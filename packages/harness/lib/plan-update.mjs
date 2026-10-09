@@ -1,14 +1,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
+import { randomUUID } from 'node:crypto';
 import { createStyle, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { externalPlansDir, planReadDirs } from './project-layout.mjs';
 import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { parseFlags } from './flags.mjs';
-import { loadPlan, parsePlanFrontmatter } from './plan-parse.mjs';
-import { completeWork } from './completion.mjs';
-import { bindLockedIntentSources, lockIntentSources, sourcePath } from './intent-sources.mjs';
+import { loadPlan, parsePlanFrontmatter, planFromText } from './plan-parse.mjs';
+import { completeWork, completionPrerequisites } from './completion.mjs';
+import { bindLockedIntentSources, lockIntentSources, sourcePath, hashIntentFile, intentSourcesCheck } from './intent-sources.mjs';
+import { readFileNoFollow } from './fs-safe.mjs';
+import { applyPlanDecision, validatePlanDecision, planRevision, planState } from './plan-decisions.mjs';
+import { runGate, publishGateSession } from './gate.mjs';
+import { loadPolicy } from './policy.mjs';
+import { validatePlanSchema } from './plan-schema.mjs';
+import { validatePlanReadiness, gapEvidenceCheck } from './plan-readiness.mjs';
+import { validatePlanScope } from './plan-scope.mjs';
+import { readReviewRecord, publishReviewRecord, recordHash } from './review.mjs';
+import { reviewHash } from './review-preparation.mjs';
+import { readEvidence, planDigest } from './evidence.mjs';
 
 const PLAN_STATUSES = ['open', 'planned', 'in-progress', 'review', 'done', 'blocked-capability', 'needs-info'];
 const REVIEW_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -306,6 +317,72 @@ function take(scan, index) {
   return { value, index: index + 1 };
 }
 
+function publishPlanFile(full, text) {
+  const temporary = path.join(path.dirname(full), `.${path.basename(full)}.${randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(temporary, text, { encoding: 'utf8', flag: 'wx', mode: fs.statSync(full).mode & 0o777 });
+    fs.renameSync(temporary, full);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+function structuredPlanUpdate({ workspace, full, input, flags, dryRun }) {
+  validatePlanDecision(input);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  return withPlanUpdateLock(full, () => {
+    const plan = loadPlan(workspace, full);
+    if (!plan) throw usage('plan is unreadable');
+    const rel = `.harness/operations/plans/${reviewHash({ plan: plan.path, operation: input.id })}.json`;
+    const inputDigest = reviewHash(input);
+    const existing = readReviewRecord(workspace, rel);
+    const operation = reviewHash({ plan: plan.path, inputDigest });
+    if (existing && (existing.version !== 1 || existing.operation !== operation || existing.inputDigest !== inputDigest || existing.plan !== plan.path || existing.value?.plan !== plan.path || existing.value?.before !== input.expect || existing.value?.action !== input.action || typeof existing.value?.text !== 'string' || planRevision(existing.value.text) !== existing.value.after || reviewHash(existing.value) !== existing.integrity)) throw usage('operation identity has different or corrupt payload');
+    if (existing?.state === 'completed') return { ...existing.result, replayed: true, currentRevision: planRevision(plan.text), current: planRevision(plan.text) === existing.value.after && intentSourcesCheck(plan, workspace).pass && gapEvidenceCheck(workspace, plan).pass && validatePlanSchema(plan).pass, allowedNextActions: ['Inspect current state; a replay does not renew an expired gate'] };
+    if (existing && existing.state !== 'pending') throw usage('operation state is invalid');
+    const current = planRevision(plan.text);
+    if (existing ? ![existing.value.before, existing.value.after].includes(current) : input.expect !== current) throw usage('stale plan revision; reread before accepting a new decision');
+    const recordedAt = existing?.value.recordedAt || new Date().toISOString();
+    const decision = existing ? { text: existing.value.text, amendments: existing.value.amendments, authority: existing.value.authority } : applyPlanDecision(workspace, plan, input, { applyUpdate: applyPlanUpdate, recordedAt });
+    const proposed = planFromText(decision.text, { path: plan.path, fullPath: full });
+    const schema = validatePlanSchema(proposed);
+    const missing = schema.checks.filter(check => !check.pass).map(check => check.message);
+    let gate = null;
+    if (input.action === 'start') {
+      if (!existing) missing.push(...validatePlanReadiness(workspace, plan).checks.filter(check => !check.pass).map(check => check.message));
+      gate = runGate({ workspace, flags: { ...flags, plan: plan.path, phase: 'implement' }, planOverride: proposed });
+      missing.push(...gate.checks.filter(check => !check.pass).map(check => check.message));
+      const scope = validatePlanScope({ workspace, plan: proposed });
+      if (scope.status !== 'passed') missing.push(scope.message);
+    }
+    if (input.changes?.criteria) missing.push(...validatePlanReadiness(workspace, proposed).checks.filter(check => !check.pass).map(check => check.message));
+    if (input.action === 'complete') {
+      const prerequisites = completionPrerequisites({ workspace, plan: proposed, copilotHome });
+      if (!prerequisites.pass) missing.push(prerequisites.message);
+    }
+    if (missing.length || gate && (!gate.pass || gate.exitCode !== 0)) return { status: 'blocked', path: full, missing: [...new Set(missing)], allowedNextActions: ['Repair the named prerequisites, then retry the same decision if the revision is unchanged'], updated: false };
+    if (!decision.amendments.every(source => hashIntentFile(workspace, source.path) === source.newHash)) throw usage('intent source changed while applying the amendment');
+    if (gate && !intentSourcesCheck(proposed, workspace).pass) throw usage('selected intent source changed before start publication');
+    const completion = input.action === 'complete' ? completeWork({ workspace, plan: proposed, copilotHome, dryRun }) : null;
+    const affectedEvidence = planDigest(plan.text) === planDigest(proposed.text) ? null : {
+      verification: readEvidence(workspace, plan.path)?.evidencePath || null,
+      review: readReviewRecord(workspace, `.harness/reviews/latest/${recordHash(plan.path)}.json`)?.id || null,
+      completion: readReviewRecord(workspace, `.harness/completions/${recordHash(plan.path)}.json`)?.id || null,
+    };
+    const value = existing?.value || { plan: plan.path, action: input.action, recordedAt, before: current, after: planRevision(decision.text), text: decision.text, amendments: decision.amendments, authority: decision.authority, affectedEvidence };
+    const result = { version: 1, status: 'ok', path: full, operation, operationPath: rel, action: input.action, revision: value.after, planState: planState(proposed), amendments: value.amendments, authority: value.authority, affectedEvidence: value.affectedEvidence, completion: completion?.id || null, missing: [], allowedNextActions: input.action === 'start' ? ['Edit within the accepted scope', 'Run required review and verification'] : ['Inspect the updated contract', 'Start or refresh the implement gate before edits'], dryRun, updated: !dryRun && current !== value.after };
+    const record = { version: 1, state: 'pending', plan: plan.path, inputDigest, operation, integrity: reviewHash(value), value, result };
+    if (!dryRun) {
+      publishReviewRecord(workspace, rel, record);
+      if (readFileNoFollow(full) !== plan.text) throw usage('plan changed during the operation; reread before retry');
+      if (current !== value.after) publishPlanFile(full, value.text);
+      if (gate) publishGateSession({ workspace, result: gate, policy: loadPolicy(workspace, flags.enforcement, { copilotHome }) });
+      publishReviewRecord(workspace, rel, { ...record, state: 'completed' });
+    }
+    return result;
+  });
+}
+
 export async function cmdPlanUpdate(argv) {
   const boundary = argv.indexOf('--');
   const scan = boundary === -1 ? argv : argv.slice(0, boundary);
@@ -313,6 +390,7 @@ export async function cmdPlanUpdate(argv) {
   let json = false;
   let dryRun = false;
   let planArg;
+  let fileArg;
   const change = {
     activity: [],
     completed: [],
@@ -325,7 +403,9 @@ export async function cmdPlanUpdate(argv) {
 
   for (let i = 0; i < scan.length; i++) {
     const token = scan[i];
-    if (token === '--plan') {
+    if (token === '--file') {
+      ({ value: fileArg, index: i } = take(scan, i));
+    } else if (token === '--plan') {
       ({ value: planArg, index: i } = take(scan, i));
     } else if (token === '--status') {
       ({ value: change.status, index: i } = take(scan, i));
@@ -397,10 +477,20 @@ export async function cmdPlanUpdate(argv) {
     || change.clearCritical
     || change.old !== undefined
     || change.next !== undefined;
-  if (!hasChange) throw usage('plan-update: provide a status, activity, review, or body change');
+  if (!hasChange && !fileArg) throw usage('plan-update: provide a structured decision or a status, activity, review, or body change');
 
   const home = harnessGlobalHome();
   const full = resolvePlanUpdateFile(workspace, planArg, { home });
+  if (fileArg) {
+    if (hasChange) throw usage('--file cannot be combined with legacy mutation flags');
+    const content = readFileNoFollow(path.resolve(workspace, fileArg), { maxBytes: 1024 * 1024 });
+    if (content === null) throw usage('decision file is missing, unsafe or over 1 MiB');
+    let input;
+    try { input = JSON.parse(content); } catch { throw usage('decision file must contain JSON'); }
+    const result = structuredPlanUpdate({ workspace, full, input, flags: parseFlags(argv), dryRun });
+    console.log(redactedJson(result));
+    return result.status === 'blocked' ? 1 : 0;
+  }
   const lockDir = acquirePlanLock(full);
   let written;
   let original = '';
@@ -408,11 +498,16 @@ export async function cmdPlanUpdate(argv) {
   let completion = null;
   try {
     original = fs.readFileSync(full, 'utf8');
+    const currentPlan = loadPlan(workspace, full);
+    if (currentPlan?.fm.intent_source_policy === 'content-v1' && currentPlan.plan_lock) {
+      if (change.intentSources.length) throw usage('selected sources are frozen; use an explicit amendment');
+      if (change.lock && !intentSourcesCheck(currentPlan, workspace).pass) throw usage('selected intent source changed; use an explicit amendment instead of rehashing --lock');
+    }
     next = applyPlanUpdate(original, change);
     if (change.lock || change.intentSources.length) {
       next = stampLockedIntentSources(workspace, next, {
-        rehash: Boolean(change.lock),
-        mergeDiscovered: Boolean(change.lock),
+        rehash: Boolean(change.lock) && !(currentPlan?.fm.intent_source_policy === 'content-v1' && currentPlan.plan_lock),
+        mergeDiscovered: Boolean(change.lock) && !(currentPlan?.fm.intent_source_policy === 'content-v1' && currentPlan.plan_lock),
       });
     }
     if (change.status === 'done') {
@@ -421,16 +516,7 @@ export async function cmdPlanUpdate(argv) {
       completion = completeWork({ workspace, plan: { ...plan, text: next, fm, status: fm.status }, copilotHome: resolveCopilotHome(parseFlags(argv).copilotHome), dryRun });
     }
     if (!dryRun && next !== original) {
-      const mode = fs.statSync(full).mode & 0o777;
-      const tmp = path.join(path.dirname(full), `.${path.basename(full)}.${process.pid}.tmp`);
-      try {
-        fs.writeFileSync(tmp, next, 'utf8');
-        try { fs.chmodSync(tmp, mode); } catch { /* windows */ }
-        fs.renameSync(tmp, full);
-      } catch (error) {
-        try { fs.rmSync(tmp, { force: true }); } catch { /* the original plan is unchanged */ }
-        throw error;
-      }
+      publishPlanFile(full, next);
     }
     written = dryRun ? next : fs.readFileSync(full, 'utf8');
   } finally {
@@ -445,6 +531,7 @@ export async function cmdPlanUpdate(argv) {
       status: fm.status,
       reviews: fm.reviews,
       completion: completion?.id || null,
+      revision: planRevision(written),
     }));
   } else {
     const ui = createStyle();

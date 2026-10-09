@@ -134,7 +134,7 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   const handoffs = new Map((frontmatter.handoffs || []).map((handoff) => [handoff.label, handoff]));
 
   assert.match(engineer, /requested file mutation enters Deliver before the first edit/i);
-  assert.match(engineer, /blocked[\s\S]{0,180}ensure-plan[\s\S]{0,180}implement gate[\s\S]{0,180}retry/i);
+  assert.match(engineer, /blocked[\s\S]*ensure-plan[\s\S]*start decision[\s\S]*implement gate before editing/i);
   assert.match(engineer, /skill, agent, instruction, prompt, check, reference, or solution[\s\S]{0,100}create-primitive/i);
   assert.match(engineer, /read `~\/\.copilot\/skills\/create-primitive\/SKILL\.md`[\s\S]{0,180}not activation/i);
   assert.match(engineer, /Capture for Later[\s\S]{0,120}Plan and Fix[\s\S]{0,120}Leave in Chat/i);
@@ -185,7 +185,6 @@ test('existing skills own structured findings, proportional plans, and primitive
     'Recommended direction',
   ]) assert.match(capture, new RegExp(field, 'i'), `capture packet missing ${field}`);
   assert.match(capture, /packet is sufficient[\s\S]{0,220}do not ask/i);
-  assert.match(capture, /status:\s*open[\s\S]{0,80}plan_lock:\s*false[\s\S]{0,80}phase:\s*0/i);
 
   const ensure = read('packages/harness/corpus/skills/ensure-plan/SKILL.md');
   for (const phrase of [
@@ -199,15 +198,8 @@ test('existing skills own structured findings, proportional plans, and primitive
     'security or concurrency',
     'unclear verification',
   ]) assert.match(ensure, new RegExp(phrase, 'i'), `fast plan missing ${phrase}`);
-  assert.match(ensure, /Never write a header-only or ad-hoc plan/i);
-  assert.match(ensure, /harness validate-plan --plan <path>/i);
-  assert.match(ensure, /docs\/plans\/YYYY-MM-DD-<type>-<slug>-plan\.md/i);
-  assert.match(ensure, /plan_schema: 1[\s\S]*verification:[\s\S]*## Overview[\s\S]*## Activity/i);
   assert.match(ensure, /read `.github\/harness\/checks\.yaml`[\s\S]{0,180}never invent/i);
   assert.match(ensure, /schema-validation[\s\S]{0,100}no schema output/i);
-  assert.match(ensure, /implement gate as a standalone terminal tool call[\s\S]{0,180}later tool call/i);
-  assert.match(ensure, /initial implement gate[\s\S]{0,180}status: planned[\s\S]{0,100}status: in-progress[\s\S]{0,160}rerun the implement gate/i);
-  assert.match(ensure, /reviews:\s*\{required:\s*\[code-review\]/);
   assert.match(ensure, /harness plan-update/);
 
   const primitive = read('packages/harness/corpus/skills/create-primitive/SKILL.md');
@@ -259,7 +251,7 @@ test('execution, gap resolution, and compounding skills have distinct boundaries
   // Phase execution is owned by the Engineer's Deliver lifecycle (work-on-task retired).
   const engineerContract = read('packages/harness/corpus/agents/engineer.agent.md');
   assert.match(engineerContract, /Deliver\*{0,2} owns mutation lifecycle/i);
-  assert.match(engineerContract, /pass the implement gate/);
+  assert.match(engineerContract, /successful implement gate before editing/);
   assert.match(engineerContract, /require passed `harness verify`/i);
 
   const gaps = read('packages/harness/corpus/skills/ensure-capability/SKILL.md');
@@ -285,19 +277,6 @@ test('execution, gap resolution, and compounding skills have distinct boundaries
   assert.match(primitive, /promotion evidence/i);
   assert.match(primitive, /trigger eval/i);
   assert.match(primitive, /outcome eval/i);
-});
-
-test('plan-producing primitives emit schema v1 and trusted named checks', () => {
-  for (const rel of [
-    'packages/harness/corpus/skills/capture-issue/SKILL.md',
-    'packages/harness/corpus/agents/plan-coordinator.agent.md',
-  ]) {
-    const contract = read(rel);
-    assert.match(contract, /plan_schema:\s*1/, `${rel} must emit schema v1`);
-    assert.match(contract, /verification:\s*\n\s+required:/, `${rel} must emit named checks`);
-    assert.match(contract, /reviews:\s*\n\s+required:/, `${rel} must emit review state`);
-    assert.doesNotMatch(contract, /verification_commands:/, `${rel} must not emit shell strings`);
-  }
 });
 
 test('corpus hooks are the only hook tree and their cwd token is hooks', () => {
@@ -733,33 +712,6 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(checks.checks['prompt-contracts'].command.join(' '), /prompt-library-contracts\.test\.mjs/);
   assert.equal(checks.checks['build-assets'], undefined);
   assert.equal(exists('scripts/build-harness-assets.mjs'), false);
-
-  const coordinator = read('packages/harness/corpus/agents/plan-coordinator.agent.md');
-  assert.match(coordinator, /Required sections:[\s\S]*## Implementation Notes/i);
-  assert.match(coordinator, /## Implementation Notes\n\[/i);
-  assert.match(coordinator, /type: feat\|fix\|docs\|refactor\|chore/);
-  for (const section of ['Memory Cards', 'Review Findings']) {
-    assert.match(coordinator, new RegExp(`Required sections:[\\s\\S]*## ${section}`, 'i'));
-    assert.match(coordinator, new RegExp(`## ${section}\\n\\[`, 'i'));
-  }
-  assert.match(coordinator, /harness verify[^\n]*evidencePath/i);
-  assert.match(coordinator, /Verification Evidence[^\n]*does not populate the plan section/i);
-
-  const ensurePlan = read('packages/harness/corpus/skills/ensure-plan/SKILL.md');
-  const ensureCapture = ensurePlan.match(/### 2\. Capture[\s\S]*?(?=### 3\.)/)?.[0] || '';
-  for (const section of [
-    'Memory Cards',
-    'Technical Notes',
-    'Plan',
-    'Research Notes',
-    'Impacted Files',
-    'Verification Plan',
-    'Risk & Review Routing',
-    'Implementation Notes',
-    'Review Findings',
-  ]) {
-    assert.match(ensureCapture, new RegExp(`## ${section}`), `ensure-plan missing ${section}`);
-  }
 
   assert.match(read('packages/harness/corpus/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
 

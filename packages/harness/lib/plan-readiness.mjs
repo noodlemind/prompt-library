@@ -4,11 +4,18 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import YAML from 'yaml';
 import { extractAcceptanceCriteria } from './plan-schema.mjs';
+import { hashIntentFile } from './intent-sources.mjs';
 
 const CHECKS_REL = '.github/harness/checks.yaml';
 
 function result(id, pass, message) {
   return { id, pass, message };
+}
+
+export function gapEvidenceCheck(workspace, plan) {
+  const bound = (plan.fm.capability_gaps || []).filter(gap => gap?.evidence !== undefined);
+  const stale = bound.filter(gap => typeof gap.evidence?.path !== 'string' || !/^[a-f0-9]{64}$/.test(gap.evidence?.sha256 || '') || hashIntentFile(workspace, gap.evidence.path) !== gap.evidence.sha256);
+  return result('gap-evidence', !stale.length, stale.length ? `Capability gap evidence changed or is unavailable: ${stale.map(gap => gap.id).join(', ')}` : `${bound.length} capability gap evidence bindings are current`);
 }
 
 export function loadConfiguredChecks(workspace) {
@@ -69,6 +76,7 @@ function relevantAlternatives(configured) {
 export function validatePlanReadiness(workspace, plan) {
   const checks = [];
   if (!plan) return { pass: false, checks: [result('readiness-plan', false, 'Plan not found')] };
+  checks.push(gapEvidenceCheck(workspace, plan));
 
   if (plan.status === 'planned') {
     const checkedCriteria = [...(plan.sections.acceptanceText || '').matchAll(/^-\s*\[[xX]\]\s+(.+)$/gm)].map((match) => match[1]);

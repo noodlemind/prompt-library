@@ -55,6 +55,10 @@ export function loadPlan(workspace, relPath) {
   const full = canonicalPlanPath(workspace, normalized);
   if (!full || !fs.statSync(full).isFile()) return null;
   const text = fs.readFileSync(full, 'utf8');
+  return planFromText(text, { path: normalized, fullPath: full });
+}
+
+export function planFromText(text, { path: planPath, fullPath }) {
   let fm;
   try {
     fm = parsePlanFrontmatter(text);
@@ -74,10 +78,10 @@ export function loadPlan(workspace, relPath) {
     reviewFindings: extractSection(text, 'Review Findings'),
   };
   return {
-    path: normalized,
-    fullPath: full,
+    path: planPath,
+    fullPath,
     text,
-    title: fm.title || path.basename(full, '.md'),
+    title: fm.title || path.basename(fullPath, '.md'),
     status: fm.status || 'unknown',
     plan_lock: fm.plan_lock === 'true' || fm.plan_lock === true,
     phase: fm.phase ?? 0,

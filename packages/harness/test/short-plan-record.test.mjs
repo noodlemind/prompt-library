@@ -279,7 +279,7 @@ test('plan-new --goal rejects --type and --risk and writes no plan file', () => 
       '--json',
     ]);
     assert.notEqual(typed.status, 0, typed.stdout);
-    assert.match(typed.stderr, /--goal does not take --type, --risk, --status, or --impacted/);
+    assert.match(typed.stderr, /--goal does not take --type, --risk/);
     const risked = harness(c, [
       'plan-new',
       '--goal', GOAL,
@@ -289,17 +289,7 @@ test('plan-new --goal rejects --type and --risk and writes no plan file', () => 
       '--json',
     ]);
     assert.notEqual(risked.status, 0, risked.stdout);
-    assert.match(risked.stderr, /--goal does not take --type, --risk, --status, or --impacted/);
-    const scoped = harness(c, [
-      'plan-new',
-      '--goal', GOAL,
-      '--acceptance', ACCEPTANCE,
-      '--constraint', CONSTRAINT,
-      '--impacted', 'src/app.js',
-      '--json',
-    ]);
-    assert.notEqual(scoped.status, 0, scoped.stdout);
-    assert.match(scoped.stderr, /--goal does not take --type, --risk, --status, or --impacted/);
+    assert.match(risked.stderr, /--goal does not take --type, --risk/);
     assert.deepEqual(markdownFiles(c.home), []);
   } finally {
     removeRepo(c, previousHome);

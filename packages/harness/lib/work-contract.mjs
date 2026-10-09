@@ -16,10 +16,11 @@ export function planContractText(text) {
   const fm = match ? YAML.parse(match[1], { maxAliasCount: 50, intAsBigInt: true }) : {};
   if (!fm || typeof fm !== 'object' || Array.isArray(fm)) throw new Error('Invalid work contract frontmatter');
   for (const field of ['status', 'phase', 'learning', 'learning_records', 'completion_record', 'review_records']) delete fm[field];
+  if (fm.intent_source_policy === 'content-v1') delete fm.progress;
   if (fm.reviews && typeof fm.reviews === 'object') delete fm.reviews.completed;
   const body = (match ? source.slice(match[0].length) : source)
     .replace(/\r\n/g, '\n')
     .replace(/\n## Activity\s*\n[\s\S]*?(?=\n## |$)/gi, '')
     .replace(/^(-\s*\[)[xX](\]\s)/gm, '$1 $2').trim();
-  return JSON.stringify({ version: WORK_CONTRACT_VERSION, frontmatter: canonical(fm), body });
+  return JSON.stringify({ version: fm.intent_source_policy === 'content-v1' ? 2 : WORK_CONTRACT_VERSION, frontmatter: canonical(fm), body });
 }

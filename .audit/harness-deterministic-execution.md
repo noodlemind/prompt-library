@@ -18,7 +18,7 @@ Done means the CLI and installed hooks reject broken, missing, stale and incompl
 - [x] Prove the complete Phase 1 exit sequence before Phase 2.
 - [x] Resolve relevant Phase 1 PR comments and reprove the updated head before resuming Phase 2.
 - [x] P2.1 Deterministic review preparation and assembly.
-- [ ] P2.2 Structured lifecycle operations and intent amendments.
+- [x] P2.2 Structured lifecycle operations and intent amendments.
 - [ ] P2.3 Learning publication and consolidation packets.
 - [ ] P2.4 Primitive validation and recurrence proposals.
 - [ ] P2.5 Factual context and reports.
@@ -50,3 +50,9 @@ Phase 2 resumed on merged main 6ff32044c82a20be47aa1b2e0c3c6c6dc812bb24 (PR79 me
 P2.1 local Node 22 full suite passed 2320/2323, zero failures, three platform/optional skips. Review/exit subset passed 27/27; review/prompt contracts passed 45/45. Mandatory-name collision and untracked new-check freshness regressions failed before repair. Skills delegate discovery, filtering, exact matching, overlap candidates, counts, sorting and report rendering to the review family. Invocation identity remains unverified, and semantic overlap/fix decisions remain agent inputs.
 
 PR80 feedback reopened P2.1 before further P2.2 work. All six Greptile issues reproduced: document substitution, selected-file check omission, large ignored document freshness, distinct-claim collapse, compatible retain rejection, and stale overlap IDs. The repaired full Node 22 suite passed 2328/2331 with zero failures and three skips (`phase2-review-feedback-full.log`). Eighteen focused cases passed, including follow-up adjudication and contradictory judgment rejection. P2.2 is preserved in stash fa73d4bc87e458b3369ed697324290513a0e932e. Updated platform CI is pending publication.
+
+PR80 repaired head 033867552ef25bedf2e7dd3b993474be54263887 passed full Linux and Windows suites and both delivery gates in runs 37929476077 and 37929476056. All six review threads resolved. This supersedes the pending platform checkpoint.
+
+P2.2 owns structured creation, start, amend, progress, finding, evidence-bound gap closure and completion. New full-v2/short-v2 plans freeze selected source bytes under content-v1; legacy contracts retain paths-only policy until explicit migration. Start publishes a recoverable readiness/state/session transition. The first final full suite passed 2353/2356, zero failures, three skips. A later creation-boundary regression found silently ignored short metadata and absent authored criteria; fixed, with 27 focused cases passing. Release full suite is running.
+
+P2.2 release suite passed 2354/2357 on Node22, zero failures, three skips (`phase2-plan-release-node22.log`); 27 focused operation cases passed. New full and short contract formats are versioned; CLI, corpus and hooks must be upgraded together. Platform CI for this unit remains pending publication.

@@ -28,7 +28,7 @@ Name the mode first. **Answer** is quick and read-only. **Investigate** names ev
 
 ## Delivery lifecycle
 
-When blocked by a missing gate and autonomy allows, read `~/.copilot/skills/ensure-plan/SKILL.md`; create the plan with `harness plan-new`, pass the implement gate, retry, then verify. Update later plan changes with `harness plan-update`; do not edit `~/.harness` in the editor. Before a product edit whose shape is not already the local pattern, read `~/.copilot/skills/architect/SKILL.md`. Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~/.copilot/skills/create-primitive/SKILL.md`; a plan label is not activation. A person approves a new skill or specialist before it is installed.
+When blocked by a missing gate and autonomy allows, read `~/.copilot/skills/ensure-plan/SKILL.md`. Supply decisions to `harness plan-new --file` and `harness plan-update --file`; Harness owns plan representation. Submit a start decision and wait for its successful implement gate before editing. Use amendments, progress, findings, gap resolution, and completion decisions for later state changes. Do not edit `~/.harness` in the editor. Before a product edit whose shape is not already the local pattern, read `~/.copilot/skills/architect/SKILL.md`. Before work on a skill, agent, instruction, prompt, check, reference, or solution, read `~/.copilot/skills/create-primitive/SKILL.md`; a plan label is not activation. A person approves a new skill or specialist before it is installed.
 
 ## Gaps and consultation
 

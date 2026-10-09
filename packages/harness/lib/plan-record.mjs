@@ -30,18 +30,20 @@ export function readPlanRecord(text) {
   };
 }
 
-export function shortPlanDocument({ goal, acceptance, constraints, check = null }) {
+export function shortPlanDocument({ goal, acceptance, constraints, check = null, intentSources = [], scope = [], status = null }) {
   const record = readPlanRecord(JSON.stringify({ goal, acceptance, constraints }));
   if (!record) throw new Error('plan-new: --goal requires at least one --acceptance and one --constraint');
   const ids = acceptance.map((_, i) => `AC${i + 1}`);
   const fm = {
-    plan_format: 'short-v1',
-    status: check ? 'in-progress' : 'open',
-    plan_lock: Boolean(check),
+    plan_format: 'short-v2',
+    intent_source_policy: 'content-v1',
+    intent_sources: intentSources,
+    status: status || (check ? 'in-progress' : 'open'),
+    plan_lock: Boolean(check) && !['open', 'needs-info'].includes(status),
     acceptance_ids: ids,
     acceptance_text: Object.fromEntries(ids.map((id, i) => [id, acceptance[i]])),
     verification: { required: check ? [check] : [], criteria: Object.fromEntries(ids.map(id => [id, check ? [check] : []])) },
     reviews: { required: ['code-review'], completed: [], critical_open: [] },
   };
-  return `---\n${YAML.stringify(fm)}---\n${JSON.stringify(record)}\n`;
+  return `---\n${YAML.stringify(fm)}---\n${JSON.stringify(record)}\n${scope.length ? `\n## Impacted Files\n\n${scope.map(file => `- \`${file}\``).join('\n')}\n` : ''}`;
 }

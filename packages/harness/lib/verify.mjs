@@ -21,6 +21,7 @@ import { redactSecrets } from './secret-scan.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { CHECKS_REL, loadNamedChecks, validateCommand, runNamedCheck } from './checks.mjs';
 import { createRedactor, redactionMarker } from './redact.mjs';
+import { intentSourcesCheck } from './intent-sources.mjs';
 
 const DEFAULT_CHECK_SEVERITIES = { [STRUCTURAL_CHECK_ID]: 'advisory' };
 
@@ -388,6 +389,8 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
   }
 
   const readiness = validatePlanReadiness(workspace, plan);
+  const intent = plan.fm?.intent_source_policy !== undefined ? intentSourcesCheck(plan, workspace) : { pass: true, message: 'Legacy source policy; selected bytes are not bound until explicit migration' };
+  checks.push(resultCheck('intent-sources', intent.pass ? 'passed' : 'failed', intent.message));
   checks.push(
     resultCheck(
       'plan-readiness',
@@ -542,6 +545,8 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     preBinding.planDigest === binding.planDigest &&
     preBinding.policyDigest === binding.policyDigest &&
     preBinding.executionPhase === binding.executionPhase &&
+    JSON.stringify(preBinding.intentSources) === JSON.stringify(binding.intentSources) &&
+    ((currentPlan || plan).fm?.intent_source_policy === undefined || intentSourcesCheck(currentPlan || plan, workspace).pass) &&
     Boolean(currentPlan) &&
     !headMoved;
   checks.push(

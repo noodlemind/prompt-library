@@ -19,7 +19,8 @@ import { approvedBundleNames, syncBundles } from './bundle-sync.mjs';
 import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { leftoverWorkspaceArtifacts, runMigrateLayout } from './migrate-layout.mjs';
-import { selectIntent } from './intent-sources.mjs';
+import { selectIntent, intentSourcesCheck } from './intent-sources.mjs';
+import { runGate, publishGateSession } from './gate.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { runIndexKnowledge } from './index-knowledge.mjs';
 import { configureVSCodeSettings } from './vscode-settings.mjs';
@@ -32,13 +33,15 @@ import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } f
 import { installVSCodeBridge, uninstallVSCodeBridge } from './install-vscode-bridge.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy, publishPolicySnapshot } from './policy.mjs';
-import { configuredCheckSnapshot } from './plan-readiness.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { planDigest, readEvidence, validateEvidence } from './evidence.mjs';
 import { validateCompletion } from './completion.mjs';
 import { migrateStrandedStore } from './knowledge/admin.mjs';
 import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
+import { planRevision } from './plan-decisions.mjs';
+import { gapEvidenceCheck } from './plan-readiness.mjs';
+import { validatePlanSchema } from './plan-schema.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
@@ -325,7 +328,10 @@ export function statusDomainResult(flags, copilotHome) {
     const plan = loadPlan(workspace, flags.plan);
     if (!plan) throw new Error('Plan not found; pass --plan');
     const evidence = readEvidence(workspace, plan.path);
-    const result = flags.validateCompletion ? validateCompletion({ workspace, plan, copilotHome }) : flags.contractDigest ? { version: 1, digest: planDigest(plan.text) }
+    const intent = intentSourcesCheck(plan, workspace);
+    const gaps = gapEvidenceCheck(workspace, plan);
+    const schema = plan.fm.plan_schema !== undefined || plan.fm.plan_format !== undefined ? validatePlanSchema(plan) : { pass: true, version: null };
+    const result = flags.validateCompletion ? validateCompletion({ workspace, plan, copilotHome }) : flags.contractDigest ? { version: plan.fm.intent_source_policy === 'content-v1' ? 2 : 1, digest: intent.pass && gaps.pass && schema.pass ? planDigest(plan.text) : null, revision: planRevision(plan.text), intent, gaps, schema }
       : { ...validateEvidence({ workspace, plan, evidence, maxAgeHours: loadPolicy(workspace, null, { copilotHome }).evidenceTtlHours, copilotHome }), evidenceIdentity: createHash('sha256').update(JSON.stringify(evidence)).digest('hex') };
     return result;
   }
@@ -784,7 +790,6 @@ export async function cmdOrient(argv) {
 }
 
 export async function cmdGate(argv) {
-  const { runGate } = await import('./gate.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const query = parseQueryFromArgv(argv, flags);
@@ -795,24 +800,7 @@ export async function cmdGate(argv) {
   result.projectPolicyIgnored = policy.projectPolicyIgnored;
   result.projectPolicyError = policy.projectPolicyError ?? null;
   result.policyExitCode = policyExitCode;
-  const previous = readSession(workspace) || {};
-  const gatePassed = result.pass && result.exitCode === 0;
-  const checkSnapshot = gatePassed ? configuredCheckSnapshot(workspace) : null;
-  writeSession(
-    workspace,
-    {
-      ...previous,
-      activePlan: result.plan?.path || previous.activePlan || null,
-      gatedPlan: result.plan?.path || null,
-      gatedPlanDigest: gatePassed ? result.plan?.digest || null : null,
-      gatedChecksDigest: gatePassed ? checkSnapshot.digest : null,
-      gatedCheckCommands: gatePassed ? checkSnapshot.commands : [],
-      lastGateAt: new Date().toISOString(),
-      gateStatus: gatePassed ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
-      blockedReason: result.blockedReason,
-    },
-    flags.dryRun
-  );
+  publishGateSession({ workspace, result, policy, dryRun: flags.dryRun });
   writeEvent(workspace, flags, {
     type: 'gate',
     command: 'gate',

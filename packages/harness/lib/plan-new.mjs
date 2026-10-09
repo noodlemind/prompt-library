@@ -3,7 +3,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { createStyle } from './style.mjs';
 import { redactedJson } from './redact.mjs';
-import { loadConfiguredChecks } from './plan-readiness.mjs';
+import { loadConfiguredChecks, validatePlanReadiness } from './plan-readiness.mjs';
 import { assertNoPersonalWrite, isPrimitivePath } from './primitive-governance.mjs';
 import { plansWriteTarget } from './project-layout.mjs';
 import { harnessGlobalHome } from './paths.mjs';
@@ -11,11 +11,13 @@ import { ensureHarnessDir } from './session.mjs';
 import { applyClassification, readClassification } from './classification.mjs';
 import { ensureIndexes } from './ensure-indexes.mjs';
 import { resolveCopilotHome } from './paths.mjs';
-import { loadPlan } from './plan-parse.mjs';
+import { loadPlan, planFromText } from './plan-parse.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
 import { emptySnapshot, routeWorkspace } from './route.mjs';
 import { shortPlanDocument } from './plan-record.mjs';
 import { bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
+import { planRevision, scopePaths, applyPlanNotes, renderPlanPhases, planState } from './plan-decisions.mjs';
+import { readFileNoFollow } from './fs-safe.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
@@ -84,7 +86,12 @@ export function buildPlanSkeleton({
   domains = [],
   playbook = null,
   intentSources = [],
+  constraints = [],
+  notes = {},
+  phases,
+  outputs,
 } = {}) {
+  const draft = ['open', 'needs-info'].includes(status);
   assertNoPersonalWrite([...(impacted || []), gap?.primitive]);
   scalar(slug, 'slug', { required: true });
   scalar(title, 'title');
@@ -92,7 +99,7 @@ export function buildPlanSkeleton({
   scalar(type, 'type', { required: true });
   scalar(risk, 'risk', { required: true });
   scalar(status, 'status');
-  scalar(check, 'check', { required: true });
+  scalar(check, 'check', { required: !draft });
   if (!slug || !SLUG_RE.test(slug)) throw new Error('plan-new: --slug is required and must be lowercase-hyphen (a-z0-9-)');
   if (!TYPES.includes(type)) throw new Error(`plan-new: --type must be one of ${TYPES.join('|')}`);
   if (!RISKS.includes(risk)) throw new Error(`plan-new: --risk must be one of ${RISKS.join('|')}`);
@@ -114,19 +121,20 @@ export function buildPlanSkeleton({
   const heading = title || slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
   const frontmatter = {
-    plan_schema: 1,
+    plan_schema: 2,
+    intent_source_policy: 'content-v1',
     title: heading,
     type,
     status: finalStatus,
-    plan_lock: true,
-    phase: 1,
+    plan_lock: !draft,
+    phase: draft ? 0 : 1,
     risk,
     intent,
-    expected_outputs: [`${slug} delivered`],
+    expected_outputs: outputs || [`${slug} delivered`],
     success_criteria: [intent],
     verification: {
-      required: [check],
-      criteria: Object.fromEntries(acs.map((ac) => [ac.id, [check]])),
+      required: check ? [check] : [],
+      criteria: Object.fromEntries(acs.map((ac) => [ac.id, check ? [check] : []])),
     },
     reviews: { required: type === 'docs' ? [] : ['code-review'], completed: [], critical_open: [] },
     skills_used: skills,
@@ -146,7 +154,7 @@ export function buildPlanSkeleton({
   const impactedLines = impactedList.length ? impactedList.map((f) => `- \`${f}\``).join('\n') : '- `TODO: add the files this plan will change`';
   const acLines = acs.map((ac) => `- [ ] **${ac.id}** ${ac.text}`).join('\n');
 
-  const content = `---
+  let content = `---
 ${YAML.stringify(frontmatter, { lineWidth: 0 })}---
 
 # ${heading}
@@ -155,19 +163,34 @@ ${YAML.stringify(frontmatter, { lineWidth: 0 })}---
 
 ${intent}
 
+## Context
+
+Pending authored context.
+
 ## Intent Contract
 
 - Goal: ${intent}
 
+## Memory Cards
+
+Pending relevance assessment through recall.
+
 ## Acceptance Criteria
 
 ${acLines}
+${constraints.length ? `\n## Constraints\n\n${constraints.map(value => `- ${scalar(value, 'constraint', { required: true })}`).join('\n')}\n` : ''}
 ${governanceSection}
+## Technical Notes
+
+Pending implementation reasoning.
+
 ## Plan
 
-### Phase 1
+${renderPlanPhases(phases || [{ title: 'Implementation', tasks: [acs[0].text.replace(/[\r\n]+/g, ' ')] }])}
 
-- [ ] ${acs[0].text}
+## Research Notes
+
+Pending research when the task requires it.
 
 ## Impacted Files
 
@@ -175,11 +198,15 @@ ${impactedLines}
 
 ## Verification Plan
 
-- Run the configured check (\`${check}\`).
+${check ? `- Named check \`${check}\` binds the acceptance criteria.` : '- Pending named check selection.'}
 
 ## Risk & Review Routing
 
 - ${risk.charAt(0).toUpperCase() + risk.slice(1)}.
+
+## Implementation Notes
+
+Implementation has not started.
 
 ## Review Findings
 
@@ -187,8 +214,9 @@ ${impactedLines}
 
 ## Activity
 
-- Scaffolded by \`harness plan-new\`.${gap ? ` Blocked on the ${gap.id} capability gap.` : ''}
+- ${date} Scaffolded by \`harness plan-new\`.${gap ? ` Blocked on the ${gap.id} capability gap.` : ''}
 `;
+  content = applyPlanNotes(content, notes);
 
   return { path: rel, content };
 }
@@ -200,6 +228,7 @@ export async function cmdPlanNew(argv) {
   let json = false;
   let dryRun = false;
   let toStdout = false;
+  let file;
 
   // Fix-wave C1: honor the literal-argument boundary, matching
   // lib/flags.mjs#parseFlags and lib/registry.mjs#validateArgs — nothing after
@@ -214,6 +243,7 @@ export async function cmdPlanNew(argv) {
     const a = scan[i];
     const next = () => scan[++i];
     if (a === '--type') opts.type = next();
+    else if (a === '--file') file = next();
     else if (a === '--slug') opts.slug = next();
     else if (a === '--title') opts.title = next();
     else if (a === '--intent') opts.intent = next();
@@ -241,6 +271,23 @@ export async function cmdPlanNew(argv) {
     else if (a === '--stdout') toStdout = true;
   }
 
+  if (file) {
+    if (Object.keys(opts).some(key => !['impacted', 'criteria', 'acceptance', 'constraints', 'intentSources', 'copilotHome'].includes(key)) || [opts.impacted, opts.criteria, opts.acceptance, opts.constraints, opts.intentSources].some(values => values.length)) throw new Error('plan-new: --file cannot be combined with authoring flags');
+    let input;
+    try { input = JSON.parse(readFileNoFollow(path.resolve(workspace, file), { maxBytes: 1024 * 1024 })); } catch { throw new Error('plan-new: decision file must contain bounded JSON'); }
+    const keys = ['version', 'format', 'slug', 'type', 'title', 'goal', 'acceptance', 'constraints', 'scope', 'check', 'intentSources', 'risk', 'status', 'notes', 'phases', 'outputs'];
+    if (!input || input.version !== 1 || !['full', 'short'].includes(input.format) || Object.keys(input).some(key => !keys.includes(key))) throw new Error('plan-new: unsupported creation decision schema');
+    scalar(input.goal, 'goal', { required: true });
+    if (!Array.isArray(input.acceptance) || input.acceptance.length === 0) throw new Error('plan-new: authored acceptance criteria are required');
+    if (input.outputs !== undefined && (!Array.isArray(input.outputs) || input.outputs.length === 0)) throw new Error('plan-new: outputs must be a non-empty list');
+    if (input.format === 'short' && ['type', 'title', 'risk', 'outputs'].some(key => input[key] !== undefined)) throw new Error('plan-new: type, title, risk and outputs require the full format');
+    for (const key of ['acceptance', 'constraints', 'intentSources', 'outputs']) if (input[key] !== undefined && (!Array.isArray(input[key]) || !input[key].every(value => typeof value === 'string' && value.trim()))) throw new Error(`plan-new: ${key} must be a list of text`);
+    if (input.status !== undefined && !['open', 'planned', 'in-progress', 'needs-info'].includes(input.status)) throw new Error('plan-new: unsupported initial status');
+    Object.assign(opts, { structured: true, slug: input.slug || shortSlug(input.goal), title: input.title, check: input.check, status: input.status, impacted: input.scope ? scopePaths(input.scope) : [], constraints: input.constraints || [], intentSources: input.intentSources || [], notes: input.notes || {}, phases: input.phases, outputs: input.outputs });
+    if (input.format === 'short') { opts.goal = input.goal; opts.acceptance = input.acceptance || []; }
+    else { opts.type = input.type || 'feat'; opts.intent = input.goal; opts.criteria = input.acceptance || []; opts.risk = input.risk; }
+  }
+
   if (opts.from) {
     if (opts.slug || opts.type || opts.intent || opts.gap || opts.goal !== undefined || opts.acceptance.length > 0 || opts.constraints.length > 0) {
       throw new Error('plan-new: --from cannot be combined with new-plan flags');
@@ -252,8 +299,8 @@ export async function cmdPlanNew(argv) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.date)) throw new Error('plan-new: date must be YYYY-MM-DD');
   assertNoPersonalWrite([...(opts.impacted || []), opts.gap?.primitive]);
   if (opts.goal !== undefined) {
-    if (opts.type || opts.risk || opts.status || opts.impacted.length > 0) {
-      throw new Error('plan-new: --goal does not take --type, --risk, --status, or --impacted');
+    if (opts.type || opts.risk || opts.status && !opts.structured) {
+      throw new Error('plan-new: --goal does not take --type, --risk, or legacy --status');
     }
     const acceptance = opts.acceptance.filter((value) => typeof value === 'string' && value.trim());
     const constraints = opts.constraints.filter((value) => typeof value === 'string' && value.trim());
@@ -272,7 +319,10 @@ export async function cmdPlanNew(argv) {
         throw new Error(`plan-new: --verification-check ${opts.check} is not an executable configured check`);
       }
     }
-    const content = shortPlanDocument({ goal: opts.goal, acceptance, constraints, check: opts.check });
+    const intentSources = bindLockedIntentSources(workspace, opts.intentSources, { query: opts.goal });
+    let content = shortPlanDocument({ goal: opts.goal, acceptance, constraints, check: opts.check, intentSources, scope: opts.impacted, status: opts.status });
+    content = applyPlanNotes(content, opts.notes || {});
+    if (opts.phases) content += `\n## Plan\n\n${renderPlanPhases(opts.phases)}\n`;
     if (toStdout) {
       process.stdout.write(content);
       return 0;
@@ -280,9 +330,9 @@ export async function cmdPlanNew(argv) {
     if (!dryRun) {
       fs.mkdirSync(path.dirname(full), { recursive: true });
       if (fs.existsSync(full)) throw new Error(`plan-new: ${full} already exists`);
-      fs.writeFileSync(full, content, 'utf8');
+      fs.writeFileSync(full, content, { encoding: 'utf8', flag: 'wx' });
     }
-    if (json) console.log(redactedJson({ path: full, created: !dryRun }));
+    if (json) console.log(redactedJson(creationResult(workspace, full, content, dryRun)));
     else {
       const ui = createStyle();
       console.log(ui.line({ state: 'ok', key: 'plan-new', value: dryRun ? `would create ${full}` : full }));
@@ -301,13 +351,16 @@ export async function cmdPlanNew(argv) {
       && config.command.length > 0
       && config.command.every((part) => typeof part === 'string' && part.trim().length > 0))
     .map(([name]) => name);
-  if (names.length === 0) {
+  const draft = ['open', 'needs-info'].includes(opts.status);
+  if (names.length === 0 && !draft) {
     throw new Error('plan-new: configure at least one named check in .github/harness/checks.yaml before generating a gate-ready plan');
   }
   if (opts.check) {
     if (!names.includes(opts.check)) {
       throw new Error(`plan-new: --verification-check ${opts.check} is not an executable configured check; choose one of: ${names.join(', ')}`);
     }
+  } else if (draft) {
+    opts.check = undefined;
   } else if (names.length === 1) {
     [opts.check] = names;
   } else {
@@ -346,17 +399,23 @@ export async function cmdPlanNew(argv) {
     }).catch((error) => ({ error: error.message }));
     warnIndexPlanes(indexes);
     if (fs.existsSync(full)) throw new Error(`plan-new: ${rel} already exists`);
-    fs.writeFileSync(full, content, 'utf8');
+    fs.writeFileSync(full, content, { encoding: 'utf8', flag: 'wx' });
   }
   // Fix-wave C2: legacy --json serializer routed through the shared
   // redacting emission boundary (lib/redact.mjs) like every other sink.
-  if (json) console.log(redactedJson({ path: rel, created: !dryRun }));
+  if (json) console.log(redactedJson(creationResult(workspace, rel, content, dryRun)));
   else {
     const ui = createStyle();
     console.log(ui.line({ state: 'ok', key: 'plan-new', value: dryRun ? `would create ${rel}` : rel }));
     console.log(ui.paint('muted', `${ui.arrow} harness gate --phase implement --plan ${rel} --json`));
   }
   return 0;
+}
+
+function creationResult(workspace, rel, content, dryRun) {
+  const plan = planFromText(content, { path: rel, fullPath: path.resolve(workspace, rel) });
+  const readiness = validatePlanReadiness(workspace, plan);
+  return { path: rel, created: !dryRun, revision: planRevision(content), planState: planState(plan), missing: readiness.checks.filter(check => !check.pass).map(check => check.message), allowedNextActions: ['Read the generated plan and selected sources', 'Submit accepted amendments or a start decision'] };
 }
 
 function prepareRouting({ workspace, impacted, risk, domains, classification, copilotHome }) {
@@ -427,7 +486,7 @@ async function relockPlan({ workspace, from, dryRun, toStdout, json, classificat
     if (fs.readFileSync(plan.fullPath, 'utf8') !== original) throw new Error('plan-new: plan changed before relock');
     fs.writeFileSync(plan.fullPath, content, 'utf8');
   }
-  if (json) console.log(redactedJson({ path: plan.path, created: !dryRun, relocked: true }));
+  if (json) console.log(redactedJson({ path: plan.path, created: !dryRun, relocked: true, revision: planRevision(content) }));
   else {
     const ui = createStyle();
     console.log(ui.line({ state: 'ok', key: 'plan-new', value: dryRun ? `would relock ${plan.path}` : plan.path }));
