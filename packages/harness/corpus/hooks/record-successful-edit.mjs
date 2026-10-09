@@ -78,6 +78,7 @@ if (success && governed.length > 0) {
       updatedAt: editAt,
       gateStatus: 'missing',
       lastEditAt: editAt,
+      lastEditPlan: null,
       lastEditTool: normalized.toolName,
       lastEditTargets: governed,
       lastEditSession: normalized.sessionId,
@@ -103,6 +104,7 @@ if (success && governed.length > 0) {
     process.exit(0);
   }
   session.lastEditAt = new Date().toISOString();
+  session.lastEditPlan = session.activePlan || null;
   session.lastEditTool = normalized.toolName;
   session.lastEditTargets = governed;
   session.lastEditSession = normalized.sessionId || session.sessionId || null;

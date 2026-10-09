@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { structuralChecks, runDoctor } from '../lib/doctor.mjs';
 import { buildStructuralIndex, structuralIndexDir } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2, loadGrammarsLock, DEFAULT_LOCK_PATH } from '../lib/repo-map/treesitter-extractor.mjs';
+import { repoId } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -57,6 +58,20 @@ function extractorWith(overrides = {}) {
 }
 
 const FIXTURE = { 'a.mjs': 'export const a = 1;\n', 'b.mjs': 'export const b = 2;\n' };
+
+test('doctor preserves all check families when a private storage alias is corrupt', async t => {
+  const { ws } = gitRepo(t, FIXTURE), home = tempTree(t, 'harness-home-'), copilotHome = tempTree(t, 'harness-copilot-');
+  withHome(t, home);
+  fs.mkdirSync(path.join(home, 'storage-aliases'));
+  fs.writeFileSync(path.join(home, 'storage-aliases', `${repoId(ws)}.json`), '{broken');
+  const { checks, pass } = await runDoctor({ copilotHome, assetsRoot: copilotHome, pkgRoot: null, flags: { workspace: ws, harnessHome: home } });
+  assert.equal(pass, false);
+  assert.equal(checks.find(c => c.id === 'H5').pass, false);
+  assert.match(checks.find(c => c.id === 'H5').hint, /storage alias/);
+  assert.equal(checks.find(c => c.id === 'K4').pass, false);
+  assert.ok(checks.some(c => c.id === 'S1'));
+  assert.ok(checks.some(c => c.id === 'H12'));
+});
 
 function withHome(t, home) {
   const saved = process.env.HARNESS_HOME;

@@ -37,7 +37,7 @@ test('installed product proof entry rejects placeholders and proves broken/fixed
   f.hook('record-successful-edit.mjs', { tool_name: 'replace_string_in_file', tool_input: { filePath: 'src/example.js' }, tool_response: 'File edited successfully' });
   const map = '.harness/product-flow.json';
   fs.writeFileSync(path.join(f.ws, map), JSON.stringify({ schema: 1, product: 'TODO', environment: 'Disposable fixture', flow: { id: 'return-two', acceptance: 'The exported value is two.', checks: ['behavior'] } }));
-  const proof = stage => f.receipt('product-proof', [stage], spawnSync(process.execPath, [script, '--workspace', f.ws, '--copilot-home', f.copilot, '--harness-home', f.home, '--plan', plan, '--map', map, '--stage', stage], { cwd: f.ws, encoding: 'utf8', timeout: 120000, env: { ...f.env, HARNESS_HOME: path.join(f.home, 'wrong-store') } }));
+  const proof = (stage, cwd = f.ws, home = f.home) => f.receipt('product-proof', [stage], spawnSync(process.execPath, [script, '--workspace', f.ws, '--copilot-home', f.copilot, '--harness-home', home, '--plan', plan, '--map', map, '--stage', stage], { cwd, encoding: 'utf8', timeout: 120000, env: { ...f.env, HARNESS_HOME: path.join(f.home, 'wrong-store') } }));
   assert.notEqual(proof('broken').status, 0, 'a placeholder map never proves a product');
   fs.writeFileSync(path.join(f.ws, map), JSON.stringify({ schema: 1, product: 'Synthetic export fixture', environment: 'Disposable fixture', flow: { id: 'return-two', acceptance: 'The exported value is two.', checks: ['behavior'] } }));
   const broken = proof('broken');
@@ -63,6 +63,21 @@ test('installed product proof entry rejects placeholders and proves broken/fixed
   assert.ok(Buffer.byteLength(fixed.stdout) <= 16384);
   assert.match(result.mapSource.sha256, /^[a-f0-9]{64}$/);
   assert.equal(result.liveHost, 'unverified');
+  const relative = proof('fixed', path.dirname(f.home), path.basename(f.home));
+  assert.equal(relative.status, 0, relative.stderr + relative.stdout);
+  const sessionPath = path.join(f.ws, '.harness/session.json'), session = JSON.parse(fs.readFileSync(sessionPath));
+  const invalidSessions = [
+    { ...session, activePlan: 'docs/plans/another-plan.md', lastEditAt: null },
+    { ...session, lastEditAt: null },
+    { ...session, lastEditPlan: 'docs/plans/another-plan.md' },
+    { ...session, lastEvidencePath: '.harness/evidence/another-proof.json', lastEditAt: null },
+  ];
+  const invalidResults = invalidSessions.map(invalid => {
+    fs.writeFileSync(sessionPath, JSON.stringify(invalid));
+    return proof('fixed').status;
+  });
+  fs.writeFileSync(sessionPath, JSON.stringify(session));
+  assert.ok(invalidResults.every(status => status !== 0), `another plan, absent mutation, mismatched edit or proof must fail: ${invalidResults}`);
   fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 3;\n');
   const stale = proof('fixed');
   assert.notEqual(stale.status, 0);

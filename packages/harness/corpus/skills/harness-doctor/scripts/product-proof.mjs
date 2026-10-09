@@ -31,7 +31,7 @@ function main() {
   delete env.HARNESS_BIN;
   const observations = [];
   const run = (family, args = [], input) => {
-    const result = spawnSync(process.execPath, family === 'Stop' ? [hook] : [bin, family, ...args, '--workspace', workspace, '--copilot-home', copilotHome, '--json', ...(flags['--harness-home'] ? ['--harness-home', flags['--harness-home']] : [])], { cwd: workspace, env, input, encoding: 'utf8', timeout: 120000, maxBuffer: 1024 * 1024 });
+    const result = spawnSync(process.execPath, family === 'Stop' ? [hook] : [bin, family, ...args, '--workspace', workspace, '--copilot-home', copilotHome, '--json', ...(flags['--harness-home'] ? ['--harness-home', env.HARNESS_HOME] : [])], { cwd: workspace, env, input, encoding: 'utf8', timeout: 120000, maxBuffer: 1024 * 1024 });
     let value;
     try { value = JSON.parse(result.stdout); } catch { fail(`${family} did not return bounded JSON (exit ${result.status}): ${String(result.stderr || result.stdout).slice(0, 500)}`); }
     if (result.error) fail(`${family} failed: ${result.error.message}`);
@@ -56,6 +56,12 @@ function main() {
     if (observed.exit !== 0 || observed.value.truncated || observed.value.sha256 !== source.sha256) fail('Executed proof is unavailable, changed or exceeds the retrieval bound');
     try { verification = JSON.parse(observed.value.excerpt); } catch { fail('Executed proof must be JSON'); }
   }
+  const sessionRead = run('get', ['--path', '.harness/session.json', '--max-bytes', '65536', '--lines', '10000']);
+  if (sessionRead.exit !== 0 || sessionRead.value.truncated) fail('Recorded mutation session is unavailable or exceeds the retrieval bound');
+  let session;
+  try { session = JSON.parse(sessionRead.value.excerpt); } catch { fail('Recorded mutation session must be JSON'); }
+  const samePath = (left, right) => typeof left === 'string' && typeof right === 'string' && path.resolve(workspace, left.replace(/\\/g, '/')) === path.resolve(workspace, right.replace(/\\/g, '/'));
+  if (!samePath(session.activePlan, verification.plan) || !samePath(session.lastEditPlan, verification.plan) || !samePath(session.lastEvidencePath, facts.value.work?.proof?.source?.path) || !Number.isFinite(Date.parse(session.lastEditAt)) || !Array.isArray(session.lastEditTargets) || !session.lastEditTargets.length) fail('Stop requires the selected plan, its proof and a successful mutation recorded for that plan');
   const stop = run('Stop', [], JSON.stringify({ cwd: workspace, hook_event_name: 'Stop' }));
   const checks = flow.checks.map(name => ({ name, result: verification.checks?.find(check => check.id === name)?.status || 'unavailable' }));
   const stopDecision = stop.value.hookSpecificOutput?.decision === 'block' ? 'block' : stop.exit === 0 && stop.value.continue === true ? 'allow' : 'unavailable';

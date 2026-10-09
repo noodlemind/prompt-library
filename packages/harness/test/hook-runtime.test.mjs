@@ -815,6 +815,7 @@ test('PostToolUse records only successful mutations and emits event schema v2', 
   session = JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8'));
   assert.match(session.lastEditAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(session.lastEditTool, 'replace_string_in_file');
+  assert.equal(session.lastEditPlan, plan);
   assert.deepEqual(session.lastEditTargets, ['src/schema.json']);
 
   const events = fs.readFileSync(path.join(workspace, '.harness', 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);

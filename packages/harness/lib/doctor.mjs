@@ -647,12 +647,16 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     hint: 'Re-run install',
   });
 
-  checks.push({
-    id: 'H5',
-    name: 'Product plans directory',
-    pass: planReadDirs(workspace, { home: flags.harnessHome || flags.home }).length > 0,
-    hint: 'harness init-repo',
-  });
+  try {
+    checks.push({
+      id: 'H5',
+      name: 'Product plans directory',
+      pass: planReadDirs(workspace, { home: flags.harnessHome || flags.home }).length > 0,
+      hint: 'harness init-repo',
+    });
+  } catch (error) {
+    checks.push({ id: 'H5', name: 'Product plans directory', pass: false, hint: error.message });
+  }
 
   const entReg = path.join(copilotHome, 'enterprise', 'capability-registry.enterprise.yaml');
   checks.push({
@@ -807,16 +811,20 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     optional: true,
   });
 
-  const leftovers = leftoverWorkspaceArtifacts(flags.workspace);
-  checks.push({
-    id: 'H18',
-    name: 'Gitignored docs artifacts migrated',
-    pass: leftovers.length === 0,
-    hint: leftovers.length
-      ? `harness migrate  # ${leftovers.map((item) => item.from).join(', ')}`
-      : 'No leftover gitignored docs/plans or docs/solutions in the product tree',
-    optional: true,
-  });
+  try {
+    const leftovers = leftoverWorkspaceArtifacts(flags.workspace);
+    checks.push({
+      id: 'H18',
+      name: 'Gitignored docs artifacts migrated',
+      pass: leftovers.length === 0,
+      hint: leftovers.length
+        ? `harness migrate  # ${leftovers.map((item) => item.from).join(', ')}`
+        : 'No leftover gitignored docs/plans or docs/solutions in the product tree',
+      optional: true,
+    });
+  } catch (error) {
+    checks.push({ id: 'H18', name: 'Gitignored docs artifacts migrated', pass: false, hint: error.message, optional: true });
+  }
 
   checks.push(routingPolicyCheck(workspace));
   const effectivePolicy = loadPolicy(workspace, flags.enforcement, { copilotHome });
