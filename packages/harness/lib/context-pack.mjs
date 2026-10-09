@@ -270,7 +270,10 @@ function trimLearningRows(body) {
   let omitted = 0;
   while (Buffer.byteLength(body, 'utf8') > MAX_BYTES) {
     const last = rows.findLastIndex(line => line.startsWith('- ['));
-    if (last < 0) return removeSection(body, '## Learnings (memory)');
+    if (last < 0) {
+      const removed = removeSection(body, '## Learnings (memory)');
+      return omitted ? placeBeforeHeading(removed, '## Gate (preview)', `- ${omitted} learning row(s) omitted; retrieve orient JSON sources.`) : removed;
+    }
     rows.splice(last, 1); omitted++;
     const surviving = rows.filter(line => line.startsWith('- [')).map(line => /^- \[([^\]]+)\]/.exec(line)?.[1]).filter(Boolean);
     const identities = rows.findIndex(line => line.startsWith('Retrieved learnings:'));

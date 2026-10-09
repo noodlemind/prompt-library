@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { buildContextPack } from '../lib/context-pack.mjs';
+import { buildFactualReport } from '../lib/report-facts.mjs';
 import { writeEvidence } from '../lib/evidence.mjs';
 import { recordHash } from '../lib/review.mjs';
 import { initGit, writeVersionedPlan, writeChecks } from './helpers/cli-fixtures.mjs';
@@ -57,6 +58,29 @@ test('bounded reports retain work coverage and disclose omitted factual rows', t
   assert.match(facts.retrieval, /lookup|report/);
 });
 
+for (const shape of ['short', 'full']) test(`untitled ${shape} plans retain factual coverage and source binding`, t => {
+  const f = fixture(t);
+  writeChecks(f.workspace, { behavior: { command: [process.execPath, '-e', 'process.exit(0)'] } });
+  let plan;
+  if (shape === 'short') {
+    const created = spawnSync(process.execPath, [path.resolve(import.meta.dirname, '../bin/harness.mjs'), 'plan-new', '--workspace', f.workspace, '--copilot-home', f.copilot, '--goal', 'Observe behavior', '--acceptance', 'Behavior works', '--constraint', 'Keep API', '--verification-check', 'behavior', '--json'], { encoding: 'utf8', env: { ...process.env, HARNESS_NO_EVENTS: '1' } });
+    assert.equal(created.status, 0, created.stderr);
+    plan = JSON.parse(created.stdout).path;
+  } else {
+    plan = writeVersionedPlan(f.workspace, { required: ['behavior'], criteria: { AC1: ['behavior'] } });
+    const full = path.join(f.workspace, plan);
+    fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replace('title: "Verify example"\n', ''));
+  }
+  const result = f.cli('--plan', plan);
+  assert.equal(result.status, 0, result.stderr);
+  const facts = JSON.parse(result.stdout);
+  assert.equal(facts.work.plan.path, plan);
+  assert.equal(facts.plans.total, 1);
+  assert.ok(facts.work.review);
+  assert.equal(facts.work.proof.pass, false);
+  assert.match(facts.work.plan.sha256, /^[a-f0-9]{64}$/);
+});
+
 test('gate intent and coverage survive long multibyte context with and without a selected source', () => {
   for (const intentSources of [[], [{ path: 'docs/spec.md', kind: 'spec' }]]) {
     const body = buildContextPack({ recall: [], plans: [], activePlan: { path: 'p.md', status: 'planned', memoryExcerpt: '界'.repeat(4000) }, planGoal: { intent: '界'.repeat(4000) }, gatePreview: { pass: false, blockedReason: 'x'.repeat(3000) }, reviewCoverage: { pass: false, requiredCount: 4, missingCount: 2 }, intentSources });
@@ -92,4 +116,47 @@ test('unsupported manifests and unavailable inventory are explicit, never invent
   const missing = JSON.parse(f.cli().stdout);
   assert.equal(missing.files.total, null);
   assert.equal(missing.files.state, 'unavailable');
+});
+
+test('large file categories and graph diagnostics remain bounded with exact omissions', t => {
+  const f = fixture(t);
+  for (let i = 0; i < 200; i++) {
+    f.write(`directory-${i}/file.extension-${i}`, 'fact');
+    f.write(`.github/agents/bad-${i}.agent.md`, '---\n[invalid\n---\n');
+    f.write(`agents/bad-${i}.agent.md`, '---\n[invalid\n---\n', f.copilot);
+  }
+  const result = f.cli('--max-bytes', '2048');
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(Buffer.byteLength(result.stdout) <= 2048);
+  const facts = JSON.parse(result.stdout);
+  assert.equal(Object.keys(facts.files.extensions).length + facts.omitted.extensions, 203);
+  assert.equal(Object.keys(facts.files.directories).length + facts.omitted.directories, 203);
+  assert.equal(facts.productGraph.diagnostics.length + facts.omitted.productDiagnostics, 200);
+  assert.equal(facts.harnessGraph.diagnostics.length + facts.omitted.harnessDiagnostics, 200);
+  assert.ok(facts.files.total >= 400);
+});
+
+test('large dependency reports shorten without repeatedly serializing the entire inventory', t => {
+  const f = fixture(t);
+  f.write('package-lock.json', JSON.stringify({ lockfileVersion: 3, packages: Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`node_modules/example-${i}`, { version: '2.0.0' }])) }));
+  const stringify = JSON.stringify;
+  let reportSerializations = 0;
+  JSON.stringify = function(value, ...args) {
+    if (value?.schema === 1 && value?.files && value?.productGraph) reportSerializations++;
+    return stringify(value, ...args);
+  };
+  let facts;
+  try { facts = buildFactualReport({ workspace: f.workspace, copilotHome: f.copilot, maxBytes: 4096 }); }
+  finally { JSON.stringify = stringify; }
+  assert.ok(Buffer.byteLength(JSON.stringify(facts)) + 1 <= 4096);
+  assert.equal(facts.versions.length + facts.omitted.versions, 5002);
+  assert.ok(reportSerializations < 30, `bounded shortening serialized the full report ${reportSerializations} times`);
+});
+
+test('complete learning omission remains visible alongside mandatory gate and intent facts', () => {
+  const body = buildContextPack({ learnings: Array.from({ length: 5 }, (_, i) => ({ id: `learning-${i}`, trigger: 'Observe behavior', claimLine: 'Long claim '.repeat(80) })), recall: [], plans: [], intentSources: [], activePlan: { path: 'p.md', status: 'planned' }, planGoal: { intent: '界'.repeat(4000) }, gatePreview: { pass: false, blockedReason: 'x'.repeat(3000) }, reviewCoverage: { pass: false, requiredCount: 4, missingCount: 2 } });
+  assert.ok(Buffer.byteLength(body) <= 2048);
+  assert.match(body, /5 learning row\(s\) omitted; retrieve orient JSON sources/);
+  assert.match(body, /pass: false/);
+  assert.match(body, /coverage: incomplete; required=4; missing=2/);
 });

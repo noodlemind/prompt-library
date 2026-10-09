@@ -26,7 +26,7 @@ function snapshotPlan(workspace, rel) {
   if (!normalized) return null;
   const root = path.isAbsolute(normalized) ? path.dirname(normalized) : workspace;
   const s = source(root, normalized);
-  return s ? { plan: planFromText(s.text, { path: normalized }), source: s.ref } : null;
+  return s ? { plan: planFromText(s.text, { path: normalized, fullPath: path.resolve(workspace, normalized) }), source: s.ref } : null;
 }
 
 export function planStateFacts(workspace) {
@@ -133,14 +133,20 @@ export function buildFactualReport({ workspace, copilotHome, planPath = null, ma
     completions.push({ plan: row.path, current, id: record?.id || null, completedAt: record?.completedAt || null, source: source(workspace, rel)?.ref || null, verification: record?.value?.verificationIdentity || null, review: record?.value?.review || null, learning: record?.value?.learning || null });
   }
   const result = { schema: 1, status: 'ok', files: { state: paths ? 'observed' : 'unavailable', total: paths ? regular.length : null, inventoryDigest: paths ? hash(JSON.stringify(regular)) : null, extensions, directories }, versions, plans: { ...plans, diagnostics: undefined }, checks, productGraph: declaredGraph(workspace, ['.github/agents', '.copilot/agents']), harnessGraph: declaredGraph(copilotHome, ['agents']), index: { knowledge: plane(index.knowledge), structural: plane(index.structural) }, work: workFacts({ workspace, copilotHome, planPath }), completions, diagnostics: [...diagnostics, ...plans.diagnostics], omitted: {}, retrieval: 'Use lookup/get on source paths; report --facts --max-bytes 65536 for more rows. Graph roots separate product and installed capabilities.' };
-  const collections = [['versions', result, 'versions'], ['plans', result.plans, 'rows'], ['checks', result, 'checks'], ['productNodes', result.productGraph, 'nodes'], ['productEdges', result.productGraph, 'edges'], ['harnessNodes', result.harnessGraph, 'nodes'], ['harnessEdges', result.harnessGraph, 'edges'], ['completions', result, 'completions'], ['diagnostics', result, 'diagnostics']];
-  const sizes = new Map(collections.map(([key, obj, field]) => [key, obj[field].length]));
+  const collections = [['versions', result, 'versions'], ['plans', result.plans, 'rows'], ['checks', result, 'checks'], ['productNodes', result.productGraph, 'nodes'], ['productEdges', result.productGraph, 'edges'], ['harnessNodes', result.harnessGraph, 'nodes'], ['harnessEdges', result.harnessGraph, 'edges'], ['completions', result, 'completions'], ['diagnostics', result, 'diagnostics'], ['productDiagnostics', result.productGraph, 'diagnostics'], ['harnessDiagnostics', result.harnessGraph, 'diagnostics'], ['extensions', result.files, 'extensions'], ['directories', result.files, 'directories'], ['planStatuses', result.plans, 'counts']];
+  const entries = collections.map(([key, obj, field]) => ({ key, obj, field, rows: Array.isArray(obj[field]) ? obj[field] : Object.keys(obj[field]) }));
+  for (const entry of entries) entry.originalSize = entry.rows.length;
   result.productGraph.mermaid = result.productGraph.nodes.length <= 100 ? result.productGraph.mermaid : null;
   result.harnessGraph.mermaid = result.harnessGraph.nodes.length <= 100 ? result.harnessGraph.mermaid : null;
   const bytes = () => Buffer.byteLength(JSON.stringify(result)) + 1;
   if (bytes() > maxBytes) { result.productGraph.mermaid = null; result.harnessGraph.mermaid = null; }
-  while (bytes() > maxBytes && collections.some(([, obj, field]) => obj[field].length)) {
-    for (const [key, obj, field] of collections) if (obj[field].length) { obj[field].pop(); result.omitted[key] = sizes.get(key) - obj[field].length; }
+  while (bytes() > maxBytes && entries.some(entry => entry.rows.length)) {
+    for (const entry of entries) {
+      const retained = Math.floor(entry.rows.length / 2);
+      if (!Array.isArray(entry.obj[entry.field])) for (const key of entry.rows.slice(retained)) delete entry.obj[entry.field][key];
+      entry.rows.length = retained;
+      if (entry.originalSize > retained) result.omitted[entry.key] = entry.originalSize - retained;
+    }
   }
   if (bytes() > maxBytes) throw Object.assign(new Error('Mandatory facts exceed the requested byte budget; increase --max-bytes'), { code: 'E_USAGE', exit: 2 });
   return result;
