@@ -51,7 +51,7 @@ Classify the document type:
 
 Read `references/review-criteria.md` for the evaluation criteria per persona and document type.
 
-Four personas evaluate every document:
+Prepare with `harness review prepare --domain document --file <document> --json` before dispatch. The packet supplies the source references and four required perspectives. Four personas evaluate every document:
 1. **Design** — information architecture, flows, interaction states, behavior completeness
 2. **Scope** — scope alignment, unjustified complexity, YAGNI, goals match
 3. **Coherence** — internal consistency, contradictions, terminology drift, structural issues
@@ -65,49 +65,15 @@ Four personas evaluate every document:
 
 Otherwise, apply each persona's perspective sequentially within this session.
 
-### 3. Collect and Merge Findings
+### 3. Collect and Assess Findings
 
-Each persona returns findings with severity:
-- **P1 (Must fix)**: Will cause confusion, incorrect implementation, or blocks the next pipeline step
-- **P2 (Should fix)**: Improves clarity, completeness, or quality meaningfully
-- **P3 (Nice to have)**: Polish, additional context, minor improvements
+Prepare with `harness review prepare --domain document --file <document> --json`. The CLI supplies the four required perspectives, source references, and coverage limits. Each perspective returns the shared `../code-review/references/findings-schema.md` JSON contract with its actual completion status and exact document locations.
 
-Merge findings across personas:
-1. Deduplicate: if two personas flag the same gap, merge into one finding noting both personas
-2. Boost severity when 2+ personas flag the same area (indicates a systemic issue)
-3. Sort by severity (P1 first) → document section order
+Collect using `harness review assemble --packet <id> --file <results.json> --json`. Use the returned factual `report` and retrieve the full record at `recordPath`. The CLI owns validation, confidence filtering, exact matching, counts, and sorting. Missing or malformed results remain incomplete coverage.
 
-### 4. Present Findings
+Decide semantic overlap and severity from the document's goals and evidence. Nearby findings remain separate until explicit merge/retain adjudication with member IDs and rationale. Multiple perspectives do not automatically raise severity or establish independence.
 
-```markdown
-# Document Review: [Document Title]
-
-**Type:** [Brainstorm / Plan / Spec]
-**Personas:** design, scope, coherence, feasibility
-
-## Findings
-
-### P1 — Must Fix
-| # | Section | Issue | Persona(s) |
-|---|---------|-------|------------|
-| 1 | Requirements | Missing edge case for empty input | design, feasibility |
-
-### P2 — Should Fix
-| # | Section | Issue | Persona(s) |
-|---|---------|-------|------------|
-| 2 | Scope Boundaries | Requirement R3 depends on out-of-scope feature | scope |
-
-### P3 — Nice to Have
-| # | Section | Issue | Persona(s) |
-|---|---------|-------|------------|
-| 3 | Overview | Terminology "module" used inconsistently | coherence |
-
-## Summary
-- [N] P1 findings, [N] P2, [N] P3
-- [Overall assessment: Ready for next step / Needs fixes / Needs rework]
-```
-
-### 5. Apply or Present Changes
+### 4. Apply or Present Changes
 
 **Interactive mode** (invoked by user):
 - Present all findings
@@ -119,7 +85,7 @@ Merge findings across personas:
 - Skip P3 improvements
 - Return the updated file path
 
-### 6. Offer Next Action
+### 5. Offer Next Action
 
 After improvements:
 - **Proceed to next step** — `/plan-issue` (for brainstorms) or `@engineer` Deliver mode (for plans)

@@ -1,0 +1,4 @@
+unit	procedure	cli_owner	behavior_test	skills	deletion_status
+P2.1	check discovery, glob matching, mandatory perspective coverage and bounded packets	review prepare	review-assembly.test.mjs: prepare owns mandatory coverage; check collision; new check freshness	code-review; document-review	removed
+P2.1	confidence filtering, exact matching, numeric aggregation and total sorting	review assemble	review-assembly.test.mjs: invariant to result order; explicit adjudication	code-review; document-review	removed
+P2.1	coverage accounting and factual tables	review assemble	review-assembly.test.mjs: failed coverage; bounded report and retrievable evidence	code-review; document-review	removed
