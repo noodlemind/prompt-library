@@ -32,6 +32,7 @@ import { readStructuralIndex } from './repo-map/structural-index.mjs';
 import { grammarStatus, packageGrammarRoots } from './repo-map/treesitter-extractor.mjs';
 import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { leftoverWorkspaceArtifacts } from './migrate-layout.mjs';
+import { planReadDirs } from './project-layout.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -648,10 +649,8 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
 
   checks.push({
     id: 'H5',
-    name: 'Product plans dir (cwd)',
-    pass:
-      fs.existsSync(path.join(flags.workspace, 'docs', 'plans')) ||
-      fs.existsSync(path.join(flags.workspace, '.harness', 'plans')),
+    name: 'Product plans directory',
+    pass: planReadDirs(workspace, { home: flags.harnessHome || flags.home }).length > 0,
     hint: 'harness init-repo',
   });
 
