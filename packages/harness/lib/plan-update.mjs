@@ -71,16 +71,19 @@ function acquirePlanLock(full) {
       fs.mkdirSync(lockDir);
       return lockDir;
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      try {
+      if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error;
+      if (Date.now() - start > LOCK_WAIT_MS) {
+        if (error.code !== 'EEXIST') throw error;
+        throw usage('plan-update: plan is locked by another update');
+      }
+      if (error.code === 'EEXIST') try {
         if (Date.now() - fs.statSync(lockDir).mtimeMs > LOCK_STALE_MS) {
           fs.rmdirSync(lockDir);
           continue;
         }
       } catch {
-        continue;
+        // A competing releaser may already have removed the lock; retry within the same budget.
       }
-      if (Date.now() - start > LOCK_WAIT_MS) throw usage('plan-update: plan is locked by another update');
       sleepMs(25);
     }
   }
