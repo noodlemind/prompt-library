@@ -48,8 +48,11 @@ function globRegex(glob) {
   return new RegExp(pattern + '$');
 }
 function source(root, rel, origin) {
-  const text = readFileNoFollow(path.join(root, rel), { root, maxBytes: 1024 * 1024 });
-  return { origin, path: rel.replace(/\\/g, '/'), sha256: text === null ? null : createHash('sha256').update(text).digest('hex') };
+  const full = path.join(root, rel);
+  const bytes = readFileNoFollow(full, { root, encoding: null });
+  let missing = false;
+  try { fs.lstatSync(full); } catch (error) { missing = error.code === 'ENOENT' && Boolean(assertNoSymlinkAncestors(root, rel)); }
+  return { origin, path: rel.replace(/\\/g, '/'), state: bytes === null ? (missing ? 'missing' : 'unreadable') : 'regular', sha256: bytes === null ? null : createHash('sha256').update(bytes).digest('hex') };
 }
 export function discoverReviewChecks(workspace, files) {
   const corpus = getCorpusRoot(), checks = [], failures = [];
@@ -81,7 +84,8 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
   const corpus = getCorpusRoot();
   const selected = files?.length ? [...new Set(files.map(f => path.relative(workspace, path.resolve(workspace, f)).replace(/\\/g, '/')))].sort(compareText) : scope.changedFiles;
   if (selected.some(f => !f || f.startsWith('../') || path.isAbsolute(f))) throw new Error('Review files must be inside the workspace');
-  const discovery = kind === 'code' ? discoverReviewChecks(workspace, selected) : { checks: [], failures: [] };
+  const covered = [...new Set([...scope.changedFiles, ...selected])].sort(compareText);
+  const discovery = kind === 'code' ? discoverReviewChecks(workspace, covered) : { checks: [], failures: [] };
   const declaredRequired = [...new Set(plan?.fm.reviews?.required || [])].sort(compareText);
   const required = [...new Set([...(kind === 'document' ? DOCUMENT_REVIEWERS : CODE_REVIEWERS), ...declaredRequired.filter(r => r !== 'code-review'), ...reviewers, ...discovery.checks.filter(c => c.matched).map(c => c.name)])].sort(compareText);
   if (required.some(id => typeof id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))) throw new Error('Invalid required review IDs');
@@ -90,13 +94,14 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
   const sources = kind === 'document' ? [source(corpus, 'skills/document-review/references/review-criteria.md', 'corpus')] : perspectives.map(id => source(corpus, `agents/${id}.agent.md`, 'corpus'));
   sources.push(source(corpus, 'skills/code-review/references/findings-schema.md', 'corpus'));
   const failures = [...discovery.failures, ...collisions, ...sources.filter(s => !s.sha256).map(s => `Review definition unavailable: ${s.path}`)];
-  const refs = selected.map(file => source(workspace, file, 'product'));
+  const refs = covered.map(file => source(workspace, file, 'product'));
   const diff = readProductDiff(workspace, { base: scope.base || 'HEAD', planPath: plan?.path });
   const branchResult = spawnSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8', timeout: 4000 });
   const budget = Math.max(1024, Math.min(maxBytes, 131072));
   const included = [], omitted = [];
   let bytes = 0;
   for (const ref of refs) {
+    if (!selected.includes(ref.path)) { omitted.push({ ...ref, reason: 'not selected for excerpts; remains in the review scope' }); continue; }
     const text = readFileNoFollow(path.join(workspace, ref.path), { root: workspace, maxBytes: 1024 * 1024 });
     const remaining = budget - bytes;
     if (text === null || remaining < 256) { omitted.push({ ...ref, reason: text === null ? 'deleted, unsafe, binary or over read limit' : 'packet byte budget' }); continue; }
@@ -104,7 +109,7 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
     bytes += Buffer.byteLength(excerpt);
     included.push({ ...ref, excerpt, truncated: Buffer.byteLength(text) > Buffer.byteLength(excerpt) });
   }
-  return { declaredRequired, required, preparation: { kind, branch: branchResult.status === 0 ? branchResult.stdout.trim() : null, checks: discovery.checks, sources, refs, files: included, omitted, diff: diff === null ? null : Buffer.from(diff).subarray(0, budget).toString('utf8'), diffTruncated: diff === null || Buffer.byteLength(diff) > budget, coverage: { totalFiles: selected.length, includedFiles: included.length, omittedFiles: omitted.length, byteBudget: budget, excerptBytes: bytes }, failures, provenance: 'Host invocation identity unknown; declarations and same-context perspectives are not independent evidence' } };
+  return { declaredRequired, required, preparation: { kind, branch: branchResult.status === 0 ? branchResult.stdout.trim() : null, checks: discovery.checks, sources, refs, files: included, omitted, diff: diff === null ? null : Buffer.from(diff).subarray(0, budget).toString('utf8'), diffTruncated: diff === null || Buffer.byteLength(diff) > budget, coverage: { totalFiles: covered.length, includedFiles: included.length, omittedFiles: omitted.length, byteBudget: budget, excerptBytes: bytes }, failures, provenance: 'Host invocation identity unknown; declarations and same-context perspectives are not independent evidence' } };
 }
 
 export function preparationIsCurrent(workspace, preparation) {
@@ -114,6 +119,6 @@ export function preparationIsCurrent(workspace, preparation) {
   }
   return [...preparation.sources, ...preparation.checks.map(c => c.ref), ...preparation.refs].every(ref => {
     const current = source(ref.origin === 'corpus' ? getCorpusRoot() : workspace, ref.path, ref.origin);
-    return current.sha256 === ref.sha256;
+    return current.sha256 === ref.sha256 && (ref.sha256 !== null || (ref.state === 'missing' && current.state === 'missing'));
   });
 }

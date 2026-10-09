@@ -6,7 +6,8 @@ const severityRank = { P1: 0, P2: 1, P3: 2 };
 const actionRank = { manual: 0, gated_auto: 1, advisory: 2, safe_auto: 3 };
 const unique = values => [...new Set(values)].sort(compareText);
 const normalizedTitle = title => title.trim().replace(/\s+/g, ' ').toLowerCase();
-export const findingIdentity = finding => reviewHash({ file: finding.file, line: finding.line, title: normalizedTitle(finding.title) });
+const normalizedClaim = text => text.trim().replace(/\s+/g, ' ');
+export const findingIdentity = finding => reviewHash({ file: finding.file, line: finding.line, title: normalizedTitle(finding.title), description: normalizedClaim(finding.description), suggested_fix: normalizedClaim(finding.suggested_fix) });
 const findingOrder = (a, b) => severityRank[a.severity] - severityRank[b.severity] || b.confidence - a.confidence || compareText(a.file, b.file) || a.line - b.line || compareText(a.title, b.title) || compareText(stableJson(a), stableJson(b));
 
 export function normalizeFinding(workspace, finding) {
@@ -35,6 +36,15 @@ function aggregate(group) {
   return { ...first, confidence: Math.min(1, Math.round((original + boost) * 1000000) / 1000000), originalConfidences, confidenceTransformation: { policy: 'perspective-agreement-v1', original, boost, independence: 'unverified' }, reviewers, evidence: unique(group.flatMap(f => f.evidence)), autofix_class: group.map(f => f.autofix_class).sort((a, b) => actionRank[a] - actionRank[b])[0], provenance: { kind: 'unknown', note: 'Reviewer identity and independence are host responsibilities' } };
 }
 
+function mergedPartitions(ids, decisions) {
+  const parent = new Map(ids.map(id => [id, id]));
+  const representative = id => { while (parent.get(id) !== id) id = parent.get(id); return id; };
+  for (const decision of decisions.filter(d => d.action === 'merge')) for (const id of decision.resolvedMembers.slice(1)) parent.set(representative(id), representative(decision.resolvedMembers[0]));
+  const groups = new Map();
+  for (const id of ids) { const root = representative(id); groups.set(root, [...(groups.get(root) || []), id]); }
+  return { representative, groups: [...groups.values()].map(group => group.sort(compareText)) };
+}
+
 export function synthesizeReview(workspace, required, input, preparationFailures = []) {
   const results = [], failures = preparationFailures.map(message => ({ reviewer: null, errors: [message] })), suppressed = [], accepted = [];
   for (const result of input.results) {
@@ -60,31 +70,63 @@ export function synthesizeReview(workspace, required, input, preparationFailures
   const groups = new Map();
   for (const finding of accepted) { const group = groups.get(finding.id) || []; group.push(finding); groups.set(finding.id, group); }
   let findings = [...groups.values()].map(aggregate).sort(findingOrder);
-  const overlaps = [];
+  const originalOverlaps = [];
   for (let i = 0; i < findings.length; i++) for (let j = i + 1; j < findings.length; j++) {
     const a = findings[i], b = findings[j];
-    if (a.file === b.file && a.line !== b.line && Math.abs(a.line - b.line) <= 3 && normalizedTitle(a.title) === normalizedTitle(b.title)) overlaps.push({ members: [a.id, b.id].sort(compareText), reason: 'Nearby locations need semantic adjudication' });
+    if (a.file === b.file && Math.abs(a.line - b.line) <= 3 && normalizedTitle(a.title) === normalizedTitle(b.title)) originalOverlaps.push({ members: [a.id, b.id].sort(compareText), reason: 'Related locations or titles need semantic adjudication' });
   }
-  const adjudications = [], consumed = new Set();
+  const adjudications = [], aliases = new Map(findings.map(f => [f.id, [f.id]]));
   if (input.adjudications !== undefined && !Array.isArray(input.adjudications)) failures.push({ reviewer: null, errors: ['Adjudications must be an array'] });
-  for (const decision of Array.isArray(input.adjudications) ? input.adjudications.toSorted((a, b) => compareText(stableJson(a), stableJson(b))) : []) {
-    const ids = Array.isArray(decision?.members) ? unique(decision.members) : [];
-    const members = findings.filter(f => ids.includes(f.id));
-    if (!['merge', 'retain'].includes(decision?.action) || typeof decision?.rationale !== 'string' || !decision.rationale.trim() || ids.length < 2 || members.length !== ids.length || ids.some(id => consumed.has(id))) { failures.push({ reviewer: null, errors: ['Invalid or conflicting review adjudication'] }); continue; }
-    adjudications.push({ ...decision, members: ids, provenance: 'Agent-supplied judgment; no invocation authority granted' });
-    ids.forEach(id => consumed.add(id));
-    if (decision.action === 'merge') {
-      const merged = aggregate(members.flatMap(f => groups.get(f.id)));
-      merged.id = reviewHash({ adjudicatedMembers: ids });
-      merged.adjudicatedMembers = ids;
-      findings = [...findings.filter(f => !ids.includes(f.id)), merged].sort(findingOrder);
+  const pending = Array.isArray(input.adjudications) ? input.adjudications.toSorted((a, b) => compareText(stableJson(a), stableJson(b))) : [];
+  while (pending.length) {
+    let progress = false;
+    for (let index = 0; index < pending.length;) {
+      const decision = pending[index];
+      if (!['merge', 'retain'].includes(decision?.action) || typeof decision?.rationale !== 'string' || !decision.rationale.trim() || !Array.isArray(decision.members) || decision.members.length < 2 || !decision.members.every(id => typeof id === 'string')) {
+        failures.push({ reviewer: null, errors: ['Invalid review adjudication'] }); pending.splice(index, 1); progress = true; continue;
+      }
+      if (!decision.members.every(id => aliases.has(id))) { index++; continue; }
+      const ids = unique(decision.members.flatMap(id => aliases.get(id)));
+      if (ids.length < 2) failures.push({ reviewer: null, errors: ['Adjudication needs distinct members'] });
+      else {
+        adjudications.push({ ...decision, members: unique(decision.members), resolvedMembers: ids, memberGroups: unique(decision.members).map(id => aliases.get(id)), provenance: 'Agent-supplied judgment; no invocation authority granted' });
+        if (decision.action === 'merge') aliases.set(reviewHash({ adjudicatedMembers: ids }), ids);
+      }
+      pending.splice(index, 1); progress = true;
     }
+    if (!progress) { failures.push({ reviewer: null, errors: ['Adjudication references missing findings or a missing prior merge'] }); break; }
+    for (const ids of mergedPartitions([...groups.keys()], adjudications).groups) if (ids.length > 1) aliases.set(reviewHash({ adjudicatedMembers: ids }), ids);
   }
+  const partitions = mergedPartitions([...groups.keys()], adjudications);
+  const retained = new Set();
+  let conflict = false;
+  for (const decision of adjudications.filter(d => d.action === 'retain')) for (let i = 0; i < decision.memberGroups.length; i++) for (let j = i + 1; j < decision.memberGroups.length; j++) for (const a of decision.memberGroups[i]) for (const b of decision.memberGroups[j]) {
+    if (partitions.representative(a) === partitions.representative(b)) conflict = true;
+    retained.add(stableJson([a, b].sort(compareText)));
+  }
+  const surviving = new Map(findings.map(f => [f.id, f.id]));
+  if (conflict) failures.push({ reviewer: null, errors: ['Conflicting merge and retain adjudications'] });
+  else {
+    findings = partitions.groups.map(ids => {
+      const sorted = ids.sort(compareText), merged = aggregate(sorted.flatMap(id => groups.get(id)));
+      if (sorted.length > 1) { merged.id = reviewHash({ adjudicatedMembers: sorted }); merged.adjudicatedMembers = sorted; }
+      sorted.forEach(id => surviving.set(id, merged.id));
+      return merged;
+    }).sort(findingOrder);
+  }
+  const unresolved = new Map();
+  for (const overlap of originalOverlaps) {
+    if (!conflict && retained.has(stableJson(overlap.members))) continue;
+    const members = unique(overlap.members.map(id => surviving.get(id)));
+    if (members.length < 2) continue;
+    unresolved.set(stableJson(members), { ...overlap, members });
+  }
+  const overlaps = [...unresolved.values()];
   const missing = required.filter(id => results.filter(r => r.reviewer === id && r.status === 'completed').length !== 1);
   const complete = missing.length === 0 && failures.length === 0;
   const risks = unique(results.flatMap(r => Array.isArray(r.raw?.residual_risks) ? r.raw.residual_risks.filter(s => typeof s === 'string') : []));
   const gaps = unique(results.flatMap(r => Array.isArray(r.raw?.testing_gaps) ? r.raw.testing_gaps.filter(s => typeof s === 'string') : []));
-  return { results: results.sort((a, b) => compareText(stableJson(a), stableJson(b))), findings, suppressed: suppressed.sort(findingOrder), overlaps: overlaps.sort((a, b) => compareText(stableJson(a), stableJson(b))), adjudications, failures: failures.sort((a, b) => compareText(stableJson(a), stableJson(b))), coverage: { complete, missing, collected: results.filter(r => r.status === 'completed').length, expected: required.length }, residual_risks: risks, testing_gaps: gaps, counts: { P1: findings.filter(f => f.severity === 'P1').length, P2: findings.filter(f => f.severity === 'P2').length, P3: findings.filter(f => f.severity === 'P3').length, suppressed: suppressed.length, failures: failures.length }, status: complete ? 'ok' : 'blocked' };
+  return { results: results.sort((a, b) => compareText(stableJson(a), stableJson(b))), findings, suppressed: suppressed.sort(findingOrder), overlaps: overlaps.sort((a, b) => compareText(stableJson(a), stableJson(b))), adjudications: adjudications.sort((a, b) => compareText(stableJson(a), stableJson(b))), failures: failures.sort((a, b) => compareText(stableJson(a), stableJson(b))), coverage: { complete, missing, collected: results.filter(r => r.status === 'completed').length, expected: required.length }, residual_risks: risks, testing_gaps: gaps, counts: { P1: findings.filter(f => f.severity === 'P1').length, P2: findings.filter(f => f.severity === 'P2').length, P3: findings.filter(f => f.severity === 'P3').length, suppressed: suppressed.length, failures: failures.length }, status: complete ? 'ok' : 'blocked' };
 }
 
 export function renderReview(record, maxBytes = 16384) {

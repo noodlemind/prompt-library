@@ -172,3 +172,102 @@ test('a newly applicable check makes the frozen packet stale', t => {
   assert.equal(result.status, 2);
   assert.match(result.stderr + result.stdout, /stale|changed/);
 });
+
+test('document review cannot fulfill a plan requiring code review', t => {
+  const f = fixture(t);
+  const output = f.cli('prepare', '--plan', f.plan, '--domain', 'document', '--base', 'HEAD');
+  assert.equal(output.status, 2);
+  assert.match(output.stderr + output.stdout, /code.review|document/i);
+});
+
+test('selecting packet excerpts cannot omit checks for the delivery scope', t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.ws, '.github/checks'), { recursive: true });
+  fs.writeFileSync(path.join(f.ws, '.github/checks/sql.md'), '---\nname: sql-contract\nglobs: "**/*.sql"\n---\nReview SQL.\n');
+  fs.writeFileSync(path.join(f.ws, 'migration.sql'), 'DELETE FROM accounts;\n');
+  const packet = f.prepare('--file', 'src/example.js');
+  assert.ok(packet.required.includes('sql-contract'));
+  assert.ok(packet.preparation.refs.some(ref => ref.path === 'migration.sql'));
+  const assembled = f.assemble(packet, packet.required.filter(id => id !== 'sql-contract').map(clean));
+  assert.equal(assembled.status, 1);
+  assert.deepEqual(assembled.value.coverage.missing, ['sql-contract']);
+});
+
+test('ignored documents above the excerpt read limit still bind their actual bytes', t => {
+  const f = fixture(t);
+  fs.appendFileSync(path.join(f.ws, '.gitignore'), 'large.md\n');
+  fs.writeFileSync(path.join(f.ws, 'large.md'), 'a'.repeat(1024 * 1024 + 1));
+  const output = f.cli('prepare', '--domain', 'document', '--file', 'large.md', '--base', 'HEAD');
+  assert.equal(output.status, 0, output.stderr + output.stdout);
+  const packet = JSON.parse(output.stdout);
+  fs.writeFileSync(path.join(f.ws, 'large.md'), 'b'.repeat(1024 * 1024 + 1));
+  const input = path.join(f.ws, '.harness/large-results.json');
+  fs.writeFileSync(input, JSON.stringify({ packet: packet.id, results: packet.required.map(clean) }));
+  const assembled = f.cli('assemble', '--packet', packet.id, '--file', input);
+  assert.equal(assembled.status, 2);
+  assert.match(assembled.stderr + assembled.stdout, /stale|changed/);
+});
+
+test('different claims at the same location remain distinct pending judgment', t => {
+  const f = fixture(t), packet = f.prepare(), results = packet.required.map(clean);
+  results[0].findings = [finding()];
+  results[1].findings = [finding({ description: 'The caller can bypass account authorization.', suggested_fix: 'Check account ownership.' })];
+  const record = f.assemble(packet, results).value;
+  assert.equal(record.findings.length, 2);
+  assert.deepEqual(record.findings.map(f => f.description).sort(), ['The caller can bypass account authorization.', 'The input is unchecked.']);
+  assert.equal(record.overlaps.length, 1);
+});
+
+test('compatible overlapping retain decisions work in either order', t => {
+  const f = fixture(t), packet = f.prepare(), results = packet.required.map(clean);
+  results[0].findings = [finding({ line: 1 }), finding({ line: 3 }), finding({ line: 5 })];
+  const original = f.assemble(packet, results).value;
+  const adjudications = original.overlaps.map(candidate => ({ action: 'retain', members: candidate.members, rationale: 'Each is a separate input boundary.' }));
+  const a = f.assemble(packet, results, { adjudications });
+  const b = f.assemble(packet, results, { adjudications: adjudications.toReversed() });
+  assert.equal(a.status, 0, a.stderr + a.stdout);
+  assert.equal(b.status, 0, b.stderr + b.stdout);
+  assert.equal(a.value.id, b.value.id);
+  assert.equal(a.value.findings.length, 3);
+  assert.equal(a.value.overlaps.length, 0);
+});
+
+test('actionable overlaps refer to surviving findings after a merge', t => {
+  const f = fixture(t), packet = f.prepare(), results = packet.required.map(clean);
+  results[0].findings = [finding(), finding({ line: 5 })];
+  const original = f.assemble(packet, results).value;
+  const merged = f.assemble(packet, results, { adjudications: [{ action: 'merge', members: original.overlaps[0].members, rationale: 'Both describe one guard.' }] }).value;
+  const ids = new Set(merged.findings.map(f => f.id));
+  assert.ok(merged.overlaps.every(candidate => candidate.members.every(id => ids.has(id))));
+  assert.equal(merged.overlaps.length, 0);
+});
+
+test('a surviving overlap accepts a follow-up judgment referencing a prior merge', t => {
+  const f = fixture(t), packet = f.prepare(), results = packet.required.map(clean);
+  results[0].findings = [finding({ line: 1 }), finding({ line: 3 }), finding({ line: 5 })];
+  const original = f.assemble(packet, results).value;
+  const first = { action: 'merge', members: original.overlaps[0].members, rationale: 'One guard is reported twice.' };
+  const merged = f.assemble(packet, results, { adjudications: [first] }).value;
+  assert.equal(merged.findings.length, 2);
+  assert.equal(merged.overlaps.length, 1);
+  const second = { action: 'retain', members: merged.overlaps[0].members, rationale: 'The remaining guard is independent.' };
+  const a = f.assemble(packet, results, { adjudications: [first, second] });
+  const b = f.assemble(packet, results, { adjudications: [second, first] });
+  assert.equal(a.status, 0, a.stderr + a.stdout);
+  assert.equal(a.value.id, b.value.id);
+  assert.equal(a.value.findings.length, 2);
+  assert.equal(a.value.overlaps.length, 0);
+});
+
+test('contradictory adjudications block coverage without silently deleting findings', t => {
+  const f = fixture(t), packet = f.prepare(), results = packet.required.map(clean);
+  results[0].findings = [finding(), finding({ line: 5 })];
+  const members = f.assemble(packet, results).value.overlaps[0].members;
+  const adjudications = ['merge', 'retain'].map(action => ({ action, members, rationale: 'Conflicting judgments.' }));
+  const a = f.assemble(packet, results, { adjudications });
+  const b = f.assemble(packet, results, { adjudications: adjudications.toReversed() });
+  assert.equal(a.status, 1);
+  assert.equal(a.value.id, b.value.id);
+  assert.equal(a.value.findings.length, 2);
+  assert.ok(a.value.failures.some(f => f.errors.includes('Conflicting merge and retain adjudications')));
+});
