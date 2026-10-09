@@ -175,7 +175,7 @@ const VERB_FLAGS = Object.freeze({
   knowledge: ['--merged'],
   learnings: ['--why'],
   orient: ['--explain'],
-  report: ['--growth', '--sync', '--global'],
+  report: ['--facts', '--growth', '--sync', '--global'],
 });
 
 /**
@@ -262,7 +262,7 @@ test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', (
     if (flags.length) actual[name] = flags;
   }
   assert.deepEqual(actual, { ...VERB_FLAGS }, 'a tui:"verb" disposition was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 14);
+  assert.equal(Object.values(actual).flat().length, 15);
 });
 
 // --- AC8: the index actually carries every enumerated verb ---------------
@@ -312,7 +312,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
   // Modal families leave the verb strip; remaining verb rows + flag-verbs only.
   const tuiVerbs = rows.filter((r) => r.kind === 'verb').length;
   assert.ok(tuiVerbs < 40, `TUI verb strip should fold heavily (got ${tuiVerbs})`);
-  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 85, 'the CLI surface keeps every declared verb including review');
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 86, 'the CLI surface keeps every declared verb including review');
 });
 
 /**

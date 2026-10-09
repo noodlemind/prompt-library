@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { planStateFacts, reviewCoverageFacts } from './report-facts.mjs';
 import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
 import { runGate } from './gate.mjs';
 import { buildContextPack, learningsSectionBytes } from './context-pack.mjs';
@@ -74,7 +75,8 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     ranker: e.ranker || 'overlap',
   }));
 
-    const planTotal = listPlanRels(workspace).length;
+  const planFacts = planStateFacts(workspace);
+  const planTotal = planFacts.total;
   const plans = findMatchingPlans(workspace, q, flags.limit || 3).map((p) => ({
     path: p.path,
     status: p.status,
@@ -206,12 +208,15 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     }
   }
 
+  const reviewCoverage = reviewCoverageFacts({ workspace, plan: active, copilotHome });
   const packBody = buildContextPack({
+    reviewCoverage,
     query: q,
     recall,
     learnings,
     plans,
     planTotal,
+    planStateCounts: planFacts.counts,
     activePlan: active
       ? {
           path: active.path,
@@ -264,6 +269,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     learningsBytes,
     plans,
     planTotal,
+    planStateCounts: planFacts.counts,
     activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
     planGoal: planGoal
       ? {
@@ -286,6 +292,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
       skipReason: isolation.skipReason,
     },
     intentSources,
+    reviewCoverage,
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,

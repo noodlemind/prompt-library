@@ -288,7 +288,7 @@ test('learningsBytes equals the actual section bytes persisted in context-pack.m
   assert.equal(out.learningsBytes, expected);
 });
 
-test('a large plan body pushes the learnings section past the 2KB cap: learningsBytes reports 0, matching the pack that actually shipped', () => {
+test('large optional plan memory is omitted while learning bytes match the actual delivered section', () => {
     const c = singleLearningContext();
   writePaddedActivePlan(c.ws, 2500);
 
@@ -298,15 +298,17 @@ test('a large plan body pushes the learnings section past the 2KB cap: learnings
   assert.equal(out.learnings.length, 1, 'learnings are still ranked/surfaced in the JSON result');
 
   const pack = fs.readFileSync(path.join(c.ws, '.harness', 'context-pack.md'), 'utf8');
-  assert.doesNotMatch(pack, /## Learnings \(memory\)/, 'the learnings section must not survive this pack');
+  assert.match(pack, /## Learnings \(memory\)/, 'omitting optional plan memory leaves room for the relevant learning');
   assert.match(pack, /truncated to 2KB budget/);
-  assert.equal(out.learningsBytes, 0);
-
+  const expected = locateLearningsSectionBytes(pack);
+  assert.ok(expected > 0);
+  assert.equal(out.learningsBytes, expected);
+  assert.match(pack, /coverage:/);
   const event = lastOrientEvent(c.ws);
-  assert.equal(event.learningsBytes, 0, JSON.stringify(event));
+  assert.equal(event.learningsBytes, expected, JSON.stringify(event));
 });
 
-test('a mid-section truncation cut: learningsBytes reports only the bytes that actually survived, not the full section', () => {
+test('context shortening preserves whole learning rows and accounts for delivered bytes', () => {
   // Control: this exact fixture's full, untruncated section size.
   const control = singleLearningContext();
   const controlRes = run(control, ['orient', '--query', QUERY]);
@@ -322,11 +324,13 @@ test('a mid-section truncation cut: learningsBytes reports only the bytes that a
 
   const pack = fs.readFileSync(path.join(c.ws, '.harness', 'context-pack.md'), 'utf8');
   assert.match(pack, /## Learnings \(memory\)/, 'the section header itself must survive for this to be a partial-cut case');
-  assert.doesNotMatch(pack, /## Next tools/, 'the next section must NOT survive, or this is not a partial cut');
+  assert.match(pack, /## Gate \(preview\)/);
+  assert.match(pack, /coverage:/);
   assert.match(pack, /truncated to 2KB budget/);
 
   const expected = locateLearningsSectionBytes(pack);
   assert.ok(expected > 0, 'sanity: some bytes of the section did survive');
   assert.equal(out.learningsBytes, expected);
-  assert.ok(out.learningsBytes < fullBytes, `expected a partial section smaller than the full ${fullBytes} bytes, got ${out.learningsBytes}`);
+  assert.equal(out.learningsBytes, fullBytes, 'the learning survives as a complete section after optional memory is removed');
+  assert.ok(Buffer.byteLength(pack) <= 2048);
 });

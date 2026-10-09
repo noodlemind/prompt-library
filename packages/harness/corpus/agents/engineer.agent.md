@@ -36,6 +36,8 @@ Use docs for facts, skills for procedures, experts for judgment, tools for execu
 
 ## Completion
 
+Use `harness report --facts --plan <path> --json` for delivery facts; explain impact and unresolved risks.
+
 Start every response `Mode: Answer|Investigate|Review|Deliver`. Investigate concurrency by tracing the shared state and interleavings; label a defect confirmed only when evidence demonstrates it. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, run `/code-review`, fix the findings, then require passed `harness verify`; read-only work has no ceremony.
 
 ## Guardrails
