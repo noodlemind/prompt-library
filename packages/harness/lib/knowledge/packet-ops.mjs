@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { consolidateCandidates, collectEpisodes, episodeId } from './consolidate.mjs';
 import { applyOps } from './apply.mjs';
-import { listLearnings, readGovernance, repoId } from './store.mjs';
+import { listLearnings, readGovernance, repoId, storeDir } from './store.mjs';
+import { resolveWriteLayer } from './layer.mjs';
 import { readLearningFile } from './store-io.mjs';
 import { deriveGitContext } from '../git-context.mjs';
 import { readFileNoFollow } from '../fs-safe.mjs';
@@ -23,7 +24,7 @@ function learningBindings(dir) {
 }
 
 export function prepareConsolidationPacket(options) {
-  const value = consolidateCandidates({ ...options, withIds: true });
+  const value = consolidateCandidates({ ...options, withIds: true, writeLayer: true, layerOverride: options.layer === 'golden' ? 'golden' : null });
   const layerDir = value.bucketKey ? path.join(value.storeDir, 'branches', value.bucketKey) : value.storeDir;
   const seen = new Set();
   const clusters = value.clusters.map(c => ({ ...c, episodes: c.episodes.filter(e => {
@@ -53,7 +54,9 @@ function expandProposal(options, input) {
       return { path: e.path, sha256: e.sha256, kind: e.kind, ...(ref.plan !== undefined ? { plan: ref.plan } : {}) };
     }) };
   });
-  const preflight = () => {
+  const preflight = actual => {
+    const layerDir = actual.layer === 'branch' && actual.bucketKey ? path.join(actual.storeDir, 'branches', actual.bucketKey) : actual.storeDir;
+    if (path.resolve(actual.storeDir) !== path.resolve(packet.storeDir) || path.resolve(layerDir) !== path.resolve(packet.binding.layerDir)) return { code: 'E_PACKET_STALE', reason: 'Packet store or layer destination differs from the actual write destination' };
     if (reviewHash(context(options)) !== reviewHash(packet.binding.context)) return { code: 'E_PACKET_STALE', reason: 'Packet repository or branch context is stale' };
     if (reviewHash([...readGovernance(packet.storeDir)]) !== packet.binding.governance) return { code: 'E_PACKET_STALE', reason: 'Packet governance is stale; preserve current human decisions and prepare again' };
     const current = new Set(collectEpisodes(options).map(episodeId));
@@ -72,7 +75,9 @@ export function applyConsolidationProposal(options) {
   let expanded;
   try { expanded = expandProposal(options, input); } catch (error) { return { ...reject('E_PACKET', error.message), retry: { eligible: false, nextAttempt: null, reason: 'Prepare a fresh packet or correct the proposal envelope.' } }; }
   const key = reviewHash({ repository: repoId(options.workspace), operation: input.operation });
-  const rel = `.harness/consolidation/operations/${key}.json`, digest = reviewHash(input);
+  const routing = resolveWriteLayer({ ...options, layerOverride: options.layer === 'golden' ? 'golden' : null });
+  const destination = { storeDir: storeDir(options.workspace, { home: options.home }), layer: routing.layer, bucketKey: routing.bucketKey };
+  const rel = `.harness/consolidation/operations/${key}.json`, digest = reviewHash({ input, destination });
   const perform = prior => {
     if (prior) {
       const { integrity, ...value } = prior;
@@ -83,8 +88,9 @@ export function applyConsolidationProposal(options) {
       if (saved.digest !== digest) return { ...reject('E_OPERATION', 'Operation attempt conflicts with a different payload'), retry: { eligible: false, nextAttempt: null } };
       return { ...saved.result, replayed: true };
     }
-    if (input.attempt !== (prior?.nextAttempt || 1) || prior && !prior.eligible) return { ...reject('E_RETRY', 'Operation is terminal or repair attempt is not eligible'), retry: { eligible: false, nextAttempt: null } };
-    const result = applyOps({ ...options, ...expanded, packetPreflight: expanded.preflight, operationReceipt: { id: key, digest } });
+    const operationRecovery = !prior && input.attempt === 2;
+    if (!operationRecovery && (input.attempt !== (prior?.nextAttempt || 1) || prior && !prior.eligible)) return { ...reject('E_RETRY', 'Operation is terminal or repair attempt is not eligible'), retry: { eligible: false, nextAttempt: null } };
+    const result = applyOps({ ...options, ...expanded, packetPreflight: expanded.preflight, operationReceipt: { id: key, digest }, operationRecovery });
     const code = result.rejected?.[0]?.code;
     const eligible = result.exitCode !== 0 && input.attempt === 1 && repairable.has(code);
     const retry = { eligible, nextAttempt: eligible ? 2 : null, reason: eligible ? 'Repair the semantic proposal once using these diagnostics.' : result.exitCode === 0 ? 'Operation completed.' : 'Terminal failure; inspect evidence before a new operation.' };

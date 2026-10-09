@@ -326,23 +326,32 @@ async function runLearningDecision({ workspace, copilotHome, flags, log }) {
   const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
   if (!checked.pass) return { pass: false, exitCode: 2, blockedReason: checked.message, plan: selected.plan.path, path: null };
   const operation = recordHash(decision.operation);
-  const digest = recordHash({ decision, proof: checked.value.verificationIdentity });
+  const target = decision.decision === 'publish' ? publicationTarget({ workspace, copilotHome, home: flags.harnessHome || process.env.HARNESS_HOME, scope: decision.scope || 'private' }) : null;
+  const destination = target ? { base: path.resolve(target.base), dirRel: target.dirRel.replace(/\\/g, '/') } : null;
+  const digest = recordHash({ decision, proof: checked.value.verificationIdentity, ...(destination ? { destination } : {}) });
+  const compatible = record => {
+    if (!record) return;
+    if (record.destination && JSON.stringify(record.destination) !== JSON.stringify(destination)) throw new Error('Learning operation destination conflicts with the accepted destination');
+    if (!record.destination && record.result?.publishedPath && (!destination || record.result.publishedPath !== path.resolve(destination.base, record.result.path))) throw new Error('Learning operation destination conflicts with the accepted destination');
+    const legacy = !record.destination && record.digest === recordHash({ decision, proof: checked.value.verificationIdentity });
+    if (record.digest !== digest && !legacy) throw new Error('Learning operation identity conflicts with a different decision, destination or proof');
+  };
   const rel = `.harness/learning/${operation}.json`;
   const existing = readReviewRecord(workspace, rel);
-  if (existing && existing.digest !== digest) throw new Error('Learning operation identity conflicts with a different decision or proof');
+  compatible(existing);
   const publish = captureDate => runInsightCompound({ workspace, copilotHome, flags: { ...flags, plan: selected.plan.path, title: decision.title, body: decision.body, category: decision.category, tags: Array.isArray(decision.tags) ? decision.tags.join(',') : '', trigger: decision.trigger, claim: decision.claim, captureDate, operationSuffix: operation.slice(0, 16), publicationScope: decision.scope || 'private' }, log, kind: 'fix', home: flags.harnessHome || process.env.HARNESS_HOME });
   if (flags.dryRun) return decision.decision === 'publish' ? { ...publish(existing?.captureDate), dryRun: true } : { pass: true, exitCode: 0, dryRun: true, decision: decision.decision, path: null, indexed: null };
   publishReviewRecord(workspace, '.harness/learning/.ready.json', { version: 1 });
   const pointer = learningPointerRel(selected.plan.path);
   return withPlanUpdateLock(path.join(workspace, pointer), () => withPlanUpdateLock(path.join(workspace, rel), () => {
     const prior = readReviewRecord(workspace, rel);
-    if (prior && prior.digest !== digest) throw new Error('Learning operation identity conflicts with a different decision or proof');
+    compatible(prior);
     const priorPublicationCurrent = !prior || learningPublicationCurrent(workspace, prior, { copilotHome, home: flags.harnessHome || process.env.HARNESS_HOME });
     if (prior?.state === 'done' && priorPublicationCurrent) {
       publishReviewRecord(workspace, pointer, { version: 1, operation, record: rel });
       return { ...prior.result, learningRecord: rel, replayed: true };
     }
-    const pending = prior || { version: 1, operation, digest, decision, proof: checked.value, captureDate: new Date().toISOString().slice(0, 10), state: 'pending' };
+    const pending = prior ? { ...prior, digest, ...(destination ? { destination } : {}) } : { version: 1, operation, digest, decision, ...(destination ? { destination } : {}), proof: checked.value, captureDate: new Date().toISOString().slice(0, 10), state: 'pending' };
     const fresh = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
     if (!fresh.pass || fresh.id !== checked.id) throw new Error('Work changed before learning publication');
     publishReviewRecord(workspace, pointer, { version: 1, operation, record: rel });

@@ -4,6 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { initGit } from './helpers/cli-fixtures.mjs';
+import { deriveGitContext } from '../lib/git-context.mjs';
+import { ensureBucket } from '../lib/knowledge/layer.mjs';
+import { renderLearning } from '../lib/knowledge/apply.mjs';
+import { writeStoreFile } from '../lib/knowledge/store-io.mjs';
+import { collectEpisodes } from '../lib/knowledge/consolidate.mjs';
 import { ensureStore, readLedger, writeStoreConfig } from '../lib/knowledge/store.mjs';
 
 function fixture(t, count = 2) {
@@ -134,4 +140,55 @@ test('candidate dry-run returns the same bounded packet without persisting it', 
   const packet = JSON.parse(r.stdout);
   assert.equal(fs.existsSync(path.join(f.ws, packet.packetPath)), false);
   assert.equal(f.candidates().id, packet.id);
+});
+
+test('accepted repair attempt recovers after outer history disappears', t => {
+  const f = fixture(t), packet = f.candidates(), id = packet.clusters[0].episodes[0].id;
+  const input = { schema: 2, packet: packet.id, operation: 'lost-repair-receipt', attempt: 1, ops: [{ op: 'ADD', domain: 'design', slug: 'claim', trigger: 'Boundary', body: 'x'.repeat(2000), episodes: [{ id }] }] };
+  assert.equal(f.apply(input).value.retry.nextAttempt, 2);
+  const repaired = { ...input, attempt: 2, ops: [{ ...input.ops[0], body: 'Preserve the accepted evidence boundary.' }] };
+  assert.equal(f.apply(repaired).status, 0);
+  const { dir } = ensureStore(f.ws, { home: f.home }), ledger = readLedger(dir);
+  fs.rmSync(path.join(f.ws, '.harness/consolidation/operations'), { recursive: true, force: true });
+  const recovered = f.apply(repaired);
+  assert.equal(recovered.status, 0, recovered.stderr + recovered.stdout);
+  assert.equal(recovered.value.replayed, true);
+  assert.deepEqual(readLedger(dir), ledger);
+  assert.notEqual(f.apply({ ...repaired, ops: [{ ...repaired.ops[0], body: 'A different claim.' }] }).status, 0);
+});
+
+test('a frozen branch packet cannot modify a changed golden copy of its target', t => {
+  const f = fixture(t);
+  initGit(f.ws);
+  assert.equal(spawnSync('git', ['switch', '-c', 'feature/bound-layer'], { cwd: f.ws }).status, 0);
+  const { dir } = ensureStore(f.ws, { home: f.home });
+  const context = deriveGitContext({ workspace: f.ws, home: f.home });
+  const branch = ensureBucket(dir, { key: context.branchKey, branch: context.branch });
+  const episode = collectEpisodes({ workspace: f.ws, copilotHome: f.copilot, home: f.home })[0];
+  const doc = renderLearning({ trigger: 'Boundary', body: 'Preserve existing evidence.', episodes: [{ path: episode.path, sha256: episode.sha256, kind: episode.kind }], origin: 'fixture', status: 'active', source: 'consolidation' });
+  assert.ok(writeStoreFile(path.join(branch, 'learnings/design/claim.md'), doc));
+  assert.ok(writeStoreFile(path.join(dir, 'learnings/design/claim.md'), doc));
+  assert.equal(spawnSync('git', ['add', '.'], { cwd: dir }).status, 0);
+  assert.equal(spawnSync('git', ['commit', '-qm', 'seed learning layers'], { cwd: dir }).status, 0);
+  const packet = f.candidates();
+  assert.equal(packet.layer, 'branch');
+  assert.ok(packet.clusters.length);
+  const changed = doc.replace('Preserve existing evidence.', 'The human refined the golden boundary.');
+  assert.ok(writeStoreFile(path.join(dir, 'learnings/design/claim.md'), changed));
+  const selected = packet.clusters.flatMap(c => c.episodes).find(e => e.path === episode.path);
+  const result = f.apply({ schema: 2, packet: packet.id, operation: 'wrong-layer', attempt: 1, ops: [{ op: 'STRENGTHEN', target: 'design/claim', episodes: [{ id: selected.id }] }] }, '--layer', 'golden', '--yes');
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.value.rejected[0].reason, /destination|layer/);
+  assert.match(fs.readFileSync(path.join(dir, 'learnings/design/claim.md'), 'utf8'), /human refined/);
+});
+
+test('first branch packet binds the write layer before a bucket exists', t => {
+  const f = fixture(t);
+  initGit(f.ws);
+  assert.equal(spawnSync('git', ['switch', '-c', 'feature/first-consolidation'], { cwd: f.ws }).status, 0);
+  const packet = f.candidates();
+  assert.equal(packet.layer, 'branch');
+  const result = f.apply({ schema: 2, packet: packet.id, operation: 'first-branch', attempt: 1, ops: [{ op: 'NOOP', reason: 'Derivable.', episodes: packet.clusters.flatMap(c => c.episodes).map(e => ({ id: e.id })) }] });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(result.value.layer, 'branch');
 });

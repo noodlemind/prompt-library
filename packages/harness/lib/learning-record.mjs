@@ -19,7 +19,8 @@ export function learningPublicationCurrent(workspace, record, options = {}) {
   const rel = record.result.path;
   if (typeof rel !== 'string' || !rel.startsWith(target.dirRel.replace(/\\/g, '/') + '/') || rel.split(/[\\/]/).includes('..')) return false;
   const full = path.resolve(target.base, rel);
-  return record.result.publicationVersion === 1 && record.result.publishedPath === full && record.result.publishedHash === recordHash(readFileNoFollow(full, { root: target.base }));
+  const text = readFileNoFollow(full, { root: target.base });
+  return text !== null && record.result.publicationVersion === 1 && record.result.publishedPath === full && record.result.publishedHash === recordHash(text);
 }
 
 export const learningPointerRel = planPath => `.harness/learning/plan-${recordHash(planPath)}.json`;
@@ -30,7 +31,7 @@ export function validateLearningDecision(workspace, proof, options = {}) {
   if (!pointer || pointer.version !== 1 || !/^[a-f0-9]{64}$/.test(pointer.operation || '') || pointer.record !== `.harness/learning/${pointer.operation}.json`) return failure('Record a publish or explicit no-learning decision for current proof before completion');
   const record = readReviewRecord(workspace, pointer.record);
   if (!record || record.version !== 1 || record.state !== 'done' || !record.result?.pass) return failure('Learning publication is pending, blocked, or unreadable; recover it before completion');
-  if (!['publish', 'no-learning'].includes(record.decision?.decision) || typeof record.decision.rationale !== 'string' || !record.decision.rationale.trim() || record.operation !== pointer.operation || recordHash(record.decision.operation) !== pointer.operation || record.digest !== recordHash({ decision: record.decision, proof: proof.verificationIdentity }) || JSON.stringify(record.proof) !== JSON.stringify(proof)) return failure('Learning decision is stale or invalid for current proof');
+  if (!['publish', 'no-learning'].includes(record.decision?.decision) || typeof record.decision.rationale !== 'string' || !record.decision.rationale.trim() || record.operation !== pointer.operation || recordHash(record.decision.operation) !== pointer.operation || record.digest !== recordHash({ decision: record.decision, proof: proof.verificationIdentity, ...(record.destination ? { destination: record.destination } : {}) }) || JSON.stringify(record.proof) !== JSON.stringify(proof)) return failure('Learning decision is stale or invalid for current proof');
   if (record.decision.decision === 'publish') {
     const proposal = record.decision.scope === 'ship-set-proposal' && record.result.proposal === true && record.result.activated === false;
     if (typeof record.result.path !== 'string' || !record.result.path || !record.result.indexed && !proposal) return failure('Learning publication has no completed episode/index result');

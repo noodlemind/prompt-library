@@ -1287,7 +1287,7 @@ export async function cmdConsolidate(argv) {
   }
 
   if (hasFlag(argv, '--candidates')) {
-    const packet = prepareConsolidationPacket({ workspace, copilotHome, home: flags.harnessHome || process.env.HARNESS_HOME, dryRun: flags.dryRun });
+    const packet = prepareConsolidationPacket({ workspace, copilotHome, home: flags.harnessHome || process.env.HARNESS_HOME, dryRun: flags.dryRun, layer: flags.layer });
     writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
     if (flags.json) {
       emitJson(flags, packet);

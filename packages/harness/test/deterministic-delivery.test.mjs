@@ -384,3 +384,23 @@ for (const format of ['short', 'full']) for (const learning of ['no-learning', '
     assert.equal(JSON.parse(stale.stdout).hookSpecificOutput?.decision, 'block', stale.stdout + stale.stderr);
   });
 }
+
+test('learning replay rejects a changed resolved home rather than republishing', t => {
+  const f = deliveryFixture(t), plan = writeVersionedPlan(f.ws, { required: ['behavior'], criteria: { AC1: ['behavior'] } });
+  fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 2;\n');
+  assert.equal(f.cli('verify', '--plan', plan, '--base', 'HEAD', '--json').status, 0);
+  const file = path.join(f.ws, '.harness/destination-conflict.json');
+  fs.writeFileSync(file, JSON.stringify({ operation: 'home-conflict', decision: 'publish', scope: 'global', rationale: 'Durable boundary.', title: 'Boundary', body: 'Accepted publication remains at one resolved destination.' }));
+  const first = f.cli('compound', '--plan', plan, '--learning-decision', file, '--json');
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const value = JSON.parse(first.stdout), receiptPath = path.join(f.ws, value.learningRecord), before = fs.readFileSync(receiptPath);
+  const secondHome = path.join(f.ws, '.harness/second-copilot');
+  fs.cpSync(f.copilot, secondHome, { recursive: true });
+  fs.rmSync(path.join(secondHome, 'knowledge/solutions'), { recursive: true, force: true });
+  approveProject({ workspace: f.ws, copilotHome: secondHome, home: f.home });
+  const result = spawnSync(process.execPath, [path.join(root, 'bin/harness.mjs'), 'compound', '--plan', plan, '--learning-decision', file, '--workspace', f.ws, '--harness-home', f.home, '--copilot-home', secondHome, '--json'], { cwd: f.ws, env: { ...f.env, COPILOT_HOME: secondHome }, encoding: 'utf8' });
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stdout + result.stderr, /destination|conflict/);
+  assert.equal(fs.existsSync(path.join(secondHome, 'knowledge/solutions')), false);
+  assert.ok(fs.readFileSync(receiptPath).equals(before));
+});

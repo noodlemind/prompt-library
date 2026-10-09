@@ -611,6 +611,7 @@ export function applyOps({
   opsPath,
   operations,
   operationReceipt,
+  operationRecovery = false,
   packetPreflight,
   dryRun = false,
   home,
@@ -784,7 +785,8 @@ export function applyOps({
       }
       if (fs.existsSync(file)) return { kind: 'reject', applied: [], governed: [], rejected: [fail('E_OPERATION', 'Operation receipt cannot be read safely')], exitCode: 1 };
     }
-    const packetFailure = packetPreflight?.();
+    if (operationRecovery) return { kind: 'reject', applied: [], governed: [], rejected: [fail('E_RETRY', 'Repair history and committed receipt are missing')], exitCode: 1 };
+    const packetFailure = packetPreflight?.({ storeDir: dir, layer: routing.layer, bucketKey: routing.bucketKey });
     if (packetFailure) return { kind: 'reject', applied: [], governed: [], rejected: [packetFailure], exitCode: 1 };
         if (!dryRun) {
       const movedEarly = assertHeadUnmoved();

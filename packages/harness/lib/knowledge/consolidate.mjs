@@ -182,12 +182,12 @@ export function promotionCandidates(learnings) {
   return out;
 }
 
-function layerView({ workspace, home, dir }) {
+function layerView({ workspace, home, dir, writeLayer = false, layerOverride = null }) {
   const hasBuckets = storeHasBuckets(dir);
   let routing = null;
-  if (hasBuckets) {
+  if (hasBuckets || writeLayer) {
     try {
-      routing = resolveWriteLayer({ workspace, home });
+      routing = resolveWriteLayer({ workspace, home, layerOverride });
     } catch {
       routing = null;
     }
@@ -203,16 +203,16 @@ function layerView({ workspace, home, dir }) {
       layer,
       currentBranch: routing?.context?.branch || null,
       defaultBranchName: routing?.defaultBranch?.name || null,
-      storeHasBuckets: hasBuckets,
+      storeHasBuckets: hasBuckets || writeLayer && layer === 'branch',
     },
   };
 }
 
-export function consolidateStatus({ workspace, copilotHome, home }) {
+export function consolidateStatus({ workspace, copilotHome, home, writeLayer = false, layerOverride = null }) {
     const dir = storeDir(workspace, { home });
   const { mode } = readStoreConfig(workspace, { home });
   const episodes = collectEpisodes({ workspace, copilotHome, home });
-  const view = layerView({ workspace, home, dir });
+  const view = layerView({ workspace, home, dir, writeLayer, layerOverride });
   const { consumed, quarantined } = splitLedger(readLedger(dir));
   let layerQuarantined = [];
   if (view.layer === 'branch') {
@@ -246,8 +246,8 @@ export function consolidateStatus({ workspace, copilotHome, home }) {
   };
 }
 
-export function consolidateCandidates({ workspace, copilotHome, home, withIds = false }) {
-  const status = consolidateStatus({ workspace, copilotHome, home });
+export function consolidateCandidates({ workspace, copilotHome, home, withIds = false, writeLayer = false, layerOverride = null }) {
+  const status = consolidateStatus({ workspace, copilotHome, home, writeLayer, layerOverride });
   const episodes = collectEpisodes({ workspace, copilotHome, home });
   const bySha = new Map(episodes.map((e) => [`${e.path}@${e.sha256}`, e]));
 
@@ -290,7 +290,7 @@ export function consolidateCandidates({ workspace, copilotHome, home, withIds = 
   }
 
     const dir = storeDir(workspace, { home });
-  const view = layerView({ workspace, home, dir });
+  const view = layerView({ workspace, home, dir, writeLayer, layerOverride });
   const active = activeLearnings(listLearnings(view.layerRoot));
   const totalBytes = active.reduce((n, l) => n + l.bytes, 0);
   const includeBodies = totalBytes <= LEARNING_BODY_BUDGET_BYTES;

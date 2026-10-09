@@ -527,7 +527,7 @@ test('every row carries its own consequence, not its command policy maximum', ()
     'Reports': 'read',
     'Global report': 'read',
     'Consolidate learnings': 'read',
-    'List consolidate candidates': 'read',
+    'List consolidate candidates': 'mutate',
     // …and the forms that genuinely write, which must not be softened
     'Rebuild knowledge and code indexes': 'mutate',
     'Rebuild code symbol index': 'mutate',
