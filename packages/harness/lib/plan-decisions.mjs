@@ -132,7 +132,7 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     }
   }
   if (input.changes !== undefined) {
-    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases'], 'changes');
+    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps'], 'changes');
     const changes = input.changes, record = readPlanRecord(plan.text);
     if (changes.notes !== undefined) body = applyPlanNotes(body, changes.notes);
     if (changes.phases !== undefined) body = section(body, 'Plan', renderPlanPhases(changes.phases));
@@ -172,6 +172,25 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
       if (!Array.isArray(changes.reviews) || !changes.reviews.every(id => typeof id === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))) fail('reviews must be reviewer IDs');
       if (plan.fm.reviews?.required?.includes('code-review') && !changes.reviews.includes('code-review')) fail('the mandatory code-review baseline cannot be removed by a decision payload');
       fm.reviews.required = [...new Set(changes.reviews)].sort();
+    }
+    if (changes.gaps !== undefined) {
+      if (!Array.isArray(changes.gaps) || !changes.gaps.length || changes.gaps.length > 100) fail('gaps must be a bounded nonempty list');
+      if (plan.status === 'done') fail('new capability gaps require active work');
+      if (fm.capability_gaps !== undefined && !Array.isArray(fm.capability_gaps)) fail('existing capability gaps must be a list');
+      const gaps = Array.isArray(fm.capability_gaps) ? fm.capability_gaps : [];
+      const ids = new Set(gaps.map(gap => gap.id));
+      for (const gap of changes.gaps) {
+        fields(gap, ['id', 'class', 'scope', 'required_for', 'evidence'], 'gap declaration');
+        if (!ID.test(gap.id || '') || ids.has(gap.id)) fail('gap IDs must be new and unique; existing gaps cannot be overwritten');
+        if (!['soft', 'bridge', 'hard'].includes(gap.class) || !['operation', 'criterion', 'plan'].includes(gap.scope)) fail('gap requires a supported class and scope');
+        const required = text(gap.required_for, 'affected criterion or operation');
+        if (gap.scope === 'criterion' && !extractAcceptanceCriteria(plan).includes(required)) fail('gap names an unknown criterion');
+        if (!Array.isArray(gap.evidence) || !gap.evidence.length || gap.evidence.length > 32) fail('gap requires bounded authored evidence observations');
+        gaps.push({ id: gap.id, class: gap.class, scope: gap.scope, required_for: required, fulfillment: 'pending', evidence: gap.evidence.map(value => text(value, 'gap observation')) });
+        if (gap.class === 'hard' && gap.scope === 'plan') fm.status = 'blocked-capability';
+        ids.add(gap.id);
+      }
+      fm.capability_gaps = gaps;
     }
     if (record) body = body.replace(/^\s*\{[^\n]+\}/, () => JSON.stringify(record));
   }

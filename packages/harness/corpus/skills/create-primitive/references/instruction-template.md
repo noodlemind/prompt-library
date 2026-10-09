@@ -1,23 +1,22 @@
 # Instruction Template
 
-Use this template when creating an instruction. A personal instruction is `harness resources create instruction <name>` with the body on stdin. A ship-set instruction is a commit at `packages/harness/corpus/instructions/<name>.instructions.md`.
+Use this template when creating an instruction. A personal instruction is `harness resources create instruction <name>` with a schema1 decision file via `--file`. A ship-set instruction is a commit at `packages/harness/corpus/instructions/<name>.instructions.md`.
 
 Create an instruction when a concise standard should load automatically for matching files. Do not use instructions for multi-step workflows, review-only criteria, or long reference material.
 
-```markdown
----
-name: '<Standard Name>'
-description: '<What this instruction applies to and why>'
-applyTo: '<glob pattern>'
----
+Use `resources scaffold instruction <name> --json` for canonical metadata. Follow [resource-operations.md](../../references/resource-operations.md) for validation and creation. Author narrow activation and source-backed examples.
 
+```markdown
 # <Standard Name>
 
-## <Category>
-- [Specific, actionable convention with one-sentence rationale.]
+## Convention
+[Specific convention and its rationale.]
 
-## <Category>
-- [Specific, actionable convention with one-sentence rationale.]
+## Bad example
+[Concrete violation from the relevant source and its consequence.]
+
+## Good example
+[Concrete correction and why it satisfies the convention.]
 ```
 
 ## Rules

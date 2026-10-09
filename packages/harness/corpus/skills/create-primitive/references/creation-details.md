@@ -1,178 +1,38 @@
-<!-- On-demand reference for /create-primitive: detailed per-type creation guidance. -->
+# Primitive creation decisions
 
-# Primitive Creation — Detailed Paths
+Use [resource-operations.md](../../references/resource-operations.md) for scaffolding, validation, registration, replacement and proposal contracts. The installed CLI owns metadata, supported host tools, reference containment, limits and inventory counts. Obtain canonical shapes from `resources scaffold`; do not copy a second tool catalogue or reconstruct its validator in a prompt.
 
-## Agent Creation
+## Artifact choice
 
-Create an agent only when the primitive decision rule says this needs a separate role. Most new procedural knowledge belongs in a skill.
+- Reusable deterministic operation: implement in Harness, with an executable behavioral regression.
+- Contextual judgment protocol: skill; explain when reasoning changes the outcome.
+- Separate perspective, authority, isolation or accountability: agent; explain its boundary.
+- Narrow convention activated by file pattern: instruction; author concrete good/bad examples.
+- Product-specific assertion: named product check or regression test.
+- Review criterion requiring judgment: review check under the owning review skill or product overlay.
+- Dense supporting material: reference under the smallest existing skill that owns it.
+- Demonstrated durable lesson: publish through the existing learning writer.
 
-### Agent Template
+## Agent
 
-Read agent-template.md for the complete agent template with all sections.
+Use [agent-template.md](agent-template.md) for judgment criteria. Choose tools from the installed scaffold's supported contract, minimizing permissions. Every agent needs meaningful guardrails for untrusted inputs; researchers and coordinators are included. Reviewer names and permission declarations do not authenticate host invocations or grant new authority.
 
-### Agent Classifications
+Choose distinct roles for distinct judgments. A reviewer assesses defects; a researcher evaluates sources; an actor performs authorized changes; a coordinator owns a bounded synthesis. Define output evidence, uncertainty and responsibility instead of command sequences. Host capabilities must be reported separately from live host proof.
 
-| Classification | Tools | Guardrails? | Use When |
-|---------------|-------|-------------|----------|
-| **Reviewer** | `["codebase", "search", "read", "usages", "changes", "problems", "terminalLastCommand"]` | Yes | Read-only code analysis |
-| **Researcher** | `["codebase", "search", "read", "fetch", "problems", "terminalLastCommand"]` | No | Information gathering |
-| **Actor** | `["codebase", "search", "read", "editFiles", "execute", "terminalLastCommand", "awaitTerminal", "changes", "problems", "usages"]` | Yes | Needs to modify code and run commands |
-| **Engineer** | `["agent", "codebase", "search", "read", "editFiles", "changes", "execute", "terminalLastCommand", "awaitTerminal", "problems", "usages", "fetch", "githubRepo"]` | No | Full-cycle understand + implement + delegate |
-| **Coordinator** | `["agent", "codebase", "search", "read", "problems", ...]` | No | Orchestrating subagents |
+## Skill
 
-**Note:** Tool names use VS Code conventions. See `copilot-instructions.md` for cross-environment mapping.
+Use [skill-template.md](skill-template.md). Keep discovery specific, including relevant triggers and confusable requests. Disclose references only when needed. Describe decisions, required evidence and interpretation of executable results. Delegate repeated serialization, discovery, hashing, policy evaluation and bookkeeping to their CLI owners.
 
-### Agent Design Principles
+A tool wrapper can teach applicability and tradeoffs. A reviewer protocol can teach evidence quality and defect assessment. A requirements interview can expose missing intent. A pipeline can explain semantic handoffs and accountability. Each deterministic generation step still belongs in code.
 
-- **Judgment-criteria, not procedures**: Define WHAT to look for, not HOW to search
-- **Boundary over breadth**: State why this must be an agent rather than a skill, instruction, or check
-- **Structured output**: Every agent has a defined output format
-- **Single responsibility**: One domain per agent
-- **Description ≤180 chars**: Must convey WHAT + WHEN concisely
-- **Guardrails for reviewers/actors**: Prevent prompt injection from code under review
+## Instruction
 
-### Agent Naming
+Use [instruction-template.md](instruction-template.md). Choose narrow activation patterns and explain the rationale behind each convention. Include source-backed examples that demonstrate the intended behavior. Split unrelated concerns; reuse existing language instructions when their coverage is sufficient.
 
-- Use kebab-case: `security-sentinel`, `performance-oracle`
-- Name describes the role, not the technology: `data-integrity-guardian`, not `postgres-migration-checker`
-- Personal: `harness resources create agent <name>`. Ship set: `packages/harness/corpus/agents/<name>.agent.md`
+## Review check
 
-## Skill Creation
+Use [check-template.md](check-template.md). Keep one concern per check and concrete bad/good examples. Harness discovers checks and captures coverage; the reviewer judges applicability, severity and defects. Product overlays live in `.github/checks/`; globally shipped criteria live under the code-review skill's references.
 
-Skills are the default home for reusable expertise. A skill may orchestrate agents, read references, use assets, enforce gates, and update plan/solution artifacts.
+## Evidence and activation
 
-### Skill Template
-
-Read skill-template.md for the complete skill template with all sections.
-
-### Skill Design Principles
-
-- **Progressive disclosure**: Frontmatter for discovery → body for activation → references for deep execution
-- **Explicit contract**: State inputs, outputs, state changes, gates, and verification evidence
-- **Interactive + non-interactive**: Skills must work both when invoked by users and by other skills
-- **`user-invocable`**: Controls visibility in `/` slash command menu when supported (default: `true`)
-- **Composable**: Skills can delegate to agents when separate judgment, authority, or isolation is useful
-
-### Skill Naming
-
-- Use kebab-case: `brainstorming`, `deepen-plan`, `code-review`
-- Personal: `harness resources create skill <name>`. Ship set: `packages/harness/corpus/skills/<name>/SKILL.md`
-
-## Cross-Tool Frontmatter Compatibility
-
-This library targets GitHub Copilot in VS Code and IntelliJ IDEA. VS Code reads specific frontmatter fields from globally hydrated `%USERPROFILE%\.copilot` customizations. IntelliJ IDEA reads global customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled. Keep shared behavior in skills; hosts select agents such as the Engineer directly from the agent dropdown.
-
-**VS Code 1.109 frontmatter (primary — always use these):**
-
-| Field | Used by | Purpose |
-|-------|---------|---------|
-| `name` | Skills | Display name in `/` menu |
-| `description` | Agents, skills | Discovery matching — the search index |
-| `tools` | Agents | Tool whitelist (omit for all tools) |
-| `user-invocable` | Agents | Show/hide in `@` menu |
-| `agents` | Agents | Subagent allowlist |
-| `applyTo` | Instructions | Glob pattern for activation |
-
-**agentskills.io standard (emerging — add for cross-tool portability when relevant):**
-
-| Field | Maps to VS Code | Notes |
-|-------|-----------------|-------|
-| `name` | Same | Required in both |
-| `description` | Same | Required in both |
-| `allowed-tools` | `tools` | Different name, same concept |
-| `license` | — | Not read by VS Code; useful for shared skills |
-| `compatibility` | — | Not read by VS Code; documents which tools support this skill |
-| `metadata` | — | Not read by VS Code; freeform extension point |
-
-**Rule of thumb:** Use VS Code frontmatter as primary. Add agentskills.io fields only when publishing skills for cross-tool consumption.
-
-## Token Budget Guidance
-
-Agent context windows are finite. Keep artifacts concise:
-
-| Artifact | Size Limit | Rationale |
-|----------|-----------|-----------|
-| Skill SKILL.md | ≤500 lines | Extract dense content to `references/` |
-| Instruction `.instructions.md` | ≤100 lines | Focused conventions, not encyclopedias |
-| Agent `.agent.md` | ≤200 lines | Judgment criteria, not procedures |
-| `agent-context.md` | ≤200 lines | Repository-owned curated patterns, prune stale entries |
-| Review check `.md` | ≤50 lines | One concern per check |
-| Skill `description:` | ≤220 chars | Search index — dense and specific |
-| Agent `description:` | ≤180 chars | Discovery text |
-
-These align with industry limits: Windsurf caps at 6K/rule, Augment at 24K user + 49K workspace, Codex at 32-64 KiB total. Staying within these limits ensures cross-tool compatibility.
-
-## Skill Design Patterns
-
-Five patterns for structuring SKILL.md content ([source](https://lavinigam.com/posts/adk-skill-design-patterns/)):
-
-| Pattern | When to Use | Directory Structure | Example |
-|---------|------------|--------------------|---------|
-| **Tool Wrapper** | Encoding library/framework best practices | `references/` for conventions | Language reviewer agents |
-| **Generator** | Producing structured output from templates | `assets/` for templates + `references/` for style guides | `/capture-issue`, `/compound-learnings` |
-| **Reviewer** | Evaluating against checklists with severity scoring | `references/` for checklists | `/code-review` |
-| **Inversion** | Gathering requirements before acting (interview-first) | `assets/` for output templates | `/brainstorming` |
-| **Pipeline** | Sequential workflows with gate conditions | `references/` + `assets/` | Connected pipeline (`/capture-issue` → `/plan-issue` → Engineer Deliver) |
-
-**Key principles:**
-- The `description` field is the skill's search index — be specific about WHAT and WHEN, include negative triggers for confusable skills
-- Separate WHAT to check (checklist in `references/`) from HOW to check (protocol in SKILL.md body)
-- Use gate conditions ("DO NOT proceed to Step N until...") to prevent agents from skipping validation
-- Skills teach agents when and how to use tools — they are not tools themselves
-- Keep SKILL.md under 500 lines; extract dense content to `references/`
-
-## Review Check Creation
-
-Create `packages/harness/corpus/skills/code-review/references/checks/<name>.md` when the harness ships a narrow review criterion that `/code-review` should discover. Product repositories may create `.github/checks/<name>.md` for product-owned overlays without modifying the shipped corpus.
-
-Required shape:
-
-- Frontmatter: `name`, `description`, optional `severity-default`, optional `globs`
-- `## What to Look For`: specific patterns and anti-patterns
-- `## Examples`: at least one bad and good example when practical
-- Keep under 50 lines and one concern per check
-
-## Instruction Creation
-
-### Instruction Template
-
-```markdown
----
-name: '<Language/Framework> Conventions'
-description: '<What these conventions cover>'
-applyTo: '<glob pattern for relevant files>'
----
-
-# <Language/Framework> Conventions
-
-## <Category>
-- [Specific, actionable convention with rationale]
-
-## <Category>
-- [Specific, actionable convention with rationale]
-```
-
-### Instruction Design Principles
-
-- **Scoped activation**: The `applyTo` glob pattern determines when the instruction loads. Use `**/*.java` for language-wide, or `src/main/**/*.java` for project-specific scoping.
-- **Specific and actionable**: "Use `@Transactional(readOnly = true)` for read queries" not "Use transactions appropriately."
-- **Include the WHY**: Conventions without rationale are ignored. One sentence explaining the benefit.
-- **Keep concise**: Under 100 lines. If longer, the instruction is trying to cover too much — split by concern.
-- **Source from reality**: Conventions must reflect actual project standards or industry guidelines (Google Style, PEP 8, etc.), not invented preferences.
-
-### Existing Instructions
-
-| File | Scope | Coverage |
-|------|-------|---------|
-| `typescript.instructions.md` | `**/*.{ts,tsx}` | Type safety, React, modules |
-| `python.instructions.md` | `**/*.py` | Type annotations, Pythonic patterns, pytest |
-| `java.instructions.md` | `**/*.java` | Google Java Style, Java 17+, records, testing |
-| `postgresql.instructions.md` | `**/*.sql` | Schema design, queries, migrations, performance |
-
-Spring Boot and AWS SDK guidance are on-demand skill references (`~/.copilot/skills/java/references/spring-boot.md`, `~/.copilot/skills/aws/references/aws-sdk.md`), authored at `packages/harness/corpus/skills/java/references/spring-boot.md` and `packages/harness/corpus/skills/aws/references/aws-sdk.md`.
-
-### Instruction Naming
-
-- Use kebab-case matching the language/framework: `java`, `typescript`, `spring-boot`, `react-native`
-- Personal: `harness resources create instruction <name>`. Ship set: `packages/harness/corpus/instructions/<name>.instructions.md`
-- For framework-specific instructions that layer on a language instruction, name after the framework: `spring-boot.instructions.md` layers on top of `java.instructions.md`
+Structural validation is necessary but does not establish usefulness, semantic overlap, check adequacy or promotion value. Evaluate realistic trigger and outcome cases. Preserve real task evidence and disclose unsupported hosts. Dormant proposals remain dormant until authorized activation through the existing writer and [human-approval-policy.md](../../references/human-approval-policy.md).

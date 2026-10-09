@@ -30,7 +30,7 @@ function snapshotPlan(workspace, rel) {
 }
 
 export function planStateFacts(workspace) {
-  const counts = {}, rows = [], diagnostics = [];
+  const counts = Object.create(null), rows = [], diagnostics = [];
   for (const rel of listPlanRels(workspace)) {
     const snapshot = snapshotPlan(workspace, rel);
     if (!snapshot || snapshot.plan.fm.__parseError) { diagnostics.push({ path: rel, reason: 'plan unavailable or malformed' }); continue; }
@@ -95,7 +95,7 @@ function declaredGraph(root, directories) {
 
 export function buildFactualReport({ workspace, copilotHome, planPath = null, maxBytes = 16384 }) {
   if (!Number.isInteger(maxBytes) || maxBytes < 2048 || maxBytes > 65536) throw Object.assign(new Error('Factual report --max-bytes must be 2048–65536'), { exit: 2, code: 'E_USAGE' });
-  const diagnostics = [], versions = [], extensions = {}, directories = {};
+  const diagnostics = [], versions = [], extensions = Object.create(null), directories = Object.create(null);
   const listed = spawnSync('git', ['ls-files', '-c', '-o', '--exclude-standard', '-z'], { cwd: workspace, encoding: 'utf8', timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
   const paths = listed.status === 0 ? [...new Set(listed.stdout.split('\0').filter(Boolean))].sort() : null;
   const regular = [];

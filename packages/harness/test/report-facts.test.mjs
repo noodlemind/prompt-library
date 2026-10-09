@@ -118,6 +118,22 @@ test('unsupported manifests and unavailable inventory are explicit, never invent
   assert.equal(missing.files.state, 'unavailable');
 });
 
+test('valid directory names and observed legacy statuses cannot collide with object prototype keys', t => {
+  const f = fixture(t);
+  for (const name of ['__proto__', 'constructor', 'toString']) f.write(`${name}/notes.txt`, 'Observed source.');
+  const plan = writeVersionedPlan(f.workspace);
+  const full = path.join(f.workspace, plan);
+  fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replace('status: in-progress', 'status: constructor'));
+  const result = f.cli();
+  assert.equal(result.status, 0, result.stderr);
+  const facts = JSON.parse(result.stdout);
+  for (const name of ['__proto__', 'constructor', 'toString']) {
+    assert.equal(Object.hasOwn(facts.files.directories, name), true);
+    assert.equal(facts.files.directories[name], 1);
+  }
+  assert.equal(facts.plans.counts.constructor, 1);
+});
+
 test('large file categories and graph diagnostics remain bounded with exact omissions', t => {
   const f = fixture(t);
   for (let i = 0; i < 200; i++) {

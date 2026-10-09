@@ -63,43 +63,14 @@ Let the user choose an approach or combine elements from multiple approaches.
 
 ### Phase 3: Capture
 
-Write the brainstorm document to `docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`:
+Capture the problem, chosen approach, rationale, constraints, open questions and scope boundaries as authored notes through [plan-operations.md](../references/plan-operations.md). Reuse an existing work identity with an `amend` decision. For new work, use `plan-new --file` with format `full`, status `open`, a goal and tentative acceptance text. Keep it unlocked while implementation intent or proof remains unresolved.
 
-```markdown
----
-topic: [Brief topic name]
-date: YYYY-MM-DD
-status: complete
----
-
-# [Topic] Brainstorm
-
-## Problem
-[What we're solving]
-
-## Key Decisions
-- [Decision 1]: [Choice made] — [Rationale]
-- [Decision 2]: [Choice made] — [Rationale]
-
-## Chosen Approach
-[Description of the selected approach]
-
-## Constraints
-- [Constraint 1]
-- [Constraint 2]
-
-## Open Questions
-- [Any unresolved items to address during planning]
-
-## Scope Boundaries
-- **In scope**: [What's included]
-- **Out of scope**: [What's explicitly excluded]
-```
+Use `notes.context` for framing and `notes.research` for alternatives and sources. Harness owns storage, dates, headings, IDs and activity; brainstorming supplies the meaning. Do not create a second dated YAML brainstorm record. A separately requested narrative document can remain an authored document, with its relationship to the work record explicit.
 
 ### Phase 4: Handoff
 
 Offer the user next steps:
-- **Run `/plan-issue`** — Create a detailed implementation plan from this brainstorm
+- **Run `/plan-issue`** — Develop the captured work into an implementation plan
 - **Refine further** — Continue exploring with more questions
 - **Save and revisit later** — Keep the brainstorm document for future reference
 
@@ -107,8 +78,9 @@ Offer the user next steps:
 
 When invoked by another skill or pipeline:
 - Skip AskUserQuestion calls
-- Infer decisions from the provided context
-- Write the brainstorm document automatically
+- Use the supplied context and authorization for supported decisions
+- Preserve unresolved choices rather than inventing approval
+- Capture authored notes through the plan operations
 - Return the file path for the orchestrating skill
 
 ## Guidelines

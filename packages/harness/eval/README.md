@@ -43,3 +43,9 @@ Metrics: `eval/results/latest.json` (autonomous only — do not merge into AE gr
 | **DeepSWE-style** | Short card, todo, compaction, parallel reads, apply, verifier stop. No embeddings / browser / first-class subagents. |
 
 **Residual:** durable shell session; public submission pipelines; TB Harbor/Terminus adapter.
+
+## Mechanical extraction comparison
+
+`node eval/mechanics/run.mjs --root <package-root> --out <new-directory> --label <revision-label> --lane common --runs 3` executes the maintained common regression fixtures repeatedly. Use lane `phase2` for the added record/proposal/report/install contracts. Run revisions sequentially with the same Node runtime and test concurrency; compare `fixtureHashes` before comparing shared trials. No paid/model calls occur.
+
+The evaluator preserves TAP output and observations of synchronous CLI/hook calls without retaining inputs or environment values. It reports actual calls, bytes and wall time; asynchronous/internal calls are outside that observation count. Model tokens, agent repair turns and intervention frequency remain null. Synthetic assertion coverage and unchanged fixtures do not establish agent semantic quality or savings. Keep those measurements pending until representative native-host model runs are available.

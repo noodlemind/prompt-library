@@ -62,97 +62,23 @@ For each area, extract:
 - **Configuration requirements** — what must be set up for the framework to work
 - **Testing patterns** — how to test code that uses this framework
 
-### Step 3: Determine What to Generate
+### Step 3: Choose the primitive
 
-Based on the source analysis, decide what to create:
+Classify with `/create-primitive`: deterministic reusable operation → Harness; contextual judgment protocol → skill; separate perspective or authority → agent; scoped convention → instruction; product assertion → product check. Inspect existing capabilities with `harness resources list --json` and source retrieval before choosing the smallest useful addition. A framework name alone is not promotion evidence.
 
-| Source Content | Generate |
-|---------------|---------|
-| Coding standards, style rules, naming conventions | `.instructions.md` file |
-| Multi-step workflow or process | `SKILL.md` file (Pipeline or Tool Wrapper pattern) |
-| Both standards and workflows | Both files |
-| Framework with rich conventions | `.instructions.md` + `SKILL.md` with `references/` |
+### Step 4: Author and validate
 
-Ask the user to confirm before generating.
+Follow [resource-operations.md](../references/resource-operations.md). Use `resources scaffold` for the canonical metadata and host declaration shape, then author the source-backed rationale, concrete good/bad examples, relevant triggers and meaningful outcome evaluations. Decide narrow activation patterns and minimum permissions from the actual use cases.
 
-### Step 4: Generate Instruction File
+Use schema1 `resources create <type> <name> --file <decision.json>` for a personal primitive; the existing writer validates and registers it. Use `resources validate --corpus --json` for an authorized ship-set change. Harness owns structural checks, references, limits, registry consistency, replacement conflicts and inventory counts. Interpret its diagnostics and repair authored content; do not maintain counts manually.
 
-A personal instruction is `harness resources create instruction <name>` with the body on stdin. A ship-set instruction is a commit at `packages/harness/corpus/instructions/<name>.instructions.md`. Follow this shape:
+### Step 5: Present evidence
 
-```markdown
----
-name: '<Framework/Library> Conventions'
-description: '<What these conventions cover>'
-applyTo: '<glob pattern for relevant files>'
----
+Report inspected sources, overlap decisions, selected primitive, operation outcome and evaluation limits. Structural validity does not prove that conventions are correct or useful. Record substantive repository rationale through plan notes when needed.
 
-# <Framework/Library> Conventions
+## Non-interactive use
 
-## <Category>
-- [Convention with rationale]
-
-## <Category>
-- [Convention with rationale]
-```
-
-**Guidelines for instruction content:**
-- Be specific and actionable — "Use `@Transactional(readOnly = true)` for read queries" not "Use transactions appropriately"
-- Include the WHY — "Prevents accidental writes and enables read replica routing"
-- Use the framework's actual API names and patterns from the source
-- Include common pitfalls with the correct alternative
-- Keep under 100 lines — extract to references if longer
-- Set `applyTo` to match the file types this framework affects
-
-### Step 5: Generate Skill File (if applicable)
-
-If the framework has workflow patterns worth encoding, a personal skill is `harness resources create skill <name>` with the body on stdin. A skill for every install is a commit at `packages/harness/corpus/skills/<name>/SKILL.md`:
-
-```markdown
----
-name: <skill-name>
-description: '<What and when>. Not for <confusable alternative>.'
----
-
-# <Skill Name>
-
-## When to Use
-[Trigger scenarios]
-
-## Trigger Examples
-[3 should, 3 should-not]
-
-## Workflow
-[Steps encoding the framework's workflow patterns]
-
-## Guardrails
-[Key constraints and common mistakes]
-```
-
-For skills with rich conventions, extract checklists or reference material to `references/`.
-
-### Step 6: Verify and Present
-
-Before saving, verify:
-- [ ] Instruction file has correct `applyTo` glob pattern
-- [ ] Conventions are sourced from actual framework code/docs, not hallucinated
-- [ ] Naming matches the project's existing instruction/skill patterns
-- [ ] No duplicate coverage with existing instructions (check `~/.copilot/instructions/`)
-
-Present the generated files to the user for review before writing.
-
-### Step 7: Update Documentation
-
-After creating new files:
-- Update CLAUDE.md instruction count if applicable
-- Update AGENTS.md if a new skill was created
-- Note the new instruction/skill in the repository-owned context docs, `.harness/agent-context.md` or committed `docs/agent-context.md`
-
-## Non-Interactive Mode
-
-When invoked by another skill:
-- Generate the instruction file automatically based on the source
-- Skip confirmation prompts
-- Return the file path(s)
+A calling skill supplies scope and prior authorization. Apply the canonical [human-approval-policy.md](../references/human-approval-policy.md); invocation alone does not authorize capability activation. Do not discard existing direct authorization or ask again for the same action.
 
 ## Error Handling
 
