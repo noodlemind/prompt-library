@@ -12,12 +12,14 @@ import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
 import { deriveGitContext } from './git-context.mjs';
-import { assertNoSymlinkAncestors, writeFileContainedExclusive, readFileNoFollow } from './fs-safe.mjs';
-import { solutionsWriteTarget } from './project-layout.mjs';
+import { assertNoSymlinkAncestors, writeFileContainedExclusive, readFileNoFollow, readBoundedInput } from './fs-safe.mjs';
 import { withPlanUpdateLock } from './plan-update.mjs';
 import { proofPrerequisites } from './completion.mjs';
 import { recordHash, readReviewRecord, publishReviewRecord } from './review.mjs';
-import { learningPointerRel } from './learning-record.mjs';
+import { learningPointerRel, publicationTarget, learningPublicationCurrent } from './learning-record.mjs';
+
+import { buildStructuralIndex } from './repo-map/structural-index.mjs';
+import { createTreesitterExtract } from './repo-map/treesitter-extractor.mjs';
 
 function snapshotFile(p) {
   try {
@@ -180,7 +182,8 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   // Never silently overwrite an earlier capture: same-day same-title collisions
   // get a deterministic numeric suffix.
   const base = `${date}-${slugify(title)}${flags.operationSuffix ? `-${flags.operationSuffix}` : ''}`;
-  const target = solutionsWriteTarget(workspace, { home });
+  const scope = flags.publicationScope || 'private';
+  const target = publicationTarget({ workspace, copilotHome, home, scope });
   const dirRel = path.join(target.dirRel, category);
   // Physical containment: a symlinked docs/solutions (or category) directory
   // must never let the write land outside the chosen base (workspace or the
@@ -230,6 +233,8 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
     // Under dryRun nothing was actually written (the write above is skipped), so
     // the log line must not claim otherwise.
     log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
+    const publication = { publicationVersion: 1, scope, publishedPath: path.resolve(target.base, rel), publishedHash: recordHash(doc) };
+    if (scope === 'ship-set-proposal') return { pass: true, exitCode: 0, kind, path: rel.split(path.sep).join('/'), ...publication, indexed: null, proposal: true, activated: false, blockedReason: null, nextTools: ['Review the proposal before requesting a shipped-corpus change'] };
     // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
     // unhandled throw here would leave the episode we JUST wrote orphaned on disk
     // and, for the `remember` caller, skip its rollback path entirely (the throw
@@ -300,6 +305,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       exitCode: 0,
       kind,
       path: rel.split(path.sep).join('/'),
+      ...publication,
       indexed,
       blockedReason: null,
       nextTools: ['harness consolidate --status'],
@@ -309,11 +315,12 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
 
 async function runLearningDecision({ workspace, copilotHome, flags, log }) {
   if (flags.insight) throw new Error('A verified learning decision cannot be combined with --insight');
-  const text = flags.learningDecision === '-' ? fs.readFileSync(0, 'utf8') : readFileNoFollow(path.resolve(flags.learningDecision), { maxBytes: 1024 * 1024 });
+  const text = flags.learningDecision === '-' ? readBoundedInput() : readFileNoFollow(path.resolve(workspace, flags.learningDecision), { maxBytes: 1024 * 1024 });
   if (!text || Buffer.byteLength(text) > 1024 * 1024) throw new Error('Learning decision is missing, unreadable, or too large');
   const decision = JSON.parse(text);
   if (!decision || typeof decision !== 'object' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(decision.operation || '') || !['no-learning', 'publish'].includes(decision.decision)
-    || typeof decision.rationale !== 'string' || !decision.rationale.trim() || (decision.scope && decision.scope !== 'private')) throw new Error('Learning decision requires operation, decision, rationale, and private scope');
+    || typeof decision.rationale !== 'string' || !decision.rationale.trim() || (decision.scope && !['private', 'global', 'ship-set-proposal'].includes(decision.scope)) || Object.keys(decision).some(key => !['operation', 'decision', 'rationale', 'scope', 'title', 'body', 'category', 'tags', 'trigger', 'claim'].includes(key))) throw new Error('Learning decision requires operation, decision, rationale, and a supported publication scope');
+  if (decision.decision === 'publish' && (typeof decision.title !== 'string' || !decision.title.trim() || typeof decision.body !== 'string' || !decision.body.trim() || decision.tags !== undefined && (!Array.isArray(decision.tags) || !decision.tags.every(tag => typeof tag === 'string')))) throw new Error('Publication requires authored title, body and optional text tags');
   const selected = selectPlan(workspace, { planPath: flags.plan, session: readSession(workspace), requireUnique: true });
   if (!selected.plan) throw new Error('Learning decision requires an unambiguous plan');
   const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
@@ -321,17 +328,20 @@ async function runLearningDecision({ workspace, copilotHome, flags, log }) {
   const operation = recordHash(decision.operation);
   const digest = recordHash({ decision, proof: checked.value.verificationIdentity });
   const rel = `.harness/learning/${operation}.json`;
-  if (flags.dryRun) return { pass: true, exitCode: 0, dryRun: true, decision: decision.decision, path: null, indexed: null };
+  const existing = readReviewRecord(workspace, rel);
+  if (existing && existing.digest !== digest) throw new Error('Learning operation identity conflicts with a different decision or proof');
+  const publish = captureDate => runInsightCompound({ workspace, copilotHome, flags: { ...flags, plan: selected.plan.path, title: decision.title, body: decision.body, category: decision.category, tags: Array.isArray(decision.tags) ? decision.tags.join(',') : '', trigger: decision.trigger, claim: decision.claim, captureDate, operationSuffix: operation.slice(0, 16), publicationScope: decision.scope || 'private' }, log, kind: 'fix', home: flags.harnessHome || process.env.HARNESS_HOME });
+  if (flags.dryRun) return decision.decision === 'publish' ? { ...publish(existing?.captureDate), dryRun: true } : { pass: true, exitCode: 0, dryRun: true, decision: decision.decision, path: null, indexed: null };
   publishReviewRecord(workspace, '.harness/learning/.ready.json', { version: 1 });
   const pointer = learningPointerRel(selected.plan.path);
   return withPlanUpdateLock(path.join(workspace, pointer), () => withPlanUpdateLock(path.join(workspace, rel), () => {
     const prior = readReviewRecord(workspace, rel);
     if (prior && prior.digest !== digest) throw new Error('Learning operation identity conflicts with a different decision or proof');
-    if (prior?.state === 'done') {
+    const priorPublicationCurrent = !prior || learningPublicationCurrent(workspace, prior, { copilotHome, home: flags.harnessHome || process.env.HARNESS_HOME });
+    if (prior?.state === 'done' && priorPublicationCurrent) {
       publishReviewRecord(workspace, pointer, { version: 1, operation, record: rel });
       return { ...prior.result, learningRecord: rel, replayed: true };
     }
-    if (prior?.state === 'blocked') return { pass: false, exitCode: 1, blockedReason: prior.result.blockedReason, partialRecovery: prior.result.partialRecovery };
     const pending = prior || { version: 1, operation, digest, decision, proof: checked.value, captureDate: new Date().toISOString().slice(0, 10), state: 'pending' };
     const fresh = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
     if (!fresh.pass || fresh.id !== checked.id) throw new Error('Work changed before learning publication');
@@ -339,7 +349,7 @@ async function runLearningDecision({ workspace, copilotHome, flags, log }) {
     publishReviewRecord(workspace, rel, pending);
     const result = decision.decision === 'no-learning'
       ? { pass: true, exitCode: 0, decision: 'no-learning', path: null, indexed: null, plan: selected.plan.path, verificationEvidence: checked.value.evidencePath }
-      : runInsightCompound({ workspace, copilotHome, flags: { ...flags, plan: selected.plan.path, title: decision.title, body: decision.body, category: decision.category, tags: Array.isArray(decision.tags) ? decision.tags.join(',') : '', captureDate: pending.captureDate, operationSuffix: operation.slice(0, 16) }, log, kind: 'fix', home: flags.harnessHome || process.env.HARNESS_HOME });
+      : publish(pending.captureDate);
     publishReviewRecord(workspace, rel, { ...pending, state: result.pass ? 'done' : result.partialRecovery ? 'blocked' : 'pending', result });
     return { ...result, learningRecord: rel };
   }));
@@ -396,8 +406,6 @@ export async function runCompound({ workspace, copilotHome, flags, log = () => {
   let codeIndex = null;
   if (!flags.dryRun) {
     try {
-      const { buildStructuralIndex } = await import('./repo-map/structural-index.mjs');
-      const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
       const extractor = await createTreesitterExtract();
       codeIndex = await buildStructuralIndex({
         workspace,

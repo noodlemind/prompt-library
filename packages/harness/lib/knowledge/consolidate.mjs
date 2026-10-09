@@ -18,6 +18,7 @@ const CANDIDATE_TITLE_CAP = 200;
 const CANDIDATE_TAGS_TOTAL_CAP = 500;
 export const PROMOTION_FIX_THRESHOLD = 3;
 export const PROMOTION_PLAN_THRESHOLD = 2;
+export const episodeId = e => crypto.createHash('sha256').update(JSON.stringify({ path: e.path, sha256: e.sha256, kind: e.kind })).digest('hex');
 
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -245,7 +246,7 @@ export function consolidateStatus({ workspace, copilotHome, home }) {
   };
 }
 
-export function consolidateCandidates({ workspace, copilotHome, home }) {
+export function consolidateCandidates({ workspace, copilotHome, home, withIds = false }) {
   const status = consolidateStatus({ workspace, copilotHome, home });
   const episodes = collectEpisodes({ workspace, copilotHome, home });
   const bySha = new Map(episodes.map((e) => [`${e.path}@${e.sha256}`, e]));
@@ -269,6 +270,7 @@ export function consolidateCandidates({ workspace, copilotHome, home }) {
       path: full.path,
       sha256: full.sha256,
       kind: full.kind,
+      ...(withIds ? { id: episodeId(full) } : {}),
             title: inertLine(full.title).slice(0, CANDIDATE_TITLE_CAP),
       tags: capTags(full.tags, CANDIDATE_TAGS_TOTAL_CAP),
       excerpt: full.excerpt,

@@ -36,12 +36,41 @@ import { loadPolicy, publishPolicySnapshot } from './policy.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { planDigest, readEvidence, validateEvidence } from './evidence.mjs';
 import { validateCompletion } from './completion.mjs';
-import { migrateStrandedStore } from './knowledge/admin.mjs';
+import { migrateStrandedStore, purgeAll, purgeEpisode, rebuildStore } from './knowledge/admin.mjs';
 import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 import { planRevision } from './plan-decisions.mjs';
 import { gapEvidenceCheck } from './plan-readiness.mjs';
 import { validatePlanSchema } from './plan-schema.mjs';
+import { prepareConsolidationPacket, applyConsolidationProposal } from './knowledge/packet-ops.mjs';
+
+import { ensureIndexes } from './ensure-indexes.mjs';
+import { indexStatus } from './index-status.mjs';
+import { buildStructuralIndex, readStructuralIndex, renderStructuralDigest, validateSinceRef } from './repo-map/structural-index.mjs';
+import { createTreesitterExtract } from './repo-map/treesitter-extractor.mjs';
+import { writeCodebaseMap } from './repo-map/index.mjs';
+import { KNOWLEDGE_COMMIT_MODES, KNOWLEDGE_MODES, inertLine, listLearnings, readStoreConfig, storeDir, writeStaleExclusions, writeStoreConfig } from './knowledge/store.mjs';
+import { assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { readOrientSlice } from './orient-read.mjs';
+import { runOrient } from './orient.mjs';
+import { exitCodeForOutcome, isGatingCheck, runVerify, statusForVerifyResult, unifiedStatusForCheck } from './verify.mjs';
+import { createJsonlStream } from './envelope.mjs';
+import { runRecall } from './recall-cmd.mjs';
+import { buildReport, hasBudgetBreach, loadReportEvents, renderReport } from './report.mjs';
+import { buildGrowthReport, renderGrowthReport } from './growth-report.mjs';
+import { collectHostUsage, mergeHostUsage } from './host-telemetry/index.mjs';
+import * as store from './telemetry-store.mjs';
+import { runValidatePlan } from './validate-plan.mjs';
+import { runCompound } from './compound.mjs';
+import { CONSOLIDATION_THRESHOLD, consolidateStatus } from './knowledge/consolidate.mjs';
+import { runCorrect, runRemember } from './knowledge/remember.mjs';
+import { setLearningStatus } from './knowledge/lifecycle.mjs';
+import { resolveLearningsView } from './knowledge/listing.mjs';
+import { DEFAULT_NEGATIVE_QUERIES, evalKnowledge } from './knowledge/eval.mjs';
+import { knowledgeStatus } from './knowledge/status.mjs';
+import { buildPromotionOps } from './knowledge/promote.mjs';
+import { pruneBuckets } from './knowledge/prune.mjs';
+import { runGet } from './get-cmd.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
@@ -409,7 +438,6 @@ export async function cmdInitRepo(argv) {
   flags.home = flags.home || process.env.HARNESS_HOME;
   const stats = runInitRepo({ workspace, flags, log: logger, copilotHome });
   try {
-    const { ensureIndexes } = await import('./ensure-indexes.mjs');
     stats.indexes = await ensureIndexes({
       workspace,
       copilotHome,
@@ -471,7 +499,6 @@ export async function cmdIndex(argv) {
   // Reports both planes: knowledge BM25 (`harness index`) and structural code
   // (`harness index --structural`). Historical top-level fields are knowledge-only.
   if (hasFlag(argv, '--status')) {
-    const { indexStatus } = await import('./index-status.mjs');
     const status = indexStatus({
       workspace,
       copilotHome,
@@ -517,10 +544,6 @@ export async function cmdIndex(argv) {
   }
 
     if (hasFlag(argv, '--structural')) {
-    const { buildStructuralIndex, validateSinceRef, renderStructuralDigest, readStructuralIndex } = await import(
-      './repo-map/structural-index.mjs'
-    );
-    const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
     const since = flags.since ? validateSinceRef(workspace, flags.since) : null;
     const extractor = await createTreesitterExtract();
     const result = await buildStructuralIndex({ workspace, extractor, since, dryRun: flags.dryRun, log: logger });
@@ -614,7 +637,6 @@ export async function cmdIndex(argv) {
   });
   // Refresh the committed codebase map alongside the knowledge index.
   try {
-    const { writeCodebaseMap } = await import('./repo-map/index.mjs');
     const map = writeCodebaseMap({ workspace, dryRun: flags.dryRun });
     if (map) {
       result.codebaseMap = map;
@@ -625,8 +647,6 @@ export async function cmdIndex(argv) {
   }
     if (!flags.dryRun) {
     try {
-      const { storeDir, listLearnings, writeStaleExclusions } = await import('./knowledge/store.mjs');
-      const { assertNoSymlinkAncestors } = await import('./fs-safe.mjs');
       const dir = storeDir(workspace);
       if (fs.existsSync(dir)) {
         const excluded = {};
@@ -649,8 +669,6 @@ export async function cmdIndex(argv) {
   let code = null;
   let codeError = null;
   try {
-    const { buildStructuralIndex } = await import('./repo-map/structural-index.mjs');
-    const { createTreesitterExtract } = await import('./repo-map/treesitter-extractor.mjs');
     const extractor = await createTreesitterExtract();
     code = await buildStructuralIndex({
       workspace,
@@ -723,11 +741,9 @@ export async function computeOrientResult(argv) {
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);
   if (flags.read) {
-    const { readOrientSlice } = await import('./orient-read.mjs');
     const result = readOrientSlice({ workspace, copilotHome, flags, query, files: flags.files });
     return { flags, workspace, copilotHome, query, result, read: true };
   }
-  const { runOrient } = await import('./orient.mjs');
   const result = runOrient({ workspace, copilotHome, flags, query });
   return { flags, workspace, copilotHome, query, result, read: false };
 }
@@ -833,8 +849,6 @@ export async function cmdGate(argv) {
 }
 
 export async function cmdVerify(argv, ctx = {}) {
-  const { runVerify, exitCodeForOutcome, statusForVerifyResult, unifiedStatusForCheck, isGatingCheck } =
-    await import('./verify.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const signal = ctx.signal;
@@ -843,7 +857,6 @@ export async function cmdVerify(argv, ctx = {}) {
   let jsonl = null;
   let onEvent;
   if (streaming) {
-    const { createJsonlStream } = await import('./envelope.mjs');
     jsonl = createJsonlStream(process.stdout);
     jsonl.start({ command: 'verify', plan: flags.plan || null });
     onEvent = (event, fields = {}) => {
@@ -973,7 +986,6 @@ export async function cmdVerify(argv, ctx = {}) {
 }
 
 export async function cmdRecall(argv) {
-  const { runRecall } = await import('./recall-cmd.mjs');
   const flags = parseFlags(argv);
   if (hasFlag(argv, '--include-plans')) flags.includePlans = true;
   const workspace = path.resolve(flags.workspace);
@@ -1066,14 +1078,12 @@ export async function cmdEvents(argv) {
 }
 
 export async function cmdReport(argv) {
-  const { buildReport, renderReport, hasBudgetBreach, loadReportEvents } = await import('./report.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
 
   // Adaptive Engineering session-end growth report (kernel-only; no LLM).
   if (flags.growth) {
-    const { buildGrowthReport, renderGrowthReport } = await import('./growth-report.mjs');
     const events = loadReportEvents({ workspace });
     const growth = buildGrowthReport({
       workspace,
@@ -1086,11 +1096,9 @@ export async function cmdReport(argv) {
     return 0;
   }
 
-  const { collectHostUsage, mergeHostUsage } = await import('./host-telemetry/index.mjs');
 
   let base = null;
   if (flags.sync || flags.global) {
-    const store = await import('./telemetry-store.mjs');
     if (flags.sync) {
       const synced = store.syncWorkspaceEvents({ workspace });
       if (!flags.json) {
@@ -1134,7 +1142,6 @@ export async function cmdReport(argv) {
 }
 
 export async function cmdValidatePlan(argv) {
-  const { runValidatePlan } = await import('./validate-plan.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const result = runValidatePlan({ workspace, flags, planPath: flags.plan });
@@ -1173,7 +1180,6 @@ export async function cmdValidatePlan(argv) {
 }
 
 export async function cmdCompound(argv) {
-  const { runCompound } = await import('./compound.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
@@ -1228,7 +1234,6 @@ export async function cmdConsolidate(argv) {
   const logger = (m) => log(flags, m);
 
   if (hasFlag(argv, '--apply')) {
-    const { applyOps } = await import('./knowledge/apply.mjs');
     if (!flags.ops) {
       throw Object.assign(new Error('--apply requires --ops <path> (the skill-emitted operations JSON)'), {
         code: 'E_USAGE',
@@ -1236,14 +1241,15 @@ export async function cmdConsolidate(argv) {
         exit: EXIT.usage,
       });
     }
-    const result = applyOps({
+    const result = applyConsolidationProposal({
       workspace,
-      opsPath: path.resolve(flags.ops),
+      opsPath: path.resolve(workspace, flags.ops),
       dryRun: flags.dryRun,
       approve: flags.yes,
       log: logger,
       copilotHome,
       layer: flags.layer,
+      home: flags.harnessHome || process.env.HARNESS_HOME,
     });
     writeEvent(workspace, flags, {
       type: 'consolidate',
@@ -1281,8 +1287,7 @@ export async function cmdConsolidate(argv) {
   }
 
   if (hasFlag(argv, '--candidates')) {
-    const { consolidateCandidates } = await import('./knowledge/consolidate.mjs');
-    const packet = consolidateCandidates({ workspace, copilotHome });
+    const packet = prepareConsolidationPacket({ workspace, copilotHome, home: flags.harnessHome || process.env.HARNESS_HOME, dryRun: flags.dryRun });
     writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
     if (flags.json) {
       emitJson(flags, packet);
@@ -1301,8 +1306,6 @@ export async function cmdConsolidate(argv) {
   }
 
   if (hasFlag(argv, '--rebuild')) {
-    const { rebuildStore } = await import('./knowledge/admin.mjs');
-    const { CONSOLIDATION_THRESHOLD } = await import('./knowledge/consolidate.mjs');
     const result = rebuildStore({ workspace, yes: flags.yes, copilotHome, log: logger });
     writeEvent(workspace, flags, {
       type: 'consolidate',
@@ -1331,7 +1334,6 @@ export async function cmdConsolidate(argv) {
   }
 
   // Default: --status (deterministic debt gauge, zero model cost).
-  const { consolidateStatus } = await import('./knowledge/consolidate.mjs');
   const status = consolidateStatus({ workspace, copilotHome, home: flags.home || process.env.HARNESS_HOME });
   writeEvent(workspace, flags, { type: 'consolidate', command: 'consolidate', result: 'pass', exitCode: 0 });
   if (flags.json) {
@@ -1403,17 +1405,14 @@ async function finishTeaching(argv, command, run) {
 }
 
 export async function cmdRemember(argv) {
-  const { runRemember } = await import('./knowledge/remember.mjs');
   return finishTeaching(argv, 'remember', runRemember);
 }
 
 export async function cmdCorrect(argv) {
-  const { runCorrect } = await import('./knowledge/remember.mjs');
   return finishTeaching(argv, 'correct', runCorrect);
 }
 
 export async function cmdLearning(argv) {
-  const { setLearningStatus } = await import('./knowledge/lifecycle.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const action = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
@@ -1456,7 +1455,6 @@ export async function cmdLearning(argv) {
 }
 
 export async function cmdLearnings(argv) {
-  const { resolveLearningsView } = await import('./knowledge/listing.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
@@ -1540,7 +1538,6 @@ export async function cmdLearnings(argv) {
 }
 
 export async function cmdEvalKnowledge(argv) {
-  const { evalKnowledge, DEFAULT_NEGATIVE_QUERIES } = await import('./knowledge/eval.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
@@ -1600,10 +1597,8 @@ export async function cmdKnowledge(argv) {
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const subcommand = argv[0] && !argv[0].startsWith('--') ? argv[0] : null;
   // Single definition (store.mjs) — commands.mjs no longer keeps its own copy.
-  const { KNOWLEDGE_MODES, KNOWLEDGE_COMMIT_MODES, writeStoreConfig, readStoreConfig } = await import('./knowledge/store.mjs');
 
   if (subcommand === 'purge') {
-    const { purgeEpisode, purgeAll } = await import('./knowledge/admin.mjs');
     const rawTarget = argv[1];
     const isAll = rawTarget === '--all';
         const target = !isAll && rawTarget && !rawTarget.startsWith('--') ? rawTarget : null;
@@ -1677,7 +1672,6 @@ export async function cmdKnowledge(argv) {
   }
 
     if (subcommand === 'status') {
-    const { knowledgeStatus } = await import('./knowledge/status.mjs');
     const report = knowledgeStatus({ workspace, copilotHome });
     writeEvent(workspace, flags, {
       type: 'knowledge',
@@ -1690,7 +1684,6 @@ export async function cmdKnowledge(argv) {
       emitJson(flags, report);
       return 0;
     }
-    const { inertLine } = await import('./knowledge/store.mjs');
     const keyWidth = keyWidthFor(['knowledge', 'golden', 'drift', ...report.golden.domains.map((d) => d.domain), ...report.buckets.map((b) => b.key)]);
     const contextNote = report.context
       ? report.context.detached
@@ -1745,7 +1738,6 @@ export async function cmdKnowledge(argv) {
   }
 
     if (subcommand === 'promote') {
-    const { buildPromotionOps } = await import('./knowledge/promote.mjs');
     const logger = (m) => log(flags, m);
     const ids = flags.ids ? flags.ids.split(',').map((s) => s.trim()).filter(Boolean) : null;
     const result = buildPromotionOps({ workspace, branchKey: flags.branch, ids, all: flags.all, log: logger });
@@ -1779,7 +1771,6 @@ export async function cmdKnowledge(argv) {
   }
 
     if (subcommand === 'prune') {
-    const { pruneBuckets } = await import('./knowledge/prune.mjs');
     const logger = (m) => log(flags, m);
     const result = pruneBuckets({
       workspace,
@@ -1943,8 +1934,6 @@ export async function cmdKnowledge(argv) {
 }
 
 export async function cmdGet(argv) {
-  const { runGet } = await import('./get-cmd.mjs');
-  const { inertLine } = await import('./knowledge/store.mjs');
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);

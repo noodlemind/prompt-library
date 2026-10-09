@@ -19,7 +19,7 @@ Done means the CLI and installed hooks reject broken, missing, stale and incompl
 - [x] Resolve relevant Phase 1 PR comments and reprove the updated head before resuming Phase 2.
 - [x] P2.1 Deterministic review preparation and assembly.
 - [x] P2.2 Structured lifecycle operations and intent amendments.
-- [ ] P2.3 Learning publication and consolidation packets.
+- [x] P2.3 Learning publication and consolidation packets.
 - [ ] P2.4 Primitive validation and recurrence proposals.
 - [ ] P2.5 Factual context and reports.
 - [ ] P2.6 Installed product proof.
@@ -60,3 +60,5 @@ P2.2 release suite passed 2354/2357 on Node22, zero failures, three skips (`phas
 PR81 review reopened P2.2. Four regressions reproduced: resolved needs-info drafts could not start, initial phase stayed zero, final gap closure reset progressed work to planned, and legacy gap observations were parsed as bindings. The repair passes 107 focused checks. New file bindings use evidence_binding; authored observations survive. Full release suite is running before publication.
 
 P2.2 review repair release suite passed 2358/2361, zero failures, three skips (`phase2-plan-feedback-full.log`). All 107 focused checks passed. Four review issues were reproduced red and repaired; platform CI remains pending for the new head.
+
+P2.3 local Node22 release suite: 2374 tests, 2371 passed, zero failures, three skipped (`phase2-learning-release-node22.log`). Accepted publication binds destination, decision, proof, provenance and bytes; private/global publication and dormant ship-set proposals use the existing writer. Frozen consolidation packets expand episode IDs, revalidate under the store transaction and persist one repair opportunity; committed store receipts recover interrupted outer receipts without duplicate consumption. Skills relinquish serialization, hashes, caps, lint arithmetic and index bookkeeping. A subsequent candidate dry-run regression caught unwanted packet publication; dry-run now leaves no packet and the registry accurately declares preparation as a mutation. Platform checks for the published head are pending; editor integration remains unverified.

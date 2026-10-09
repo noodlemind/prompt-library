@@ -5,7 +5,7 @@ import { parseFlags } from './flags.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { createEvidenceBinding } from './evidence.mjs';
 import { collectChangedFiles } from './plan-scope.mjs';
-import { readFileNoFollow, writeFileContained } from './fs-safe.mjs';
+import { readFileNoFollow, writeFileContained, readBoundedInput } from './fs-safe.mjs';
 import { ensureHarnessDir } from './session.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { redactedJson } from './redact.mjs';
@@ -116,7 +116,7 @@ export async function reviewResultOf(argv) {
     return { ...packet, packetPath: `.harness/reviews/packets/${packet.id}.json`, persisted: !flags.dryRun };
   }
   if (verb !== 'assemble') throw usage('review requires prepare or assemble');
-  const text = flags.files?.length ? readFileNoFollow(path.resolve(flags.files[0]), { maxBytes: 1024 * 1024 }) : fs.readFileSync(0, 'utf8');
+  const text = flags.files?.length ? readFileNoFollow(path.resolve(workspace, flags.files[0]), { maxBytes: 1024 * 1024 }) : readBoundedInput();
   if (!text || Buffer.byteLength(text) > 1024 * 1024) throw usage('Review input is absent, unreadable, or too large');
   let input;
   try { input = JSON.parse(text); } catch { throw usage('Review input must be JSON'); }
