@@ -55,7 +55,7 @@ export function ensureHarnessDir(workspace, dryRun) {
     if (harnessDirEscapes(workspace)) return null;
   const gitignore = path.join(dir, '.gitignore');
     const content =
-      '# Ephemeral per-turn artifacts\nsession.json\ncontext-pack.md\nevents.jsonl\nruns.jsonl\nevidence/\nundo.jsonl\nundo/\nlocks/\nplans/\ncodebase-map.md\nagent-context.md\n';
+      '# Ephemeral per-turn artifacts\nsession.json\ncontext-pack.md\nevents.jsonl\nruns.jsonl\nevidence/\nreviews/\ncompletions/\nlearning/\noperations/\nundo.jsonl\nundo/\nlocks/\nplans/\ncodebase-map.md\nagent-context.md\n';
   if (!fs.existsSync(gitignore)) {
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
@@ -70,6 +70,10 @@ export function ensureHarnessDir(workspace, dryRun) {
       'events.jsonl',
       'runs.jsonl',
       'evidence/',
+      'reviews/',
+      'completions/',
+      'learning/',
+      'operations/',
       'undo.jsonl',
       'undo/',
       'locks/',

@@ -32,7 +32,7 @@ user-invocable: false
 Require explicit passed evidence:
 
 ```bash
-harness verify --plan <path> --workspace . --json
+harness status --validate-evidence --plan <path> --workspace . --json
 ```
 
 Do not run on `failed` or `inconclusive`, with open hard gaps, or before required review is satisfied.
@@ -49,21 +49,21 @@ Do not run on `failed` or `inconclusive`, with open hard gaps, or before require
 | Need for independent expertise | Specialist-agent candidate |
 | External executable capability | Tool/integration candidate |
 
-Append a structured recommendation to the plan:
+Supply a learning decision to Harness with a private publication destination. Record recurrence evidence and any candidate_primitive, candidate_name, and recommendation as proposals. Keep the learning outside the work contract:
 
-```yaml
-learning:
-  destination: knowledge
-  recurrence: possible
-  candidate_primitive: skill
-  candidate_name: spring-boot-jackson-migration
-  evidence:
-    - verification outcome passed
-    - migration completed in one repository
-  recommendation: record-now-promote-after-next-use
+```json
+{
+  "operation": "task-learning-1",
+  "decision": "publish",
+  "scope": "private",
+  "rationale": "A durable, reusable lesson was demonstrated by this task",
+  "title": "Task-specific lesson",
+  "category": "testing",
+  "body": "Evidence, root cause, correction, and applicability in Markdown"
+}
 ```
 
-Fields `destination`, `recurrence`, `candidate_primitive`, `candidate_name`, `evidence`, and `recommendation` are required. Use `candidate_primitive: null` when no promotion is warranted.
+Use `decision: "no-learning"` with a rationale when no durable lesson exists. It produces no episode. Operation IDs support safe replay; reuse an ID only for the same decision and proof. Promotion recommendations are proposals, never activation authority.
 
 ## Promotion test
 
@@ -73,13 +73,13 @@ Every promoted skill must have 8–10 positive trigger evals, 8–10 negative/co
 
 ## Persist
 
-Write the selected plan/knowledge destination, then run:
+Pass the JSON decision file to the writer:
 
 ```bash
-harness compound --plan <path> --workspace . --json
+harness compound --plan <path> --learning-decision <file> --workspace . --json
 ```
 
-The command consumes passed evidence, indexes knowledge, and records skill usage/outcome telemetry. Add 1–3 bounded Memory Cards with source paths. Report the evidence path, learning destination, and promotion recommendation.
+The command validates current proof, writes the private verified episode when requested, and reports the persisted record and indexing result. Never edit learning frontmatter before publication or rerun tests for bookkeeping. Report actual evidence and publication outcomes.
 
 ## Debt check (session-end drain)
 

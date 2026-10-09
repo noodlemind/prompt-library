@@ -389,6 +389,7 @@ test('validate-plan and gate reject pre-completed planned work and output-irrele
 
 test('scope treats the active plan as governance metadata while enforcing product paths', () => {
   const workspace = tempDir('harness-workspace-');
+  writeChecks(workspace, { 'unit-tests': { command: [process.execPath, '-e', 'process.exit(0)'] } });
   initGit(workspace);
   const planPath = writeVersionedPlan(workspace, { impacted: ['src/example.js'] });
   fs.appendFileSync(path.join(workspace, 'src', 'example.js'), 'export const changed = true;\n');

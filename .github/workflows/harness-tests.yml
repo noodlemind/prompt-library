@@ -53,3 +53,43 @@ jobs:
 
       - name: Prompt library contracts
         run: node --test packages/harness/test/prompt-library-contracts.test.mjs
+
+  delivery-contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: npm ci --prefix packages/harness
+      - name: Worktree and platform contracts
+        run: node --test packages/harness/test/issue-intake.test.mjs packages/harness/test/corpus-home.test.mjs packages/harness/test/provider-adapters.test.mjs packages/harness/test/resources-plugins.test.mjs packages/harness/test/unchanged-retry.test.mjs packages/harness/test/windows-workflow.test.mjs packages/harness/test/fs-copy.test.mjs packages/harness/test/vscode-lm-bridge.test.mjs packages/harness/test/storage-aliases.test.mjs
+      - name: CLI and installed delivery contracts
+        id: proof
+        continue-on-error: true
+        shell: bash
+        env:
+          HARNESS_PROOF_LOG: delivery-transcripts.jsonl
+        run: node --test packages/harness/test/deterministic-delivery.test.mjs packages/harness/test/insight-compound.test.mjs > delivery-proof.log 2>&1
+      - name: Preserve proof output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: delivery-proof-${{ matrix.os }}
+          path: |
+            delivery-proof.log
+            delivery-transcripts.jsonl
+      - name: Require an executed passing verdict
+        if: always()
+        shell: bash
+        env:
+          PROOF_OUTCOME: ${{ steps.proof.outcome }}
+        run: |
+          cat delivery-proof.log || true
+          test "$PROOF_OUTCOME" = success

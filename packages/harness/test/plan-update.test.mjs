@@ -171,10 +171,10 @@ keep-intent is the goal
   const ws = workspace();
   const plan = newPlan(ws);
   const before = fs.readFileSync(plan, 'utf8');
-  const dry = harness(ws, ['plan-update', '--plan', plan, '--status', 'done', '--dry-run', '--json']);
+  const dry = harness(ws, ['plan-update', '--plan', plan, '--status', 'review', '--dry-run', '--json']);
   assert.equal(dry.status, 0, dry.stderr);
   assert.equal(JSON.parse(dry.stdout).dryRun, true);
-  assert.equal(JSON.parse(dry.stdout).status, 'done');
+  assert.equal(JSON.parse(dry.stdout).status, 'review');
   assert.equal(fs.readFileSync(plan, 'utf8'), before);
   fs.rmSync(ws, { recursive: true, force: true });
 });

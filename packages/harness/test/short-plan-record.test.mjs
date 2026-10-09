@@ -6,6 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { externalPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
+import { approveProject } from '../lib/trust.mjs';
+import { writeChecks } from './helpers/cli-fixtures.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(packageRoot, '../..');
@@ -30,12 +32,14 @@ function coldRepo() {
   fs.writeFileSync(path.join(ws, 'README.md'), 'cold\n');
   fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
   fs.writeFileSync(path.join(ws, 'src', 'app.js'), 'export const n = 1;\n');
+  writeChecks(ws, { behavior: { command: [process.execPath, '-e', "import('./src/app.js').then(m => { if (m.n !== 2) process.exit(1); })"] } });
   git(ws, ['init', '-q']);
   git(ws, ['config', 'user.email', 'e@x.test']);
   git(ws, ['config', 'user.name', 'T']);
   git(ws, ['add', 'README.md', 'src/app.js']);
   const committed = git(ws, ['commit', '-qm', 'init']);
   assert.equal(committed.status, 0, committed.stderr || committed.stdout);
+  approveProject({ workspace: ws, copilotHome: home, home });
   return { ws, home };
 }
 
@@ -53,6 +57,7 @@ function useHome(c) {
 }
 
 function harness(c, args) {
+  if (args[0] === 'plan-new' && args.includes('--goal') && !args.includes('--verification-check')) args = [...args, '--verification-check', 'behavior'];
   return spawnSync(process.execPath, [binPath, ...args, '--workspace', c.ws, '--harness-home', c.home], {
     cwd: c.ws,
     encoding: 'utf8',
@@ -315,6 +320,11 @@ test('a short plan passes verify after a green file change', () => {
     assert.equal(created.status, 0, created.stderr || created.stdout);
     const plan = JSON.parse(created.stdout).path;
     fs.writeFileSync(path.join(c.ws, 'src', 'app.js'), 'export const n = 2;\n');
+    const packet = JSON.parse(harness(c, ['review', 'prepare', '--plan', plan, '--base', 'HEAD', '--json']).stdout);
+    const input = path.join(c.ws, '.harness/review-input.json');
+    fs.writeFileSync(input, JSON.stringify({ packet: packet.id, results: packet.required.map(reviewer => ({ reviewer, status: 'completed', findings: [], residual_risks: [], testing_gaps: [] })) }));
+    const reviewed = harness(c, ['review', 'assemble', '--plan', plan, '--packet', packet.id, '--file', input, '--json']);
+    assert.equal(reviewed.status, 0, reviewed.stdout + reviewed.stderr);
     const verified = harness(c, ['verify', '--plan', plan, '--base', 'HEAD', '--json']);
     assert.equal(verified.status, 0, verified.stderr || verified.stdout);
     assert.equal(JSON.parse(verified.stdout).outcome, 'passed');

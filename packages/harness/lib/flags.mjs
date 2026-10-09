@@ -53,6 +53,7 @@ export function parseFlags(argv) {
     const boundary = argv.indexOf('--');
   const scan = boundary === -1 ? argv : argv.slice(0, boundary);
   const flags = {
+    effectivePolicy: false,
     dryRun: false,
     verbose: false,
     json: false,
@@ -63,6 +64,7 @@ export function parseFlags(argv) {
     autonomy: null,
     copilotHome: null,
     harnessHome: null,
+    fromId: null,
     targets: new Set(['vscode', 'cli', 'intellij']),
     workspace: process.cwd(),
     query: null,
@@ -127,6 +129,12 @@ export function parseFlags(argv) {
     if (a === '--dry-run') flags.dryRun = true;
     else if (a === '--verbose' || a === '-v') flags.verbose = true;
     else if (a === '--json') flags.json = true;
+    else if (a === '--effective-policy') flags.effectivePolicy = true;
+    else if (a === '--contract-digest') flags.contractDigest = true;
+    else if (a === '--validate-evidence') flags.validateEvidence = true;
+    else if (a === '--validate-completion') flags.validateCompletion = true;
+    else if (a === '--packet') flags.packet = scan[++i];
+    else if (a === '--learning-decision') flags.learningDecision = scan[++i];
     else if (a === '--explain') flags.explain = true;
     else if (a === '--read') flags.read = true;
     else if (a === '--refresh') flags.refresh = true;
@@ -166,6 +174,11 @@ export function parseFlags(argv) {
     else if (a === '--autonomy') flags.autonomy = scan[++i];
     else if (a.startsWith('--copilot-home=')) flags.copilotHome = a.split('=')[1];
     else if (a === '--copilot-home') flags.copilotHome = scan[++i];
+    else if (a.startsWith('--from-id=') || a === '--from-id') {
+      const value = a === '--from-id' ? scan[++i] : a.slice('--from-id='.length);
+      if (typeof value !== 'string' || !/^local-[0-9a-f]{12}$/.test(value)) invalidFlag('--from-id', value, 'requires local-<12 hex digits>');
+      flags.fromId = value;
+    }
     else if (a.startsWith('--harness-home=')) {
       const value = a.split('=').slice(1).join('=');
       if (!value) invalidFlag('--harness-home', value, 'requires a directory path');

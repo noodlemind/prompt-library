@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { StringDecoder } from 'node:string_decoder';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -43,8 +42,9 @@ export function startPlugin({
 
   const pending = new Map();
   let seq = 0;
-  let buffer = '';
-    const decoder = new StringDecoder('utf8');
+  let fragments = [];
+  let frameBytes = 0;
+  let discarding = false;
   let closed = false;
     let exited = false;
   const logs = [];
@@ -63,55 +63,68 @@ export function startPlugin({
     if (logs.length > MAX_LOG_ENTRIES) logs.splice(0, logs.length - MAX_LOG_ENTRIES);
   };
 
-  child.stdout?.on('data', (chunk) => {
-    buffer += decoder.write(chunk);
-        if (buffer.length > maxLineBytes && !buffer.includes('\n')) {
-      pushLog({ level: 'warn', text: `discarded ${buffer.length} bytes of unterminated output from plugin` });
-      buffer = '';
-      return;
-    }
-    let index = buffer.indexOf('\n');
-    while (index !== -1) {
-      const line = buffer.slice(0, index);
-      buffer = buffer.slice(index + 1);
-      index = buffer.indexOf('\n');
-      if (!line.trim()) continue;
+  const receiveLine = (line) => {
+      if (!line.trim()) return;
             if (line.length > maxLineBytes) {
         pushLog({ level: 'warn', text: `discarded a ${line.length}-byte frame from plugin (cap ${maxLineBytes})` });
-        continue;
+        return;
       }
       let message;
       try {
         message = JSON.parse(line);
       } catch {
                 pushLog({ level: 'warn', text: `unparseable line from plugin: ${line.slice(0, 200)}` });
-        continue;
+        return;
       }
       if (!PLUGIN_MESSAGES.includes(message?.type)) {
         pushLog({ level: 'warn', text: `unknown message type from plugin: ${String(message?.type).slice(0, 40)}` });
-        continue;
+        return;
       }
       if (message.type === 'chunk') {
         // Progress, not an answer: reported and never used to settle.
         onChunk?.({ id: message.id, text: String(message.text ?? '') });
-        continue;
+        return;
       }
       if (message.type === 'log') {
         pushLog({ level: message.level === 'error' ? 'error' : 'info', text: String(message.text ?? '').slice(0, 4000) });
-        continue;
+        return;
       }
       if (message.type === 'hello') {
                 if (message.protocol !== undefined && message.protocol !== PROTOCOL_VERSION) {
           pushLog({ level: 'warn', text: `plugin answered the handshake with protocol ${String(message.protocol).slice(0, 20)}, expected ${PROTOCOL_VERSION}` });
         }
-        continue;
+        return;
       }
-      if (message.type !== 'result' && message.type !== 'error') continue;
+      if (message.type !== 'result' && message.type !== 'error') return;
       const entry = pending.get(message.id);
-      if (!entry) continue;
+      if (!entry) return;
       pending.delete(message.id);
       if (message.type === 'error') entry.reject(Object.assign(new Error(String(message.message ?? 'plugin error')), { code: 'E_PLUGIN' }));
       else entry.resolve(message.result);
+
+  };
+
+  child.stdout?.on('data', (chunk) => {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const newline = bytes.indexOf(10, offset);
+      const end = newline === -1 ? bytes.length : newline;
+      const segment = bytes.subarray(offset, end);
+      if (!discarding) {
+        frameBytes += segment.length;
+        if (frameBytes > maxLineBytes) {
+          pushLog({ level: 'warn', text: `discarded a ${frameBytes}-byte frame from plugin (cap ${maxLineBytes}); unterminated output is ignored until the next newline` });
+          fragments = [];
+          discarding = true;
+        } else if (segment.length) fragments.push(segment);
+      }
+      if (newline === -1) break;
+      if (!discarding) receiveLine(Buffer.concat(fragments, frameBytes).toString('utf8'));
+      fragments = [];
+      frameBytes = 0;
+      discarding = false;
+      offset = end + 1;
     }
   });
 

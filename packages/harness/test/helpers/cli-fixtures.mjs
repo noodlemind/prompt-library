@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runHarness, packageRoot } from './cli.mjs';
+import { runHarness, packageRoot, cliHarnessHome } from './cli.mjs';
 
 export function writeKnowledgeSolution(copilotHome, {
   category = 'api',
@@ -95,6 +95,13 @@ export function writeChecks(workspace, checks) {
   );
 }
 
+export function writeNoLearningDecision(workspace) {
+  const full = path.join(workspace, '.harness/fixture-no-learning.json');
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, JSON.stringify({ operation: 'fixture-no-learning', decision: 'no-learning', rationale: 'Disposable test fixture has no durable product lesson.' }));
+  return full;
+}
+
 export function writeVersionedPlan(workspace, {
   name = '2026-07-13-feat-verify-plan.md',
   required = ['unit-tests'],
@@ -108,6 +115,9 @@ export function writeVersionedPlan(workspace, {
 } = {}) {
   const plansDir = path.join(workspace, 'docs', 'plans');
   fs.mkdirSync(plansDir, { recursive: true });
+  if (!fs.existsSync(path.join(workspace, '.github/harness/checks.yaml')) && required.length) {
+    writeChecks(workspace, Object.fromEntries(required.map(name => [name, { command: [process.execPath, '-e', 'process.exit(0)'] }])));
+  }
   const rel = `docs/plans/${name}`;
   const criterionYaml = Object.entries(criteria)
     .map(([id, checks]) => `    ${id}: ${JSON.stringify(checks)}`)
@@ -211,12 +221,14 @@ export function runHook(name, workspace, toolInput = {}) {
     cwd: workspace,
     input: JSON.stringify({ workspace, tool_input: toolInput }),
     encoding: 'utf8',
-    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce', HARNESS_BIN: path.join(packageRoot, 'bin', 'harness.mjs') },
+    env: { ...process.env, HARNESS_HOME: process.env.HARNESS_HOME || cliHarnessHome(), HARNESS_ENFORCEMENT: 'enforce', HARNESS_BIN: path.join(packageRoot, 'bin', 'harness.mjs') },
   });
 }
 
 export function runHookWithPolicy(name, workspace, toolInput = {}) {
   const env = { ...process.env };
+  env.HARNESS_HOME ||= cliHarnessHome();
+  env.HARNESS_BIN = path.join(packageRoot, 'bin/harness.mjs');
   delete env.HARNESS_ENFORCEMENT;
   return spawnSync(process.execPath, [path.join(packageRoot, 'corpus', 'hooks', name)], {
     cwd: workspace,
@@ -253,4 +265,3 @@ export const primitiveAnalysis = `
 - Verification expectations: run prompt, host, and built-asset contracts.
 - Registry and documentation impact: update them only if a new skill is justified.
 `.trim();
-

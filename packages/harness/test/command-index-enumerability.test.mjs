@@ -161,6 +161,7 @@ const DECLARED_VERBS = Object.freeze({
   // override DOWN to read.
   model: ['show', 'set', 'clear', 'refresh'],
   resources: ['list', 'show', 'register', 'unregister', 'discard', 'create', 'bundles', 'add', 'update', 'remove'],
+  review: ['prepare', 'assemble'],
   undo: ['list'],
   todo: ['list', 'add', 'complete', 'clear'],
   inspect: ['config', 'permissions', 'workspace', 'tools'],
@@ -251,7 +252,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 65, 'prior 63 + resources discard + resources create');
+  assert.equal(Object.values(actual).flat().length, 67, '65 existing verbs plus review prepare and assemble');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -311,7 +312,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
   // Modal families leave the verb strip; remaining verb rows + flag-verbs only.
   const tuiVerbs = rows.filter((r) => r.kind === 'verb').length;
   assert.ok(tuiVerbs < 40, `TUI verb strip should fold heavily (got ${tuiVerbs})`);
-  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 79, 'the CLI surface keeps every verb (+ resources discard + resources create)');
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 81, 'the CLI surface keeps every declared verb including review');
 });
 
 /**

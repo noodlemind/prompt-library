@@ -142,22 +142,17 @@ test('install --target cli copies the engineer skill and rewrites hook cwd witho
   for (const cwd of cwds) assert.equal(cwd, path.join(home, 'hooks'));
 });
 
-test('resources create on a tty exits 2 and writes nothing', () => {
+test('resources create refuses terminal stdin with exit 2 and writes nothing', () => {
   const home = tempDir('corpus-tty-home-');
   const workspace = tempDir('corpus-tty-ws-');
-  const py = `
-import os, pty
-node = ${JSON.stringify(process.execPath)}
-argv = [node, ${JSON.stringify(binPath)}, 'resources', 'create', 'skill', 'sonar',
-        '--copilot-home', ${JSON.stringify(home)}, '--workspace', ${JSON.stringify(workspace)},
-        '--no-events', '--json']
-pid, fd = pty.fork()
-if pid == 0:
-    os.execv(node, argv)
-_, status = os.waitpid(pid, 0)
-raise SystemExit(os.waitstatus_to_exitcode(status))
-`;
-  const result = spawnSync('python3', ['-c', py], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [
+    '--import', "data:text/javascript,Object.defineProperty(process.stdin, 'isTTY', { value: true })",
+    binPath, 'resources', 'create', 'skill', 'sonar',
+    '--copilot-home', home, '--workspace', workspace, '--no-events', '--json',
+  ], { cwd: workspace, encoding: 'utf8', input: '' });
   assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /resources create reads the primitive body from stdin/);
+  assert.deepEqual(productSnapshot(workspace), []);
+  assert.deepEqual(fs.readdirSync(home), []);
   assert.equal(fs.existsSync(path.join(home, 'skills', 'sonar', 'SKILL.md')), false);
 });

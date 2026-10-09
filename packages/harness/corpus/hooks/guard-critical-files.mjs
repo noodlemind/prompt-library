@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
 import { normalizeToolPayload } from './lib/tool-payload.mjs';
+import { loadHookPolicy } from './lib/policy.mjs';
+
+let policy = { enforcement: 'enforce' };
 
 const BLOCKED = [
   /(?:^|\/)\.env(?:rc$|\.|$)/i,
@@ -19,12 +22,8 @@ function output(value) {
   console.log(JSON.stringify(value));
 }
 
-function enforcement() {
-  return process.env.HARNESS_ENFORCEMENT || 'enforce';
-}
-
 function deny(reason) {
-  if (enforcement() !== 'enforce') {
+  if (policy.enforcement !== 'enforce') {
     output({ continue: true, systemMessage: `[harness hook] ${reason}` });
     process.exit(0);
   }
@@ -60,6 +59,7 @@ try {
 }
 
 const mutation = normalizeToolPayload(payload);
+policy = loadHookPolicy(mutation.workspace, { rule: 'critical' });
 if (!mutation.mutation) {
   output({ continue: true });
   process.exit(0);

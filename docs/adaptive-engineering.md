@@ -2,7 +2,7 @@
 
 You start with two parts. The Engineer decides what to do. The Harness checks the work and keeps the record.
 
-The Engineer is the only entry. It answers a question, investigates a system, delivers a change, or reviews a result. The Harness orients the work, locks a plan, gates edits, runs the named checks, and stores the evidence. A change is done when that evidence passes.
+The Engineer is the only entry. It answers a question, investigates a system, delivers a change, or reviews a result. The Harness orients the work, locks a plan, gates edits, runs the named checks, and stores the evidence. A change is done when current verification passes, required review results are collected, and Harness records completion.
 
 The Engineer grows the way a working engineer does. A repeated procedure becomes a skill. A judgment that needs its own reviewer becomes an agent. A rule for one kind of file becomes an instruction. A solved problem becomes a learning. None of these are required on the first day. The Engineer acquires them when the work shows they are needed. Installing the Harness does not require the specialist agents or the domain skills that may already be in this repository.
 
@@ -25,6 +25,8 @@ harness prepare
 `harness prepare` writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` when those paths are missing. Edit them. A later run leaves an existing file alone. Orient lists them as `intentSources`. Plan lock hashes them. If `docs/` is gitignored, prepare writes nothing and orient says to un-ignore those paths. Prepare does not rewrite a spec from the code.
 
 Then select `@engineer` in Copilot Chat.
+
+Windows checkouts use one canonical repository ID across long paths, short aliases, casing, and linked worktrees. Existing local storage under a known older spelling remains discoverable. Run `harness knowledge migrate-store` from that spelling to bind it permanently. If the old spelling is unavailable, run `harness knowledge migrate-store --from-id local-<12 hex digits>`. The command preserves knowledge, plans, and their absolute references in place. It refuses a non-empty canonical destination, unsafe paths, and replacement of an existing binding. The CLI and installed hooks share the project-layout resolver.
 
 ## How a task runs
 
@@ -52,21 +54,31 @@ A person can promote a learning. The governance ledger records that decision. Th
 
 ## What a plan must contain
 
-A delivery plan uses `plan_schema: 1`. Its verification block names checks. Its review block records what is still open.
+A delivery plan uses `plan_schema: 1`. Its verification block names checks. Its review block declares required coverage and open findings. A supported short plan has the same proof obligations. Without an explicit named check it remains an unlocked draft.
 
 ```yaml
 plan_schema: 1
 intent_sources: []
 verification:
-  required: []
-  criteria: {}
+  required: [behavior]
+  criteria: {AC1: [behavior]}
 reviews:
   required: [code-review]
   completed: []
   critical_open: []
 ```
 
-Product plans list `code-review` in `reviews.required`. A docs plan may leave that list empty. `harness verify` fails while a required review is missing or `critical_open` is non-empty.
+Product plans list `code-review` in `reviews.required`. A docs plan may leave that list empty. `harness review prepare --plan <path> --base <base> --json` captures the work to review. The host invokes reviewers, then `harness review assemble --plan <path> --packet <id> --file <results.json> --json` validates and stores their results. Reviewer names are declared provenance; they do not authenticate an invocation. `harness verify` fails while collected review coverage is incomplete or critical findings remain. A bare completed string is not review evidence.
+
+After verification, submit a publish or no-learning decision with `harness compound --plan <path> --learning-decision <file> --json`. Complete with `harness plan-update --plan <path> --status done`. Completion version 2 requires a finished decision for the current proof and binds its record identity. Missing, pending, blocked, changed, or stale learning records prevent completion. A no-learning decision creates no episode. An old completion record requires this explicit decision and a fresh completion update. The Stop hook validates the current bound completion on every attempt. Lifecycle bookkeeping does not change the work contract. Goal, criteria, scope, check mappings, policy, product bytes, and execution phase still invalidate relevant evidence.
+
+Captures and standalone index rebuilds share a lock on the physical knowledge manifest. A capture holds it through episode publication, retrieval snapshots, index rebuilding, and any rollback. Concurrent captures cannot replace a sibling's newer index or restore a snapshot over a successful sibling publication. Dry runs acquire no lock and write nothing.
+
+Evidence version 4 and the installed CLI and hook bundle ship together. Old proof requires re-verification; upgrade removes the old hook-side contract parser. Verification observations, review packets, learning operations, and completion records remain under `.harness/`. A lost final status write is recoverable by retrying the completion command.
+
+Installed hooks resolve the hydrated CLI directly under `~/.copilot/.harness-bin/`. A global PATH entry is optional. Episode writers publish complete bytes atomically with exclusive creation; interruption before publication leaves the final name absent, and replay reuses an identical published episode. Review records enforce the same 1 MiB limit at write and read boundaries before changing the current coverage pointer.
+
+`harness status --effective-policy --json` reports the CLI policy authority, rule-specific modes, positive freshness limits, trust binding, and resolver version. Installed hooks refresh that snapshot when source bytes, trust, or environment change. An unavailable or invalid authority fails closed. A command override is scoped to its invocation and is never cached as a hook policy.
 
 Named checks are argv arrays in `.github/harness/checks.yaml`. The Harness runs them without a shell. Policy exemptions and waivers are explicit. A missing check is not a pass.
 

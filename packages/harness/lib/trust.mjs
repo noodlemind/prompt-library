@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { EXIT } from './style.mjs';
-import { writeFileContained } from './fs-safe.mjs';
+import { writeFileContained, readFileNoFollow } from './fs-safe.mjs';
 import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 
 export const TRUST_SCHEMA_VERSION = 1;
@@ -58,7 +58,9 @@ export function policyDigest(workspace, files = PINNED_FILES) {
     hash.update(rel);
     try {
       hash.update('\0present\0');
-      hash.update(fs.readFileSync(full));
+      const content = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024, encoding: null });
+      if (content === null && !fs.existsSync(full)) throw new Error('absent');
+      hash.update(content === null ? 'unreadable' : content);
     } catch {
       hash.update('\0absent\0');
     }
@@ -80,7 +82,7 @@ export function digestMatchesApproval(recordDigest, workspace) {
 
 function parseStoreFile(file) {
   try {
-    const doc = YAML.parse(fs.readFileSync(file, 'utf8'), { maxAliasCount: 50 });
+    const doc = YAML.parse(readFileNoFollow(file, { maxBytes: 1024 * 1024 }) || 'null', { maxAliasCount: 50 });
     if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
       return { version: TRUST_SCHEMA_VERSION, projects: {}, unreadable: true };
     }

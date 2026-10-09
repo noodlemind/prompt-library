@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { binPath, runHarness } from './helpers/cli.mjs';
-import { initGit, recordSuccessfulEdit, writeChecks, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
+import { initGit, recordSuccessfulEdit, writeChecks, writeVersionedPlan, writeNoLearningDecision } from './helpers/cli-fixtures.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(packageRoot, '../..');
@@ -108,6 +108,9 @@ test('verify stores the normalized diff and the next unchanged edit is unchanged
   const again = harness(c, ['verify', '--plan', c.plan, '--base', 'HEAD']);
   assert.equal(again.status, 0, again.stderr + again.stdout);
   assert.equal(JSON.parse(again.stdout).outcome, 'passed');
+  assert.equal(harness(c, ['compound', '--plan', c.plan, '--learning-decision', writeNoLearningDecision(c.ws)]).status, 0);
+  const completed = harness(c, ['plan-update', '--plan', c.plan, '--status', 'done']);
+  assert.equal(completed.status, 0, completed.stdout + completed.stderr);
 
   const stopped = jsonLine(stop(c));
   assert.equal(stopped.continue, true);
@@ -159,9 +162,12 @@ test('the edit hook denies when the current diff cannot be read', () => {
   const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
   session.diffFingerprint = 'diff --git a/src/example.js\n';
   fs.writeFileSync(sessionPath, JSON.stringify(session));
-  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'unchanged-retry-git-'));
-  fs.writeFileSync(path.join(fakeBin, 'git'), '#!/bin/sh\nexit 1\n');
-  fs.chmodSync(path.join(fakeBin, 'git'), 0o755);
+  const unavailableGitEnv = hookEnv(c);
+  for (const key of Object.keys(unavailableGitEnv)) {
+    if (key.toUpperCase() === 'PATH') delete unavailableGitEnv[key];
+  }
+  unavailableGitEnv.PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'unchanged-retry-no-git-'));
+  assert.equal(spawnSync('git', ['--version'], { env: unavailableGitEnv }).error?.code, 'ENOENT');
   const denied = jsonLine(spawnSync(process.execPath, [editHook], {
     cwd: c.ws,
     input: JSON.stringify({
@@ -172,7 +178,7 @@ test('the edit hook denies when the current diff cannot be read', () => {
       tool_input: { filePath: 'src/example.js' },
     }),
     encoding: 'utf8',
-    env: { ...hookEnv(c), PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` },
+    env: unavailableGitEnv,
   }));
   assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(denied.hookSpecificOutput.permissionDecisionReason, /^unreadable-diff\b/);

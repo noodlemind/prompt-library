@@ -5,7 +5,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { planContractText } from './lib/evidence-binding.mjs';
+import { readProductDiff } from './lib/product-diff.mjs';
+import { currentPlanDigest } from './lib/proof-authority.mjs';
 import { resolveAcceptedPlan } from './lib/external-plans.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
@@ -15,7 +16,7 @@ import { isPersonalWritePath, isPrimitivePath, normalizeToolPayload, planUsesCre
 const startedAt = Date.now();
 let payload = {};
 let normalized = null;
-let policy = { enforcement: process.env.HARNESS_ENFORCEMENT || 'enforce', ttl: 30 };
+let policy = { enforcement: 'enforce', ttl: 30 };
 const RECOVER_MISSING_GATE = 'Read ~/.copilot/skills/ensure-plan/SKILL.md and follow it exactly; create or lock only the canonical plan in a standalone mutation containing no product paths, run the implement gate as its own non-mutating tool call, wait for pass, then retry this mutation in a later tool call';
 const NEW_PLAN_PATH = /^(?:docs|\.harness)\/plans\/\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.md$/;
 
@@ -148,19 +149,6 @@ function isPlannedAncestor(file, entries) {
     const planned = entry.replace(/\/\*\*$/, '').replace(/\/+$/, '');
     return planned.startsWith(prefix);
   });
-}
-
-function currentDiff(workspace) {
-  const diff = spawnSync('git', ['diff', '--no-ext-diff', 'HEAD'], {
-    cwd: workspace,
-    encoding: 'utf8',
-    timeout: 4000,
-  });
-  if (diff.error || diff.status !== 0) return null;
-  return String(diff.stdout || '')
-    .split(/\r?\n/)
-    .filter((line) => !/^index [0-9a-f]+\.\.[0-9a-f]+(?:\s|$)/.test(line))
-    .join('\n');
 }
 
 function readFileText(file) {
@@ -436,7 +424,7 @@ if (!planPath) deny('invalid-implement-gate', 'Gated plan is missing or outside 
 const planText = fs.readFileSync(planPath, 'utf8');
 // Digest the Activity-stripped contract text so routine session logging does
 // not invalidate the gate; this must match the evidence-binding digest rule.
-const planDigest = crypto.createHash('sha256').update(planContractText(planText)).digest('hex');
+const planDigest = currentPlanDigest(normalized.workspace, session.gatedPlan);
 if (!session.gatedPlanDigest || session.gatedPlanDigest !== planDigest) {
   deny('changed-implement-plan', 'Plan changed after the implement gate; rerun the gate', 'invalid');
 }
@@ -504,7 +492,7 @@ if (governed.some(isPrimitivePath)) {
 }
 
 if (typeof session.diffFingerprint === 'string' && session.diffFingerprint.length > 0) {
-  const nextDiff = currentDiff(normalized.workspace);
+  const nextDiff = readProductDiff(normalized.workspace, { planPath: session.activePlan });
   if (nextDiff === null) {
     deny('unreadable-diff', 'The current diff could not be read; retry the edit once git diff HEAD succeeds', 'invalid');
   }

@@ -36,4 +36,4 @@ Use docs for facts, skills for procedures, experts for judgment, tools for execu
 
 ## Completion
 
-Start every response `Mode: Answer|Investigate|Review|Deliver`. Investigate MUST call non-atomic check/action/mark a confirmed race/retry defect unless atomicity is proven—even when each store method is thread-safe. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, run `/code-review`, fix the findings, then require passed `harness verify`; read-only work has no ceremony.
+Start every response `Mode: Answer|Investigate|Review|Deliver`. Investigate concurrency by tracing the shared state and interleavings; label a defect confirmed only when evidence demonstrates it. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, run `/code-review`, fix the findings, then require passed `harness verify`; read-only work has no ceremony.

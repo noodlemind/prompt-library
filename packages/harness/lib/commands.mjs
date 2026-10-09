@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
+import { createHash } from 'node:crypto';
 import { parseFlags, hasFlag } from './flags.mjs';
 import { resolveCopilotHome, resolveIntelliJHome } from './paths.mjs';
 import { pkgRoot, readPkgVersion, getCorpusRoot } from './assets.mjs';
@@ -30,8 +31,12 @@ import { resolveHarnessBin, agentHarnessCommand, writeHarnessRunner, RUNNER_VERS
 import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
 import { installVSCodeBridge, uninstallVSCodeBridge } from './install-vscode-bridge.mjs';
 import { readSession, writeSession } from './session.mjs';
-import { loadPolicy } from './policy.mjs';
+import { loadPolicy, publishPolicySnapshot } from './policy.mjs';
 import { configuredCheckSnapshot } from './plan-readiness.mjs';
+import { loadPlan } from './plan-parse.mjs';
+import { planDigest, readEvidence, validateEvidence } from './evidence.mjs';
+import { validateCompletion } from './completion.mjs';
+import { migrateStrandedStore } from './knowledge/admin.mjs';
 import { createStyle, keyWidthFor, clampNote, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
 
@@ -311,8 +316,27 @@ export function computeStatusResult(argv) {
   return { flags, copilotHome, lock, version };
 }
 
+export function statusDomainResult(flags, copilotHome) {
+  if (flags.effectivePolicy) {
+    return publishPolicySnapshot(path.resolve(flags.workspace), { copilotHome, override: flags.enforcement });
+  }
+  if (flags.contractDigest || flags.validateEvidence || flags.validateCompletion) {
+    const workspace = path.resolve(flags.workspace);
+    const plan = loadPlan(workspace, flags.plan);
+    if (!plan) throw new Error('Plan not found; pass --plan');
+    const evidence = readEvidence(workspace, plan.path);
+    const result = flags.validateCompletion ? validateCompletion({ workspace, plan, copilotHome }) : flags.contractDigest ? { version: 1, digest: planDigest(plan.text) }
+      : { ...validateEvidence({ workspace, plan, evidence, maxAgeHours: loadPolicy(workspace, null, { copilotHome }).evidenceTtlHours, copilotHome }), evidenceIdentity: createHash('sha256').update(JSON.stringify(evidence)).digest('hex') };
+    return result;
+  }
+
+  return null;
+}
+
 export async function cmdStatus(argv) {
   const { flags, copilotHome, lock, version } = computeStatusResult(argv);
+  const domain = statusDomainResult(flags, copilotHome);
+  if (domain) { emitJson(flags, domain); return 0; }
 
   if (flags.json) {
     emitJson(flags, { packageVersion: version, copilotHome, lock });
@@ -1642,9 +1666,8 @@ export async function cmdKnowledge(argv) {
   }
 
     if (subcommand === 'migrate-store') {
-    const { migrateStrandedStore } = await import('./knowledge/admin.mjs');
     const logger = (m) => log(flags, m);
-    const result = migrateStrandedStore({ workspace, log: logger });
+    const result = migrateStrandedStore({ workspace, home: flags.harnessHome, fromId: flags.fromId, log: logger });
     writeEvent(workspace, flags, {
       type: 'knowledge',
       command: 'knowledge',

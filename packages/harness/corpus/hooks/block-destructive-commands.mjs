@@ -3,6 +3,9 @@
 import fs from 'node:fs';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
 import { normalizeToolPayload, unwrapShellSegments } from './lib/tool-payload.mjs';
+import { loadHookPolicy } from './lib/policy.mjs';
+
+let policy = { enforcement: 'enforce' };
 
 const BLOCKED = [
   /\brm\s+-rf\s+\//,
@@ -70,7 +73,7 @@ function output(value) {
 }
 
 function deny(reason) {
-  if ((process.env.HARNESS_ENFORCEMENT || 'enforce') !== 'enforce') {
+  if (policy.enforcement !== 'enforce') {
     output({ continue: true, systemMessage: `[harness hook] ${reason}` });
     process.exit(0);
   }
@@ -87,7 +90,8 @@ try {
   deny(`invalid-hook-payload: ${error.message}`);
 }
 
-const { command } = normalizeToolPayload(payload);
+const { command, workspace } = normalizeToolPayload(payload);
+policy = loadHookPolicy(workspace, { rule: 'destructive' });
 if (destructiveProtectedPush(command)) {
   deny('destructive-command: command blocked by Harness policy');
 }

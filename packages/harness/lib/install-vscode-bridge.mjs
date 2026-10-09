@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { copyDirectorySync } from './fs-copy.mjs';
 
 export const VSCODE_BRIDGE_ID = 'harness-copilot-bridge';
 export const VSCODE_BRIDGE_PUBLISHER = 'harness';
@@ -101,7 +102,7 @@ export function installVSCodeBridge({
   log(`${dryRun ? 'would ' : ''}${existing ? 'update' : 'install'} VS Code extension: ${VSCODE_BRIDGE_ID}`);
   if (!dryRun) {
     fs.mkdirSync(extensionsDir, { recursive: true });
-    fs.cpSync(source, target, { recursive: true, force: true, errorOnExist: false });
+    copyDirectorySync(source, target, { force: true, errorOnExist: false });
   }
   return {
     id: VSCODE_BRIDGE_ID,

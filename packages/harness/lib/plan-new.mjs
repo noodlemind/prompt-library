@@ -264,7 +264,15 @@ export async function cmdPlanNew(argv) {
     const fileName = `${opts.date}-feat-${slug}-plan.md`;
     const plansTarget = plansWriteTarget(workspace, { home: harnessGlobalHome() });
     const full = path.join(plansTarget.base, plansTarget.dirRel, fileName);
-    const content = shortPlanDocument({ goal: opts.goal, acceptance, constraints });
+    if (opts.check) {
+      const configured = loadConfiguredChecks(workspace);
+      if (configured.error) throw new Error(`plan-new: ${configured.error}`);
+      const command = configured.checks?.[opts.check]?.command;
+      if (!Array.isArray(command) || !command.length || !command.every(part => typeof part === 'string' && part.trim())) {
+        throw new Error(`plan-new: --verification-check ${opts.check} is not an executable configured check`);
+      }
+    }
+    const content = shortPlanDocument({ goal: opts.goal, acceptance, constraints, check: opts.check });
     if (toStdout) {
       process.stdout.write(content);
       return 0;

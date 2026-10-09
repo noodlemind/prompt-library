@@ -2,6 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { isProjectTrusted } from './trust.mjs';
+import { harnessGlobalHome } from './paths.mjs';
+import { writeFileContained, readFileNoFollow } from './fs-safe.mjs';
+import { ENFORCEMENT_MODES, policySourceBinding, snapshotRel } from '../corpus/hooks/lib/policy-snapshot.mjs';
 
 const MODES = new Set(['observe', 'warn', 'enforce']);
 
@@ -65,7 +68,9 @@ export function loadPolicy(workspace, override = null, { copilotHome = null } = 
   let bailed = false;
   if (onDisk) {
     try {
-      parsed = YAML.parse(fs.readFileSync(policyPath, 'utf8'), { maxAliasCount: 50 }) || {};
+      const content = readFileNoFollow(policyPath, { root: workspace, maxBytes: 1024 * 1024 });
+      if (content === null) throw new Error('Policy source is unreadable or nonregular');
+      parsed = YAML.parse(content, { maxAliasCount: 50 }) || {};
     } catch (error) {
       bailed = invalid(`Invalid harness policy ${policyPath}: ${error.message}`);
     }
@@ -87,22 +92,35 @@ export function loadPolicy(workspace, override = null, { copilotHome = null } = 
 
   const applied = onDisk && trusted && !bailed;
   const policy = applied ? parsed : {};
-  const requested = override ?? policy.enforcement ?? 'enforce';
+  const environment = ENFORCEMENT_MODES.includes(process.env.HARNESS_ENFORCEMENT) ? process.env.HARNESS_ENFORCEMENT : null;
+  const requested = override ?? environment ?? policy.enforcement ?? 'enforce';
   if (!MODES.has(requested)) {
     throw new Error(`Invalid enforcement mode: ${requested}. Expected observe, warn, or enforce`);
   }
   return {
     version: applied ? policy.version : null,
     enforcement: requested,
+    enforcementSource: override !== null ? 'invocation' : environment ? 'environment' : applied ? 'trusted-project' : 'safe-default',
+    rules: { plan: requested, completion: requested, critical: override ?? environment ?? 'enforce', destructive: override ?? environment ?? 'enforce' },
         projectPolicyIgnored: onDisk && !trusted,
         projectPolicyError: policyError,
     policyPath,
-    gateTtlMinutes: Number.isFinite(policy.gate_ttl_minutes) ? policy.gate_ttl_minutes : 30,
-    evidenceTtlHours: Number.isFinite(policy.evidence_ttl_hours) ? policy.evidence_ttl_hours : 24,
+    gateTtlMinutes: Number.isFinite(policy.gate_ttl_minutes) && policy.gate_ttl_minutes > 0 ? policy.gate_ttl_minutes : 30,
+    evidenceTtlHours: Number.isFinite(policy.evidence_ttl_hours) && policy.evidence_ttl_hours > 0 ? policy.evidence_ttl_hours : 24,
     exemptions: Array.isArray(policy.exemptions) ? policy.exemptions : [],
     waivers: Array.isArray(policy.waivers) ? policy.waivers : [],
     checkSeverities: applied ? parsedSeverities : {},
   };
+}
+
+export function publishPolicySnapshot(workspace, { copilotHome = null, override = null } = {}) {
+  const home = harnessGlobalHome();
+  const binding = policySourceBinding(workspace, home);
+  const policy = loadPolicy(workspace, override, { copilotHome });
+  if (JSON.stringify(binding) !== JSON.stringify(policySourceBinding(workspace, home))) throw new Error('Policy or trust changed during resolution; retry');
+  const snapshot = { version: 1, scope: override === null ? 'environment' : 'invocation', binding, policy };
+  if (override === null && !writeFileContained(home, snapshotRel(workspace), `${JSON.stringify(snapshot)}\n`)) throw new Error('Could not publish effective policy snapshot');
+  return snapshot;
 }
 
 export function checkSeverityFor(policy, id, defaultSeverity = 'enforce', planGatedIds = null) {

@@ -8,6 +8,7 @@ import YAML from 'yaml';
 import { cliHarnessHome, runHarness, tempDir } from './helpers/index.mjs';
 import { initGit, writeChecks, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 import { TEST_GIT_ENV } from './helpers/store.mjs';
+import { linkedPrimaryCheckout, localRepoId } from '../lib/knowledge/store.mjs';
 
 const SPEC_BODY = '# Checkout retry\n\nRefunds share the payment retry budget.\n';
 const SPEC_SHA = crypto.createHash('sha256').update(SPEC_BODY).digest('hex');
@@ -577,7 +578,6 @@ test('hashIntentFile hashes the raw file bytes', async () => {
 });
 
 test('separate git directories do not share a store and a linked worktree still does', async () => {
-  const { localRepoId } = await import('../lib/knowledge/store.mjs');
   const { inspectIsolation } = await import('../lib/worktree.mjs');
   const parent = tempDir('split-git-');
   const gitParent = path.join(parent, 'git');
@@ -611,6 +611,26 @@ test('separate git directories do not share a store and a linked worktree still 
   assert.equal(localRepoId(tree.path), localRepoId(normal));
   git(normal, ['worktree', 'remove', '--force', tree.path]);
 });
+
+for (const name of ['checkout with spaces é', 'checkout\nwith newline']) {
+  test(`linked worktrees share the primary checkout store for ${JSON.stringify(name)}`, {
+    skip: process.platform === 'win32' && name.includes('\n') ? 'Windows forbids newlines in directory names' : false,
+  }, () => {
+    const parent = tempDir('worktree-path-');
+    const ws = path.join(parent, name);
+    fs.mkdirSync(ws);
+    initGit(ws);
+    const tree = addWorktree(ws, 'share-path');
+    try {
+      assert.equal(linkedPrimaryCheckout(tree.path), fs.realpathSync.native(ws));
+      assert.equal(localRepoId(tree.path), localRepoId(ws));
+      assert.equal(localRepoId(fs.realpathSync.native(ws)), localRepoId(ws));
+      if (process.platform === 'win32') assert.equal(localRepoId(ws.toUpperCase()), localRepoId(ws));
+    } finally {
+      git(ws, ['worktree', 'remove', '--force', tree.path]);
+    }
+  });
+}
 
 test('plan-new fails when a discovered spec is missing on disk', () => {
   const ws = planWorkspace();

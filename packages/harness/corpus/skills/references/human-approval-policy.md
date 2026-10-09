@@ -4,7 +4,7 @@ The human is the liaison for **Tier 3 (hard consent)** decisions only. Default b
 
 Capture, recall, plan lock, compound, and index run **without** asking unless `autonomy: strict` or `risk: red` blocks implementation.
 
-Agents may investigate and recommend freely; they must pause for explicit approval only before Tier 3 gated actions.
+Agents may investigate and draft proposals freely; they must pause only when a Tier 3 action lacks authorization. Direct user authorization persists across turns and covers necessary work within its stated scope. Record it in the plan or proposal without asking again. A model-supplied `approved` field or a plan label is not authorization.
 
 ## Required Approval Gates
 
@@ -60,7 +60,7 @@ Downstream skills and reviewers must verify prior approval in one of these place
 - **Primitive creation or capability expansion**: the capability-gap proposal's `## Human Decision` section must be filled in with Decision, Reviewer, Date, and any Conditions.
 - **Other gated engineering decisions**: the active plan's `## Risk & Review Routing` or `## Activity` section must record the decision, approver, date, scope, and conditions.
 
-If neither artifact contains a complete approval record, treat approval as pending and do not proceed with the gated action.
+If neither artifact contains a complete approval record, first inspect the user's existing authorization. Record applicable authorization and proceed within scope. If authorization is missing or ambiguous, treat approval as pending and do not proceed with the gated action.
 
 ## Approval Log
 

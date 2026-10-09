@@ -19,6 +19,24 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
 const tempDir = (p) => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), p)));
 
+test('resources add preserves bundle bytes under an accented Copilot home', () => {
+  const home = path.join(tempDir('bundle-add-home-'), 'Copilot é');
+  const workspace = tempDir('bundle-add-workspace-');
+  const source = makeBundle(tempDir('bundle-add-source-'), 'demo', {
+    manifest: { contributes: { skills: ['a.md'] } },
+    files: { 'skills/a.md': '# Copied skill\n' },
+  });
+  const result = spawnSync(process.execPath, [
+    binPath, 'resources', 'add', source, '--copilot-home', home, '--workspace', workspace, '--json', '--no-events',
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(JSON.parse(result.stdout).bundle.name, 'demo');
+  const installed = path.join(home, 'resources', 'demo');
+  assert.equal(fs.readFileSync(path.join(installed, 'skills', 'a.md'), 'utf8'), '# Copied skill\n');
+  assert.deepEqual(fs.readFileSync(path.join(installed, 'harness-resource.yaml')), fs.readFileSync(path.join(source, 'harness-resource.yaml')));
+  assert.equal(discoverBundles(home)[0].state, 'untrusted');
+});
+
 function makeBundle(home, name, { manifest = {}, files = {}, enabled = false } = {}) {
   const dir = path.join(home, 'resources', name);
   fs.mkdirSync(dir, { recursive: true });
@@ -318,7 +336,8 @@ test('P5AC3: a bundle cannot transfer approval to another by naming itself after
   const home = tempDir('res-crosskey-');
   makeBundle(home, 'grant', { manifest: { name: 'decoy' }, enabled: true });
   makeBundle(home, 'other', { manifest: { name: 'grant' } });
-  const states = Object.fromEntries(discoverBundles(home, { trustedNames: trusted(home) }).map((b) => [b.dir.split('/').pop(), b.state]));
+  const states = Object.fromEntries(discoverBundles(home, { trustedNames: trusted(home) }).map((b) => [path.basename(b.dir), b.state]));
+  assert.equal(states.grant, 'enabled');
   assert.equal(states.other, 'untrusted',
     'approval belongs to the directory the operator approved, not to a name its contents claim');
 });

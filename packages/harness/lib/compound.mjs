@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'node:child_process';
-import { runIndexKnowledge } from './index-knowledge.mjs';
+import { runIndexKnowledge, withKnowledgeIndexLock } from './index-knowledge.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { readEvidence, validateEvidence } from './evidence.mjs';
@@ -12,8 +12,12 @@ import { recordSkillUsage } from './telemetry.mjs';
 import { scanSecrets } from './secret-scan.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
 import { deriveGitContext } from './git-context.mjs';
-import { assertNoSymlinkAncestors, realpathParentContained } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, writeFileContainedExclusive, readFileNoFollow } from './fs-safe.mjs';
 import { solutionsWriteTarget } from './project-layout.mjs';
+import { withPlanUpdateLock } from './plan-update.mjs';
+import { proofPrerequisites } from './completion.mjs';
+import { recordHash, readReviewRecord, publishReviewRecord } from './review.mjs';
+import { learningPointerRel } from './learning-record.mjs';
 
 function snapshotFile(p) {
   try {
@@ -40,46 +44,24 @@ function snapshotRestored(p, snap) {
   }
 }
 
-function reserveEpisodePath(baseRoot, dirRel, base, doc) {
+function reserveEpisodePath(baseRoot, dirRel, base, doc, { replay = false } = {}) {
   const dirFull = assertNoSymlinkAncestors(baseRoot, dirRel);
   if (!dirFull) return { ok: false };
   fs.mkdirSync(dirFull, { recursive: true });
   let candidate = `${base}.md`;
   let n = 2;
-    for (let attempt = 0; attempt < 100000; attempt++) {
+  for (let attempt = 0; attempt < 100000; attempt++) {
     const rel = path.join(dirRel, candidate);
     const full = assertNoSymlinkAncestors(baseRoot, rel);
     if (!full) return { ok: false };
-    try {
-            const fd = fs.openSync(full, 'wx');
-            if (!realpathParentContained(baseRoot, full)) {
-        try {
-          fs.closeSync(fd);
-        } catch {
-          // fd may already be gone if the leaf was swapped away
-        }
-        try {
-          fs.unlinkSync(full);
-        } catch {
-          // best effort — a swapped-away leaf is not ours to chase
-        }
-        return { ok: false };
-      }
-      // Verify passed: write the content THROUGH the verified descriptor.
-      try {
-        fs.writeFileSync(fd, doc);
-      } finally {
-        fs.closeSync(fd);
-      }
-      return { ok: true, rel };
-    } catch (err) {
-      if (err.code === 'EEXIST') {
-        candidate = `${base}-${n}.md`;
-        n += 1;
-        continue;
-      }
-      return { ok: false, error: err };
+    if (writeFileContainedExclusive(baseRoot, rel, doc)) return { ok: true, rel };
+    if (fs.existsSync(full)) {
+      if (replay) return readFileNoFollow(full, { root: baseRoot }) === doc ? { ok: true, rel, replayed: true } : { ok: false, error: new Error('Learning operation conflicts with existing episode bytes') };
+      candidate = `${base}-${n}.md`;
+      n += 1;
+      continue;
     }
+    return { ok: false, error: new Error('Atomic episode publication failed before the final file was published') };
   }
   return { ok: false };
 }
@@ -110,6 +92,14 @@ function yamlQuote(value) {
  * kind, ranked below verified fixes and barred from promotion.
  */
 export function runInsightCompound({ workspace, copilotHome, flags, log = () => {}, kind = 'insight', home }) {
+  let verifiedProof = null;
+  if (kind === 'fix') {
+    const selected = selectPlan(workspace, { planPath: flags.plan, requireUnique: true });
+    if (!selected.plan) return { pass: false, exitCode: 2, kind, path: null, blockedReason: 'Verified fix requires a selected plan' };
+    const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
+    if (!checked.pass) return { pass: false, exitCode: 2, kind, path: null, blockedReason: checked.message };
+    verifiedProof = checked.value;
+  }
   // Kill switch: only the fully-off mode blocks insight capture — freeze and
   // capture-only both keep this lane open (the mode matrix, Task 4).
   const { mode } = readStoreConfig(workspace, { home });
@@ -145,7 +135,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       nextTools: ['harness compound --insight --title "..." --body "..."'],
     };
   }
-  const date = new Date().toISOString().slice(0, 10);
+  const date = flags.captureDate || new Date().toISOString().slice(0, 10);
   // Category is one safe path segment — never a traversal vector.
   const category = slugify(flags.category || 'insights');
   const tags = flags.tags
@@ -156,6 +146,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
         .join(',')
     : '';
   const fmLines = [`title: ${yamlQuote(title)}`, `kind: ${kind}`, `date: ${date}`];
+  if (verifiedProof) fmLines.push(`verification: ${yamlQuote(verifiedProof.evidencePath)}`, `work_contract: ${verifiedProof.binding.planDigest}`, `proof_identity: ${verifiedProof.verificationIdentity}`);
   if (tags) fmLines.push(`tags: ${tags}`);
   if (flags.trigger) fmLines.push(`trigger: ${yamlQuote(flags.trigger)}`);
   if (flags.claim) fmLines.push(`claim: ${yamlQuote(flags.claim)}`);
@@ -188,7 +179,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   }
   // Never silently overwrite an earlier capture: same-day same-title collisions
   // get a deterministic numeric suffix.
-  const base = `${date}-${slugify(title)}`;
+  const base = `${date}-${slugify(title)}${flags.operationSuffix ? `-${flags.operationSuffix}` : ''}`;
   const target = solutionsWriteTarget(workspace, { home });
   const dirRel = path.join(target.dirRel, category);
   // Physical containment: a symlinked docs/solutions (or category) directory
@@ -205,117 +196,157 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
     };
   }
-  let rel;
-  if (flags.dryRun) {
-    // Dry run writes nothing, so a plain existence probe is enough to report a
-    // representative would-be name (no reservation, no file created).
-    rel = path.join(dirRel, `${base}.md`);
-    let n = 2;
-    while (fs.existsSync(path.join(target.base, rel))) {
-      rel = path.join(dirRel, `${base}-${n}.md`);
-      n += 1;
+  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
+  return withKnowledgeIndexLock({ knowledgeRoot, workspace, copilotHome, flags, log, home }, rebuild => {
+    let rel;
+    let replayed = false;
+    if (flags.dryRun) {
+      // Dry run writes nothing, so a plain existence probe is enough to report a
+      // representative would-be name (no reservation, no file created).
+      rel = path.join(dirRel, `${base}.md`);
+      let n = 2;
+      while (fs.existsSync(path.join(target.base, rel))) {
+        rel = path.join(dirRel, `${base}-${n}.md`);
+        n += 1;
+      }
+    } else {
+      const reserved = reserveEpisodePath(target.base, dirRel, base, doc, { replay: Boolean(flags.operationSuffix) });
+      if (!reserved.ok) {
+        return {
+          pass: false,
+          exitCode: 1,
+          kind,
+          path: null,
+          indexed: null,
+          blockedReason: reserved.error
+            ? `could not write episode file: ${reserved.error.message}`
+            : 'episode path escapes the workspace (symlinked docs/solutions?)',
+          nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+        };
+      }
+      rel = reserved.rel;
+      replayed = Boolean(reserved.replayed);
     }
-  } else {
-    // Atomic exclusive-create reservation (P1#1): claims a unique suffix with
-    // O_EXCL so concurrent captures of the same title can never overwrite each
-    // other. Containment is re-validated before each create.
-    const reserved = reserveEpisodePath(target.base, dirRel, base, doc);
-    if (!reserved.ok) {
+    // Under dryRun nothing was actually written (the write above is skipped), so
+    // the log line must not claim otherwise.
+    log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
+    // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
+    // unhandled throw here would leave the episode we JUST wrote orphaned on disk
+    // and, for the `remember` caller, skip its rollback path entirely (the throw
+    // never reaches `if (!episode.pass)`). Snapshot the ENTIRE retrieval state it
+    // writes — the manifest AND the postings (index-knowledge writes manifest
+    // then postings.json/meta.json, so a throw between them can leave postings
+    // referencing the rolled-back episode) — and on any index failure delete the
+    // just-written episode and restore all of it so retrieval state is exactly
+    // pre-write, then return a clean, recoverable failure the caller handles.
+    const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
+    const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
+    const snapshots = [
+      [manifestPath, snapshotFile(manifestPath)],
+      [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
+      [path.join(indexDir, 'meta.json'), snapshotFile(path.join(indexDir, 'meta.json'))],
+    ];
+    let indexed;
+    try {
+      indexed = rebuild();
+    } catch (err) {
+      // Rollback WITH verified postconditions (P2): the prior code swallowed
+      // every recovery error yet always reported "episode rolled back" /
+      // `path: null` — so a rollback that left the episode on disk or failed to
+      // restore retrieval state was indistinguishable from a clean one. Now each
+      // step is verified against disk and any residue is named in the result.
+      const episodeFull = path.join(target.base, rel);
+      let episodeRemains = false;
+      const unrestored = [];
+      if (!flags.dryRun) {
+        try {
+          if (!replayed) fs.rmSync(episodeFull, { force: true });
+        } catch {
+          // best effort — verified below regardless of whether rmSync threw
+        }
+        episodeRemains = fs.existsSync(episodeFull);
+        // Restore manifest + postings + meta to exactly pre-write (write back the
+        // snapshot, or delete if it was absent), then confirm each landed.
+        for (const [p, snap] of snapshots) {
+          restoreFile(p, snap);
+          if (!snapshotRestored(p, snap)) unrestored.push(p);
+        }
+      }
+      const recovered = !episodeRemains && unrestored.length === 0;
+      let blockedReason;
+      if (recovered) {
+        blockedReason = `knowledge index rebuild failed, episode rolled back: ${err.message}`;
+      } else {
+        const residue = [];
+        if (episodeRemains) residue.push(`episode still on disk at ${rel.split(path.sep).join('/')}`);
+        if (unrestored.length) residue.push(`retrieval state not restored: ${unrestored.join(', ')}`);
+        blockedReason = `knowledge index rebuild failed AND rollback incomplete (${residue.join('; ')}) — run: harness index. Original error: ${err.message}`;
+      }
       return {
         pass: false,
         exitCode: 1,
         kind,
         path: null,
         indexed: null,
-        blockedReason: reserved.error
-          ? `could not write episode file: ${reserved.error.message}`
-          : 'episode path escapes the workspace (symlinked docs/solutions?)',
-        nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+        blockedReason,
+        // Name the residue explicitly so a caller never treats a partial
+        // recovery as a clean one.
+        ...(recovered ? {} : { partialRecovery: { episodeRemains, unrestored } }),
+        nextTools: ['harness index'],
       };
     }
-    rel = reserved.rel;
-  }
-  // Under dryRun nothing was actually written (the write above is skipped), so
-  // the log line must not claim otherwise.
-  log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
-  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
-  // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
-  // unhandled throw here would leave the episode we JUST wrote orphaned on disk
-  // and, for the `remember` caller, skip its rollback path entirely (the throw
-  // never reaches `if (!episode.pass)`). Snapshot the ENTIRE retrieval state it
-  // writes — the manifest AND the postings (index-knowledge writes manifest
-  // then postings.json/meta.json, so a throw between them can leave postings
-  // referencing the rolled-back episode) — and on any index failure delete the
-  // just-written episode and restore all of it so retrieval state is exactly
-  // pre-write, then return a clean, recoverable failure the caller handles.
-  const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
-  const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
-  const snapshots = [
-    [manifestPath, snapshotFile(manifestPath)],
-    [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
-    [path.join(indexDir, 'meta.json'), snapshotFile(path.join(indexDir, 'meta.json'))],
-  ];
-  let indexed;
-  try {
-    indexed = runIndexKnowledge({ knowledgeRoot, workspace, copilotHome, flags, log, home });
-  } catch (err) {
-    // Rollback WITH verified postconditions (P2): the prior code swallowed
-    // every recovery error yet always reported "episode rolled back" /
-    // `path: null` — so a rollback that left the episode on disk or failed to
-    // restore retrieval state was indistinguishable from a clean one. Now each
-    // step is verified against disk and any residue is named in the result.
-    const episodeFull = path.join(target.base, rel);
-    let episodeRemains = false;
-    const unrestored = [];
-    if (!flags.dryRun) {
-      try {
-        fs.rmSync(episodeFull, { force: true });
-      } catch {
-        // best effort — verified below regardless of whether rmSync threw
-      }
-      episodeRemains = fs.existsSync(episodeFull);
-      // Restore manifest + postings + meta to exactly pre-write (write back the
-      // snapshot, or delete if it was absent), then confirm each landed.
-      for (const [p, snap] of snapshots) {
-        restoreFile(p, snap);
-        if (!snapshotRestored(p, snap)) unrestored.push(p);
-      }
-    }
-    const recovered = !episodeRemains && unrestored.length === 0;
-    let blockedReason;
-    if (recovered) {
-      blockedReason = `knowledge index rebuild failed, episode rolled back: ${err.message}`;
-    } else {
-      const residue = [];
-      if (episodeRemains) residue.push(`episode still on disk at ${rel.split(path.sep).join('/')}`);
-      if (unrestored.length) residue.push(`retrieval state not restored: ${unrestored.join(', ')}`);
-      blockedReason = `knowledge index rebuild failed AND rollback incomplete (${residue.join('; ')}) — run: harness index. Original error: ${err.message}`;
-    }
     return {
-      pass: false,
-      exitCode: 1,
+      pass: true,
+      exitCode: 0,
       kind,
-      path: null,
-      indexed: null,
-      blockedReason,
-      // Name the residue explicitly so a caller never treats a partial
-      // recovery as a clean one.
-      ...(recovered ? {} : { partialRecovery: { episodeRemains, unrestored } }),
-      nextTools: ['harness index'],
+      path: rel.split(path.sep).join('/'),
+      indexed,
+      blockedReason: null,
+      nextTools: ['harness consolidate --status'],
     };
-  }
-  return {
-    pass: true,
-    exitCode: 0,
-    kind,
-    path: rel.split(path.sep).join('/'),
-    indexed,
-    blockedReason: null,
-    nextTools: ['harness consolidate --status'],
-  };
+  });
+}
+
+async function runLearningDecision({ workspace, copilotHome, flags, log }) {
+  if (flags.insight) throw new Error('A verified learning decision cannot be combined with --insight');
+  const text = flags.learningDecision === '-' ? fs.readFileSync(0, 'utf8') : readFileNoFollow(path.resolve(flags.learningDecision), { maxBytes: 1024 * 1024 });
+  if (!text || Buffer.byteLength(text) > 1024 * 1024) throw new Error('Learning decision is missing, unreadable, or too large');
+  const decision = JSON.parse(text);
+  if (!decision || typeof decision !== 'object' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(decision.operation || '') || !['no-learning', 'publish'].includes(decision.decision)
+    || typeof decision.rationale !== 'string' || !decision.rationale.trim() || (decision.scope && decision.scope !== 'private')) throw new Error('Learning decision requires operation, decision, rationale, and private scope');
+  const selected = selectPlan(workspace, { planPath: flags.plan, session: readSession(workspace), requireUnique: true });
+  if (!selected.plan) throw new Error('Learning decision requires an unambiguous plan');
+  const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
+  if (!checked.pass) return { pass: false, exitCode: 2, blockedReason: checked.message, plan: selected.plan.path, path: null };
+  const operation = recordHash(decision.operation);
+  const digest = recordHash({ decision, proof: checked.value.verificationIdentity });
+  const rel = `.harness/learning/${operation}.json`;
+  if (flags.dryRun) return { pass: true, exitCode: 0, dryRun: true, decision: decision.decision, path: null, indexed: null };
+  publishReviewRecord(workspace, '.harness/learning/.ready.json', { version: 1 });
+  const pointer = learningPointerRel(selected.plan.path);
+  return withPlanUpdateLock(path.join(workspace, pointer), () => withPlanUpdateLock(path.join(workspace, rel), () => {
+    const prior = readReviewRecord(workspace, rel);
+    if (prior && prior.digest !== digest) throw new Error('Learning operation identity conflicts with a different decision or proof');
+    if (prior?.state === 'done') {
+      publishReviewRecord(workspace, pointer, { version: 1, operation, record: rel });
+      return { ...prior.result, learningRecord: rel, replayed: true };
+    }
+    if (prior?.state === 'blocked') return { pass: false, exitCode: 1, blockedReason: prior.result.blockedReason, partialRecovery: prior.result.partialRecovery };
+    const pending = prior || { version: 1, operation, digest, decision, proof: checked.value, captureDate: new Date().toISOString().slice(0, 10), state: 'pending' };
+    const fresh = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
+    if (!fresh.pass || fresh.id !== checked.id) throw new Error('Work changed before learning publication');
+    publishReviewRecord(workspace, pointer, { version: 1, operation, record: rel });
+    publishReviewRecord(workspace, rel, pending);
+    const result = decision.decision === 'no-learning'
+      ? { pass: true, exitCode: 0, decision: 'no-learning', path: null, indexed: null, plan: selected.plan.path, verificationEvidence: checked.value.evidencePath }
+      : runInsightCompound({ workspace, copilotHome, flags: { ...flags, plan: selected.plan.path, title: decision.title, body: decision.body, category: decision.category, tags: Array.isArray(decision.tags) ? decision.tags.join(',') : '', captureDate: pending.captureDate, operationSuffix: operation.slice(0, 16) }, log, kind: 'fix', home: flags.harnessHome || process.env.HARNESS_HOME });
+    publishReviewRecord(workspace, rel, { ...pending, state: result.pass ? 'done' : result.partialRecovery ? 'blocked' : 'pending', result });
+    return { ...result, learningRecord: rel };
+  }));
 }
 
 export async function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
+  if (flags.learningDecision) return runLearningDecision({ workspace, copilotHome, flags, log });
   if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log, home: flags.home });
   const session = readSession(workspace);
   const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true });
@@ -337,6 +368,7 @@ export async function runCompound({ workspace, copilotHome, flags, log = () => {
     plan: selected.plan,
     evidence,
     maxAgeHours: loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) }).evidenceTtlHours,
+    copilotHome,
   });
   if (!freshness.pass) {
     return {

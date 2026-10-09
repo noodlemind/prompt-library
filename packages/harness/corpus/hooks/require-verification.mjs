@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /** Stop gate: require fresh passed evidence after every successful governed mutation. */
+import { readPolicySource } from './lib/policy-snapshot.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { validateEvidenceBinding } from './lib/evidence-binding.mjs';
+import { validateEvidenceBinding, callProofAuthority } from './lib/proof-authority.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { stopBlockOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy } from './lib/policy.mjs';
 import { writeSessionState } from './lib/session-state.mjs';
 import { resolveHookWorkspace } from './lib/tool-payload.mjs';
+import { authorityBin } from './lib/authority-bin.mjs';
 
 const startedAt = Date.now();
 
@@ -22,7 +24,7 @@ function readPayload() {
 
 const input = readPayload();
 const workspace = resolveHookWorkspace(input);
-const policy = loadHookPolicy(workspace, { ttlKey: 'evidence_ttl_hours', ttlDefault: 24 });
+const policy = loadHookPolicy(workspace, { ttlKey: 'evidence_ttl_hours', ttlDefault: 24, rule: 'completion' });
 const sessionPath = path.join(workspace, '.harness', 'session.json');
 let session = null;
 
@@ -45,7 +47,7 @@ function event(fields) {
 
 function deny(message) {
   const planFlag = session?.activePlan ? ` --plan ${session.activePlan}` : '';
-  const recipe = `; next: run \`harness verify${planFlag} --workspace . --json\` after the edit is complete, then stop`;
+  const recipe = `; next: run \`harness verify${planFlag} --workspace . --json\` after the edit is complete, record a publish or no-learning decision, and complete the plan with \`harness plan-update${planFlag} --status done\` before stopping`;
   const base = input.stop_hook_active
     ? `${message}; verification is still pending after the prior Stop block`
     : message;
@@ -73,13 +75,13 @@ if (!fs.existsSync(sessionPath)) {
 }
 
 try {
-  session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  session = JSON.parse(readPolicySource(sessionPath)?.toString('utf8') || 'null');
 } catch {
   deny('session is unreadable');
 }
 
 function refreshVerification(current) {
-  const bin = process.env.HARNESS_BIN;
+  const bin = authorityBin();
   const command = bin ? process.execPath : 'harness';
   const args = [...(bin ? [bin] : []), 'verify', '--json', '--no-events', '--workspace', workspace];
   if (current?.activePlan) args.push('--plan', current.activePlan);
@@ -91,20 +93,16 @@ function refreshVerification(current) {
   });
   if (result.error || result.status == null) return current;
   try {
-    return JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+    return JSON.parse(readPolicySource(sessionPath)?.toString('utf8') || 'null');
   } catch {
     return current;
   }
 }
 
+if (!session || typeof session !== 'object') deny('session is unreadable');
 if (!session.lastEditAt) allow('No successful governed mutation requires verification.');
 const lastEditAt = Date.parse(session.lastEditAt);
 if (!Number.isFinite(lastEditAt)) deny('last edit timestamp is missing or invalid');
-const lastCompletedEditAt = Date.parse(session.lastCompletedEditAt || '');
-if (Number.isFinite(lastCompletedEditAt) && lastCompletedEditAt >= lastEditAt) {
-  allow('Latest successful mutation already has completion evidence.');
-}
-
 if (!session.lastEvidencePath || !session.lastVerifyAt) session = refreshVerification(session);
 if (!session.lastEvidencePath || !session.lastVerifyAt) deny('harness verify has not run');
 const evidencePath = path.resolve(workspace, session.lastEvidencePath);
@@ -114,10 +112,11 @@ if (!evidencePath.startsWith(path.join(workspace, '.harness', 'evidence') + path
 
 let evidence;
 try {
-  evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
+  evidence = JSON.parse(readPolicySource(evidencePath)?.toString('utf8') || 'null');
 } catch {
   deny('verification evidence is unreadable');
 }
+if (!evidence || typeof evidence !== 'object') deny('verification evidence is unreadable');
 if (evidence.outcome === 'repeated-mistake') deny('verification outcome is repeated-mistake; run harness correct');
 if (evidence.outcome !== 'passed') deny(`verification outcome is ${evidence.outcome || 'unknown'}`);
 const normalizedPlan = (value) => String(value || '').replace(/\\/g, '/');
@@ -137,6 +136,8 @@ const evidenceVerifiedAt = Date.parse(evidence.verifiedAt);
 if (lastVerifyAt < lastEditAt || evidenceVerifiedAt < lastEditAt) {
   deny('files changed after the latest passed verification');
 }
+const completion = callProofAuthority(workspace, ['--validate-completion', '--plan', evidence.plan]);
+if (!completion?.pass) deny(completion?.message || 'Current completion record cannot be validated; upgrade and retry completion');
 session.lastCompletedEditAt = session.lastEditAt;
 session.lastCompletionAt = new Date().toISOString();
 try {

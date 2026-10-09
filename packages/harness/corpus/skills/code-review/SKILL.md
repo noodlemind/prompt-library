@@ -44,6 +44,8 @@ Activate when the user wants to:
 
 **Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip pipeline validation and review whatever is provided.
 
+For a pipeline plan, run `harness review prepare --plan <path> --base <base> --json` before dispatch. Supply its packet ID and required reviewer IDs with every result. After judgment and fixes, collect current results using `harness review assemble --plan <path> --packet <id> --file <results.json> --json`. A scope change requires a new packet and review. Bare `reviews.completed` strings are bookkeeping, never coverage evidence.
+
 ### 2. Understand the Scope
 
 Determine what to review:
@@ -112,6 +114,7 @@ Each persona returns JSON:
 ```json
 {
   "reviewer": "persona-name",
+  "status": "completed",
   "findings": [...],
   "residual_risks": [...],
   "testing_gaps": [...]

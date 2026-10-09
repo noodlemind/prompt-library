@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import { test } from 'node:test';
-import { validateEvidenceBinding } from '../corpus/hooks/lib/evidence-binding.mjs';
+import { validateEvidence } from '../lib/evidence.mjs';
 import { runNamedCheck, validateCommand } from '../lib/checks.mjs';
 import { createEvidenceBinding } from '../lib/evidence.mjs';
 import { loadPlan } from '../lib/plan-parse.mjs';
@@ -30,30 +30,29 @@ test('behavioralProof classifies passed type-check and behavior checks', () => {
   assert.equal(behavioralProof([]), 'unproven');
 });
 
-test('stop-hook binding accepts evidence version 3 and rejects a different head', () => {
+test('proof authority accepts evidence version 4 and rejects a different head', () => {
   const workspace = tempDir('harness-workspace-');
   const planPath = writeVersionedPlan(workspace);
   initGit(workspace);
   const plan = loadPlan(workspace, planPath);
   const binding = createEvidenceBinding({ workspace, plan, base: 'HEAD', changedFiles: [] });
   const evidence = {
-    version: 3,
+    version: 4,
     plan: plan.path,
     outcome: 'passed',
+    checks: [{ id: 'unit-tests', status: 'passed', proof: 'behavior' }, { id: 'criteria-evidence', status: 'passed' }],
     verifiedAt: new Date().toISOString(),
     binding,
   };
-  assert.equal(
-    validateEvidenceBinding({ workspace, planPath: plan.path, evidence, maxAgeHours: 24 }),
-    null,
-  );
-  const moved = validateEvidenceBinding({
+  assert.equal(validateEvidence({ workspace, plan, evidence, maxAgeHours: 24 }).pass, true);
+  assert.equal(validateEvidence({ workspace, plan, evidence: { ...evidence, version: 3 }, maxAgeHours: 24 }).pass, false);
+  const moved = validateEvidence({
     workspace,
-    planPath: plan.path,
+    plan,
     evidence: { ...evidence, binding: { ...binding, head: 'a'.repeat(40) } },
     maxAgeHours: 24,
   });
-  assert.match(moved, /different head/i);
+  assert.match(moved.message, /different head/i);
 });
 
 test('verify refuses a pass when the git head changes during checks', async () => {

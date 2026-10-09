@@ -253,7 +253,7 @@ test('describeCommand produces help data shaped for the existing renderer', () =
   assert.match(learnings.usage, /\[domain\]/);
 
   const status = describeCommand('status');
-  assert.deepEqual(status.options, []);
+  assert.ok(status.options.some(([name]) => name === '--effective-policy'));
 });
 
 test('describeAll lists every registered command, pilots included', () => {

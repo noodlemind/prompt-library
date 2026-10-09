@@ -1,13 +1,16 @@
+import { readProductDiff } from '../corpus/hooks/lib/product-diff.mjs';
 import fs from 'node:fs';
+import { validateReview } from './review.mjs';
+import { openHardGaps } from './completion.mjs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { repeatedFromServed } from './repeat-mistake.mjs';
 import { readSession } from './session.mjs';
-import { selectPlan } from './plan-parse.mjs';
+import { selectPlan, loadPlan } from './plan-parse.mjs';
 import { extractAcceptanceCriteria, validatePlanSchema } from './plan-schema.mjs';
 import { validatePlanScope } from './plan-scope.mjs';
-import { createEvidenceBinding, writeEvidence } from './evidence.mjs';
+import { createEvidenceBinding, writeEvidence, planDigest } from './evidence.mjs';
 import { checkSeverityFor, enforcementExitCode, loadPolicy } from './policy.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { isProjectTrusted } from './trust.mjs';
@@ -20,22 +23,6 @@ import { CHECKS_REL, loadNamedChecks, validateCommand, runNamedCheck } from './c
 import { createRedactor, redactionMarker } from './redact.mjs';
 
 const DEFAULT_CHECK_SEVERITIES = { [STRUCTURAL_CHECK_ID]: 'advisory' };
-
-function normalizedDiff(text) {
-  return String(text || '')
-    .split(/\r?\n/)
-    .filter((line) => !/^index [0-9a-f]+\.\.[0-9a-f]+(?:\s|$)/.test(line))
-    .join('\n');
-}
-
-function deliveredDiff(workspace, base) {
-  const args = ['diff', '--no-ext-diff'];
-  const safeBase = typeof base === 'string' && base && !base.startsWith('-') && !/[\0\r\n]/.test(base);
-  args.push(safeBase ? base : 'HEAD');
-  const diff = spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout: 30000 });
-  if (diff.status !== 0) return '';
-  return normalizedDiff(diff.stdout || '');
-}
 
 function resultCheck(id, status, message, extra = {}) {
   return { id, status, message, ...extra };
@@ -335,13 +322,14 @@ function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
   const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   const severities = applyCheckSeverities(partial.checks, policy, partial.planGatedChecks || new Set());
     const checks = severities.checks.map(sanitizeCheckPayload);
-  const resolved = partial.outcome || resolveOutcome(checks);
+  let resolved = partial.outcome || resolveOutcome(checks);
+  if (resolved === 'passed' && behavioralProof(checks) === 'unproven') resolved = 'inconclusive';
   const typeCheckOnly = resolved === 'passed' && behavioralProof(checks) === 'type-check-only';
   const repeated = !typeCheckOnly && resolved === 'passed' && repeatedFromServed({
     workspace,
     home: flags.harnessHome || flags.home || process.env.HARNESS_HOME,
     session: readSession(workspace),
-    delivered: deliveredDiff(workspace, flags.base),
+    delivered: readProductDiff(workspace, { base: flags.base || 'HEAD', planPath: partial.plan, timeout: 30000 }) || '',
   });
   const result = {
     outcome: typeCheckOnly ? 'type-check-only' : repeated ? 'repeated-mistake' : resolved,
@@ -363,7 +351,7 @@ function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
   };
   result.evidencePath = skipEvidence ? null : writeEvidence(workspace, result, flags.dryRun);
   // Kept off the evidence file. The edit gate compares this string later.
-  if (result.evidencePath) result.diffFingerprint = deliveredDiff(workspace, flags.base);
+  if (result.evidencePath) result.diffFingerprint = readProductDiff(workspace, { base: flags.base || 'HEAD', planPath: result.plan, timeout: 30000 }) || '';
   return result;
 }
 
@@ -392,6 +380,12 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
       { details: schema.checks }
     )
   );
+  if (!schema.pass) return finalize(workspace, flags, { plan: plan.path, checks });
+  try { planDigest(plan.text); }
+  catch (error) {
+    checks.push(resultCheck('plan-schema', 'failed', error.message));
+    return finalize(workspace, flags, { plan: plan.path, checks });
+  }
 
   const readiness = validatePlanReadiness(workspace, plan);
   checks.push(
@@ -418,6 +412,7 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     plan,
     base: flags.base,
     changedFiles: preScope.changedFiles,
+    copilotHome: resolveCopilotHome(flags.copilotHome),
   });
 
   const named = loadNamedChecks(workspace);
@@ -486,7 +481,7 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     if (status !== 'passed') unverifiedCriteria.push(id);
     return { id, status };
   });
-  let criteriaStatus = 'passed';
+  let criteriaStatus = criterionIds.length ? 'passed' : 'failed';
   if (criterionStatuses.some((entry) => entry.status === 'failed')) criteriaStatus = 'failed';
   else if (criterionStatuses.some((entry) => entry.status === 'inconclusive')) criteriaStatus = 'inconclusive';
   checks.push(resultCheck('criteria-evidence', criteriaStatus, unverifiedCriteria.length ? `Unverified criteria: ${unverifiedCriteria.join(', ')}` : 'Every acceptance criterion has passed named evidence', { criteria: criterionStatuses }));
@@ -523,27 +518,31 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     );
   }
 
-  const requiredReviews = (plan.fm.reviews?.required || []).filter((review) => !(plan.fm.reviews?.completed || []).includes(review));
-  checks.push(resultCheck('required-reviews', requiredReviews.length ? 'failed' : 'passed', requiredReviews.length ? `Missing required reviews: ${requiredReviews.join(', ')}` : 'Required reviews satisfied'));
+  const review = validateReview({ workspace, plan, copilotHome: resolveCopilotHome(flags.copilotHome) });
+  const requiredReviews = review.missing;
+  checks.push(resultCheck('required-reviews', review.pass ? 'passed' : 'failed', review.message, { record: review.record?.id || null }));
 
-  const openHardGaps = (plan.fm.capability_gaps || []).filter(
-    (gap) => gap && typeof gap === 'object' && gap.class === 'hard' && !['done', 'bridge', 'waived'].includes(gap.fulfillment)
-  );
-  checks.push(resultCheck('hard-gaps', openHardGaps.length ? 'failed' : 'passed', openHardGaps.length ? `${openHardGaps.length} hard capability gaps remain open` : 'No open hard capability gaps'));
+  const hardGaps = openHardGaps(plan, loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) }));
+  checks.push(resultCheck('hard-gaps', hardGaps.length ? 'failed' : 'passed', hardGaps.length ? `${hardGaps.length} hard capability gaps remain open or lack scoped authorization` : 'No open hard capability gaps'));
 
-  const criticalOpen = plan.fm.reviews?.critical_open || [];
+  const criticalOpen = [...(plan.fm.reviews?.critical_open || []), ...review.critical];
   checks.push(resultCheck('critical-findings', criticalOpen.length ? 'failed' : 'passed', criticalOpen.length ? `${criticalOpen.length} critical findings remain open` : 'No open critical review findings'));
 
+  const currentPlan = loadPlan(workspace, plan.path);
   const binding = createEvidenceBinding({
     workspace,
-    plan,
+    plan: currentPlan || plan,
     base: flags.base,
     changedFiles: scope.changedFiles,
+    copilotHome: resolveCopilotHome(flags.copilotHome),
   });
   const headMoved = preBinding.head !== binding.head;
   const stable =
     preBinding.workspaceDigest === binding.workspaceDigest &&
     preBinding.planDigest === binding.planDigest &&
+    preBinding.policyDigest === binding.policyDigest &&
+    preBinding.executionPhase === binding.executionPhase &&
+    Boolean(currentPlan) &&
     !headMoved;
   checks.push(
     resultCheck(
@@ -563,7 +562,7 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     planGatedChecks: planGatedCheckIds(plan),
     unverifiedCriteria,
     scopeViolations: scope.violations,
-    openHardGaps,
+    openHardGaps: hardGaps,
     requiredReviews,
     binding,
   });

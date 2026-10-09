@@ -9,6 +9,7 @@ Each persona returns a single JSON object:
 ```json
 {
   "reviewer": "architecture-strategist",
+  "status": "completed",
   "findings": [
     {
       "file": "path/to/file.rb",
@@ -55,6 +56,7 @@ Each persona returns a single JSON object:
 | Field | Type | Description |
 |-------|------|-------------|
 | `reviewer` | string | Name of the persona that produced these findings |
+| `status` | enum | `completed` for a complete result; otherwise the actual failed or timed-out status |
 | `findings` | array | List of finding objects |
 | `residual_risks` | array[string] | Risks that remain even after all findings are addressed |
 | `testing_gaps` | array[string] | Areas where test coverage is insufficient |
@@ -87,7 +89,7 @@ Each persona returns a single JSON object:
 
 ### Routing Guidelines
 
-- A typo fix, missing null check on an internal method, or adding a missing test → `safe_auto`
+- A typo or another demonstrated behavior-preserving local correction may be `safe_auto`; a missing null check requires judgment about valid inputs and behavior. Classification never grants tool authority.
 - Changing a public API response format, modifying auth permissions, altering database constraints → `gated_auto`
 - Architectural refactoring, redesigning a module boundary, rewriting a test strategy → `manual`
 - "This area has historically been fragile", deployment considerations, monitoring suggestions → `advisory`

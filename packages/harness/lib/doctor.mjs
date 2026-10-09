@@ -3,6 +3,10 @@ import path from 'path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'node:url';
+import { completeWork } from './completion.mjs';
+import { runCompound } from './compound.mjs';
+import { loadPolicy } from './policy.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
 import { resolveHarnessBin, RUNNER_VERSION } from './resolve-harness-bin.mjs';
@@ -16,7 +20,8 @@ import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
-import { storeDir, storeDirForId, repoId, localRepoId, listLearnings } from './knowledge/store.mjs';
+import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings } from './knowledge/store.mjs';
+import { storageIdForRepo } from './storage-aliases.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { loadRoutingPolicy } from './routing-policy.mjs';
 import { listBuckets } from './knowledge/overlay.mjs';
@@ -161,7 +166,7 @@ Exercise installed hooks in an isolated fixture.
 `;
 }
 
-function runHook(script, workspace, payload) {
+function runHook(script, workspace, payload, env = {}) {
   return spawnSync(process.execPath, [script], {
     cwd: workspace,
     input: JSON.stringify({
@@ -170,7 +175,7 @@ function runHook(script, workspace, payload) {
       ...payload,
     }),
     encoding: 'utf8',
-    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce', ...env },
     timeout: 15_000,
   });
 }
@@ -200,6 +205,9 @@ export async function runVSCodeHookProbe(hookRoot) {
   // fixture and must not accumulate temp-directory entries in the real
   // ~/.copilot trust store every time someone runs `harness doctor`.
   const doctorCopilotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-home-'));
+  const previousHome = process.env.HARNESS_HOME;
+  process.env.HARNESS_HOME = doctorCopilotHome;
+  const probeHook = (script, workspace, payload) => runHook(script, workspace, payload, { COPILOT_HOME: doctorCopilotHome, HARNESS_HOME: doctorCopilotHome, HARNESS_BIN: fileURLToPath(new URL('../bin/harness.mjs', import.meta.url)) });
   const planRel = 'docs/plans/vscode-hook-doctor-plan.md';
   const result = {
     recognized: false,
@@ -252,7 +260,7 @@ export async function runVSCodeHookProbe(hookRoot) {
       tool_name: 'replace_string_in_file',
       tool_input: { filePath: 'src/schema.json' },
     };
-    const missing = runHook(pre, workspace, mutation);
+    const missing = probeHook(pre, workspace, mutation);
     result.missingGateDenied = hookBlocked(missing, 'PreToolUse');
     const eventsPath = path.join(workspace, '.harness', 'events.jsonl');
     if (fs.existsSync(eventsPath)) {
@@ -270,10 +278,10 @@ export async function runVSCodeHookProbe(hookRoot) {
       gateStatus: 'pass',
       lastGateAt: new Date().toISOString(),
     });
-    const allowed = runHook(pre, workspace, mutation);
+    const allowed = probeHook(pre, workspace, mutation);
     result.gatedAllowed = allowed.status === 0 && !hookBlocked(allowed, 'PreToolUse');
 
-    const postResult = runHook(post, workspace, {
+    const postResult = probeHook(post, workspace, {
       hook_event_name: 'PostToolUse',
       tool_name: 'replace_string_in_file',
       tool_input: { filePath: 'src/schema.json' },
@@ -282,7 +290,7 @@ export async function runVSCodeHookProbe(hookRoot) {
     const afterPost = readSession(workspace);
     result.postRecorded = postResult.status === 0 && Boolean(afterPost?.lastEditAt);
 
-    const deniedStop = runHook(stop, workspace, { hook_event_name: 'Stop', stop_hook_active: false });
+    const deniedStop = probeHook(stop, workspace, { hook_event_name: 'Stop', stop_hook_active: false });
     result.unverifiedDenied = hookBlocked(deniedStop, 'Stop');
 
     const plan = loadPlan(workspace, planRel);
@@ -298,7 +306,13 @@ export async function runVSCodeHookProbe(hookRoot) {
         lastVerifyOutcome: verification.outcome,
         lastEvidencePath: verification.evidencePath,
       });
-      const allowedStop = runHook(stop, workspace, { hook_event_name: 'Stop', stop_hook_active: false });
+      const decisionPath = path.join(workspace, '.harness/doctor-learning.json');
+      fs.writeFileSync(decisionPath, JSON.stringify({ operation: 'doctor-fixture-learning', decision: 'no-learning', rationale: 'Disposable verification fixture has no durable product lesson.' }));
+      const learning = await runCompound({ workspace, copilotHome: doctorCopilotHome, flags: { plan: planRel, learningDecision: decisionPath } });
+      if (!learning.pass) return result;
+      completeWork({ workspace, plan, copilotHome: doctorCopilotHome });
+      fs.writeFileSync(path.join(workspace, planRel), plan.text.replace(/^status: in-progress$/m, 'status: done'));
+      const allowedStop = probeHook(stop, workspace, { hook_event_name: 'Stop', stop_hook_active: false });
       const endEvents = fs.existsSync(eventsPath)
         ? fs.readFileSync(eventsPath, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
         : [];
@@ -316,6 +330,8 @@ export async function runVSCodeHookProbe(hookRoot) {
     // of ~/.copilot, which is a move rather than a fix.
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(doctorCopilotHome, { recursive: true, force: true });
+    if (previousHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previousHome;
   }
 }
 
@@ -392,53 +408,40 @@ function knowledgeChecks({ workspace, copilotHome }) {
     // Advisory; never fail doctor on a knowledge-check error.
   }
 
-  // K4 (P2, design §2): repoId (store.mjs) switches from a path-keyed
-  // local-<hash> id to a remote-keyed id the instant this workspace gains an
-  // origin remote — a store built BEFORE that switch is left on disk under
-  // the OLD id, silently orphaned (every mutator now resolves storeDir
-  // against the NEW id, so the old store is never read or written again).
-  // DETECTS only — never auto-migrates; a human runs the printed command.
-  //
-  // Two distinct FAILING shapes, not one — the common sequence (add remote,
-  // then do one more consolidate --apply/remember before anyone notices) is
-  // what makes this matter: the FRESH store materializes under the new id,
-  // and a check that only fired on "legacy exists, current doesn't" would go
-  // permanently blind at exactly that point — the orphaned legacy store
-  // would sit there forever with K4 reporting a clean pass. Both shapes fail
-  // (never silently clear once a second store exists), each with its own
-  // hint:
-  //   - legacy exists, current does NOT: the pre-write window — migrate-store
-  //     will succeed cleanly.
-  //   - legacy exists AND current exists: the post-write window — migrate-
-  //     store now refuses (a non-empty target), so the hint routes to manual
-  //     reconciliation instead of a command that would just fail.
+  // Both legacy-only and split-store states require recovery after an ID change.
   try {
     const currentId = repoId(workspace);
     const hasRemote = !currentId.startsWith('local-');
     let stranded = false;
     let hint = 'harness knowledge migrate-store';
-    if (hasRemote) {
+    if (!hasRemote) {
+      const selected = workspaceStorageId(workspace);
+      if (selected !== storageIdForRepo(currentId)) {
+        stranded = true;
+        hint = `saved knowledge or plans use the old Windows path ID ${selected}; preserve the binding with: harness knowledge migrate-store --from-id ${selected}`;
+      }
+    } else {
       const legacyDir = storeDirForId(localRepoId(workspace));
       const currentDir = storeDirForId(currentId);
       const legacyExists = fs.existsSync(path.join(legacyDir, 'consolidated.jsonl'));
       const currentExists = fs.existsSync(path.join(currentDir, 'consolidated.jsonl'));
-      if (legacyExists && !currentExists) {
+      if (legacyDir !== currentDir && legacyExists && !currentExists) {
         stranded = true;
         hint = `a path-keyed store exists at ${legacyDir} but this workspace now resolves to ${currentDir} — run: harness knowledge migrate-store`;
-      } else if (legacyExists && currentExists) {
+      } else if (legacyDir !== currentDir && legacyExists && currentExists) {
         stranded = true;
         hint = `both a legacy path-keyed store and the remote-keyed store exist — reconcile manually (migrate-store will refuse a non-empty target); inspect ${legacyDir}`;
       }
     }
     checks.push({
       id: 'K4',
-      name: 'Knowledge store not stranded behind a newly-added origin remote',
+      name: 'Saved storage remains bound after a repository ID change',
       pass: !stranded,
       hint,
       optional: true,
     });
-  } catch {
-    // Advisory; never fail doctor on a knowledge-check error.
+  } catch (error) {
+    checks.push({ id: 'K4', name: 'Saved storage remains bound after a repository ID change', pass: false, hint: error.message, optional: true });
   }
 
   // K5 (blueprint P6): a bucket whose branch no longer exists locally or on
@@ -817,6 +820,8 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   });
 
   checks.push(routingPolicyCheck(workspace));
+  const effectivePolicy = loadPolicy(workspace, flags.enforcement, { copilotHome });
+  checks.push({ id: 'P0', name: `Installed effective policy: ${effectivePolicy.enforcement}`, pass: true, optional: true, hint: `${effectivePolicy.enforcementSource}; critical=${effectivePolicy.rules.critical}; destructive=${effectivePolicy.rules.destructive}`, policy: effectivePolicy });
   checks.push(...knowledgeChecks({ workspace, copilotHome }));
   checks.push(...structuralChecks({ workspace }));
 
