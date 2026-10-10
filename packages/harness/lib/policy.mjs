@@ -14,6 +14,7 @@ const POLICY_VERSIONS = new Set([1, 2]);
 export const NON_ADVISORY_CHECK_IDS = new Set([
   'plan-selection',
   'plan-schema',
+  'intent-sources',
   'plan-readiness',
   'plan-state',
   'phase-tasks',

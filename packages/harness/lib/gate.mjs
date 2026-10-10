@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { readSession } from './session.mjs';
+import { readSession, writeSession } from './session.mjs';
 import { loadPlan, pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
@@ -9,12 +9,13 @@ import { loadPolicy } from './policy.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { primitivePlanGovernance } from './primitive-governance.mjs';
 import { validateRoutingSnapshot } from './route.mjs';
-import { validatePlanReadiness } from './plan-readiness.mjs';
+import { configuredCheckSnapshot, validatePlanReadiness } from './plan-readiness.mjs';
 import { readPlanRecord } from './plan-record.mjs';
+import { validatePlanSchema } from './plan-schema.mjs';
 import { intentSourcesCheck } from './intent-sources.mjs';
 import { inspectIsolation, worktreeGateMessage } from './worktree.mjs';
 
-export function runGate({ workspace, flags, query = '' }) {
+export function runGate({ workspace, flags, query = '', planOverride = null }) {
   const session = readSession(workspace);
   const phase = flags.phase || 'implement';
   const checks = [];
@@ -24,9 +25,9 @@ export function runGate({ workspace, flags, query = '' }) {
 
   const planPaths = listPlanRels(workspace);
   const matches = query ? findMatchingPlans(workspace, query, 5) : [];
-  const plan = flags.plan
+  const plan = planOverride || (flags.plan
     ? loadPlan(workspace, flags.plan)
-    : pickActivePlan(workspace, session, matches, planPaths);
+    : pickActivePlan(workspace, session, matches, planPaths));
 
   if (!plan && planPaths.length === 0) {
     checks.push({
@@ -46,6 +47,11 @@ export function runGate({ workspace, flags, query = '' }) {
     pass = false;
   } else {
     checks.push({ id: 'C1', pass: true, message: `Plan: ${plan.path}`, severity: 'ok' });
+    if (plan.fm.plan_schema !== undefined || plan.fm.plan_format !== undefined) {
+      const schema = validatePlanSchema(plan);
+      checks.push({ id: 'C-plan-schema', pass: schema.pass, message: schema.pass ? 'Declared plan schema is supported' : schema.checks.filter(check => !check.pass).map(check => check.message).join('; '), severity: schema.pass ? 'ok' : 'fail' });
+      if (!schema.pass) pass = false;
+    }
 
     const readiness = validatePlanReadiness(workspace, plan);
     for (const check of readiness.checks) {
@@ -246,9 +252,7 @@ export function runGate({ workspace, flags, query = '' }) {
         ? ['harness compound', '/auto-compound']
         : plan?.status === 'planned'
           ? [
-              `set ${plan.path} status to in-progress`,
-              `harness gate --phase implement --plan ${plan.path}`,
-              'editFiles (scoped) only after the fresh gate passes',
+              `harness plan-update --plan ${plan.path} --file <start-decision.json>`,
             ]
           : ['editFiles (scoped)', `harness verify --plan ${plan?.path || '<path>'}`]
       : plan?.status === 'blocked-capability'
@@ -265,6 +269,26 @@ export function runGate({ workspace, flags, query = '' }) {
   };
 
   return result;
+}
+
+export function publishGateSession({ workspace, result, policy, dryRun = false }) {
+  const previous = readSession(workspace) || {};
+  const passed = result.pass && result.exitCode === 0;
+  const snapshot = passed ? configuredCheckSnapshot(workspace) : null;
+  if (passed && snapshot.error) throw new Error(snapshot.error);
+  const written = writeSession(workspace, {
+    ...previous,
+    activePlan: result.plan?.path || previous.activePlan || null,
+    gatedPlan: result.plan?.path || null,
+    gatedPlanDigest: passed ? result.plan?.digest || null : null,
+    gatedChecksDigest: passed ? snapshot.digest : null,
+    gatedCheckCommands: passed ? snapshot.commands : [],
+    lastGateAt: new Date().toISOString(),
+    gateStatus: passed ? 'pass' : policy.enforcement === 'enforce' && !result.pass ? 'blocked' : 'warn',
+    blockedReason: result.blockedReason,
+  }, dryRun);
+  if (!written) throw new Error('Could not publish the gate session');
+  return written;
 }
 
 /** Quick scan for any locked plan without full gate context */

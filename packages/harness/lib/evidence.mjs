@@ -10,6 +10,8 @@ import { planContractText } from './work-contract.mjs';
 import { policyDigest, trustStatus } from './trust.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { loadPolicy } from './policy.mjs';
+import { intentSourceBindings, intentSourcesCheck } from './intent-sources.mjs';
+import { gapEvidenceCheck } from './plan-readiness.mjs';
 
 export const EVIDENCE_VERSION = 4;
 export { planContractText } from './work-contract.mjs';
@@ -146,7 +148,8 @@ export function createEvidenceBinding({ workspace, plan, base = null, changedFil
   // it to the product diff and invalidate otherwise current product proof.
   const files = normalizedFiles(changedFiles).filter(file => file !== plan.path);
   return {
-    contractVersion: 1,
+    contractVersion: plan.fm?.intent_source_policy === 'content-v1' ? 2 : 1,
+    ...(plan.fm?.intent_source_policy === 'content-v1' ? { intentSources: intentSourceBindings(plan, workspace) } : {}),
     executionPhase: String(plan.phase ?? 0),
     policyDigest: proofPolicyDigest(workspace, copilotHome),
     base: base || null,
@@ -162,9 +165,15 @@ export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24, 
   if (evidence.outcome !== 'passed') {
     return { pass: false, message: `Latest harness verify outcome is ${evidence.outcome || 'unknown'}` };
   }
-  if (evidence.version !== EVIDENCE_VERSION || !validBinding(evidence.binding) || evidence.binding.contractVersion !== 1) {
+  const expectedVersion = plan.fm?.intent_source_policy === 'content-v1' ? 2 : 1;
+  if (evidence.version !== EVIDENCE_VERSION || !validBinding(evidence.binding) || evidence.binding.contractVersion !== expectedVersion) {
     return { pass: false, message: 'Verification evidence is not bound to the current plan and workspace' };
   }
+  const intent = plan.fm?.intent_source_policy !== undefined ? intentSourcesCheck(plan, workspace) : null;
+  if (intent && !intent.pass) return { pass: false, message: intent.message };
+  const gaps = gapEvidenceCheck(workspace, plan);
+  if (!gaps.pass) return { pass: false, message: gaps.message };
+  if (expectedVersion === 2 && JSON.stringify(evidence.binding.intentSources) !== JSON.stringify(intentSourceBindings(plan, workspace))) return { pass: false, message: 'Selected intent source evidence changed; amend and reverify' };
   const required = plan.fm.verification?.required;
   if (!Array.isArray(evidence.checks) || !Array.isArray(required) || !required.length || required.some(id => !evidence.checks.some(check => check.id === id && check.status === 'passed' && ['behavior', 'type-check'].includes(check.proof))) || !evidence.checks.some(check => required.includes(check.id) && check.status === 'passed' && check.proof === 'behavior') || !evidence.checks.some(check => check.id === 'criteria-evidence' && check.status === 'passed')) return { pass: false, message: 'Verification record lacks executed proof for the current acceptance criteria' };
   if (evidence.binding.policyDigest !== proofPolicyDigest(workspace, copilotHome)) return { pass: false, message: 'Policy or trust changed after verification; refresh trust and reverify' };

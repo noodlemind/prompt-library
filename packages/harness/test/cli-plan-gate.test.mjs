@@ -203,7 +203,7 @@ test('gate passes intent checks when locked plan has intent contract', () => {
   assert.equal(body.checks.find((check) => check.id === 'I3')?.pass, true);
 });
 
-test('gate directs a planned plan through in-progress and a fresh gate before edits', () => {
+test('gate directs a planned plan to the atomic start operation', () => {
   const workspace = tempDir('harness-workspace-');
   const planPath = writePlan(workspace, {
     frontmatter:
@@ -215,9 +215,7 @@ test('gate directs a planned plan through in-progress and a fresh gate before ed
 
   assert.equal(result.status, 0, result.stderr);
   const body = JSON.parse(result.stdout);
-  assert.match(body.nextTools[0], /status to in-progress/i);
-  assert.match(body.nextTools[1], /harness gate --phase implement/i);
-  assert.match(body.nextTools[2], /only after the fresh gate passes/i);
+  assert.deepEqual(body.nextTools, ['harness plan-update --plan docs/plans/2026-05-22-fix-example-plan.md --file <start-decision.json>']);
 });
 
 test('validate-plan strict-intent fails locked plan with empty intent contract', () => {

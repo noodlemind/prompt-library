@@ -45,7 +45,8 @@ export function validatePlanSchema(plan) {
   if (record) {
     const criteria = extractAcceptanceCriteria(plan);
     const required = plan.fm.verification?.required;
-    const valid = plan.fm.plan_format === 'short-v1'
+    const valid = ['short-v1', 'short-v2'].includes(plan.fm.plan_format)
+      && (plan.fm.plan_format !== 'short-v2' || plan.fm.intent_source_policy === 'content-v1')
       && criteria.length === record.acceptance.length
       && criteria.length > 0
       && criteria.every((id, i) => typeof id === 'string' && /^[A-Za-z]+\d+$/.test(id)
@@ -54,9 +55,9 @@ export function validatePlanSchema(plan) {
       && Array.isArray(required) && (!plan.plan_lock || required.length > 0)
       && plan.fm.verification?.criteria && typeof plan.fm.verification.criteria === 'object'
       && !Array.isArray(plan.fm.verification.criteria)
-      && ['open', 'planned', 'in-progress', 'review', 'done'].includes(plan.status)
+      && (plan.fm.plan_format === 'short-v2' ? ['open', 'planned', 'in-progress', 'review', 'done', 'needs-info', 'blocked-capability'] : ['open', 'planned', 'in-progress', 'review', 'done']).includes(plan.status)
       && [plan.fm.reviews?.required, plan.fm.reviews?.completed, plan.fm.reviews?.critical_open].every(Array.isArray);
-    return { pass: Boolean(valid), version: 'short-v1', criteria, checks: [{ id: 'short-contract', pass: Boolean(valid), message: valid ? 'Short plan proof contract valid' : 'Short plan requires stable acceptance IDs/text and verification bindings; repair and reverify' }] };
+    return { pass: Boolean(valid), version: plan.fm.plan_format, criteria, checks: [{ id: 'short-contract', pass: Boolean(valid), message: valid ? 'Short plan proof contract valid' : 'Short plan requires stable acceptance IDs/text and verification bindings; repair and reverify' }] };
   }
 
   const version = Number(plan.fm.plan_schema);

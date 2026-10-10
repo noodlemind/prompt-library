@@ -196,7 +196,7 @@ test('plan-new records discovered intent sources on the scaffold', () => {
   assert.equal(fm.intent_sources[0].sha256, SPEC_SHA);
 });
 
-test('implement gate still passes after a locked spec file changes', () => {
+test('a legacy paths-only plan still passes after a locked spec file changes', () => {
   const ws = planWorkspace('docs/specs/checkout.md');
   const created = runHarness(
     [
@@ -219,6 +219,7 @@ test('implement gate still passes after a locked spec file changes', () => {
   );
   assert.equal(created.status, 0, created.stderr);
   const plan = JSON.parse(created.stdout).path;
+  fs.writeFileSync(plan, fs.readFileSync(plan, 'utf8').replace('plan_schema: 2', 'plan_schema: 1').replace('intent_source_policy: content-v1\n', ''));
   fs.writeFileSync(path.join(ws, 'docs/specs/checkout.md'), '# Drifted after lock\n');
   const gated = runHarness(['gate', '--phase', 'implement', '--plan', plan, '--workspace', ws, '--json'], {
     env: GIT_ENV,
@@ -644,7 +645,7 @@ test('plan-new fails when a discovered spec is missing on disk', () => {
   assert.match(`${created.stderr}\n${created.stdout}`, /intent source unreadable: docs\/specs\/gone\.md/);
 });
 
-test('implement gate passes after a locked body edit drops the query words from the winner among thirteen specs', () => {
+test('a strict locked selection does not rerank when source query words disappear', () => {
   const ws = planWorkspace();
   for (let i = 1; i <= 12; i += 1) {
     addTracked(ws, `docs/specs/n${String(i).padStart(2, '0')}.md`, `# n${i}\n`);
@@ -660,12 +661,13 @@ test('implement gate passes after a locked body edit drops the query words from 
   assert.equal(locked[0], 'docs/specs/n13.md');
   fs.writeFileSync(path.join(ws, 'docs/specs/n13.md'), '# n13\n\nno query words remain\n');
   const gated = runHarness(['gate', '--phase', 'implement', '--plan', planPath, '--workspace', ws, '--json'], { env: GIT_ENV });
-  assert.equal(gated.status, 0, gated.stderr + gated.stdout);
+  assert.equal(gated.status, 1, gated.stderr + gated.stdout);
   const check = JSON.parse(gated.stdout).checks.find((item) => item.id === 'C-intent-sources');
-  assert.equal(check.pass, true);
+  assert.equal(check.pass, false);
+  assert.deepEqual(check.stale.map(source => source.path), ['docs/specs/n13.md']);
   assert.doesNotMatch(check.message || '', /Missing/);
   assert.doesNotMatch(check.message || '', /docs\/specs\/n01\.md/);
-  assert.doesNotMatch(check.message || '', /drift|hash mismatch|needs-info/i);
+  assert.deepEqual(parseFrontmatter(fs.readFileSync(planPath, 'utf8')).intent_sources.map(source => source.path), locked);
 });
 
 test('equal token counts rank spec.md and the constitution ahead of sibling contracts', async () => {

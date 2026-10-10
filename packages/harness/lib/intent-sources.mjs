@@ -183,6 +183,17 @@ export function listedIntentSources(plan) {
 }
 
 export function intentSourcesCheck(plan, workspace) {
+  const policy = plan?.fm?.intent_source_policy;
+  if (policy !== undefined && policy !== 'content-v1' || (plan?.fm?.plan_schema === 2 || plan?.fm?.plan_format === 'short-v2') && policy !== 'content-v1') {
+    return { id: 'C-intent-sources', pass: false, message: 'Unsupported intent source policy; upgrade or explicitly migrate the plan', severity: 'fail' };
+  }
+  if (policy === 'content-v1') {
+    const entries = plan.fm.intent_sources ?? [];
+    if (!Array.isArray(entries) || entries.some(entry => !sourcePath(entry) || !sourceHash(entry)) || new Set(entries.map(sourcePath)).size !== entries.length) return { id: 'C-intent-sources', pass: false, message: 'Selected intent sources require unique paths and accepted content hashes', severity: 'fail', policy };
+    const sources = intentSourceBindings(plan, workspace);
+    const stale = sources.filter(source => !source.accepted || source.accepted !== source.current);
+    if (stale.length) return { id: 'C-intent-sources', pass: false, message: `Selected intent source changed or unreadable; accept an explicit amendment: ${stale.map(s => s.path).join(', ')}`, severity: 'fail', policy, stale };
+  }
   const obligation = resolveObligation(workspace, plan);
   if (obligation.reason === 'missing') {
     return {
@@ -193,12 +204,17 @@ export function intentSourcesCheck(plan, workspace) {
     };
   }
   if (obligation.reason === 'none') {
-    return { id: 'C-intent-sources', pass: true, message: 'no in-repo spec or intent sources', severity: 'ok' };
+    return { id: 'C-intent-sources', pass: true, message: 'no in-repo spec or intent sources', severity: 'ok', guarantee: policy ? 'content-bound' : 'legacy-paths-only' };
   }
   return {
     id: 'C-intent-sources',
     pass: true,
-    message: `intent_sources covers ${obligation.paths.length} source(s)`,
+    message: `intent_sources covers ${obligation.paths.length} source(s)${policy ? '; selected bytes bound' : '; legacy paths-only guarantee; explicit migration is available'}`,
     severity: 'ok',
+    guarantee: policy ? 'content-bound' : 'legacy-paths-only',
   };
+}
+
+export function intentSourceBindings(plan, workspace) {
+  return (Array.isArray(plan?.fm?.intent_sources) ? plan.fm.intent_sources : []).map(entry => ({ path: sourcePath(entry), accepted: sourceHash(entry), current: hashIntentFile(workspace, sourcePath(entry)) }));
 }

@@ -3,156 +3,49 @@ name: ensure-plan
 description: Internal plan creation and locking procedure for trackable work. Use when no suitable explicit plan exists or a matched plan is unlocked; not for execution, review, or capability discovery.
 user-invocable: false
 ---
-
 # Ensure Plan (internal)
 
-Apply `/capture-issue` and `/plan-issue` logic without asking the user to run slash commands. This skill owns detailed planning; it does not own the Engineer runtime loop.
-
-## Non-negotiable output contract
-
-- Never run the implement gate until the referenced plan exists and `harness validate-plan --plan <path> --workspace . --json` has accepted its schema.
-- Never write a header-only or ad-hoc plan. A locked plan requires YAML frontmatter plus every canonical section below; if you cannot produce that plan, stop without a product edit.
-- Prefer scaffolding the skeleton with `harness plan-new --type <t> --slug <slug> --intent "..." --impacted <files>` — it emits a valid, gate-ready plan (correct dated path, frontmatter, and every canonical section) so you fill content, not structure. It records discovered in-repo specs on `intent_sources` with a content hash at lock. Add `--intent-source <path>` to name more. Add `--gap <id>:<primitive-path>` for a capability gap (sets `status: blocked-capability` and the `capability_gaps` entry), and it auto-adds the `## Primitive Governance` block plus `create-primitive` to `skills_used` when an Impacted File is a primitive path. Then refine the generated sections before locking.
-- New paths use `.harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md` (default, gitignored) or `docs/plans/YYYY-MM-DD-<type>-<slug>-plan.md` when git tracks files there. Prefer `harness plan-new` so the CLI chooses the root. Do not invent an undated shortcut path.
-- Before populating `verification.required`, read `.github/harness/checks.yaml`; never invent a check. Inspect each candidate command/assertion and choose only a trusted check relevant to the expected outputs; for example, `schema-validation` is forbidden when no schema output is planned. If no check exercises a documentation/primitive artifact and adding one is unjustified, use the generic product smoke check and record that limitation. New acceptance criteria and phase tasks start unchecked.
-- Create the plan with `harness plan-new` and update it with `harness plan-update --plan <path>` (status, activity, review fields, a unique body replace, `--lock`, `--intent`, `--intent-source`, `--expected-output`, `--success-criterion`, `--verification-check`, and `--gap-fulfillment`). Do not edit a `~/.harness` plan in the editor. Never batch plan bootstrap with product files, directories, checks, or scripts. After a blocked compound attempt, retry with `harness plan-update` only.
-- Read every `intent_sources` path before locking. If a spec is ambiguous, set `status: needs-info` and write `## Missing` questions instead of guessing.
-- Before the first product edit on the default branch of the primary checkout, run `harness worktree --slug <slug>` and pass `--workspace` on later harness commands. Do not edit that checkout in place.
-- Run the implement gate as a standalone terminal tool call with no file mutation in the same command. Wait for its explicit pass, then retry the original mutation in a later tool call.
+Bridge capture and planning for Engineer Deliver mode. Decide intent, scope, criteria, check adequacy, research needs, and risk. Harness owns plan representation and transitions.
 
 ## Trigger Examples
 
 **Should trigger:**
-
-- "Implement this feature" when no matching plan exists.
-- "Continue this task" when the matched plan is still open and unlocked.
-- "Make these trackable changes" when the implement capture gate would fail.
+- "Implement this feature" when no suitable plan exists.
+- "Continue this task" when the matched plan is open and unlocked.
+- "Make these trackable changes" when required intent or proof inputs are missing.
 
 **Should not trigger:**
-
-- "Log this issue for later." → use `/capture-issue`
-- "Research and lock this captured issue." → use `/plan-issue`
-- "Execute this already locked plan." → hand to `@engineer` Deliver mode
+- "Log this issue for later." Use /capture-issue.
+- "Research this captured issue." Use /plan-issue.
+- "Execute this locked plan." Use Engineer Deliver mode.
 
 ## Confusable Boundaries
 
-- `/ensure-plan` is the internal autonomous bridge across capture and planning.
-- `/capture-issue` only creates an open, unlocked issue shell.
-- `/plan-issue` researches and locks a captured issue as an explicit power-user step.
-- Engineer Deliver mode executes a locked plan; `/ensure-capability` resolves encountered capability gaps.
+Capture records the problem. Planning chooses the approach. Engineer executes the accepted plan. /ensure-capability handles encountered capability gaps.
 
-## When to invoke
+## Proportional planning
 
-`@engineer` calls this when trackable work needs a plan and any of:
+Use concise content for one or two intended product files, expected completion in one session, a user-supplied target or reference, no architectural choice, and focused trusted verification. Use one phase and no broad repository scan. Consult a specialist only when its judgment is needed.
 
-- No `.harness/plans/*.md` or `docs/plans/*.md` matches the request (dedupe first)
-- Plan exists with `status: open` and `plan_lock: false`
-- Capture gate C1–C3 would fail
+Escalate when investigation reveals a data migration, security or concurrency implications, compatibility risk, more affected files, or unclear verification. Choose full or short representation through the same CLI contract; both require current proof.
 
-## Steps
+## Establish the decision
 
-### Proportional fast path
+1. Use `harness lookup` or `harness orient --read` to retrieve existing plans. Judge semantic overlap before creating another work item.
+2. Read selected specs and relevant /recall evidence. Resolve ambiguity from available sources. If required intent remains ambiguous, capture an unlocked needs-info draft and state the missing decision.
+3. Read `.github/harness/checks.yaml` and inspect each candidate assertion. Never invent a named check. A schema-validation check is inadequate when no schema output is planned. Choose a relevant trusted check and explain any limitation.
+4. Use `harness plan-new --file <creation.json> --json` for new work. Use `harness plan-update --plan <path> --file <decision.json> --json` for accepted amendments, reasoning, phases, progress, findings, gaps, and completion. See `../references/plan-operations.md`. Do not generate frontmatter, headings, dates, hashes, or activity records.
+5. Before the first product edit on the default branch of a primary checkout, use `harness worktree --slug <slug>`. Keep later operations bound to that workspace.
+6. Submit a start decision as its own tool call. Harness validates readiness, changes state, and publishes the implement gate as one recoverable operation. Wait for explicit success before making a product edit in a later tool call. A blocked result supplies missing prerequisites.
 
-Use the same canonical plan schema with concise content when all are true: one or two intended product files; completion is expected in one session; the user supplied the target or reference pattern; no architectural choice; no security, concurrency, data-integrity, infrastructure, destructive, migration, breaking-contract risk; and a focused trusted verification check exists.
+## Continue delivery
 
-A fast plan has concise intent, one phase, one or two impacted paths, measurable acceptance criteria, and focused named checks. Use no specialist unless a gap appears, no external research unless needed, no broad repository scan, and no compounding when nothing durable was learned.
+Implement within the accepted scope. Use focused TDD checks during implementation. Record accepted progress through the CLI. Prepare review with `harness review prepare`, obtain the required judgments, fix valid findings, and collect them with `harness review assemble`. Require passed `harness verify`, then record durable learning or explicit no-learning with `harness compound --learning-decision <file>`. Submit a complete decision.
 
-Escalate to normal planning if investigation finds more affected files, compatibility or required-field risk, a data migration, security or concurrency implications, an architectural decision, or unclear verification. Never create another schema for fast plans.
-
-For a fast plan, instantiate this existing-schema shape with task-specific values and a trusted check from `.github/harness/checks.yaml`:
-
-```markdown
----
-plan_schema: 1
-title: "<task>"
-type: feat
-status: planned
-plan_lock: true
-phase: 1
-risk: green
-intent: "<durable goal>"
-expected_outputs: ["<artifact>"]
-success_criteria: ["<measurable result>"]
-verification:
-  required: [<named-check>]
-  criteria: {AC1: [<named-check>]}
-reviews: {required: [code-review], completed: [], critical_open: []}
-skills_used: [engineer, ensure-plan]
-org_objectives: []
-domains: [<domain>]
-specialists: []
-capability_gaps: []
----
-
-# <Task>
-
-## Overview
-<scope>
-
-## Intent Contract
-- Goal: <durable goal>
-
-## Acceptance Criteria
-- [ ] **AC1** <measurable result>
-
-## Plan
-### Phase 1
-- [ ] <smallest implementation and verification step>
-
-## Impacted Files
-- `<exact product path>`
-
-## Verification Plan
-- `<named-check>` validates AC1.
-
-## Risk & Review Routing
-- Green; no specialist unless a gap appears.
-
-## Review Findings
-- None.
-
-## Activity
-- YYYY-MM-DD — ensure-plan: captured, planned, and locked (autonomous).
-```
-
-### 1. Dedupe
-
-List `.harness/plans/*.md` and `docs/plans/*.md`. Fuzzy-match titles/Overview against the user request. If duplicate → use existing path; do not create a second file.
-
-### 2. Capture (if no suitable plan)
-
-Follow **`/capture-issue`** exactly:
-
-- Path: `.harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md` (or `docs/plans/…` when git tracks files there; `harness plan-new` chooses)
-- Frontmatter: `plan_schema: 1`, `status: open`, `plan_lock: false`, `phase: 0`, `risk`, `intent` when known, `intent_sources` for in-repo specs already read, `expected_outputs: []`, `success_criteria: []`, `verification`, `reviews`, `skills_used`, `org_objectives: []`, `domains`, `specialists`, and encountered `capability_gaps`
-- Body minimum (create every heading; use pending markers for planning-owned content):
-  - `## Overview`, `## Context`, `## Intent Contract` (goal stub from user message), `## Memory Cards`
-  - `## Acceptance Criteria`, `## Technical Notes`, `## Plan`, `## Research Notes`, `## Impacted Files`
-  - `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes`, `## Review Findings`, `## Activity`
-- Append Activity: `YYYY-MM-DD — ensure-plan: captured (autonomous)`
-
-Do **not** set `plan_lock: true` in this step.
-
-### 3. Plan lock (if `plan_lock: false` and work is trackable)
-
-Follow **`/plan-issue`** for that path:
-
-- Research as needed (delegate `plan-coordinator` when `agent` tool available)
-- Fill `## Intent Contract` as the durable goal (from user message), `## Research Notes`, `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, phased tasks
-- Populate frontmatter `intent`, `expected_outputs`, `success_criteria`, and named `verification.required` with `harness plan-update`; never store executable shell strings in the plan
-- Set `status: planned` and `plan_lock: true` with `harness plan-update --status planned --lock`. `--lock` never clears the lock. Mark a resolved hard gap with `--gap-fulfillment <id>:done` (or `bridge` or `waived`)
-- Append Activity: `YYYY-MM-DD — ensure-plan: planned and locked (autonomous)`
-
-Respect `autonomy-policy.md`: red `risk` may require Tier 3 before lock under `strict` profile.
-
-### 4. Return
-
-Output the canonical plan path and frontmatter snapshot. Engineer proceeds to Investigate/Implement only when `plan_lock: true` (or documented exemption).
-
-Engineer continuation is ordered: run the initial implement gate alone; change `status: planned` to `status: in-progress` with `harness plan-update --status`; rerun the implement gate alone and wait for its pass; make the product mutation; capture the review scope with `harness review prepare`, run `/code-review` and fix findings, then collect the current results with `harness review assemble`; mark completed criteria/tasks; run `harness verify`, which executes the required named checks. Focused TDD checks during implementation remain appropriate. After passed verification, publish any learning decision with `harness compound --learning-decision <file>`, then complete with `harness plan-update --status done`. Do not repair an unrelated optional check or add its files to scope. If a later contract edit precedes another product correction, rerun the implement gate before that correction.
+An intent amendment records accepted source bytes and affected evidence. Refresh the start/gate before a later product correction when its contract changed. Do not repair an unrelated optional check or add its files to scope.
 
 ## Guardrails
 
-- Same schema `harness plan-new` writes — no ad-hoc variants
-- Under `strict` autonomy: stop after capture and ask human to approve `/plan-issue`
-- Does not implement product code
+Use the CLI's missing prerequisites and allowed next actions. An operation retry returns the prior logical result; it does not renew an expired gate or bless changed content. Preserve authored reasoning. Do not edit a `~/.harness` plan in the editor.
+
+Respect existing user authorization and the single human approval policy. Under strict autonomy, stop at an unauthorized gated decision. This skill plans; it does not implement product code.

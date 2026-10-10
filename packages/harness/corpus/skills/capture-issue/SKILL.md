@@ -4,140 +4,40 @@ description: Create the initial plan file from a bug, feature, or task. Power-us
 argument-hint: "[issue description or URL]"
 user-invocable: false
 ---
-
 # Capture Issue
 
-## Pipeline Role
+Capture the observed problem and intended outcome as an unlocked plan. /plan-issue chooses the implementation approach. Engineer Deliver mode executes it.
 
-**Step 1** of the connected pipeline: Capture → Plan → Work → Review → Compound.
+## When to use
 
-This skill creates the initial local plan file that all subsequent skills operate on. It stores the file under `.harness/plans/` by default (gitignored), or under `docs/plans/` when git tracks files there. Prefer `harness plan-new` so the CLI chooses the root. It sets the initial state machine values and ensures enough context is captured to plan effectively.
-
-## Mode Detection
-
-**Pipeline mode:** If a plan file is provided as argument AND the file contains `status:` in YAML frontmatter, enforce pipeline state validation (duplicate checking, status transitions, `status: open` on creation).
-
-**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip pipeline validation. Create an issue file directly from the provided input without checking for prior pipeline state or enforcing status transitions.
-
-## When to Use
-
-Activate when the user wants to:
-- Create or log a new issue, bug, feature request, or task
-- Convert a finding or conversation into a trackable work item
-- File a structured issue for planning and execution
+Use when the user wants to log a bug, feature request, task, or investigation finding.
 
 ## Trigger Examples
 
 **Should trigger:**
-- "Log this bug"
-- "Create an issue for this feature request"
-- "Track this task"
+- "Log this bug."
+- "Create an issue for this feature request."
+- "Track this task."
 
 **Should not trigger:**
-- "Plan how to fix this" → use /plan-issue
-- "Fix this bug now" → use @engineer Deliver mode
-- "Brainstorm solutions" → use /brainstorming
+- "Plan how to fix this." Use /plan-issue.
+- "Fix this bug now." Use Engineer Deliver mode.
+- "Brainstorm solutions." Use /brainstorming.
 
-## Steps
+## Gather the evidence
 
-### 1. Gather Information
+Accept an Engineer finding packet containing Title, Observed behavior, Expected invariant, Evidence paths, Impact, Confidence, and Recommended direction. When the packet is sufficient, do not ask the user to repeat it. Derive these fields from an unstructured request where possible. Ask only for information needed to understand the intended outcome.
 
-Accept a structured finding packet from Engineer with:
+Read relevant intent sources and /recall results. Retrieve existing plans through `harness lookup` or `harness orient --read`; judge whether an existing work item already covers the problem. Preserve prior observations when updating it.
 
-- **Title**
-- **Observed behavior**
-- **Expected invariant**
-- **Evidence paths**
-- **Impact**
-- **Confidence**
-- **Recommended direction**
+## Record the capture
 
-When the packet is sufficient, do not ask the user to repeat what happened, why it matters, scope, or technical context. Ask only for genuinely missing information. For an unstructured request, derive these fields where possible and ask focused questions only for information required to produce a useful capture; priority defaults to P2 when it is not material or supplied.
+Use `harness plan-new --file <creation.json> --json` with full format and open status. Supply the goal, measurable acceptance, known scope, and authored notes. Add reproduction and expected-versus-actual evidence to contextual notes. For unresolved intent, use needs-info status and state the missing decision.
 
-If the user provides a code selection or error output, extract context automatically.
+Harness chooses the current storage root and dated path, writes the canonical headings and initial status, and returns the revision and readiness diagnostics. See `../references/plan-operations.md`. Do not generate YAML, dates, IDs, or activity entries. An unlocked capture can omit a check; missing proof remains explicit and blocks starting work.
 
-### 2. Deduplicate
-
-Scan `.harness/plans/*.md` and `docs/plans/*.md` for existing issues with similar titles or descriptions. If a likely duplicate is found, inform the user and ask whether to proceed or update the existing issue.
-
-### 3. Create Initial Plan File
-
-**Path**: `.harness/plans/YYYY-MM-DD-<type>-<descriptive-slug>-plan.md`, or `docs/plans/YYYY-MM-DD-<type>-<descriptive-slug>-plan.md` when git tracks files there. Prefer `harness plan-new`.
-
-This is intentionally a plan file from the start, even while `status: open`. `/plan-issue` later fills in the implementation plan and locks it for work.
-
-**Frontmatter** (the state machine):
-```yaml
----
-plan_schema: 1
-title: "<short, imperative title>"
-type: feat|fix|docs|refactor|chore
-status: open
-plan_lock: false
-phase: 0
-priority: P0|P1|P2|P3
-risk: green|amber|red
-autonomy: full|balanced|strict
-intent: ""
-intent_sources: []
-expected_outputs: []
-success_criteria: []
-verification:
-  required: []
-  criteria: {}
-reviews:
-  required: [code-review]
-  completed: []
-  critical_open: []
-skills_used: []
-org_objectives: []
-domains: []
-specialists: []
-capability_gaps: []
-created: YYYY-MM-DD
-updated: YYYY-MM-DD
----
-```
-
-For `type: docs`, `reviews.required` is `[]`. Every other type lists `code-review`.
-
-**Body sections** (create every heading; use a concise pending marker where planning owns the content):
-- `## Overview` — what and why, 2-3 sentences
-- `## Context` — relevant technical context, related code paths, prior art
-- `## Intent Contract` — optional at capture; `/plan-issue` must fill it before locking
-- `## Memory Cards` — run `/recall` first; state that no relevant cards were found when empty
-- `## Acceptance Criteria` — measurable checklist of requirements
-- `## Technical Notes` — implementation hints, constraints, dependencies
-- `## Plan` — state that phased tasks are pending `/plan-issue`
-- `## Research Notes` — state that research synthesis is pending `/plan-issue`
-- `## Impacted Files` — state that the allowlist is pending planning
-- `## Verification Plan` — state that named checks are pending; never add plan-authored command strings
-- `## Risk & Review Routing` — initial risk and expected review needs
-- `## Implementation Notes` — state that implementation has not started
-- `## Review Findings` — state that review has not started
-- `## Activity` — append-only lifecycle log, initialized with capture timestamp
-
-For bugs, add:
-- `## Steps to Reproduce`
-- `## Expected vs Actual Behavior`
-
-### 4. Validate Definition of Ready
-
-Validate the file against plan schema v1. Definition of Ready still requires
-substantive **Overview** and **Acceptance Criteria** content; initialize every
-other schema-required section with a concise pending-planning marker.
-If any required information is missing, set `status: needs-info` and add a `## Missing` section with focused questions. Search in-repo specs, ADRs, intent files, and linked issue notes first. Read what exists. Ask only about what those sources leave ambiguous.
-
-### 5. Print Summary
-
-List all files created with their paths. Confirm the path under `.harness/plans/` or `docs/plans/` and state: `status: open, plan_lock: false, phase: 0`.
-
-Suggest next step: "Run `/plan-issue <plan-path>` to generate an implementation plan."
+Use `harness plan-update --plan <path> --file <decision.json> --json` to record accepted findings or amend an existing capture. Preserve its identity. Report the returned path and missing inputs.
 
 ## Guardrails
 
-- Do **not** start implementation. This skill creates the initial plan file shell, but `/plan-issue` owns implementation planning and locking.
-- Do **not** set `plan_lock: true` — that's the plan-issue skill's job.
-- Keep the issue file under 100 lines. Brevity forces clarity.
-- **`@engineer`** uses internal **`/ensure-plan`** (same steps as this skill). See `capture-gate.md`.
-- Use the section list in this skill for layout. `harness plan-new` writes the same shape.
+Do not implement product code or claim the plan is ready for delivery. Select a trusted named check only after inspecting what it proves. Do not force a generic check onto an unresolved criterion. Keep captured reasoning concise and sufficient for another agent to continue.

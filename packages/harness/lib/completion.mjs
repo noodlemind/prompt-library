@@ -30,6 +30,8 @@ export function proofPrerequisites({ workspace, plan, copilotHome }) {
 export function completionPrerequisites(options) {
   const proof = proofPrerequisites(options);
   if (!proof.pass) return proof;
+  const openTasks = [...(options.plan.sections.plan || '').matchAll(/^-\s*\[ \]\s+(.+)$/gm)];
+  if (openTasks.length) return { pass: false, message: `${openTasks.length} plan tasks remain open across the full plan; record accepted progress before completion` };
   const learning = validateLearningDecision(options.workspace, proof.value);
   if (!learning.pass) return learning;
   const value = { ...proof.value, version: 2, learning: learning.reference };

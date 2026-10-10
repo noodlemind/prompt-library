@@ -17,7 +17,7 @@ const startedAt = Date.now();
 let payload = {};
 let normalized = null;
 let policy = { enforcement: 'enforce', ttl: 30 };
-const RECOVER_MISSING_GATE = 'Read ~/.copilot/skills/ensure-plan/SKILL.md and follow it exactly; create or lock only the canonical plan in a standalone mutation containing no product paths, run the implement gate as its own non-mutating tool call, wait for pass, then retry this mutation in a later tool call';
+const RECOVER_MISSING_GATE = 'Read ~/.copilot/skills/ensure-plan/SKILL.md; create or amend only the canonical plan, then submit a standalone harness plan-update --file start decision. Harness binds state and the implement gate. Wait for explicit success before retrying the product mutation in a later tool call';
 const NEW_PLAN_PATH = /^(?:docs|\.harness)\/plans\/\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.md$/;
 
 function output(value) {

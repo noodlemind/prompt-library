@@ -424,9 +424,8 @@ test('camelCase ungated mutation returns a structured deny decision', () => {
   assert.equal(output.permissionDecision, 'deny');
   assert.match(output.permissionDecisionReason, /missing-implement-gate/i);
   assert.match(output.permissionDecisionReason, /ensure-plan\/SKILL\.md/);
-  assert.match(output.permissionDecisionReason, /standalone mutation/i);
-  assert.match(output.permissionDecisionReason, /no product paths/i);
-  assert.match(output.permissionDecisionReason, /gate as its own non-mutating tool call[\s\S]*later tool call/i);
+  assert.match(output.permissionDecisionReason, /standalone harness plan-update --file start decision/i);
+  assert.match(output.permissionDecisionReason, /explicit success[\s\S]*product mutation in a later tool call/i);
 });
 
 test('ungated interpreter heredoc mutation returns a structured deny decision', () => {
