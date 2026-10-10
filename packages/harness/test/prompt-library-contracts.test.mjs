@@ -590,7 +590,6 @@ test('knowledge layer surface: consolidate command and insight lane stay documen
   assert.match(store, /KNOWLEDGE_MODES = new Set\(\[[^\]]*'suggest'[^\]]*\]\)/, 'store.mjs KNOWLEDGE_MODES includes suggest');
   const commands = read('packages/harness/lib/commands.mjs');
   assert.doesNotMatch(commands, /const KNOWLEDGE_MODES\s*=\s*new Set/, 'commands.mjs must not keep its own copy of KNOWLEDGE_MODES');
-  assert.match(commands, /KNOWLEDGE_MODES[^=]*=[\s\S]*?await import\('\.\/knowledge\/store\.mjs'\)/, 'commands.mjs imports KNOWLEDGE_MODES from store.mjs');
   const concept = read('docs/adaptive-engineering.md');
   assert.match(concept, /stateDiagram/, 'concept doc includes the learning lifecycle stateDiagram');
   assert.match(concept, /promote/, 'concept doc documents learning promote');

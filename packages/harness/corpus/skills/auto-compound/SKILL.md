@@ -49,7 +49,7 @@ Do not run on `failed` or `inconclusive`, with open hard gaps, or before require
 | Need for independent expertise | Specialist-agent candidate |
 | External executable capability | Tool/integration candidate |
 
-Supply a learning decision to Harness with a private publication destination. Record recurrence evidence and any candidate_primitive, candidate_name, and recommendation as proposals. Keep the learning outside the work contract:
+Supply a learning decision to Harness with an approved private/global publication destination or dormant ship-set proposal. See [learning-operations.md](../references/learning-operations.md). Record recurrence evidence and any candidate_primitive, candidate_name, and recommendation as proposals. Keep the learning outside the work contract:
 
 ```json
 {
@@ -79,7 +79,7 @@ Pass the JSON decision file to the writer:
 harness compound --plan <path> --learning-decision <file> --workspace . --json
 ```
 
-The command validates current proof, writes the private verified episode when requested, and reports the persisted record and indexing result. Never edit learning frontmatter before publication or rerun tests for bookkeeping. Report actual evidence and publication outcomes.
+The command validates current proof, publishes through the existing writer, and reports the persisted destination and index or dormant proposal result. Never edit learning frontmatter before publication or rerun tests for bookkeeping. Report actual evidence and publication outcomes.
 
 ## Debt check (session-end drain)
 

@@ -32,7 +32,7 @@ export function completionPrerequisites(options) {
   if (!proof.pass) return proof;
   const openTasks = [...(options.plan.sections.plan || '').matchAll(/^-\s*\[ \]\s+(.+)$/gm)];
   if (openTasks.length) return { pass: false, message: `${openTasks.length} plan tasks remain open across the full plan; record accepted progress before completion` };
-  const learning = validateLearningDecision(options.workspace, proof.value);
+  const learning = validateLearningDecision(options.workspace, proof.value, { copilotHome: options.copilotHome, home: process.env.HARNESS_HOME });
   if (!learning.pass) return learning;
   const value = { ...proof.value, version: 2, learning: learning.reference };
   return { pass: true, value, id: recordHash(value), message: 'Current proof, review and completed learning decision are bound' };

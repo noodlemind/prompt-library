@@ -110,6 +110,70 @@ test('oversized serialized review records reject without changing current covera
   assert.equal(fs.readFileSync(pointer, 'utf8'), before);
 });
 
+for (const scope of ['private', 'global', 'ship-set-proposal']) test(`verified publication owns ${scope} destination and replays one logical result`, t => {
+  const f = deliveryFixture(t), plan = writeVersionedPlan(f.ws, { required: ['behavior'], criteria: { AC1: ['behavior'] } });
+  fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 2;\n');
+  assert.equal(f.cli('verify', '--plan', plan, '--base', 'HEAD', '--json').status, 0);
+  const file = path.join(f.ws, '.harness/learning-destination.json');
+  const decision = { operation: `destination-${scope}`, decision: 'publish', scope, rationale: 'The boundary needs a durable evidence-backed explanation.', title: 'Accepted publication boundary', body: 'A publication operation must retain its content and evidence identity across recovery.', category: 'design', tags: ['publication'] };
+  fs.writeFileSync(file, JSON.stringify(decision));
+  const first = f.cli('compound', '--plan', plan, '--learning-decision', file, '--json');
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const value = JSON.parse(first.stdout);
+  assert.equal(value.scope, scope);
+  assert.ok(fs.existsSync(value.publishedPath));
+  const bytes = fs.readFileSync(value.publishedPath, 'utf8');
+  assert.match(bytes, /proof_identity: [a-f0-9]{64}/);
+  assert.match(bytes, /work_contract: [a-f0-9]{64}/);
+  if (scope === 'global') assert.ok(value.publishedPath.startsWith(path.join(f.copilot, 'knowledge')));
+  if (scope === 'ship-set-proposal') {
+    assert.ok(value.publishedPath.startsWith(path.join(f.ws, '.harness/proposals')));
+    assert.equal(value.activated, false);
+    assert.equal(value.indexed, null);
+  }
+  const receiptFile = path.join(f.ws, value.learningRecord), receipt = JSON.parse(fs.readFileSync(receiptFile));
+  fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, state: 'pending' }));
+  const recovered = f.cli('compound', '--plan', plan, '--learning-decision', file, '--json');
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.equal(JSON.parse(recovered.stdout).publishedPath, value.publishedPath);
+  assert.equal(fs.readFileSync(value.publishedPath, 'utf8'), bytes);
+  assert.equal(f.cli('plan-update', '--plan', plan, '--status', 'done', '--json').status, 0);
+  fs.writeFileSync(file, JSON.stringify({ ...decision, body: 'Different claim.' }));
+  assert.notEqual(f.cli('compound', '--plan', plan, '--learning-decision', file, '--dry-run', '--json').status, 0);
+});
+
+test('publication replay and completion detect missing accepted episode bytes', t => {
+  const f = deliveryFixture(t), plan = writeVersionedPlan(f.ws, { required: ['behavior'], criteria: { AC1: ['behavior'] } });
+  fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 2;\n');
+  assert.equal(f.cli('verify', '--plan', plan, '--base', 'HEAD', '--json').status, 0);
+  const file = path.join(f.ws, '.harness/learning-delete.json');
+  fs.writeFileSync(file, JSON.stringify({ operation: 'deleted-episode', decision: 'publish', scope: 'private', rationale: 'Durable boundary.', title: 'Boundary', body: 'The published evidence must remain available.' }));
+  const first = f.cli('compound', '--plan', plan, '--learning-decision', file, '--json');
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const value = JSON.parse(first.stdout);
+  assert.ok(value.publishedPath);
+  fs.rmSync(value.publishedPath);
+  assert.notEqual(f.cli('plan-update', '--plan', plan, '--status', 'done', '--json').status, 0);
+  const recovered = f.cli('compound', '--plan', plan, '--learning-decision', file, '--json');
+  assert.equal(recovered.status, 0, recovered.stderr + recovered.stdout);
+  assert.ok(fs.existsSync(value.publishedPath));
+});
+
+test('publication can recover after previously reported partial index recovery is reconciled', t => {
+  const f = deliveryFixture(t), plan = writeVersionedPlan(f.ws, { required: ['behavior'], criteria: { AC1: ['behavior'] } });
+  fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 2;\n');
+  assert.equal(f.cli('verify', '--plan', plan, '--base', 'HEAD', '--json').status, 0);
+  const file = path.join(f.ws, '.harness/learning-reconcile.json');
+  fs.writeFileSync(file, JSON.stringify({ operation: 'reconciled-episode', decision: 'publish', scope: 'private', rationale: 'Durable boundary.', title: 'Recovery', body: 'Recovery must validate current retrieval state.' }));
+  const value = JSON.parse(f.cli('compound', '--plan', plan, '--learning-decision', file, '--json').stdout);
+  const receiptFile = path.join(f.ws, value.learningRecord), receipt = JSON.parse(fs.readFileSync(receiptFile));
+  fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, state: 'blocked', result: { ...receipt.result, pass: false, blockedReason: 'Earlier partial rollback.', partialRecovery: { episodeRemains: true, unrestored: ['manifest.yaml'] } } }));
+  assert.equal(f.cli('index', '--json').status, 0);
+  const retry = f.cli('compound', '--plan', plan, '--learning-decision', file, '--json');
+  assert.equal(retry.status, 0, retry.stdout + retry.stderr);
+  assert.equal(JSON.parse(retry.stdout).publishedPath, value.publishedPath);
+});
+
 export function deliveryFixture(t, runtimeRoot = root) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-delivery-'));
   const ws = path.join(dir, 'product');
@@ -320,3 +384,23 @@ for (const format of ['short', 'full']) for (const learning of ['no-learning', '
     assert.equal(JSON.parse(stale.stdout).hookSpecificOutput?.decision, 'block', stale.stdout + stale.stderr);
   });
 }
+
+test('learning replay rejects a changed resolved home rather than republishing', t => {
+  const f = deliveryFixture(t), plan = writeVersionedPlan(f.ws, { required: ['behavior'], criteria: { AC1: ['behavior'] } });
+  fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 2;\n');
+  assert.equal(f.cli('verify', '--plan', plan, '--base', 'HEAD', '--json').status, 0);
+  const file = path.join(f.ws, '.harness/destination-conflict.json');
+  fs.writeFileSync(file, JSON.stringify({ operation: 'home-conflict', decision: 'publish', scope: 'global', rationale: 'Durable boundary.', title: 'Boundary', body: 'Accepted publication remains at one resolved destination.' }));
+  const first = f.cli('compound', '--plan', plan, '--learning-decision', file, '--json');
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const value = JSON.parse(first.stdout), receiptPath = path.join(f.ws, value.learningRecord), before = fs.readFileSync(receiptPath);
+  const secondHome = path.join(f.ws, '.harness/second-copilot');
+  fs.cpSync(f.copilot, secondHome, { recursive: true });
+  fs.rmSync(path.join(secondHome, 'knowledge/solutions'), { recursive: true, force: true });
+  approveProject({ workspace: f.ws, copilotHome: secondHome, home: f.home });
+  const result = spawnSync(process.execPath, [path.join(root, 'bin/harness.mjs'), 'compound', '--plan', plan, '--learning-decision', file, '--workspace', f.ws, '--harness-home', f.home, '--copilot-home', secondHome, '--json'], { cwd: f.ws, env: { ...f.env, COPILOT_HOME: secondHome }, encoding: 'utf8' });
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stdout + result.stderr, /destination|conflict/);
+  assert.equal(fs.existsSync(path.join(secondHome, 'knowledge/solutions')), false);
+  assert.ok(fs.readFileSync(receiptPath).equals(before));
+});

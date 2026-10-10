@@ -4,6 +4,22 @@ import path from 'node:path';
 const O_NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : null;
 export const DEFAULT_MAX_BYTES = 10_000_000;
 
+export function readBoundedInput(fd = 0, { maxBytes = 1024 * 1024 } = {}) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) return null;
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const buffer = Buffer.alloc(Math.min(4096, maxBytes + 1 - total));
+      const count = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (!count) return Buffer.concat(chunks, total).toString('utf8');
+      total += count;
+      if (total > maxBytes) return null;
+      chunks.push(buffer.subarray(0, count));
+    }
+  } catch { return null; }
+}
+
 function canonicalPath(p) {
   try {
     return fs.realpathSync.native(p);

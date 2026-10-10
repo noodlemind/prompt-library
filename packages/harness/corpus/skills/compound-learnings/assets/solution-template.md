@@ -1,13 +1,4 @@
----
-title: "[Descriptive title: problem and solution]"
-date: YYYY-MM-DD
-category: [performance-issues|security-issues|build-errors|configuration-fixes|<new-category>]
-tags: [specific, technology, tags]
-module: [affected module or area]
-symptom: "[What the developer observed]"
-root_cause: "[Technical root cause — one sentence]"
-severity: [low|medium|high|critical]
----
+Harness owns episode frontmatter, provenance, dates and publication paths. Use these prompts to author the learning body and supply title, category and tags in the decision.
 
 ## Problem
 [Detailed description of what went wrong. Include error messages, unexpected behavior, or symptoms that led to investigation.]

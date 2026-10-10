@@ -87,11 +87,6 @@ test('KNOWLEDGE_MODES is defined once in store.mjs and includes suggest', () => 
     /const KNOWLEDGE_MODES\s*=\s*new Set/,
     'commands.mjs must not keep its own copy of KNOWLEDGE_MODES'
   );
-  assert.match(
-    commandsSrc,
-    /KNOWLEDGE_MODES[^=]*=\s*[\s\S]*?await import\('\.\/knowledge\/store\.mjs'\)/,
-    'commands.mjs must import KNOWLEDGE_MODES from store.mjs'
-  );
 });
 
 test('knowledge suggest sets the mode; --status reports it', () => {

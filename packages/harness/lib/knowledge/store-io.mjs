@@ -63,6 +63,9 @@ export function storePathParts(file) {
     return parts(seg.slice(0, n - 3), full, 'bucket-meta', true);
   }
   // <storeRoot>/<store metadata>
+  if (n >= 3 && at(n - 2) === 'operations' && /^[a-f0-9]{64}\.json$/.test(at(n - 1))) {
+    return parts(seg.slice(0, n - 2), full, 'operation', false);
+  }
   if (n >= 2 && STORE_ROOT_FILES.has(at(n - 1))) {
     return parts(seg.slice(0, n - 1), full, 'store-meta', false);
   }

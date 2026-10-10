@@ -31,7 +31,7 @@ import { parseMergedFrom } from './listing.mjs';
 import { resolveWriteLayer, ensureBucket, migrateRenamedBucket, episodeEligibleForLayer, storeHasBuckets } from './layer.mjs';
 import { bucketDirFor, readBucketMeta, bucketAncestryOk, isSafeBucketKey } from './overlay.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
-import { readLearningFile, writeLearningFile, writeStoreFile } from './store-io.mjs';
+import { readLearningFile, writeLearningFile, writeStoreFile, readStoreFile } from './store-io.mjs';
 import { episodeResolveRoots } from '../project-layout.mjs';
 
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
@@ -609,6 +609,10 @@ function overridesGovernanceRecency(workspace, copilotHome, episodes, record, { 
 export function applyOps({
   workspace,
   opsPath,
+  operations,
+  operationReceipt,
+  operationRecovery = false,
+  packetPreflight,
   dryRun = false,
   home,
   approve = false,
@@ -679,7 +683,7 @@ export function applyOps({
 
   let parsed;
   try {
-    parsed = JSON.parse(fs.readFileSync(opsPath, 'utf8'));
+    parsed = operations || JSON.parse(readFileNoFollow(opsPath, { maxBytes: 1024 * 1024 }));
   } catch (err) {
     return { applied: [], governed: [], rejected: [fail('E_SCHEMA', `unreadable ops file: ${err.message}`)], committed: false, exitCode: 1 };
   }
@@ -770,6 +774,20 @@ export function applyOps({
   }
 
   function runOnce({ dir, git, recordCheckpoint = () => {}, rollbackToCheckpoint = () => false, rollbackUncommitted = () => false }) {
+    if (operationReceipt) {
+      const file = path.join(dir, 'operations', `${operationReceipt.id}.json`);
+      const text = readStoreFile(file);
+      if (text !== null) {
+        let receipt;
+        try { receipt = JSON.parse(text); } catch { return { kind: 'reject', applied: [], governed: [], rejected: [fail('E_OPERATION', 'Unreadable operation receipt')], exitCode: 1 }; }
+        if (receipt.digest !== operationReceipt.digest || receipt.resultHash !== crypto.createHash('sha256').update(JSON.stringify(receipt.result)).digest('hex')) return { kind: 'reject', applied: [], governed: [], rejected: [fail('E_OPERATION', 'Operation identity conflicts with a different payload or damaged result')], exitCode: 1 };
+        return { ...receipt.result, replayed: true };
+      }
+      if (fs.existsSync(file)) return { kind: 'reject', applied: [], governed: [], rejected: [fail('E_OPERATION', 'Operation receipt cannot be read safely')], exitCode: 1 };
+    }
+    if (operationRecovery) return { kind: 'reject', applied: [], governed: [], rejected: [fail('E_RETRY', 'Repair history and committed receipt are missing')], exitCode: 1 };
+    const packetFailure = packetPreflight?.({ storeDir: dir, layer: routing.layer, bucketKey: routing.bucketKey });
+    if (packetFailure) return { kind: 'reject', applied: [], governed: [], rejected: [packetFailure], exitCode: 1 };
         if (!dryRun) {
       const movedEarly = assertHeadUnmoved();
       if (movedEarly) return movedEarly;
@@ -1588,7 +1606,7 @@ export function applyOps({
       : disputes.length
         ? `dispute ${disputes.map((d) => d.target).join(', ')}`
         : 'noop';
-        return {
+        const result = {
       kind: 'success',
       applied,
       rejected,
@@ -1599,6 +1617,10 @@ export function applyOps({
         promotionMode ? ` [promote ${promotion.branchKey}]` : routing.layer === 'branch' ? ` [${routing.bucketKey}]` : ''
       }`,
     };
+    if (operationReceipt && !dryRun) {
+      if (!writeStoreFile(path.join(dir, 'operations', `${operationReceipt.id}.json`), JSON.stringify({ version: 1, digest: operationReceipt.digest, resultHash: crypto.createHash('sha256').update(JSON.stringify(result)).digest('hex'), result }) + '\n')) throw new Error('Cannot publish consolidation operation receipt');
+    }
+    return result;
   }
 
   if (dryRun) {
@@ -1670,6 +1692,7 @@ export function applyOps({
     governed: inner.governed,
     layer: inner.layer,
     bucketKey: inner.bucketKey ?? null,
+    ...(inner.replayed ? { replayed: true } : {}),
     ...(routing?.branchWarning ? { branchWarning: routing.branchWarning } : {}),
     ...staleExtra,
   };

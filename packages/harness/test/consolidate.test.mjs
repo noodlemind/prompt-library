@@ -147,7 +147,7 @@ test('consolidate --candidates emits the deterministic work packet', () => {
   });
   assert.equal(res.status, 0, res.stderr || res.stdout);
   const out = JSON.parse(res.stdout);
-  assert.equal(out.schema, 1);
+  assert.equal(out.schema, 2);
   assert.deepEqual(out.contract, { maxOps: 5, byteCap: 1200, threshold: 5, domainCap: 25 });
   const allEpisodes = out.clusters.flatMap((c) => c.episodes);
   assert.equal(allEpisodes.length, 6);

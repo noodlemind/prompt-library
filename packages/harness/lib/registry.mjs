@@ -1671,7 +1671,7 @@ registerCommand({
     positionals: [],
     flags: [
             { name: '--status', type: 'boolean', description: 'debt vs threshold, quarantine, promotion candidates (default)', required: false, default: false, tui: 'cli-only' },
-            { name: '--candidates', type: 'boolean', description: 'deterministic work packet for the consolidation skill', required: false, default: false, tui: 'verb', sideEffect: 'read' },
+            { name: '--candidates', type: 'boolean', description: 'persist a frozen work packet; --dry-run previews without publication', required: false, default: false, tui: 'verb', sideEffect: 'mutate' },
       {
         name: '--apply',
         type: 'boolean',
@@ -1681,7 +1681,7 @@ registerCommand({
         tui: 'verb',
                 requires: ['--ops'],
       },
-            { name: '--ops', type: 'string', valueName: 'path', description: 'ops JSON path (with --apply)', required: false, default: null, tui: 'prompt', sideEffect: 'read', choices: 'path' },
+            { name: '--ops', type: 'string', valueName: 'path', description: 'Frozen packet proposal JSON path; legacy schema-1 ops remain supported', required: false, default: null, tui: 'prompt', sideEffect: 'read', choices: 'path' },
             { name: '--rebuild', type: 'boolean', description: 'T2 reset for model-upgrade regeneration (git history retains learnings)', required: false, default: false, tui: 'verb' },
       { name: '--yes', type: 'boolean', description: 'confirm --apply (suggest mode) or --rebuild', required: false, default: false, tui: 'cli-only' },
             { name: '--layer', type: 'string', valueName: 'golden|branch', description: 'explicit layer override for --apply (writes otherwise route by write-time git context)', required: false, default: null, tui: 'prompt', sideEffect: 'read' },
