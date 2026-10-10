@@ -1,6 +1,6 @@
 # Findings Schema
 
-This file defines the structured output contract for review personas. Each persona returns JSON matching this schema. The skill body (SKILL.md) defines how findings are merged, deduplicated, and routed.
+This file defines the structured output contract for review personas. Each persona returns JSON matching this schema. Harness review assembly validates, filters, and reports findings. The Engineer supplies semantic adjudications and decides fix authority.
 
 ## Persona Output Format
 
@@ -42,7 +42,7 @@ Each persona returns a single JSON object:
 | Field | Type | Description |
 |-------|------|-------------|
 | `file` | string | Relative file path from repo root |
-| `line` | integer | Line number in the file (approximate is acceptable) |
+| `line` | integer | Exact current line number in a readable workspace file |
 | `severity` | enum | `P1` (critical), `P2` (important), `P3` (suggestion) |
 | `confidence` | float | 0.0 to 1.0 — how confident the reviewer is that this is a real issue |
 | `title` | string | One-line summary of the issue |
@@ -55,8 +55,8 @@ Each persona returns a single JSON object:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `reviewer` | string | Name of the persona that produced these findings |
-| `status` | enum | `completed` for a complete result; otherwise the actual failed or timed-out status |
+| `reviewer` | string | Required perspective/check ID declared in the packet |
+| `status` | enum | `completed` or actual failure status such as `timed-out`; only completed validates as coverage |
 | `findings` | array | List of finding objects |
 | `residual_risks` | array[string] | Risks that remain even after all findings are addressed |
 | `testing_gaps` | array[string] | Areas where test coverage is insufficient |
@@ -82,8 +82,8 @@ Each persona returns a single JSON object:
 
 | Class | Meaning | Routed to |
 |-------|---------|-----------|
-| `safe_auto` | Local, deterministic fix that doesn't change behavior or contracts | In-skill fixer (applied automatically) |
-| `gated_auto` | Concrete fix exists but changes behavior, contracts, or permissions | User for approval before applying |
+| `safe_auto` | Local, deterministic fix that doesn't change behavior or contracts | Engineer assesses authority and behavior before applying |
+| `gated_auto` | Concrete fix exists but changes behavior, contracts, or permissions | Applicable recorded authorization before applying |
 | `manual` | Actionable work that requires human judgment or larger changes | Handoff as residual work |
 | `advisory` | Report-only: learnings, rollout notes, residual risk observations | Included in report, no action taken |
 

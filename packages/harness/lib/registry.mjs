@@ -688,12 +688,15 @@ registerCommand({
 registerCommand({
   name: 'review', summary: 'Capture review obligations and collect bound specialist results', group: 'engineer loop', sideEffect: 'mutate', capabilities: [], outputModes: ['ledger', 'json'],
   verbs: REVIEW_VERBS.map(verb => ({ verb, summary: verb === 'prepare' ? 'Capture current review scope' : 'Validate and record collected results' })),
-  usage: '<prepare|assemble> --plan <plan> [--packet <id> --file <results.json>]',
+  usage: '<prepare|assemble> [--plan <plan>] [--packet <id> --file <path>]',
   args: { positionals: [{ name: 'verb', required: true, description: REVIEW_VERBS.join('|') }], flags: [
-    { name: '--plan', type: 'string', valueName: 'plan', required: true, description: 'Plan whose work is reviewed' },
+    { name: '--plan', type: 'string', valueName: 'plan', description: 'Plan whose work is reviewed (omit for standalone)' },
+    { name: '--domain', type: 'string', valueName: 'code|document', description: 'Review criteria set (default: code)' },
+    { name: '--reviewer', type: 'string', valueName: 'id', description: 'Additional specialist (repeatable)' },
+    { name: '--max-bytes', type: 'string', valueName: 'bytes', description: 'Per-section packet byte budget, 1024 to 131072 (default: 16384)' },
     { name: '--base', type: 'string', valueName: 'ref', description: 'Captured comparison revision' },
     { name: '--packet', type: 'string', valueName: 'id', description: 'Prepared packet identity' },
-    { name: '--file', type: 'string', valueName: 'results.json', description: 'JSON results file (default: stdin)' },
+    { name: '--file', type: 'string', valueName: 'path', description: 'Prepare: selected source (repeatable). Assemble: JSON results (default: stdin)' },
   ] }, handler: cmdReview, resultOf: reviewResultOf, exitOf: result => result.status === 'blocked' ? 1 : 0,
 });
 

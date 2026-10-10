@@ -134,6 +134,7 @@ export function parseFlags(argv) {
     else if (a === '--validate-evidence') flags.validateEvidence = true;
     else if (a === '--validate-completion') flags.validateCompletion = true;
     else if (a === '--packet') flags.packet = scan[++i];
+    else if (a === '--reviewer') (flags.reviewers ||= []).push(scan[++i]);
     else if (a === '--learning-decision') flags.learningDecision = scan[++i];
     else if (a === '--explain') flags.explain = true;
     else if (a === '--read') flags.read = true;

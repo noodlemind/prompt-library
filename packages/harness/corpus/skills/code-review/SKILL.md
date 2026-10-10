@@ -10,7 +10,7 @@ user-invocable: false
 
 **Step 4** of the connected pipeline: Capture → Plan → Work → **Review** → Compound.
 
-This skill coordinates multiple specialist personas to provide comprehensive code review. Each persona returns structured findings with severity and confidence scores. The skill merges, deduplicates, and routes findings by action type.
+This skill coordinates multiple specialist personas to provide comprehensive code review. Each persona returns structured findings with severity and confidence scores. Harness captures the review scope, validates coverage, applies confidence policy, and renders the factual report. The Engineer assesses defects and ambiguous overlaps.
 
 ## When to Use
 
@@ -38,28 +38,13 @@ Activate when the user wants to:
 
 ## Workflow
 
-### 1. Determine Mode
+### 1. Capture Scope
 
-**Pipeline mode:** If a plan file is provided and contains `status:` in YAML frontmatter, enforce pipeline state validation (status must be `review` or `in-progress`).
+Use `harness review prepare --plan <path> --base <base> --json` for delivery review. Omit `--plan` for standalone review. The packet supplies current head, working changes, required reviewers, applicable checks, source hashes, excerpts, retrieval paths, and explicit omissions. Use the host's PR tools to establish the requested comparison when reviewing a PR. A missing base or omitted source is an investigation input, never evidence of an empty scope.
 
-**Standalone mode:** If no plan file is provided or the file lacks state machine fields, skip pipeline validation and review whatever is provided.
+Read the full packet at `packetPath` and retrieve omitted source content before judging that area. Do not manually discover checks or reconstruct the packet. A changed source requires fresh preparation.
 
-For a pipeline plan, run `harness review prepare --plan <path> --base <base> --json` before dispatch. Supply its packet ID and required reviewer IDs with every result. After judgment and fixes, collect current results using `harness review assemble --plan <path> --packet <id> --file <results.json> --json`. A scope change requires a new packet and review. Bare `reviews.completed` strings are bookkeeping, never coverage evidence.
-
-### 2. Understand the Scope
-
-Determine what to review:
-- **Pull Request**: Fetch PR details and modified files
-- **Current Changes**: Review uncommitted changes in the workspace
-- **Specific Files**: Review files or directories specified by the user
-- **Branch Comparison**: Diff between two branches:
-  1. Determine the base branch (ask the user if unclear; default `main` or `master`)
-  2. Get the diff using the best available tool:
-     - **VS Code**: Ask the user to run `git diff <base>...<branch> -- . ':!*.lock'` in terminal, then read with `terminalLastCommand`
-     - **CLI/Claude Code**: Run `git diff <base>...<branch> -- . ':!*.lock'` directly via `run_command` or `Bash`
-  3. Parse into changed files list with per-file hunks for specialist input
-
-### 3. Gather Context and Detect Intent
+### 2. Gather Context and Detect Intent
 
 - Read modified files and understand the changes
 - Check available repository context for accumulated codebase knowledge: `README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`.
@@ -69,30 +54,11 @@ Determine what to review:
 - Read related code and dependencies touched by the changes
 - Write a 2-3 line intent summary: what the change is trying to accomplish
 
-### 4. Select Personas
+### 3. Choose Additional Perspectives
 
-Read `references/review-personas.md` for the full persona catalog.
+The CLI preserves the five mandatory perspectives and selects bundled/product checks from declared globs. Read `references/review-personas.md` and decide whether the change needs additional language or domain judgment. Add each selected specialist with `--reviewer <id>` when preparing the packet. Explain the relevance of additional perspectives before dispatch.
 
-**Always engage** (every review): architecture-strategist, security-sentinel, performance-oracle, code-simplicity-reviewer, pattern-recognition-specialist (5 personas)
-
-**Conditionally engage** based on diff content — this is judgment, not keyword matching:
-- **Language-specific**: java-reviewer (Java), compounding-typescript-reviewer (TypeScript), python-reviewer (Python)
-- **Domain-specific**: sql-reviewer (SQL/query/schema work), aws-reviewer (AWS integrations), data-integrity-guardian (migration/backfill/schema risk), spec-flow-analyzer (plan file referenced)
-
-### 4b. Discover Project Checks
-
-Scan available check directories for check files (`.md` files with `name:` frontmatter):
-- bundled library checks under this skill's `references/checks/` directory
-- workspace `.github/checks/`, if the product repo defines project-specific checks
-
-For each check:
-- If the check has a `globs:` field, only include it when changed files match the glob pattern
-- If no `globs:`, include for all reviews
-- Each check will be dispatched as a focused subagent alongside personas
-
-Announce the selected team (personas + checks) before dispatching.
-
-### 5. Dispatch Personas and Checks
+### 4. Dispatch Personas and Checks
 
 **Orchestration:** If the `agent` tool is available for subagent delegation, delegate to persona agents as isolated subagents in parallel batches (3-4 at a time). Otherwise, apply each persona's perspective sequentially within this session.
 
@@ -121,65 +87,15 @@ Each persona returns JSON:
 }
 ```
 
-### 6. Synthesize Findings
+### 5. Collect and Adjudicate
 
-Merge multiple persona outputs into one deduplicated, confidence-gated finding set:
+Submit `{ "packet": "<id>", "results": [...] }` as a file to `harness review assemble --plan <path> --packet <id> --file <results.json> --json`. Omit `--plan` for standalone review. Each required result needs `status: completed`, findings, residual risks, and testing gaps. Retain a failed or timed-out result with its actual status.
 
-1. **Validate**: Check each output against the schema. Drop malformed findings (missing required fields). Record drop count.
-2. **Confidence gate**: Suppress findings below 0.60 confidence. Exception: P1 findings at 0.50+ confidence survive — critical-but-uncertain issues must not be silently dropped.
-3. **Deduplicate**: Fingerprint = normalize(file) + line_bucket(line, ±3) + normalize(title). When fingerprints match: keep highest severity, keep highest confidence with strongest evidence, union evidence arrays, note which personas flagged it.
-4. **Cross-persona boost**: When 2+ independent personas flag the same issue, boost merged confidence by 0.10 (capped at 1.0). Note agreement in the output.
-5. **Route by action type**: For each merged finding, set the final `autofix_class` per the routing definitions in `references/findings-schema.md`:
-   - `safe_auto` → in-skill fix queue (applied automatically)
-   - `gated_auto` → user approval required before applying
-   - `manual` → handoff as residual work
-   - `advisory` → report only, no action
-6. **Sort**: Order by severity (P1 first) → confidence (descending) → file path → line number.
-7. **Collect coverage**: Union residual_risks and testing_gaps across all personas.
+Harness validates locations and schema, applies the confidence floor before aggregation, merges exact claims, preserves suppressed/raw results, and renders `report`. Exact claims share location, normalized title, description, and suggested fix. Different claims at one location and nearby locations remain candidate overlaps. Decide whether they describe the same defect from their evidence. Submit explicit `adjudications` with `action: merge|retain`, member IDs, and a rationale. Include prior adjudications when deciding a surviving overlap involving a merged finding. No automatic proximity clustering or severity escalation is permitted.
 
-### 7. Output Format
+Use the returned report and coverage counts. Retrieve full raw evidence at `recordPath` and exact invocation payload at `observationPath`. Incomplete coverage blocks delivery completion. A supplied reviewer name does not authenticate the invocation; a confidence boost does not establish independent corroboration. Do not recalculate tables or counts in prose.
 
-Present findings as pipe-delimited markdown tables grouped by severity level. Omit empty severity levels.
-
-```markdown
-# Code Review
-
-**Scope:** [What was reviewed]
-**Intent:** [2-3 line summary of what the change accomplishes]
-**Personas:** [List of engaged personas with conditional justifications]
-
-### P1 — Critical
-
-| # | File | Issue | Persona(s) | Confidence | Route |
-|---|------|-------|------------|------------|-------|
-| 1 | `path:line` | Issue title | security, architecture | 0.92 | safe_auto |
-
-### P2 — Important
-
-| # | File | Issue | Persona(s) | Confidence | Route |
-|---|------|-------|------------|------------|-------|
-| 2 | `path:line` | Issue title | performance | 0.78 | manual |
-
-### P3 — Suggestions
-
-| # | File | Issue | Persona(s) | Confidence | Route |
-|---|------|-------|------------|------------|-------|
-| 3 | `path:line` | Issue title | patterns | 0.65 | advisory |
-
-## Coverage
-- Suppressed: [N] findings below 0.60 confidence
-- Residual risks: [from personas]
-- Testing gaps: [from personas]
-- Failed personas: [any that failed or timed out]
-
----
-
-## Verdict
-[Ready to merge / Ready with fixes / Not ready]
-[Brief reasoning]
-```
-
-### 8. Quality Gates
+### 6. Quality Gates
 
 Before delivering the review, verify:
 
@@ -189,34 +105,20 @@ Before delivering the review, verify:
 4. **Line numbers are accurate** — verified against file content
 5. **Findings don't duplicate linter output** — focus on semantic issues the linter won't catch
 
-### 9. Pipeline Continuation
+### 7. Continue from Evidence
 
-Apply `safe_auto` fixes in this skill. Leave `gated_auto` for the user. Keep `manual` and unresolved critical findings open.
+Assess fix authority and behavior before acting. `autofix_class` is advisory routing metadata; it never grants permissions. Apply authorized fixes, then prepare and collect a new review for the changed content before verification. Clearing a plan string cannot discharge a recorded critical finding.
 
-When a plan file is in scope, record the result with `harness plan-update`. Do not edit a `~/.harness` plan in the editor.
-
-- Put each unresolved critical finding in `reviews.critical_open` with `--critical-open`.
-- When none remain, clear that list with `--clear-critical`.
-- Add `code-review` to `reviews.completed` with `--review-completed code-review`.
-- Do not mark the plan `done` while `critical_open` is non-empty.
-- If a fix changed the diff, run `harness verify` again.
-
-If the plan status is `review`, suggest `/compound-learnings` for a lesson that is not already in the diff.
+When current coverage is complete and critical findings are resolved, run `harness verify`. Completion and Stop consume this same bound review record. Optional learning follows passed verification.
 
 ## Error Handling
 
-- **Empty diff** (nothing to review): Report "No changes detected" and suggest checking the branch or staging area.
-- **All personas fail** (no output from any): Report "Review degraded — 0 of N personas returned results" with the scope summary. Do not present an empty findings table.
-- **Single persona fails**: Report which persona failed. Present findings from successful personas. Offer to retry the failed persona.
-- **Persona returns malformed JSON**: Drop the malformed findings. Record the drop in the Coverage section. Continue with valid findings.
-- **Persona times out** (partial output): Include whatever findings were returned. Note the timeout in Coverage.
-- **Plan file missing or malformed**: Report the error and suggest running the prior pipeline step.
-- **Tool not available**: Use the fallback from the cross-environment compatibility table in copilot-instructions.md.
+Use the CLI's missing/failure/omission diagnostics. Retry the affected judgment with its full evidence. Do not turn malformed, partial, timed-out, or unavailable results into a clean review. If a required capability is unavailable, report the degraded coverage. For semantic disagreements, retain both claims until the Engineer adjudicates them explicitly.
 
 ## Guardrails
 
 - Be specific: reference exact file paths and line numbers.
 - Be constructive: suggest concrete fixes, not just problems.
 - Prioritize: most important issues first.
-- Deduplicate: merge overlapping findings from different personas.
+- Adjudicate candidate overlaps using the evidence; retain different defects separately.
 - Separate pre-existing issues from newly introduced issues when the diff makes the distinction clear.

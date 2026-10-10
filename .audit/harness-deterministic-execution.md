@@ -15,9 +15,9 @@ Done means the CLI and installed hooks reject broken, missing, stale and incompl
 - [x] P1.4 Separate contracts from lifecycle bookkeeping.
 - [x] P1.5 Bind review and completion records.
 - [x] P1.6 Publish learning decisions and repair corpus instructions.
-- [ ] Prove the complete Phase 1 exit sequence before Phase 2.
-- [ ] Resolve relevant Phase 1 PR comments and reprove the updated head before resuming Phase 2.
-- [ ] P2.1 Deterministic review preparation and assembly.
+- [x] Prove the complete Phase 1 exit sequence before Phase 2.
+- [x] Resolve relevant Phase 1 PR comments and reprove the updated head before resuming Phase 2.
+- [x] P2.1 Deterministic review preparation and assembly.
 - [ ] P2.2 Structured lifecycle operations and intent amendments.
 - [ ] P2.3 Learning publication and consolidation packets.
 - [ ] P2.4 Primitive validation and recurrence proposals.
@@ -42,3 +42,11 @@ Feedback release candidate 0.9.1 passes the local Node 22 full suite (2298 tests
 The updated e80a4ef gate passed the full Linux suite and Linux delivery tests, but failed Windows concurrent captures: two processes attempted to replace manifest.yaml, yielding EPERM. Two forced-interleaving regressions reproduced unordered publication on macOS before the repair. Capture and standalone index operations now hold the same physical-manifest lock; capture includes episode publication, snapshots, and rollback in that boundary. All 33 delivery/episode tests pass locally after this repair. Updated full-suite and platform checks remain required before resumption.
 
 The lock repair passes the final local Node 22 full suite: 2300 tests, 2299 passed, zero failed, one optional skip (`phase1-feedback-lock-required.log`). This run includes the clean-package exit proof and both new forced interleavings. The new platform run must certify the exact published head.
+
+Updated Phase 1 gate passed on 5a57184b9b6b78c3ff02c5e94fe8b37cc09e0c85 in run 37643956970: Linux full suite 2299 passed, zero failed, one optional skip; prompt contracts 35 passed; Linux delivery/episode 33 passed; Windows delivery/episode 32 passed with the Unix FIFO case skipped. Both platforms recorded 120 exit invocations on 15 disposable fixture identities. A fresh PR thread sweep found all five threads resolved and no new unresolved comments. Phase 2 work was preserved in stash e315aafe7a3b35db7c29a0a191f03b687d8cffa9, its branch fast-forwarded to the repaired parent, and the work restored. Separate full-Windows diagnostic workflows were still running at this checkpoint; live editor behavior remains unverified.
+
+Phase 2 resumed on merged main 6ff32044c82a20be47aa1b2e0c3c6c6dc812bb24 (PR79 merged 2026-10-09T01:34:27Z). Final Phase 1 head f5c7fe6 passed full Linux (2310 passed, 3 skipped) and full Windows (2305 passed, 8 skipped) with zero failures; required Windows suite now gates. Six Greptile threads resolved. Earlier pending platform records above are superseded by the final phase1-windows-repairs.md artifact. Saved Phase 2 work is protected in stash 7513c5011d355a14afc4a0989ad857462ca64ec4. Live editor integration remains unverified.
+
+P2.1 local Node 22 full suite passed 2320/2323, zero failures, three platform/optional skips. Review/exit subset passed 27/27; review/prompt contracts passed 45/45. Mandatory-name collision and untracked new-check freshness regressions failed before repair. Skills delegate discovery, filtering, exact matching, overlap candidates, counts, sorting and report rendering to the review family. Invocation identity remains unverified, and semantic overlap/fix decisions remain agent inputs.
+
+PR80 feedback reopened P2.1 before further P2.2 work. All six Greptile issues reproduced: document substitution, selected-file check omission, large ignored document freshness, distinct-claim collapse, compatible retain rejection, and stale overlap IDs. The repaired full Node 22 suite passed 2328/2331 with zero failures and three skips (`phase2-review-feedback-full.log`). Eighteen focused cases passed, including follow-up adjudication and contradictory judgment rejection. P2.2 is preserved in stash fa73d4bc87e458b3369ed697324290513a0e932e. Updated platform CI is pending publication.
