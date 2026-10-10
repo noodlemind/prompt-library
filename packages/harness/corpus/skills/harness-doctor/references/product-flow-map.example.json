@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "product": "TODO: selected accessible product",
+  "environment": "TODO: agreed disposable environment",
+  "flow": {
+    "id": "selected-flow",
+    "acceptance": "TODO: one observable outcome and failure condition",
+    "checks": ["product-flow-behavior"]
+  }
+}

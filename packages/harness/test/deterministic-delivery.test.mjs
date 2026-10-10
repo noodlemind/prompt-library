@@ -27,6 +27,64 @@ function installPackage(t) {
   return path.join(dir, 'node_modules/harness');
 }
 
+test('installed product proof entry rejects placeholders and proves broken/fixed stages through actual checks', t => {
+  const f = deliveryFixture(t, installPackage(t));
+  assert.equal(f.cli('install', '--json').status, 0);
+  const script = path.join(f.copilot, 'skills/harness-doctor/scripts/product-proof.mjs');
+  assert.ok(fs.existsSync(script), 'proof script must be discovered in the clean installed skill');
+  const plan = JSON.parse(f.cli('plan-new', '--goal', 'Return two', '--acceptance', 'value is two', '--constraint', 'Preserve API', '--verification-check', 'behavior', '--json').stdout).path;
+  assert.equal(f.cli('gate', '--plan', plan, '--json').status, 0);
+  f.hook('record-successful-edit.mjs', { tool_name: 'replace_string_in_file', tool_input: { filePath: 'src/example.js' }, tool_response: 'File edited successfully' });
+  const map = '.harness/product-flow.json';
+  fs.writeFileSync(path.join(f.ws, map), JSON.stringify({ schema: 1, product: 'TODO', environment: 'Disposable fixture', flow: { id: 'return-two', acceptance: 'The exported value is two.', checks: ['behavior'] } }));
+  const proof = (stage, cwd = f.ws, home = f.home) => f.receipt('product-proof', [stage], spawnSync(process.execPath, [script, '--workspace', f.ws, '--copilot-home', f.copilot, '--harness-home', home, '--plan', plan, '--map', map, '--stage', stage], { cwd, encoding: 'utf8', timeout: 120000, env: { ...f.env, HARNESS_HOME: path.join(f.home, 'wrong-store') } }));
+  assert.notEqual(proof('broken').status, 0, 'a placeholder map never proves a product');
+  fs.writeFileSync(path.join(f.ws, map), JSON.stringify({ schema: 1, product: 'Synthetic export fixture', environment: 'Disposable fixture', flow: { id: 'return-two', acceptance: 'The exported value is two.', checks: ['behavior'] } }));
+  const broken = proof('broken');
+  assert.equal(broken.status, 0, broken.stderr + broken.stdout);
+  assert.equal(JSON.parse(broken.stdout).verifyOutcome, 'failed');
+  assert.equal(JSON.parse(broken.stdout).stopDecision, 'block');
+  assert.notEqual(proof('fixed').status, 0);
+  fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 2;\n');
+  const packet = JSON.parse(f.cli('review', 'prepare', '--plan', plan, '--base', 'HEAD', '--json').stdout), input = path.join(f.ws, '.harness/proof-review.json');
+  fs.writeFileSync(input, JSON.stringify({ packet: packet.id, results: packet.required.map(reviewer => ({ reviewer, status: 'completed', findings: [], residual_risks: [], testing_gaps: [] })) }));
+  assert.equal(f.cli('review', 'assemble', '--plan', plan, '--packet', packet.id, '--file', input, '--json').status, 0);
+  assert.equal(f.cli('verify', '--plan', plan, '--base', 'HEAD', '--json').status, 0);
+  const learning = path.join(f.ws, '.harness/proof-learning.json');
+  fs.writeFileSync(learning, JSON.stringify({ operation: 'proof-no-learning', decision: 'no-learning', rationale: 'No durable lesson in this synthetic fixture.' }));
+  assert.equal(f.cli('compound', '--plan', plan, '--learning-decision', learning, '--json').status, 0);
+  assert.equal(f.cli('plan-update', '--plan', plan, '--status', 'done', '--json').status, 0);
+  const fixed = proof('fixed');
+  assert.equal(fixed.status, 0, fixed.stderr + fixed.stdout);
+  const result = JSON.parse(fixed.stdout);
+  assert.equal(result.verifyOutcome, 'passed');
+  assert.equal(result.stopDecision, 'allow');
+  assert.equal(result.work.completion.pass, true);
+  assert.ok(Buffer.byteLength(fixed.stdout) <= 16384);
+  assert.match(result.mapSource.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(result.liveHost, 'unverified');
+  const relative = proof('fixed', path.dirname(f.home), path.basename(f.home));
+  assert.equal(relative.status, 0, relative.stderr + relative.stdout);
+  const sessionPath = path.join(f.ws, '.harness/session.json'), session = JSON.parse(fs.readFileSync(sessionPath));
+  const invalidSessions = [
+    { ...session, activePlan: 'docs/plans/another-plan.md', lastEditAt: null },
+    { ...session, lastEditAt: null },
+    { ...session, lastEditPlan: 'docs/plans/another-plan.md' },
+    { ...session, lastEvidencePath: '.harness/evidence/another-proof.json', lastEditAt: null },
+  ];
+  const invalidResults = invalidSessions.map(invalid => {
+    fs.writeFileSync(sessionPath, JSON.stringify(invalid));
+    return proof('fixed').status;
+  });
+  fs.writeFileSync(sessionPath, JSON.stringify(session));
+  assert.ok(invalidResults.every(status => status !== 0), `another plan, absent mutation, mismatched edit or proof must fail: ${invalidResults}`);
+  fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 3;\n');
+  const stale = proof('fixed');
+  assert.notEqual(stale.status, 0);
+  assert.equal(JSON.parse(stale.stdout).work.proof.pass, false);
+  assert.equal(JSON.parse(stale.stdout).stopDecision, 'block');
+});
+
 test('installed package proves behavior, hook layout, stale replay and completion recovery outside checkout', (t) => {
   const installedRoot = installPackage(t);
   const f = deliveryFixture(t, installedRoot);
