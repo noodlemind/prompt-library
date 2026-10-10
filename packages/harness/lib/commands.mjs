@@ -902,6 +902,7 @@ export async function cmdVerify(argv, ctx = {}) {
   writeEvent(workspace, flags, {
     type: 'verify',
     command: 'verify',
+    repeatEvidence: result.repeatEvidence,
     plan: result.plan,
     exitCode,
     result: cancelled ? 'warn' : result.outcome === 'passed' ? 'pass' : result.outcome === 'failed' ? 'fail' : 'warn',

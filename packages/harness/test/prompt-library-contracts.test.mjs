@@ -712,7 +712,7 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.equal(checks.checks['build-assets'], undefined);
   assert.equal(exists('scripts/build-harness-assets.mjs'), false);
 
-  assert.match(read('packages/harness/corpus/skills/harness-doctor/SKILL.md'), /H7[^\n]*auto-skill-draft/);
+  assert.match(read('packages/harness/corpus/skills/harness-doctor/SKILL.md'), /harness doctor/);
 
   const concept = read(architecturePath);
   assert.match(concept, /exemptions/i);

@@ -43,3 +43,7 @@ Use git history as an archaeological tool to understand why code exists in its c
 ### Implications
 [What this means for the current task]
 ```
+
+## Guardrails
+
+History is evidence of prior choices, not proof of present correctness or current authorization. Preserve uncertain attribution.

@@ -37,3 +37,7 @@ Use `~/.copilot/skills/references/plan-operations.md` for creation and amendment
 The Engineer applies the decision against the observed revision. Harness returns missing prerequisites and a persisted path. A start decision validates readiness, locks state, and binds the implement gate before edits. A scoped source amendment records accepted changed bytes and affected evidence. Preserve the frozen selected sources.
 
 `harness verify` returns the authoritative `evidencePath`. Treat verification and completion records as factual outputs; do not copy or fabricate proof in a plan section. Resolve semantic concerns before requesting delivery.
+
+## Guardrails
+
+Return planning decisions within the authorized scope. Missing research or verification adequacy remains a visible gap; a plan label cannot establish approval.

@@ -5,7 +5,7 @@ import { openHardGaps } from './completion.mjs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
-import { repeatedFromServed } from './repeat-mistake.mjs';
+import { repeatEvidenceFromServed } from './repeat-mistake.mjs';
 import { readSession } from './session.mjs';
 import { selectPlan, loadPlan } from './plan-parse.mjs';
 import { extractAcceptanceCriteria, validatePlanSchema } from './plan-schema.mjs';
@@ -326,14 +326,15 @@ function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
   let resolved = partial.outcome || resolveOutcome(checks);
   if (resolved === 'passed' && behavioralProof(checks) === 'unproven') resolved = 'inconclusive';
   const typeCheckOnly = resolved === 'passed' && behavioralProof(checks) === 'type-check-only';
-  const repeated = !typeCheckOnly && resolved === 'passed' && repeatedFromServed({
+  const repeatEvidence = !typeCheckOnly && resolved === 'passed' ? repeatEvidenceFromServed({
     workspace,
     home: flags.harnessHome || flags.home || process.env.HARNESS_HOME,
     session: readSession(workspace),
     delivered: readProductDiff(workspace, { base: flags.base || 'HEAD', planPath: partial.plan, timeout: 30000 }) || '',
-  });
+  }) : [];
   const result = {
-    outcome: typeCheckOnly ? 'type-check-only' : repeated ? 'repeated-mistake' : resolved,
+    outcome: typeCheckOnly ? 'type-check-only' : repeatEvidence.length ? 'repeated-mistake' : resolved,
+    repeatEvidence,
     plan: partial.plan || null,
     checks,
     advisoryFailures: collectAdvisoryFailures(checks),

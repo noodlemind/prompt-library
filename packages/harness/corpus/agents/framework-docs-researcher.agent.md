@@ -45,3 +45,7 @@ Find accurate, version-specific answers from framework documentation. When a dev
 ### Sources
 - [Official docs URL]
 ```
+
+## Guardrails
+
+Preserve the requested version and environment constraints. Cite documentation for factual claims and disclose unavailable or conflicting sources.

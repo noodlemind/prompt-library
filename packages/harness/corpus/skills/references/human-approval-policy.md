@@ -49,8 +49,8 @@ When the user is unavailable and the task cannot wait:
 
 - Choose the lowest-risk reversible action.
 - Prefer documentation, tests, reproduction, or analysis over implementation.
-- Do not create new primitives.
-- Do not choose risky concurrency/data/schema/security strategies.
+- Do not create new primitives without prior direct authorization covering that creation.
+- Do not choose risky concurrency/data/schema/security strategies beyond existing direct authorization.
 - Log the assumption in plan `## Activity` or the relevant approval record.
 
 ## Approval Record Locations

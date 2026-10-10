@@ -265,6 +265,7 @@ capabilities:
     triggers: [structural expectations, verify severity, advisory check]
 
 engineer_allowlist:
+  - delivery-classifier
   - code-implementer
   - code-review-coordinator
   - plan-coordinator
