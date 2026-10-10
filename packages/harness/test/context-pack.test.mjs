@@ -240,7 +240,8 @@ test('a pinned intent pack clips neighborhood and next tools without splitting t
   const gateAt = body.indexOf('## Gate (preview)');
   assert.ok(bytes <= 2048, `bytes=${bytes}`);
   assert.ok(intentAt !== -1 && gateAt !== -1 && intentAt < gateAt, body);
-  assert.equal(body.slice(intentAt, gateAt).trim(), `## Intent sources\n${expectedLine}`);
+  assert.equal(body.slice(intentAt, gateAt).split('\n').slice(0, 2).join('\n'), `## Intent sources\n${expectedLine}`);
+  assert.match(body.slice(intentAt, gateAt), /1 learning row\(s\) omitted; retrieve orient JSON sources/);
   for (const intentPath of paths) assert.ok(body.includes(intentPath), intentPath);
   assert.doesNotMatch(body, /\+\d+ more/);
   assert.match(body, /- pass: true/);

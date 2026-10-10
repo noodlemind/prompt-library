@@ -1578,11 +1578,13 @@ registerCommand({
   group: 'engineer loop',
   sideEffect: 'mutate',
   bareSideEffect: 'read',
-  usage: '[--growth] [--sync] [--global] [--check] [--json]',
+  usage: '[--facts] [--growth] [--sync] [--global] [--check] [--json]',
   instrument: false,
   args: {
     positionals: [],
     flags: [
+      { name: '--facts', type: 'boolean', description: 'source-bound product facts, declared graphs and completion records', tui: 'verb', sideEffect: 'read' },
+      { name: '--max-bytes', type: 'number', valueName: 'n', description: 'factual report byte budget 2048–65536', tui: 'cli-only' },
       { name: '--growth', type: 'boolean', description: 'session-end Adaptive Engineering growth report (learnings, compound, promote)', required: false, default: false, tui: 'verb', sideEffect: 'read' },
       { name: '--plan', type: 'string', valueName: 'path', description: 'optional plan path for growth report context', required: false, default: null, tui: 'prompt', choices: 'plan', sideEffect: 'read' },
       { name: '--sync', type: 'boolean', description: 'merge workspace events into the global store first', required: false, default: false, tui: 'verb' },

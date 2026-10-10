@@ -30,8 +30,7 @@ Activate when the user wants to:
 
 ### 1. Gather Issues
 
-Scan for open issues from available sources:
-- `docs/plans/*.md` files with `status: open` or `status: planned`
+Use `harness report --facts --json` for plan rows and generated status counts across the current storage locations. Retrieve each selected source for intent and constraints. Gather other issues from available sources:
 - GitHub issues — use `githubRepo` (VS Code), or run `gh issue list` via `run_command`/`Bash` (CLI/Claude Code)
 - User-provided list of tasks
 
@@ -72,7 +71,7 @@ Place each issue in one of four quadrants:
 - [Issue] — [Why it may not be worth doing]
 
 ### Summary
-- Open: [count] | Planned: [count] | In Progress: [count]
+- Plan-state summary from the factual report; distinguish GitHub-only issues from these local records
 - Recommended next: [top issue]
 ```
 

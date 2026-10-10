@@ -21,7 +21,7 @@ Done means the CLI and installed hooks reject broken, missing, stale and incompl
 - [x] P2.2 Structured lifecycle operations and intent amendments.
 - [x] P2.3 Learning publication and consolidation packets.
 - [x] P2.4 Primitive validation and recurrence proposals.
-- [ ] P2.5 Factual context and reports.
+- [x] P2.5 Factual context and reports.
 - [ ] P2.6 Installed product proof.
 - [ ] P2.7 Extraction ledger, evaluation and cleanup.
 
@@ -70,3 +70,9 @@ P2.2 repaired head536cf20753a97e80228118a492e286732a49e3db passed Linux, full Wi
 P2.4 full Node22 suite passed2385/2388, zero failures, three skips (`phase2-resources-release-final.log`). Further admission checks reproduced dry-run shipped collision, missing instruction examples and installed shipped metadata rejection; the corresponding focused suite passes after repair. Resource proposals remain dormant, exact recurrence is separate from suspected semantic similarity, and global-tag clustering never asserts verified use. Caller confirmation is recorded by --yes; payload approval fields cannot grant permission. Actual editor integration remains unverified.
 
 PR83 feedback: all eight findings reproduced and repaired. Registered personal resources use harness/registered.yaml; inventory returns byte-compatible replacement digests; missing replacement targets conflict; global tag evidence is selectable and currentness-bound; every candidate list is bounded; malformed registries return diagnostics; unfinished scaffold bodies and unsupported host tools fail shared validation. Focused71/71 and full Node22 release2396/2399 pass, zero failures, three skips (`phase2-resources-review-release.log`). Updated platform CI is required on publication.
+
+P2.5 full Node22 release2393/2396 passes, zero failures, three skips (`phase2-facts-release-final.log`). The63-case integration subset and31-case retention subset pass. Reports separate declared product graphs from installed capabilities, actual source/version observations from unsupported parsers, and historical outcomes from validated current proof. Mandatory intent/gate/coverage survive2KiB packs; whole learning rows are removed with explicit omissions and actual delivery accounting. PR83's eight repaired findings were propagated after this full run; its independently green2396/2399 release and the combined focused checks cover the parent repair. Live editor and real-product evidence remain unverified.
+
+PR84 feedback: all three findings reproduced and repaired, plus untitled short/full plan source snapshots found by the installed entry. All report collections, including category maps and graph diagnostics, now have bounded presentation and exact omissions. Batch reduction avoids repeated whole-inventory copies; complete learning omission survives pinned context. Focused36/36 and full Node22 release2406/2409 pass, zero failures, three skips (`phase2-facts-review-release-final.log`). Full Windows/Linux checks rerun on publication; actual host/product proof remains unverified.
+
+P2.3 head015c16d passed the full Windows and Linux suites and both delivery gates (runs37941282171/37941282227). This supersedes its earlier pending platform checkpoint.

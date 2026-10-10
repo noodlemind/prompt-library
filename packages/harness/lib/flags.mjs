@@ -97,6 +97,7 @@ export function parseFlags(argv) {
     global: false,
     check: false,
     growth: false,
+    facts: false,
     insight: false,
     title: null,
     category: null,
@@ -149,6 +150,7 @@ export function parseFlags(argv) {
     else if (a === '--sync') flags.sync = true;
     else if (a === '--global') flags.global = true;
     else if (a === '--check') flags.check = true;
+    else if (a === '--facts') flags.facts = true;
     else if (a.startsWith('--query=')) flags.query = a.split('=').slice(1).join('=');
     else if (a === '--query') flags.query = scan[++i];
     else if (a.startsWith('--file=')) {

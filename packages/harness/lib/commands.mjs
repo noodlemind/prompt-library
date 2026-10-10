@@ -57,6 +57,7 @@ import { exitCodeForOutcome, isGatingCheck, runVerify, statusForVerifyResult, un
 import { createJsonlStream } from './envelope.mjs';
 import { runRecall } from './recall-cmd.mjs';
 import { buildReport, hasBudgetBreach, loadReportEvents, renderReport } from './report.mjs';
+import { buildFactualReport } from './report-facts.mjs';
 import { buildGrowthReport, renderGrowthReport } from './growth-report.mjs';
 import { collectHostUsage, mergeHostUsage } from './host-telemetry/index.mjs';
 import * as store from './telemetry-store.mjs';
@@ -1082,6 +1083,15 @@ export async function cmdReport(argv) {
   const flags = parseFlags(argv);
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
+
+  if (flags.facts) {
+    if (flags.growth || flags.sync || flags.global || flags.check) throw Object.assign(new Error('--facts cannot combine with event report modes'), { code: 'E_USAGE', exit: 2 });
+    const maxBytes = argv.some(a => a === '--max-bytes' || a.startsWith('--max-bytes=')) ? flags.maxBytes : 16384;
+    const facts = buildFactualReport({ workspace, copilotHome, planPath: flags.plan, maxBytes });
+    if (flags.json) emitJson(flags, facts);
+    else console.log(JSON.stringify(facts));
+    return 0;
+  }
 
   // Adaptive Engineering session-end growth report (kernel-only; no LLM).
   if (flags.growth) {

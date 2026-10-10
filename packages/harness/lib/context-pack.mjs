@@ -54,6 +54,7 @@ export function buildContextPack({
   planView,
   repoMapRef,
   gatePreview,
+  reviewCoverage = null,
   nextTools,
   gitContext,
   routingLines = null,
@@ -104,7 +105,7 @@ export function buildContextPack({
   }
 
   const displayedIntent = intentSources?.map((item) => ({ path: inertLine(item.path), kind: item.kind }));
-  const pinnedIntent = displayedIntent?.length ? `## Intent sources\n${obligationLine(displayedIntent)}` : '';
+  const pinnedIntent = displayedIntent?.length ? `## Intent sources\n${obligationLine(displayedIntent)}` : Array.isArray(intentSources) ? '## Intent sources\n- None yet. Use harness prepare before locking intent.' : '';
   if (!pinnedIntent && Array.isArray(intentSources)) {
     lines.push('', '## Intent sources', '- None yet. Run `harness prepare`, then edit the starter spec and ADR.');
   }
@@ -116,6 +117,7 @@ export function buildContextPack({
   lines.push('', '## Gate (preview)');
   if (gatePreview) {
     lines.push(`- pass: ${gatePreview.pass}`);
+    if (reviewCoverage) lines.push(`- coverage: ${reviewCoverage.pass ? 'current' : 'incomplete'}; required=${reviewCoverage.requiredCount}; missing=${reviewCoverage.missingCount}`);
     if (gatePreview.blockedReason) lines.push(`- blocked: ${gatePreview.blockedReason}`);
   }
   if (Array.isArray(routingLines)) {
@@ -229,6 +231,7 @@ function removeSection(body, heading) {
 }
 
 function fitPinnedIntent(body) {
+  if (Buffer.byteLength(body, 'utf8') > MAX_BYTES) body += `\n${TRUNCATION_MARKER}\n`;
   const drops = [
     '### Memory Cards (excerpt)',
     '## Plan view (current phase)',
@@ -240,7 +243,7 @@ function fitPinnedIntent(body) {
   const over = () => Buffer.byteLength(body, 'utf8') > MAX_BYTES;
   for (const heading of drops) {
     if (!over()) return body;
-    body = removeSection(body, heading);
+    body = heading === '## Learnings (memory)' ? trimLearningRows(body) : removeSection(body, heading);
   }
   if (over()) body = body.replace(/\n- blocked:[^\n]*/, '');
   const later = [
@@ -251,11 +254,33 @@ function fitPinnedIntent(body) {
   ];
   for (const heading of later) {
     if (!over()) return body;
-    body = removeSection(body, heading);
+    body = heading === '## Learnings (memory)' ? trimLearningRows(body) : removeSection(body, heading);
   }
   if (over()) body = removeSection(body, '## Routing');
   if (!over()) return body;
   return clipUnpinned(body);
+}
+
+function trimLearningRows(body) {
+  const start = headingAt(body, '## Learnings (memory)');
+  if (start < 0) return body;
+  const next = body.indexOf('\n## ', start + 1), end = next < 0 ? body.length : next;
+  const prefix = body.slice(0, start), tail = body.slice(end);
+  const rows = body.slice(start, end).split('\n');
+  let omitted = 0;
+  while (Buffer.byteLength(body, 'utf8') > MAX_BYTES) {
+    const last = rows.findLastIndex(line => line.startsWith('- ['));
+    if (last < 0) {
+      const removed = removeSection(body, '## Learnings (memory)');
+      return omitted ? placeBeforeHeading(removed, '## Gate (preview)', `- ${omitted} learning row(s) omitted; retrieve orient JSON sources.`) : removed;
+    }
+    rows.splice(last, 1); omitted++;
+    const surviving = rows.filter(line => line.startsWith('- [')).map(line => /^- \[([^\]]+)\]/.exec(line)?.[1]).filter(Boolean);
+    const identities = rows.findIndex(line => line.startsWith('Retrieved learnings:'));
+    if (identities >= 0) rows[identities] = `Retrieved learnings: ${surviving.join(', ')}`;
+    body = prefix + rows.join('\n') + `\n- ${omitted} learning row(s) omitted; retrieve orient JSON sources.\n` + tail;
+  }
+  return body;
 }
 
 function clipUnpinned(body) {
@@ -266,8 +291,12 @@ function clipUnpinned(body) {
   const passAt = body.indexOf('\n- pass:', gateAt);
   if (passAt === -1) return body;
   const passEnd = body.indexOf('\n', passAt + 1);
-  const gateEnd = passEnd === -1 ? body.length : passEnd;
-  const reserved = pinned + body.slice(gateAt, gateEnd);
+  let gateEnd = passEnd === -1 ? body.length : passEnd;
+  if (body.startsWith('\n- coverage:', gateEnd)) {
+    const coverageEnd = body.indexOf('\n', gateEnd + 1);
+    gateEnd = coverageEnd === -1 ? body.length : coverageEnd;
+  }
+  const reserved = pinned + body.slice(gateAt, gateEnd) + `\n${TRUNCATION_MARKER}\n`;
   if (Buffer.byteLength(reserved, 'utf8') > MAX_BYTES) return reserved;
   const room = MAX_BYTES - Buffer.byteLength(reserved, 'utf8');
   let prefix = clipUtf8(body.slice(0, intentAt), room);

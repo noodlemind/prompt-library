@@ -47,7 +47,7 @@ Identify the target README path:
 
 ### 2. Gather Repository Evidence
 
-Read high-signal files before editing:
+Use `harness report --facts --json` for generated inventory, declared/resolved versions, check configuration and declared graphs. Follow [factual-context.md](../references/factual-context.md); retrieve sources for missing or unsupported parsers. Read high-signal files before editing:
 - Existing `README.md`
 - `AGENTS.md`, `.github/copilot-instructions.md`, `.harness/agent-context.md` or `docs/agent-context.md`, and `docs/codebase-snapshot.md` when present
 - Build and dependency manifests (`package.json`, `pyproject.toml`, `pom.xml`, `build.gradle`, `requirements.txt`, `go.mod`, etc.)

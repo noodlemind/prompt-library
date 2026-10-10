@@ -530,7 +530,7 @@ test('engineer step 8 runs harness compound to close the learn loop', () => {
 test('read-only report command is registered and AC14 amendment is consistent', () => {
   assert.equal(hasCommand('report'), true, 'report command must be registered');
   const help = describeCommand('report');
-  assert.equal(help.usage, '[--growth] [--sync] [--global] [--check] [--json]', 'help documents report');
+  assert.equal(help.usage, '[--facts] [--growth] [--sync] [--global] [--check] [--json]', 'help documents report');
   // report must not write session/plan state — it only reads telemetry (and syncs under ~/.harness).
   const commands = read('packages/harness/lib/commands.mjs');
   const reportFn = commands.slice(commands.indexOf('export async function cmdReport'), commands.indexOf('export async function cmdValidatePlan'));
