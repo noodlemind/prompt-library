@@ -8,11 +8,11 @@ user-invocable: false
 
 ## Pipeline Role
 
-Canonical primitive creator and maintainer for the harness. Use it to keep the library skill-driven. Skills hold reusable workflows, agents hold isolated roles, instructions hold scoped conventions, checks hold narrow review criteria, references hold dense supporting material, and solution docs hold verified learnings.
+Canonical primitive creator and maintainer for the harness. Use it to keep the library skill-driven. Harness owns deterministic reusable operations, skills hold contextual judgment protocols, agents hold isolated roles, instructions hold scoped conventions, checks hold narrow review criteria, references hold dense supporting material, and solution docs hold verified learnings.
 
 ## When to Use
 
-- A personal agent, skill, or instruction is created only by `harness resources create <skill|agent|instruction> <name>` with the body on stdin. The command writes under the Copilot home.
+- A personal agent, skill, or instruction is created only by `harness resources create <skill|agent|instruction> <name>` with a schema1 decision file via `--file`. The command writes under the Copilot home.
 - A skill for every install is a commit under `packages/harness/corpus/skills/<name>/SKILL.md`. Agents use `packages/harness/corpus/agents/<name>.agent.md`. Instructions use `packages/harness/corpus/instructions/<name>.instructions.md`.
 - Creating a new review check (bundled under `packages/harness/corpus/skills/code-review/references/checks/*.md` or product-owned `.github/checks/*.md`)
 - Creating or moving dense supporting material into skill `references/` or `assets/`
@@ -68,7 +68,7 @@ Do not claim feature parity across hosts. When a host lacks a primitive, documen
 
 ## Creator Workflow
 
-Ship-set edits under `packages/harness/corpus/skills/`, `packages/harness/corpus/agents/`, `packages/harness/corpus/instructions/`, `packages/harness/corpus/enterprise/`, `.github/checks/`, or `packages/harness/corpus/knowledge/capability-registry.yaml` are governed primitive work. `.github/prompts/` stays retired, and reintroduction requires this governance. A personal skill, agent, or instruction is created only by `harness resources create <skill|agent|instruction> <name>` with the body on stdin, writing under the Copilot home. Do not plan an edit of the product repo or this checkout for a personal primitive. Before a ship-set edit, use this sequence: classify primitive → check overlap → decide minimal artifact structure → record the change rationale and, before creating or substantially expanding a skill, promotion evidence → create or reuse a plan → gate → edit → run primitive verification → report evidence.
+Ship-set edits under `packages/harness/corpus/skills/`, `packages/harness/corpus/agents/`, `packages/harness/corpus/instructions/`, `packages/harness/corpus/enterprise/`, `.github/checks/`, or `packages/harness/corpus/knowledge/capability-registry.yaml` are governed primitive work. `.github/prompts/` stays retired, and reintroduction requires this governance. A personal skill, agent, or instruction is created only by `harness resources create <skill|agent|instruction> <name>` with a schema1 decision file via `--file`, writing under the Copilot home. Do not plan an edit of the product repo or this checkout for a personal primitive. Before a ship-set edit, use this sequence: classify primitive → check overlap → decide minimal artifact structure → record the change rationale and, before creating or substantially expanding a skill, promotion evidence → create or reuse a plan → gate → edit → run primitive verification → report evidence.
 
 Activation means this `SKILL.md` was actually loaded in the current chat session. Do not claim activation by only adding `create-primitive` to `skills_used`.
 
@@ -129,7 +129,7 @@ Promotion is never automatic — the CLI only records history after a human has 
 
 Use for contextual judgment protocols and reviewer workflows. Deterministic generators belong in Harness. Read `references/skill-template.md`.
 
-A personal skill is `harness resources create skill <name>` with the body on stdin.
+A personal skill is `harness resources create skill <name>` with a schema1 decision file via `--file`.
 
 A skill for every install:
 - `packages/harness/corpus/skills/<name>/SKILL.md`
@@ -138,7 +138,7 @@ A skill for every install:
 
 Use only for separate judgment, authority, isolation, runtime profile, or accountability. Read `references/agent-template.md`.
 
-A personal agent is `harness resources create agent <name>` with the body on stdin.
+A personal agent is `harness resources create agent <name>` with a schema1 decision file via `--file`.
 
 A ship-set agent:
 - `packages/harness/corpus/agents/<name>.agent.md`
@@ -149,7 +149,7 @@ Use for concise standards that should load by file pattern, such as language con
 
 Read `references/instruction-template.md`.
 
-A personal instruction is `harness resources create instruction <name>` with the body on stdin.
+A personal instruction is `harness resources create instruction <name>` with a schema1 decision file via `--file`.
 
 A ship-set instruction:
 - `packages/harness/corpus/instructions/<name>.instructions.md`

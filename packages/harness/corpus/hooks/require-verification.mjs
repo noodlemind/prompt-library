@@ -13,6 +13,11 @@ import { resolveHookWorkspace } from './lib/tool-payload.mjs';
 import { authorityBin } from './lib/authority-bin.mjs';
 
 const startedAt = Date.now();
+// Leave five seconds for hook startup/output within the configured 90-second deadline.
+const stopBudgetMs = 85000;
+const proofCallBudgetMs = 10000;
+const remainingBudget = () => Math.max(1, stopBudgetMs - (Date.now() - startedAt));
+const proofTimeout = () => Math.min(proofCallBudgetMs, remainingBudget());
 
 function readPayload() {
   try {
@@ -88,7 +93,8 @@ function refreshVerification(current) {
   const result = spawnSync(command, args, {
     cwd: workspace,
     encoding: 'utf8',
-    timeout: 80000,
+    // Reserve time for both authority reads after refreshing missing evidence.
+    timeout: Math.max(1, remainingBudget() - 2 * proofCallBudgetMs),
     env: process.env,
   });
   if (result.error || result.status == null) return current;
@@ -128,6 +134,7 @@ const bindingError = validateEvidenceBinding({
   planPath: evidence.plan,
   evidence,
   maxAgeHours: policy.ttl,
+  timeout: proofTimeout(),
 });
 if (bindingError) deny(bindingError);
 const lastVerifyAt = Date.parse(session.lastVerifyAt);
@@ -136,7 +143,7 @@ const evidenceVerifiedAt = Date.parse(evidence.verifiedAt);
 if (lastVerifyAt < lastEditAt || evidenceVerifiedAt < lastEditAt) {
   deny('files changed after the latest passed verification');
 }
-const completion = callProofAuthority(workspace, ['--validate-completion', '--plan', evidence.plan]);
+const completion = callProofAuthority(workspace, ['--validate-completion', '--plan', evidence.plan], { timeout: proofTimeout() });
 if (!completion?.pass) deny(completion?.message || 'Current completion record cannot be validated; upgrade and retry completion');
 session.lastCompletedEditAt = session.lastEditAt;
 session.lastCompletionAt = new Date().toISOString();

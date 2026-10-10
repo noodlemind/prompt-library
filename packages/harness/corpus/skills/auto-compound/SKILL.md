@@ -44,7 +44,8 @@ Do not run on `failed` or `inconclusive`, with open hard gaps, or before require
 | Task-specific implementation detail | Plan Implementation Notes |
 | Reusable fact or gotcha | Knowledge solution |
 | Repository convention | Instruction or agent context candidate |
-| Repeatable multi-step procedure | Skill candidate |
+| Reusable deterministic operation | Harness CLI candidate |
+| Contextual judgment protocol | Skill candidate |
 | Deterministic invariant | Check, hook, or CI candidate |
 | Need for independent expertise | Specialist-agent candidate |
 | External executable capability | Tool/integration candidate |

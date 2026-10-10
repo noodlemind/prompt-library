@@ -45,6 +45,86 @@ test('legacy gap observations retain their meaning without pretending to be file
   assert.equal(started.status, 0, started.stderr + started.stdout);
   assert.ok(JSON.parse(f.cli('status', '--contract-digest', '--plan', f.plan).stdout).digest);
 });
+
+test('encountered capability gaps are declared through revision-bound amendments and block proof', t => {
+  const f = fixture(t);
+  const input = f.decision('amend', { rationale: 'A required perspective is unavailable.', changes: { gaps: [{ id: 'schema-review', class: 'hard', scope: 'criterion', required_for: 'AC1', evidence: ['The current specialist inventory lacks this perspective.'] }] } });
+  const declared = f.op(input);
+  assert.equal(declared.status, 0, declared.stdout + declared.stderr);
+  const gaps = YAML.parse(f.text().split('---')[1]).capability_gaps;
+  assert.equal(gaps.length, 1);
+  assert.equal(gaps[0].fulfillment, 'pending');
+  assert.equal(gaps[0].required_for, 'AC1');
+  assert.equal(YAML.parse(f.text().split('---')[1]).status, 'planned', 'a criterion gap does not fabricate a plan-wide blocked status');
+  const after = f.text();
+  assert.equal(f.op(input).value.replayed, true);
+  assert.equal(f.text(), after);
+  fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 2;\n');
+  const verify = JSON.parse(f.cli('verify', '--plan', f.plan, '--base', 'HEAD').stdout);
+  assert.notEqual(verify.outcome, 'passed');
+  assert.equal(verify.checks.find(check => check.id === 'hard-gaps').status, 'failed');
+});
+
+test('gap declarations cannot overwrite accepted gaps or grant completion and waiver authority', t => {
+  const f = fixture(t), base = { id: 'expert', class: 'soft', scope: 'operation', required_for: 'design decision', evidence: ['Sources inspected.'] };
+  for (const gap of [{ ...base, fulfillment: 'done' }, { ...base, approved: true }, { ...base, class: 'unsupported' }, { ...base, scope: 'criterion', required_for: 'AC999' }]) {
+    const before = f.text();
+    assert.notEqual(f.op(f.decision('amend', { rationale: 'Record the encountered gap.', changes: { gaps: [gap] } })).status, 0);
+    assert.equal(f.text(), before);
+  }
+  assert.equal(f.op(f.decision('amend', { rationale: 'Record the encountered gap.', changes: { gaps: [base] } })).status, 0);
+  const accepted = f.text();
+  assert.notEqual(f.op({ ...f.decision('amend', { rationale: 'Replace the gap.', changes: { gaps: [{ ...base, class: 'hard' }] } }), id: 'replace-gap' }).status, 0);
+  assert.equal(f.text(), accepted);
+});
+
+for (const kind of ['operation', 'finding', 'gap', 'criterion']) {
+  test(`${kind} identifiers reject non-string coercion without publishing accepted work`, t => {
+    const f = fixture(t);
+    for (const id of [true, [kind === 'criterion' ? 'AC2' : 'coerced-id'], null, '']) {
+      const input = kind === 'operation' ? { ...f.decision('amend', { rationale: 'Record accepted context.', changes: { notes: { context: 'Authored context.' } } }), id }
+        : kind === 'finding' ? f.decision('finding', { finding: { id, text: 'Authored finding.' } })
+          : kind === 'criterion' ? f.decision('amend', { rationale: 'Amend accepted criteria.', changes: { criteria: [{ id, text: 'Updated behavior.', checks: ['unit-tests'] }] } })
+          : f.decision('amend', { rationale: 'Declare the encountered gap.', changes: { gaps: [{ id, class: 'soft', scope: 'operation', required_for: 'Design decision', evidence: ['Sources inspected.'] }] } });
+      const before = f.text();
+      const result = f.op(input);
+      assert.notEqual(result.status, 0, `${kind} accepted coerced ID ${JSON.stringify(id)}`);
+      assert.equal(f.text(), before);
+    }
+  });
+}
+
+for (const required of ['AC2', 'AC1']) {
+  test(`joint criterion and gap amendments validate ${required} against the amended contract`, t => {
+    const f = fixture(t);
+    const before = f.text();
+    const input = f.decision('amend', { rationale: 'The accepted scope now has a different criterion and required perspective.', changes: {
+      criteria: [{ id: 'AC2', text: 'The updated behavior works.', checks: ['unit-tests'] }],
+      gaps: [{ id: 'new-perspective', class: 'hard', scope: 'criterion', required_for: required, evidence: ['The current inventory lacks the required perspective.'] }],
+    } });
+    const result = f.op(input);
+    if (required === 'AC2') {
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const fm = YAML.parse(f.text().split('---')[1]);
+      assert.equal(fm.capability_gaps[0].required_for, 'AC2');
+      assert.deepEqual(Object.keys(fm.verification.criteria), ['AC2']);
+    } else {
+      assert.notEqual(result.status, 0, 'a removed criterion cannot receive a new gap');
+      assert.equal(f.text(), before);
+    }
+  });
+}
+
+test('a declared hard plan-scope gap blocks start until evidence-bound fulfillment', t => {
+  const f = fixture(t);
+  const gap = { id: 'required-tool', class: 'hard', scope: 'plan', required_for: 'All implementation requires the unavailable tool.', evidence: ['Required executable capability is absent.'] };
+  assert.equal(f.op(f.decision('amend', { rationale: 'No safe planned work can proceed.', changes: { gaps: [gap] } })).status, 0);
+  assert.equal(YAML.parse(f.text().split('---')[1]).status, 'blocked-capability');
+  assert.notEqual(f.op(f.decision('start')).status, 0);
+  fs.writeFileSync(path.join(f.ws, '.harness/tool-evidence.md'), 'The accepted tool is available.');
+  assert.equal(f.op(f.decision('gap', { rationale: 'The required tool was supplied.', gap: { id: gap.id, fulfillment: 'done', evidence: '.harness/tool-evidence.md' } })).status, 0);
+  assert.equal(YAML.parse(f.text().split('---')[1]).status, 'planned');
+});
 test('structured creation refuses absent criteria and fields it cannot preserve', t => {
   const f = fixture(t), file = path.join(f.ws, '.harness/create-invalid.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });

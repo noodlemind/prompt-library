@@ -41,11 +41,11 @@ Supported decisions:
 | progress | Accepted criterion/task IDs and optional current phase | Record checked state and phase without fabricating proof |
 | finding | Stable finding ID and accepted text | Append once; reject conflicting content under the same finding ID |
 | gap | Existing gap ID, done fulfillment, evidence path, and rationale | Bind the evidence hash, update the gap and resulting state; leave waivers and bridges to trusted policy |
-
-Start accepts a resolved `open` or `needs-info` draft only after readiness passes and sets its initial execution phase. Closing the final hard gap returns new work to `planned` and preserves partially completed work as `in-progress`. New gap file bindings use `evidence_binding`; existing `evidence` observations remain authored observations and do not claim verified bytes.
 | complete | Decision to finish | Require current review, executed proof, learning decision, and completed tasks across all phases; publish completion and done state |
 
-An amendment's `changes` can contain `scope`, `goal`, `constraints`, `criteria`, `reviews`, `notes`, or `phases`. Criteria use `{ "id": "AC1", "text": "...", "checks": ["named-check"] }`; omit a new ID to let Harness allocate it. Reviews cannot remove an existing code-review baseline. Phases use `{ "title": "...", "tasks": ["..."] }`; Harness numbers phases and generates task IDs such as P1T1. Existing unlabelled tasks can be addressed by their list IDs T1, T2, and so on.
+Start accepts a resolved `open` or `needs-info` draft only after readiness passes and sets its initial execution phase. Closing the final hard gap returns new work to `planned` and preserves partially completed work as `in-progress`. New gap file bindings use `evidence_binding`; existing `evidence` observations remain authored observations and do not claim verified bytes.
+
+An amendment's `changes` can contain `scope`, `goal`, `constraints`, `criteria`, `reviews`, `notes`, `phases`, or new `gaps`. Criteria use `{ "id": "AC1", "text": "...", "checks": ["named-check"] }`; omit a new ID to let Harness allocate it. Reviews cannot remove an existing code-review baseline. Phases use `{ "title": "...", "tasks": ["..."] }`; Harness numbers phases and generates task IDs such as P1T1. Existing unlabelled tasks can be addressed by their list IDs T1, T2, and so on.
 
 Authored note keys are overview, context, memory, technical, research, routing, and implementation. Values contain prose or Markdown content without owned `##` headings. Harness creates or updates the corresponding section while preserving other reasoning. Progress uses `{ "criteria": ["AC1"], "tasks": ["P1T1"], "phase": 1 }`; omit fields that did not change. Accepted progress is a declaration. Executed verification remains a separate requirement.
 
@@ -62,3 +62,9 @@ Legacy plan_schema 1 and short-v1 retain their declared paths-only policy. Expli
 Missing prerequisites return blocked work and allowed next actions without a successful transition. A stale revision requires rereading before accepting a new decision. Retry the identical operation ID and payload after interruption; a completed retry returns the prior logical result. Reusing an ID with different content conflicts. Replaying start does not renew an expired gate.
 
 After implementation and collected review, require passed `harness verify`. Record durable learning or explicit no-learning with `harness compound --learning-decision`. Submit complete only after all planned work is accepted. A completion record remains current only while its product, policy, contract, review, and selected source bindings remain valid.
+
+## Encountered capability gaps
+
+Declare new gaps in an amend decision with rationale and `changes.gaps`. Each entry supplies `id`, class `soft|bridge|hard`, scope `operation|criterion|plan`, `required_for` and a nonempty list of authored `evidence` observations. Criterion scope refers to an existing criterion. Harness initializes pending fulfillment, rejects duplicate/existing IDs and records the change under the revision guard. It cannot infer verified bytes or waiver authority from observations.
+
+Choosing hard plan scope means the agent has determined that no safe planned work remains; Harness sets blocked-capability. Criterion and operation declarations preserve the plan lifecycle. Any pending hard gap prevents passed verification and completion. Resolve an existing gap through the evidence-bound gap operation. Payload fields cannot mark a declaration done, bridge or waived; scoped bridge/waiver authority belongs in trusted policy. Completed work requires a new work identity for newly encountered gaps.

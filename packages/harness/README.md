@@ -172,3 +172,11 @@ bin/harness.mjs   lib/   test/   eval/   corpus/   config/
 ```
 
 Node 20+. Runtime: `yaml`. Optional tree-sitter packages for structural index only (lexical fallback if missing).
+
+## Deterministic work operations (0.10.0)
+
+Use `plan-new --file` and `plan-update --file` for accepted creation, amendments, notes, progress, new gap declarations and completion. Harness owns representation and revision/replay checks. Use `review prepare` and `review assemble` for captured scope and collected perspective coverage; semantic adjudication remains an explicit decision.
+
+Publish accepted learning through `compound --learning-decision`; use frozen `consolidate --candidates` packets for consolidation decisions. `resources scaffold`, `validate`, `candidates` and `propose` generate structural facts and dormant proposals. Creation/activation uses the existing writer and approval contract. `report --facts` supplies bounded, source-bound reporting. Retrieve omitted rows rather than treating them as absent.
+
+Upgrade CLI, corpus and hooks together. A structurally valid result does not establish check adequacy, independent reviewer identity or product quality. The installed Doctor proof entry covers the executable install path; selected-product and live editor evidence remain separate. For repeatable mechanical comparisons in a source checkout, see `packages/harness/eval/README.md`.

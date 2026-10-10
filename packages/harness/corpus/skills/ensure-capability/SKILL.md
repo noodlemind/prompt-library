@@ -43,7 +43,8 @@ Do not scan or load the full registry before ordinary work. Missing optional cap
 | Missing fact or API | Inspect code and authoritative docs | Bounded research consultation |
 | Unfamiliar framework | Inspect repository conventions, docs, and one relevant skill | Domain expert |
 | Specialized judgment | Consult the relevant specialist | Independent review |
-| Repeatable procedure | Search installed skills | Import or draft after promotion evidence |
+| Reusable deterministic procedure | Inspect existing Harness commands | CLI enhancement proposal |
+| Contextual judgment protocol | Search installed skills | Import or draft after promotion evidence |
 | Missing executable capability | Find an approved tool or integration | Governed tool proposal |
 | Missing organizational convention | Search instructions and knowledge | Instruction or check proposal |
 | Safety-critical capability | Stop the affected operation | Expert review or recorded waiver |
@@ -51,25 +52,17 @@ Do not scan or load the full registry before ordinary work. Missing optional cap
 ## Resolution workflow
 
 1. State the blocked criterion or decision, evidence already inspected, and why direct investigation is insufficient.
-2. Classify the gap as `soft`, `bridge`, or `hard` and record it on the explicit plan.
+2. Classify the gap as `soft`, `bridge`, or `hard`; declare it through a revision-bound plan amendment.
 3. Choose the smallest response from the table. Consultations use `subagent-context-packet.md`.
 4. For a repeatable capability candidate, search existing skills and registry overlap before drafting anything.
 5. For a hard gap, record its affected criterion or operation and stop only that scope until fulfillment, an approved bridge, or an explicit waiver is recorded.
-6. Keep the plan `in-progress` while unrelated safe work remains. Use plan-level `status: blocked-capability` only when no executable safe work remains.
+6. Keep unrelated safe work available. Choose plan scope only when no executable safe work remains; Harness records `blocked-capability` for a declared hard plan-scope gap.
 
 ## Plan record
 
-```yaml
-capability_gaps:
-  - id: secure-schema-review
-    class: hard
-    required_for: AC4
-    scope: criterion
-    fulfillment: pending
-    evidence: ["docs inspected", "missing required reviewer"]
-```
+Use [plan-operations.md](../references/plan-operations.md). An `amend` decision's `changes.gaps` supplies new gap IDs, class, scope, affected criterion/operation and authored evidence observations. Harness writes the plan representation, pending state and activity; existing gaps cannot be overwritten by this input. Criterion scope names an existing criterion. Observations are claims; they do not assert verified file bytes.
 
-Allowed scope values are `operation`, `criterion`, or `plan`. Allowed fulfillment values are `pending`, `bridge`, `done`, or `waived`. A waiver quotes the human decision and scope. `scope: plan` is required before setting the entire plan to `blocked-capability`.
+Use the `gap` operation to close an existing gap with the accepted evidence path. Harness binds its current bytes. Bridge and waiver authority remains in trusted policy with the human decision's reason and scope. A declaration cannot grant that authority or claim fulfillment. Read the resulting state and allowed next actions instead of editing frontmatter.
 
 ## Promotion boundary
 

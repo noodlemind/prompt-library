@@ -1,17 +1,14 @@
 # Skill Template
 
-Use this template when creating a new skill. A personal skill is `harness resources create skill <name>` with the body on stdin. A skill for every install is a commit at `packages/harness/corpus/skills/<name>/SKILL.md`.
+Use this template when creating a new skill. A personal skill is `harness resources create skill <name>` with a schema1 decision file via `--file`. A skill for every install is a commit at `packages/harness/corpus/skills/<name>/SKILL.md`.
 
-Before creating a skill, confirm the decision rule. Use a skill for reusable workflows, checklists, generators, reviewer protocols, and pipeline steps. If the artifact needs a separate role or permission boundary, create an agent instead.
+Before creating a skill, confirm the decision rule. Use a skill for contextual judgment protocols, evidence interpretation and semantic handoffs. Deterministic reusable operations belong in Harness. If the artifact needs a separate role or permission boundary, create an agent instead.
 
-## SKILL.md File Structure
+Use `resources scaffold skill <name> --json` for metadata. Follow [resource-operations.md](../../references/resource-operations.md) for structural validation and creation. Author useful trigger/outcome evaluations; passing the validator cannot establish usefulness.
+
+## Judgment guidance
 
 ```markdown
----
-name: skill-name
-description: "[What this skill does and when to use it]. Not for [confusable alternative] -- use /other-skill. Keep under 220 characters."
----
-
 # Skill Name
 
 ## Pipeline Role
