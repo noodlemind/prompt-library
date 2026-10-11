@@ -369,3 +369,24 @@ test('decision authoring admits only direct contained JSON inputs', (t) => {
   fs.symlinkSync(f.home, path.join(f.workspace, '.harness/decisions'), process.platform === 'win32' ? 'junction' : 'dir');
   assert.equal(edit('.harness/decisions/escaped.json').permissionDecision, 'deny');
 });
+
+test('decision authoring rejects a hard link to protected lifecycle state', (t) => {
+  const f = fixture(t);
+  const directory = path.join(f.workspace, '.harness/decisions');
+  fs.mkdirSync(directory, { recursive: true });
+  const protectedFile = path.join(f.workspace, '.harness/session.json');
+  const alias = path.join(directory, 'start.json');
+  fs.writeFileSync(protectedFile, '{"protected":true}');
+  try { fs.linkSync(protectedFile, alias); }
+  catch (error) {
+    if (!['EPERM', 'EACCES', 'ENOTSUP', 'EXDEV'].includes(error.code)) throw error;
+    t.skip('Filesystem does not support the hard-link execution probe');
+    return;
+  }
+  fs.writeFileSync(alias, '{"control":"shared bytes"}');
+  assert.equal(fs.readFileSync(protectedFile, 'utf8'), '{"control":"shared bytes"}');
+  assert.equal(f.hook('guard-critical-files.mjs', '', { tool_name: 'create_file', tool_input: { filePath: '.harness/decisions/start.json' } }).permissionDecision, 'deny');
+  fs.rmSync(alias);
+  fs.writeFileSync(alias, '{}');
+  assert.equal(f.hook('guard-critical-files.mjs', '', { tool_name: 'create_file', tool_input: { filePath: '.harness/decisions/start.json' } }).continue, true);
+});
