@@ -25,6 +25,9 @@ import {
 
 const SLICE_KEYS = [
   'neighborhood',
+  'planGoal',
+  'trust',
+  'reviewCoverage',
   'learnings',
   'skills',
   'instructions',

@@ -8,6 +8,9 @@ import { resolveHookWorkspace } from './lib/tool-payload.mjs';
 function emptyOrientSlice() {
   return {
     neighborhood: null,
+    planGoal: null,
+    trust: null,
+    reviewCoverage: null,
     learnings: [],
     skills: [],
     instructions: [],
@@ -40,10 +43,10 @@ function orientSlice(workspace) {
   try {
     const parsed = JSON.parse(res.stdout);
     const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed) : [];
-    if (keys.length !== 8 || !Object.hasOwn(parsed, 'neighborhood') || !Object.hasOwn(parsed, 'index')) {
+    if (!['neighborhood', 'learnings', 'skills', 'instructions', 'contacts', 'index', 'gateStatus', 'activePlan'].every(key => keys.includes(key))) {
       return emptyOrientSlice();
     }
-    return parsed;
+    return { ...emptyOrientSlice(), ...parsed };
   } catch {
     return emptyOrientSlice();
   }

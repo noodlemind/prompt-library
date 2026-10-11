@@ -433,7 +433,7 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
       namedResults.push(resultCheck(
         name,
         'unavailable',
-        `Not run: this project is not trusted, and a named check executes repo-authored commands. Approve it with \`harness trust approve\` after reading ${CHECKS_REL}.`,
+        `Not run: this project is not trusted, and a named check executes repo-authored commands. A person must read ${CHECKS_REL} and approve the current policy with \`harness trust approve\`; the agent must not grant approval.`,
       ));
       continue;
     }

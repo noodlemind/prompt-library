@@ -58,6 +58,8 @@ Or root `.harness-version` with the same pin.
 
 Same registry tools; autonomous does **not** require plans or compound. It is an opt-in add-on for a measured eval. See [eval/README.md](./eval/README.md).
 
+The optional `harness agent --profile deliver` loop enforces explicit orientation with touched files, the host mutation hooks and current bound completion proof. Its `harness` tool runs lifecycle commands and stages authored decisions without editing product files. A final model message without completed review, passed verification, a learning decision and plan completion exits with `delivery-incomplete`. The agent can read trust status; approval remains a person action. These controls share the host's command analysis and do not provide operating-system confinement.
+
 ## Commands (summary)
 
 ### Setup

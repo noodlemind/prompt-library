@@ -65,6 +65,7 @@ export function discoverReviewChecks(workspace, files) {
       const text = readFileNoFollow(path.join(root, ref.path), { root, maxBytes: 1024 * 1024 });
       try {
         if (text === null) throw new Error('Missing, unsafe or oversized check');
+        if (file.toLowerCase() === 'readme.md' && !/^---\r?\n/.test(text)) continue;
         const fm = parsePlanFrontmatter(text);
         if (typeof fm.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(fm.name)) throw new Error('Check needs a valid name');
         if (fm.globs !== undefined && typeof fm.globs !== 'string' && !(Array.isArray(fm.globs) && fm.globs.every(g => typeof g === 'string'))) throw new Error('Check globs must be strings');

@@ -71,9 +71,9 @@ export async function cmdTrust(argv, ctx = {}) {
     console.log(ui.line({ key: 'pinned', value: result.pinned.join(', '), keyWidth }));
     console.log(ui.line({ key: 'store', value: result.store, keyWidth }));
     if (result.state === 'stale') {
-      console.log(ui.paint('muted', '  the pinned files changed — re-approve after reading them: harness trust approve'));
+      console.log(ui.paint('muted', '  the pinned files changed — a person must read them and re-approve: harness trust approve'));
     } else if (result.state !== 'trusted' && result.verb === 'status') {
-      console.log(ui.paint('muted', '  project config and policy are ignored until approved: harness trust approve'));
+      console.log(ui.paint('muted', '  project config and policy are ignored until a person reviews and approves: harness trust approve'));
     }
   }
 

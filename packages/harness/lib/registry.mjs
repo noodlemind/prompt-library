@@ -621,6 +621,7 @@ registerCommand({
       },
     ],
     flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'orient the selected plan instead of ranking active plans', required: false, default: null },
       { name: '--query', type: 'string', valueName: 'text', description: 'agent/internal task summary', required: false, default: null, tui: 'prompt' },
       { name: '--limit', type: 'number', valueName: 'n', description: 'recall result count (default 3)', required: false, default: 3, tui: 'prompt' },
       {
