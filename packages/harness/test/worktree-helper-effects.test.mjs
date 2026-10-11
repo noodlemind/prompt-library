@@ -113,7 +113,7 @@ test('worktree bootstrap suppresses required filters activated only by the targe
 
 test('unresolved primary helper metadata fails before checkout or ignore-file mutation', (t) => {
   const f = fixture(t, 'metadata');
-  f.mustGit(['config', 'filter.Probe.clean', 'x'.repeat(70 * 1024)]);
+  fs.appendFileSync(path.join(f.workspace, '.git/config'), `[filter "Probe"]\n\tclean = ${'x'.repeat(70 * 1024)}\n`);
   const result = f.cli('metadata');
   assert.notEqual(result.status, 0, result.stderr + result.stdout);
   assert.equal(fs.existsSync(path.join(f.workspace, '.gitignore')), false);

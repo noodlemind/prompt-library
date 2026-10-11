@@ -154,3 +154,36 @@ All final reproduction cases after the Git repair
 ℹ pass 19
 ℹ fail 0
 ```
+
+## Windows CI correction and worktree helper follow-up
+
+Both Windows full-suite jobs failed at PR head `ab2d672`, in runs `38153024521` and `38153022012`. The source CLI startup passed, but the hydrated runtime test rebuilt its executable path from `env.PATH`. Windows supplied `Path`; spreading the inherited environment into a plain object lost case-insensitive lookup. The added uppercase key omitted the inherited path and hid Git from the installed CLI. This was a fixture error. A real subprocess regression exercises both spellings and requires one path key with the complete inherited value. Regression-only commit `7f00c62` failed one of seven tests. The minimal fixture fix in `00aa481` passed all seven with no skips and checks that the hydrated child can execute Git before creating its worktree.
+
+```text
+Installed-runtime path regression before repair
+ℹ pass 6
+ℹ fail 1
+After repair
+ℹ pass 7
+ℹ fail 0
+```
+
+Raw receipts are `/tmp/harness-ci-root-path-red.log` and `/tmp/harness-ci-root-path-green.log`. These are local subprocess observations; successful Windows CI requires a fresh pushed-head run.
+
+Greptile's subsequent review at `ab2d672` reported another P1. Independent disposable untrusted repositories confirmed that canonical worktree startup executed configured post-checkout, smudge, process and filesystem-monitor helpers. Each wrote a fixture marker and primary source before any trust or implement gate. A single primary-checkout helper override still missed a filter activated by `includeIf.onbranch:harness/**` in the new checkout. The demonstrated repair sequence creates the checkout without files, resolves the existing helper metadata reader there, then populates raw committed bytes with hooks, monitors and filters suppressed. The existing worktree owner handles cleanup and retries; no new configuration parser or lifecycle owner is introduced. The raw probes are `/tmp/harness-worktree-trust-probe.json`, `/tmp/harness-worktree-safe-prefix-probe.json` and `/tmp/harness-worktree-conditional-filter-probe.json`. Source regression and final pushed-head receipts are recorded separately after verification. These probes establish the named helper mechanisms, not a general Git sandbox.
+
+Regression-only commit `b871e49` reproduced all eight worktree failures. The corrected source passes all eight without skips, including actual helper execution controls, required target-branch filters, malformed and oversized metadata, populated retries and ordinary reuse. Cleanup uses this invocation's successful Git add as its ownership receipt; a failed add cannot delete another invocation's checkout. The oversized configuration fixture writes its bytes directly, avoiding Windows command-line limits. Existing startup and issue-intake coverage plus the new cases passed 47 tests without skips. The root independently ran both changed regression files on the final source and passed all 15 cases without skips. Raw receipts are `/tmp/harness-ci-root-worktree-red.log`, `/tmp/harness-worktree-helper-green.log`, `/tmp/harness-worktree-existing-green.log` and `/tmp/harness-ci-root-focused-green.log`.
+
+```text
+Worktree helper regressions before repair
+ℹ pass 0
+ℹ fail 8
+After repair
+ℹ pass 8
+ℹ fail 0
+Both changed regression files after repair
+ℹ pass 15
+ℹ fail 0
+```
+
+Final source-CLI review, named-check verification and pushed-head CI outcomes live in the same plan's generated evidence and the updated PR description. Source changes require new evidence. Native VS Code and IntelliJ acceptance remains unverified.
