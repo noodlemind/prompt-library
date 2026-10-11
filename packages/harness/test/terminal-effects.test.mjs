@@ -129,6 +129,37 @@ test('Git queries with unresolved metadata or explicit global execution contexts
   assert.equal(f.hook('require-plan-gate.mjs', 'git status --short').permissionDecision, 'deny');
 });
 
+for (const option of ['-nO', '--open-files-in-page=', '--open-files-in-p=', '--op=']) {
+  test(`Git grep pager spelling ${option} requires opaque admission and effect recording`, (t) => {
+    const f = fixture(t);
+    const helper = gitHelper(f);
+    const query = ['grep', `${option}${helper}`, 'before'];
+    const command = `git grep '${option}${helper}' before`;
+    const admission = f.hook('require-plan-gate.mjs', command);
+    assert.equal(fs.existsSync(path.join(f.workspace, 'src/hidden.txt')), false, 'hook inspection must not execute the pager');
+    if (process.platform !== 'win32') {
+      const execution = f.run('git', query);
+      assert.equal(execution.status, 0, execution.stderr);
+      assert.equal(fs.readFileSync(path.join(f.workspace, 'src/hidden.txt'), 'utf8'), 'helper changed bytes');
+    } else t.diagnostic('Actual pager execution uses a POSIX helper; hook admission and effect recording still execute on Windows.');
+    assert.equal(admission.permissionDecision, 'deny');
+    f.hook('record-successful-edit.mjs', command, { hook_event_name: 'PostToolUse' });
+    assert.equal(f.session().lastEditEffect, 'unknown');
+    assert.deepEqual(f.session().lastEditTargets, []);
+  });
+}
+
+test('ordinary Git grep queries remain read-only', (t) => {
+  const f = fixture(t);
+  for (const query of [['grep', 'before'], ['grep', '-n', 'before']]) {
+    const command = `git ${query.join(' ')}`;
+    assert.equal(f.hook('require-plan-gate.mjs', command).continue, true);
+    assert.equal(f.run('git', query).status, 0);
+    f.hook('record-successful-edit.mjs', command, { hook_event_name: 'PostToolUse' });
+    assert.equal(fs.existsSync(path.join(f.workspace, '.harness/session.json')), false);
+  }
+});
+
 test('Git metadata inspection is bounded and recognizes an exact cat pager', (t) => {
   const f = fixture(t);
   assert.equal(f.hook('require-plan-gate.mjs', 'git diff', {}, { GIT_PAGER: 'cat' }).continue, true);
