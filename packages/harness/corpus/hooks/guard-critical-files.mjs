@@ -58,7 +58,7 @@ function isDecisionInput(workspace, target) {
   while (true) {
     try {
       const stat = fs.lstatSync(cursor);
-      if (stat.isSymbolicLink() || (cursor === full ? !stat.isFile() : !stat.isDirectory())) return false;
+      if (stat.isSymbolicLink() || (cursor === full ? !stat.isFile() || stat.nlink !== 1 : !stat.isDirectory())) return false;
     }
     catch (error) { if (error.code !== 'ENOENT') return false; }
     const parent = path.dirname(cursor);
