@@ -17,6 +17,7 @@ export const CHECK_TIMEOUT_DEFAULT_SECONDS = 600;
 export const CHECK_TIMEOUT_MIN_SECONDS = 1;
 export const CHECK_TIMEOUT_MAX_SECONDS = 3600;
 export const CHECK_OUTPUT_MAX_CHARS = 4000;
+const CHECK_SECRET_PATTERN_OVERLAP_CHARS = 64 * 1024;
 
 /** Legacy per-check status vocabulary, preserved byte-for-byte from the
  * pre-runner spawnSync era. Distinct from the unified status vocabulary in
@@ -77,10 +78,7 @@ function canonicalPath(p) {
 }
 
 function secretScanOverlap(redactText) {
-  // Covers the shared patterns' bounded tokens (including the ~42K JWT
-  // pattern). Known environment masks may be longer, including URL-encoded
-  // literals; derive their overlap so output volume cannot grow this state.
-  let overlap = 64 * 1024;
+  let overlap = CHECK_SECRET_PATTERN_OVERLAP_CHARS;
   for (const value of Object.values(process.env)) {
     if (typeof value !== 'string') continue;
     if (value.length > overlap && redactText(value) !== value) overlap = value.length;

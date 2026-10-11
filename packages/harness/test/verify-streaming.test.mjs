@@ -181,8 +181,6 @@ test('writeEvidence redacts a secret-shaped check stdout before persisting to .h
   const check = result.checks.find((c) => c.id === 'leaky-check');
   assert.match(check.stdout, /token=«redacted:kv-secret»/, 'retained check output is sanitized before result consumers see it');
 
-  // Exercise the persistence boundary independently of the check's earlier
-  // redaction: legacy or manually assembled results can still contain raw text.
   const rawResult = { ...result, checks: result.checks.map(row => row.id === 'leaky-check' ? { ...row, stdout: 'token=abcdef1234567890\n' } : row) };
   writeEvidence(workspace, rawResult);
 

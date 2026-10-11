@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/** PostToolUse recorder: explicit edits and unknown terminal effects need fresh verification. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { writeHookEvent } from './lib/events.mjs';
