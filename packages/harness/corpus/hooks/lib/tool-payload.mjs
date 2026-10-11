@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { authorityBin } from './authority-bin.mjs';
 
@@ -467,6 +468,9 @@ const QUERY_COMMANDS = new Set(['cat', 'ls', 'pwd', 'rg', 'grep', 'head', 'tail'
 const POWERSHELL_QUERIES = new Set(['get-content', 'get-childitem', 'get-location', 'select-string', 'test-path', 'write-output']);
 const EXPLICIT_WRITERS = new Set(['touch', 'rm', 'rmdir', 'unlink', 'truncate', 'del', 'erase', 'rd', 'mkdir', 'md', 'dd', 'cp', 'install', 'mv', 'ln', 'tee', ...POWERSHELL_WRITERS]);
 const GIT_QUERIES = new Set(['status', 'diff', 'log', 'show', 'ls-files', 'ls-tree', 'rev-parse', 'rev-list', 'describe', 'blame', 'grep', 'check-ignore', 'version']);
+const GIT_DIFF_QUERIES = new Set(['status', 'diff', 'log', 'show', 'blame', 'grep']);
+const GIT_INDEX_QUERIES = new Set(['status', 'diff', 'ls-files', 'blame', 'grep', 'check-ignore']);
+const GIT_HELPER_CONFIG = '^(core\\.(fsmonitor|pager|alternaterefscommand)|pager\\..*|diff\\.(external|.*\\.(command|textconv))|filter\\..*\\.(clean|smudge|process)|log\\.showsignature)$';
 const HARNESS_CONTROL = new Set(['plan-new', 'plan-update', 'gate', 'verify', 'review', 'compound', 'status', 'orient', 'prepare', 'index', 'recall', 'help', '--help', '-h', '--version', '-V', 'validate-plan', 'doctor', 'route']);
 
 function terminalSegments(command) {
@@ -525,6 +529,39 @@ function isSystemCommand(token, base) {
   return token === base || token === `/usr/bin/${base}` || token === `/bin/${base}`;
 }
 
+function gitQueryIsResolved(tokens, git, workspace) {
+  const args = tokens.slice(1);
+  if (!GIT_QUERIES.has(git.subcommand) || args[0] !== git.subcommand) return false;
+  if (args.some(arg => /^--(?:output|exec-path|config-env|ext-diff|textconv|open-files-in-pager|show-signature)(?:=|$)/.test(arg)
+    || git.subcommand === 'grep' && /^-O/.test(arg) || /%G[?NGSKFPTR]/.test(arg))) return false;
+  if (git.subcommand === 'version') return true;
+  if (GIT_DIFF_QUERIES.has(git.subcommand) && process.env.GIT_EXTERNAL_DIFF) return false;
+  const result = spawnSync(tokens[0], ['--no-pager', 'config', '--includes', '--null', '--get-regexp', GIT_HELPER_CONFIG], {
+    cwd: workspace, encoding: 'utf8', timeout: 1000, maxBuffer: 64 * 1024, windowsHide: true,
+  });
+  if (result.error || ![0, 1].includes(result.status) || result.status === 1 && result.stdout) return false;
+  const config = new Map();
+  for (const entry of String(result.stdout || '').split('\0').filter(Boolean)) {
+    const separator = entry.indexOf('\n');
+    const key = (separator < 0 ? entry : entry.slice(0, separator)).toLowerCase();
+    if (!/^[a-z][a-z0-9.-]*$/.test(key)) return false;
+    config.set(key, separator < 0 ? '' : entry.slice(separator + 1));
+  }
+  const boolean = /^(?:true|false|yes|no|on|off|1|0)$/i;
+  const disabled = /^(?:false|no|off|0|)$/i;
+  const fsmonitor = config.get('core.fsmonitor');
+  if (GIT_INDEX_QUERIES.has(git.subcommand) && fsmonitor && !boolean.test(fsmonitor)) return false;
+  if (GIT_DIFF_QUERIES.has(git.subcommand) && [...config].some(([key, value]) => value
+    && (/^diff\.(?:external|.*\.(?:command|textconv))$/.test(key) || /^filter\..*\.(?:clean|smudge|process)$/.test(key)))) return false;
+  if (args.includes('--alternate-refs') && config.get('core.alternaterefscommand')) return false;
+  if (['log', 'show'].includes(git.subcommand) && config.has('log.showsignature') && !disabled.test(config.get('log.showsignature'))) return false;
+  const pagerSetting = config.get(`pager.${git.subcommand}`);
+  if (pagerSetting !== undefined && disabled.test(pagerSetting)) return true;
+  if (pagerSetting && !boolean.test(pagerSetting)) return false;
+  const pager = process.env.GIT_PAGER ?? config.get('core.pager') ?? process.env.PAGER;
+  return !pager || ['cat', '/bin/cat', '/usr/bin/cat'].includes(pager);
+}
+
 export function harnessControlCommand(tokens, workspace) {
   let args;
   if (tokens[0] === 'harness') args = tokens.slice(1);
@@ -565,7 +602,7 @@ export function analyzeTerminalEffects(command, workspace = process.cwd()) {
     const query = POWERSHELL_QUERIES.has(base) && tokens[0].toLowerCase() === base
       || isSystemCommand(tokens[0], base) && (QUERY_COMMANDS.has(base) && !(base === 'rg' && args.some(arg => /^--(?:pre|hostname-bin)(?:=|$)/.test(arg)))
       || (base === 'find' && !args.some(arg => /^-(?:exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)$/.test(arg)))
-      || (git && GIT_QUERIES.has(git.subcommand) && !args.some(arg => /^-[cC]/.test(arg) || /^--(?:output|exec-path|config-env|ext-diff|textconv)(?:=|$)/.test(arg)))
+      || (git && gitQueryIsResolved(tokens, git, workspace))
       || (['node', 'python', 'python3', 'npm'].includes(base) && args.length === 1 && ['--version', '-v', '--help'].includes(args[0])));
     if (!parsed.ambiguous && !wrapped && (query || harnessControlCommand(tokens, workspace))) continue;
     const inner = wrapped ? unwrapShellSegments(segment) : [tokens];

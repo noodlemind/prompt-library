@@ -328,7 +328,7 @@ checks:
 
   const legacy = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'run_in_terminal',
-    tool_input: { command: 'git status' },
+    tool_input: { command: 'pwd' },
   });
   assert.equal(outputJson(legacy).continue, true, 'missing gatedChecksDigest is a legacy session, not a hard deny');
 

@@ -20,7 +20,7 @@ function fixture(t) {
   const globalConfig = path.join(root, 'global.gitconfig');
   fs.writeFileSync(globalConfig, '');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig, HARNESS_HOME: home, HARNESS_BIN: bin, HARNESS_ENFORCEMENT: 'enforce' };
+  const env = { ...process.env, GIT_PAGER: undefined, PAGER: undefined, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig, HARNESS_HOME: home, HARNESS_BIN: bin, HARNESS_ENFORCEMENT: 'enforce' };
   const run = (executable, argv, extra = {}) => spawnSync(executable, argv, { cwd: workspace, encoding: 'utf8', env, ...extra });
   const cli = (...argv) => runHarness([...argv, '--workspace', workspace, '--json', '--no-events'], { cwd: workspace, env, trust: false, injectHome: false });
   const hook = (name, command, extra = {}, environment = {}) => {
@@ -122,11 +122,21 @@ test('Git query inspection respects Boolean fsmonitor and effective helper appli
 
 test('Git queries with unresolved metadata or explicit global execution contexts remain opaque', (t) => {
   const f = fixture(t);
-  for (const command of ['git -C . status', 'git --git-dir=.git status', 'git --work-tree=. diff', 'git --no-pager log', 'git --paginate log', 'git -p log', 'git -P log', 'git grep --open-files-in-pager=./git-helper needle', 'git grep -O./git-helper needle']) {
+  for (const command of ['git -C . status', 'git --git-dir=.git status', 'git --work-tree=. diff', 'git --no-pager log', 'git --paginate log', 'git -p log', 'git -P log', 'git grep --open-files-in-pager=./git-helper needle', 'git grep -O./git-helper needle', "git log '--format=%G?'"]) {
     assert.equal(f.hook('require-plan-gate.mjs', command).permissionDecision, 'deny', command);
   }
   fs.appendFileSync(path.join(f.workspace, '.git/config'), '\ninvalid configuration\n');
   assert.equal(f.hook('require-plan-gate.mjs', 'git status --short').permissionDecision, 'deny');
+});
+
+test('Git metadata inspection is bounded and recognizes an exact cat pager', (t) => {
+  const f = fixture(t);
+  assert.equal(f.hook('require-plan-gate.mjs', 'git diff', {}, { GIT_PAGER: 'cat' }).continue, true);
+  assert.equal(f.hook('require-plan-gate.mjs', 'git diff', {}, { GIT_PAGER: './git-helper' }).permissionDecision, 'deny');
+  assert.equal(f.hook('require-plan-gate.mjs', 'git diff', {}, { GIT_PAGER: 'cat > src/hidden.txt' }).permissionDecision, 'deny');
+  fs.appendFileSync(path.join(f.workspace, '.git/config'), `\n[diff]\n\texternal = ${'x'.repeat(70 * 1024)}\n`);
+  assert.equal(f.hook('require-plan-gate.mjs', 'git diff').permissionDecision, 'deny');
+  assert.equal(fs.existsSync(path.join(f.workspace, 'src/hidden.txt')), false);
 });
 
 test('opaque terminal generators fail before execution without a current gate on both native aliases', (t) => {
@@ -197,7 +207,11 @@ test('ordinary queries and canonical lifecycle commands remain usable before a g
   const f = fixture(t);
   for (const command of ['git status --short', 'rg needle src', "printf '%s' 'a;b'", 'cat src/generated.txt', 'node --version', 'Get-Content src/generated.txt', 'Get-ChildItem src', 'Get-Location', "Select-String -Path src/generated.txt -Pattern 'before'", 'Test-Path src/generated.txt', 'Write-Output fixture', 'harness plan-new --file .harness/decisions/new.json', `node '${bin}' plan-update --file .harness/decisions/start.json`, `node '${bin}' verify --json`, 'harness checks list']) {
     assert.equal(f.hook('require-plan-gate.mjs', command).continue, true, command);
-    assert.equal(normalizeToolPayload({ workspace: f.workspace, tool_name: 'run_in_terminal', tool_input: { command } }).mutation, false, command);
+    if (!command.startsWith('git ')) assert.equal(normalizeToolPayload({ workspace: f.workspace, tool_name: 'run_in_terminal', tool_input: { command } }).mutation, false, command);
+    else {
+      f.hook('record-successful-edit.mjs', command, { hook_event_name: 'PostToolUse' });
+      assert.equal(fs.existsSync(path.join(f.workspace, '.harness/session.json')), false, 'ordinary Git queries must not create pending verification');
+    }
   }
   for (const command of ['node fake/harness.mjs plan-new --file input.json', './harness status', 'npm run build', 'python generator.py', './custom-build']) {
     assert.equal(f.hook('require-plan-gate.mjs', command).permissionDecision, 'deny', command);
