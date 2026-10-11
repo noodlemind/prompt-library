@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { readGitArgs } from '../corpus/hooks/lib/product-diff.mjs';
 import { readPlanRecord } from './plan-record.mjs';
 
-function runGit(workspace, args) {
-  return spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout: 30_000 });
+function runGit(workspace, args, prefix) {
+  return spawnSync('git', [...prefix, ...args], { cwd: workspace, encoding: 'utf8', timeout: 30_000 });
 }
 
 function lines(output) {
@@ -31,23 +32,25 @@ export function matchesScope(file, allowed) {
 }
 
 export function collectChangedFiles(workspace, base = null) {
-  const inside = runGit(workspace, ['rev-parse', '--is-inside-work-tree']);
+  const prefix = readGitArgs(workspace, { timeout: 30_000 });
+  if (!prefix) return { files: [], error: 'Git helper configuration could not be read safely; scope cannot be verified' };
+  const inside = runGit(workspace, ['rev-parse', '--is-inside-work-tree'], prefix);
   if (inside.status !== 0 || inside.stdout.trim() !== 'true') {
     return { files: [], error: 'Workspace is not a git worktree; scope cannot be verified' };
   }
 
-  const diffArgs = ['diff', '--name-only', '--diff-filter=ACMRDTUXB'];
+  const diffArgs = ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '--diff-filter=ACMRDTUXB'];
   if (base && (typeof base !== 'string' || base.startsWith('-') || /[\0\r\n]/.test(base))) {
     return { files: [], error: 'Base must be a safe git ref' };
   }
   if (base) diffArgs.push(base, '--');
   else if (fs.existsSync(path.join(workspace, '.git'))) diffArgs.push('HEAD');
-  const diff = runGit(workspace, diffArgs);
+  const diff = runGit(workspace, diffArgs, prefix);
   if (diff.status !== 0) {
     return { files: [], error: diff.error?.message || String(diff.stderr || '').trim() || 'git diff failed' };
   }
 
-  const untracked = runGit(workspace, ['ls-files', '--others', '--exclude-standard']);
+  const untracked = runGit(workspace, ['ls-files', '--others', '--exclude-standard'], prefix);
   if (untracked.status !== 0) {
     return { files: [], error: untracked.error?.message || String(untracked.stderr || '').trim() || 'git ls-files failed' };
   }
