@@ -601,7 +601,7 @@ export function analyzeTerminalEffects(command, workspace = process.cwd()) {
     const git = base === 'git' ? parseGitInvocation(args) : null;
     const query = POWERSHELL_QUERIES.has(base) && tokens[0].toLowerCase() === base
       || isSystemCommand(tokens[0], base) && (QUERY_COMMANDS.has(base) && !(base === 'rg' && (args.some(arg => /^--(?:pre|hostname-bin)(?:=|$)/.test(arg))
-        || process.env.RIPGREP_CONFIG_PATH && !args.includes('--no-config')))
+        || process.env.RIPGREP_CONFIG_PATH && args[0] !== '--no-config'))
       || (base === 'find' && !args.some(arg => /^-(?:exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)$/.test(arg)))
       || (git && gitQueryIsResolved(tokens, git, workspace))
       || (['node', 'python', 'python3', 'npm'].includes(base) && args.length === 1 && ['--version', '-v', '--help'].includes(args[0])));

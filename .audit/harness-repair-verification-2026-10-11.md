@@ -119,3 +119,27 @@ The final comment/style pass removed six introduced narration lines and named th
 Clean-filter controls then exposed execution despite monitor and diff flags. Two actual filter regressions failed before repair; the shared existing-owner Git args helper now disables each effective filter driver, preserving its case, through ephemeral options. The seven reader tests (five actual helper cases plus malformed/oversized metadata) passed, and the impacted gate/hooks/review/evidence suite passed 132/132. Metadata inspection remains bounded and uncached, with one read reused by each scope collection. The additional regression commit is `27ae603`.
 
 Fresh security review demonstrated a pre-existing hard link from a decision-input file to protected session bytes. The critical-file guard now rejects multiply linked decision leaves. The actual shared-byte regression failed before repair (commit `75a25ef`); both decision-authoring tests then passed. Plan-gate exemption and critical-file sensitivity remain separate existing responsibilities. These checks do not guarantee filesystem race isolation.
+
+## Greptile follow-up on PR 89
+
+Greptile reviewed `47801ae` with confidence 2/5 and two P1 findings. Both were valid and escaped the earlier collected review. The same plan was amended and reopened for these repairs; earlier completion and verification do not cover this follow-up.
+
+The actual default-branch startup fixture failed isolation, then blocked the prescribed canonical worktree command. Worktree was missing from the existing control registry, and a failed gate's null checks digest also prevented recovery. Standalone canonical gate and worktree commands can now recover through the existing guard. Mixed, wrapped, ambiguous and redirected commands retain their gate requirements. A disposable installed runtime and hook also created a real linked worktree; invalid slugs still fail in the CLI.
+
+Actual ripgrep preprocessing from `RIPGREP_CONFIG_PATH` wrote a hidden fixture marker while the pre-hook admitted the query and post-hooks recorded no pending effects. Configured queries now remain opaque unless their first argument is `--no-config`. Explicit helper options stay opaque. A second runtime probe showed why searching all arguments for that string is unsafe: a pattern or filename named `--no-config` does not disable configuration. Two further failing regressions cover that distinction.
+
+Regression-only commit `3b5de80` reproduces the original findings. The root's combined run had eight failures and four passing controls. The first repair passed all 99 impacted terminal, startup and hook cases. Regression-only commit `b66bb80` then reproduced both option-value escapes. All 14 final reproduction and control cases passed on the corrected source, with no skips. POSIX helper execution is exercised on macOS; hook policy assertions and actual worktree startup also execute on Windows. Native editor-host acceptance remains unverified.
+
+```text
+Original findings before repair
+ℹ pass 4
+ℹ fail 8
+Option-value escapes before repair
+ℹ pass 0
+ℹ fail 2
+All final reproduction cases after repair
+ℹ pass 14
+ℹ fail 0
+```
+
+Raw local receipts are `/tmp/harness-greptile-combined-red.log`, `/tmp/harness-greptile-impacted-green.log`, `/tmp/harness-greptile-ripgrep-value-red.log` and `/tmp/harness-greptile-final-repros-green.log`. Fresh collected review and authoritative source-CLI verification bind the subsequent final head before this PR is updated. A later Greptile score requires a new review; local repair proof does not change the recorded score.
