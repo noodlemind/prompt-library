@@ -8,6 +8,7 @@ import { resolveControls } from './controls.mjs';
 import { buildChildEnv } from './exec-policy.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { isProjectTrusted } from './trust.mjs';
+import { createRedactor, redactionMarker } from './redact.mjs';
 
 export const CHECKS_REL = '.github/harness/checks.yaml';
 
@@ -15,6 +16,7 @@ export const CHECKS_REL = '.github/harness/checks.yaml';
 export const CHECK_TIMEOUT_DEFAULT_SECONDS = 600;
 export const CHECK_TIMEOUT_MIN_SECONDS = 1;
 export const CHECK_TIMEOUT_MAX_SECONDS = 3600;
+export const CHECK_OUTPUT_MAX_CHARS = 4000;
 
 /** Legacy per-check status vocabulary, preserved byte-for-byte from the
  * pre-runner spawnSync era. Distinct from the unified status vocabulary in
@@ -74,9 +76,42 @@ function canonicalPath(p) {
   }
 }
 
-function trimOutput(value) {
-  const text = String(value || '');
-  return text.length > 4000 ? `${text.slice(0, 4000)}\n…truncated…` : text;
+function secretScanOverlap(redactText) {
+  // Covers the shared patterns' bounded tokens (including the ~42K JWT
+  // pattern). Known environment masks may be longer, including URL-encoded
+  // literals; derive their overlap so output volume cannot grow this state.
+  let overlap = 64 * 1024;
+  for (const value of Object.values(process.env)) {
+    if (typeof value !== 'string') continue;
+    if (value.length > overlap && redactText(value) !== value) overlap = value.length;
+    try {
+      const encoded = encodeURIComponent(value);
+      if (encoded.length > overlap && redactText(encoded) !== encoded) overlap = encoded.length;
+    } catch {
+      // The shared redactor also falls back to a raw literal for lone surrogates.
+    }
+  }
+  return overlap;
+}
+
+function observeCheckOutput(onChunk, redactText, overlap) {
+  let carry = '';
+  let privateKeySeen = false;
+  let secretSeen = false;
+  return {
+    push(chunk) {
+      const text = carry + String(chunk);
+      privateKeySeen ||= /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(text);
+      secretSeen ||= privateKeySeen || redactText(text) !== text;
+      carry = text.slice(-overlap);
+      onChunk?.(chunk);
+    },
+    retained(text, omittedChars) {
+      if (privateKeySeen) return redactionMarker('private-key');
+      if (secretSeen && omittedChars > 0) return redactionMarker('truncated-output');
+      return redactText(text);
+    },
+  };
 }
 
 export async function runNamedCheck(workspace, name, config, { signal, onStdout, onStderr, copilotHome = null, events = null } = {}) {
@@ -104,15 +139,20 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
     environmentAllowlisted: allowlisted,
   });
 
+  const { redactText } = createRedactor();
+  const overlap = secretScanOverlap(redactText);
+  const stdout = observeCheckOutput(onStdout, redactText, overlap);
+  const stderr = observeCheckOutput(onStderr, redactText, overlap);
   const execution = await runProcess({
     argv: [...networkWrapper, ...config.command],
     cwd: workspace,
     ...(envReport ? { env: envReport.env } : {}),
     timeoutMs: timeoutSeconds * 1000,
     signal,
-    onStdout,
-    onStderr,
-    maxBuffer: 1024 * 1024,
+    onStdout: chunk => stdout.push(chunk),
+    onStderr: chunk => stderr.push(chunk),
+    maxBuffer: CHECK_OUTPUT_MAX_CHARS,
+    bufferMode: 'head-tail',
   });
 
     const sink = typeof events?.withCommand === 'function' ? events.withCommand('exec') : events;
@@ -132,11 +172,18 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
         : { inherited: true },
       signal: execution.signalName,
       truncated: execution.truncated,
+      outputTruncation: execution.outputTruncation,
       controls,
       degraded: degraded.map((c) => ({ id: c.id, declared: c.declared, realized: c.realized, reason: c.reason })),
     },
   });
-  const output = { stdout: trimOutput(execution.stdout), stderr: trimOutput(execution.stderr), durationMs: execution.durationMs };
+  const output = {
+    stdout: stdout.retained(execution.stdout, execution.outputTruncation.stdout.omittedChars),
+    stderr: stderr.retained(execution.stderr, execution.outputTruncation.stderr.omittedChars),
+    truncated: execution.truncated,
+    outputTruncation: execution.outputTruncation,
+    durationMs: execution.durationMs,
+  };
 
   if (execution.status === 'cancelled') {
     return finish(resultCheck(name, 'unavailable', 'Cancelled — verification was interrupted', { ...output, cancelled: true }));
