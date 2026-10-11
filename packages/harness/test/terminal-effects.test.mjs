@@ -411,6 +411,27 @@ test('explicit ripgrep helper flags remain opaque with --no-config', (t) => {
   assert.deepEqual(f.session().lastEditTargets, []);
 });
 
+for (const [label, argv] of [
+  ['pattern', ['--regexp', '--no-config', 'src/generated.txt']],
+  ['path', ['before', '--', '--no-config', 'src/generated.txt']],
+]) {
+  test(`ripgrep ${label} text --no-config cannot exempt an ambient configured helper`, (t) => {
+    const f = fixture(t);
+    const configured = ripgrepConfig(f);
+    const command = `rg ${argv.join(' ')}`;
+    const admission = f.hook('require-plan-gate.mjs', command, {}, configured.environment);
+    const help = f.run('rg', ['--help']);
+    if (process.platform !== 'win32' && !help.error && help.status === 0) {
+      const execution = f.run('rg', argv, { env: { ...f.env, ...configured.environment } });
+      assert.equal(execution.error, undefined);
+      assert.equal(fs.readFileSync(configured.marker, 'utf8'), 'configured helper changed bytes');
+    } else t.diagnostic('Actual configured helper execution needs ripgrep and POSIX executable scripts; hook policy assertions still execute.');
+    assert.equal(admission.permissionDecision, 'deny');
+    f.hook('record-successful-edit.mjs', command, { hook_event_name: 'PostToolUse' }, configured.environment);
+    assert.equal(f.session().lastEditEffect, 'unknown');
+  });
+}
+
 test('missing or unreadable ambient ripgrep configuration stays opaque without reading or executing it', (t) => {
   const f = fixture(t);
   const unreadable = path.join(f.workspace, 'unreadable-ripgrep-config');
