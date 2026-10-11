@@ -98,3 +98,40 @@ test('changed file collection preserves tracked and untracked paths without invo
   assert.equal(fs.existsSync(helper.marker), false, 'authoritative changed-file collection must not execute fsmonitor');
   assert.deepEqual(changed, { files: ['new.txt', 'sample.txt'], error: null });
 });
+
+for (const reader of ['product diff', 'changed file collection']) {
+  test(`${reader} reads raw bytes without invoking a configured clean filter`, (t) => {
+    const f = fixture(t);
+    const root = path.dirname(f.workspace);
+    const marker = path.join(root, 'filter.marker');
+    const executable = path.join(root, 'filter.cjs');
+    fs.writeFileSync(executable, `const fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(marker)}, 'called\\n'); process.stdout.write(fs.readFileSync(0));\n`);
+    const shellQuote = (value) => `'${value.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`;
+    fs.writeFileSync(path.join(f.workspace, '.gitattributes'), 'sample.txt filter=Fixture\n');
+    f.git('add', '.gitattributes');
+    f.git('commit', '-qm', 'filter attribute fixture');
+    f.git('config', 'filter.Fixture.clean', `${shellQuote(process.execPath)} ${shellQuote(executable)}`);
+    f.git('-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv', 'HEAD');
+    assert.equal(fs.existsSync(marker), true, 'control query must actually execute the configured filter');
+    fs.rmSync(marker);
+    const output = reader === 'product diff' ? readProductDiff(f.workspace) : collectChangedFiles(f.workspace, 'HEAD');
+    assert.equal(fs.existsSync(marker), false, 'authoritative Git read must not execute a clean filter');
+    if (reader === 'product diff') assert.match(output, /^-before\n\+after$/m);
+    else assert.deepEqual(output, { files: ['sample.txt'], error: null });
+  });
+}
+
+for (const configuration of ['malformed', 'oversized']) {
+  test(`authoritative Git readers fail closed when helper metadata is ${configuration}`, (t) => {
+    const f = fixture(t);
+    const config = path.join(f.workspace, '.git', 'config');
+    fs.appendFileSync(config, configuration === 'malformed'
+      ? '\ninvalid configuration\n'
+      : `\n[filter "fixture"]\n\tclean = ${'x'.repeat(70_000)}\n`);
+    assert.equal(readProductDiff(f.workspace), null);
+    const changed = collectChangedFiles(f.workspace, 'HEAD');
+    assert.deepEqual(changed.files, []);
+    assert.equal(typeof changed.error, 'string');
+    assert.notEqual(changed.error, '');
+  });
+}
