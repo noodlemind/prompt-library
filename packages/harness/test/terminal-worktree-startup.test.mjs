@@ -63,10 +63,11 @@ function assertAllowed(response, command) {
 }
 
 function installedEnvironment(env, shim, hydratedBin, copilotHome) {
+  const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH';
   return {
     HARNESS_BIN: hydratedBin,
     COPILOT_HOME: copilotHome,
-    PATH: `${path.dirname(shim)}${path.delimiter}${env.PATH || ''}`,
+    [pathKey]: `${path.dirname(shim)}${path.delimiter}${env[pathKey] || ''}`,
   };
 }
 
