@@ -6,7 +6,7 @@ Put structured decision files under `.harness/decisions/` and pass them with `--
 
 ## Create
 
-Use `harness plan-new --file <creation.json> --json`. A creation decision has version 1, format `full|short`, and a goal. Supply acceptance text, constraints, scope paths, the inspected named check, and selected intent-source paths. Optional full-plan fields include type, slug, title, risk, outputs, authored notes, and phases. Omit slug to let Harness derive it. Use open or needs-info status for an unlocked capture; such a draft can omit a check. Missing proof remains explicit.
+Use `harness plan-new --file <creation.json> --json`. A creation decision has version 1, format `full|short`, and a goal. Supply acceptance text, constraints, scope paths, the inspected named check, and selected intent-source paths. Optional full-plan fields include type, slug, title, risk, outputs, authored notes, phases, and `skillsUsed`. Record only skills actually loaded. Primitive maintenance requires `create-primitive`; its declaration does not replace the successful skill read recorded for the session. Omit slug to let Harness derive it. Use open or needs-info status for an unlocked capture; such a draft can omit a check. Missing proof remains explicit.
 
 ```json
 {
