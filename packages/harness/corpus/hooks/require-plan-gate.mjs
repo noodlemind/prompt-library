@@ -303,10 +303,10 @@ function unplannedNamedChecks(commands, command, planText) {
     .map(({ name }) => name);
 }
 
-function isSoleHarnessGate(command) {
+function isSoleHarnessRecovery() {
   const effects = normalized.terminalEffects;
-  return !effects.hasOpaque && effects.invocations.length > 0
-    && effects.invocations.every(tokens => harnessControlCommand(tokens, normalized.workspace) === 'gate');
+  return !normalized.mutation && !effects.ambiguous && !effects.hasOpaque && effects.invocations.length === 1
+    && ['gate', 'worktree'].includes(harnessControlCommand(effects.invocations[0], normalized.workspace));
 }
 
 try {
@@ -328,7 +328,7 @@ if (normalized.command) {
       const currentDigest = configuredChecksDigest(normalized.workspace);
       if (Object.hasOwn(session, 'gatedChecksDigest')
         && session.gatedChecksDigest !== currentDigest
-        && !isSoleHarnessGate(normalized.command)) {
+        && !isSoleHarnessRecovery()) {
         deny(
           'changed-check-config',
           'The configured check manifest changed after the implement gate. Rerun harness gate before running terminal commands',

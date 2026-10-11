@@ -471,7 +471,7 @@ const GIT_QUERIES = new Set(['status', 'diff', 'log', 'show', 'ls-files', 'ls-tr
 const GIT_DIFF_QUERIES = new Set(['status', 'diff', 'log', 'show', 'blame', 'grep']);
 const GIT_INDEX_QUERIES = new Set(['status', 'diff', 'ls-files', 'blame', 'grep', 'check-ignore']);
 const GIT_HELPER_CONFIG = '^(core\\.(fsmonitor|pager|alternaterefscommand)|pager\\..*|diff\\.(external|.*\\.(command|textconv))|filter\\..*\\.(clean|smudge|process)|log\\.showsignature)$';
-const HARNESS_CONTROL = new Set(['plan-new', 'plan-update', 'gate', 'verify', 'review', 'compound', 'status', 'orient', 'prepare', 'index', 'recall', 'help', '--help', '-h', '--version', '-V', 'validate-plan', 'doctor', 'route']);
+const HARNESS_CONTROL = new Set(['plan-new', 'plan-update', 'gate', 'worktree', 'verify', 'review', 'compound', 'status', 'orient', 'prepare', 'index', 'recall', 'help', '--help', '-h', '--version', '-V', 'validate-plan', 'doctor', 'route']);
 
 function terminalSegments(command) {
   const segments = [];
@@ -600,7 +600,8 @@ export function analyzeTerminalEffects(command, workspace = process.cwd()) {
     const knownWrite = analyzeShellMutation(segment).mutation;
     const git = base === 'git' ? parseGitInvocation(args) : null;
     const query = POWERSHELL_QUERIES.has(base) && tokens[0].toLowerCase() === base
-      || isSystemCommand(tokens[0], base) && (QUERY_COMMANDS.has(base) && !(base === 'rg' && args.some(arg => /^--(?:pre|hostname-bin)(?:=|$)/.test(arg)))
+      || isSystemCommand(tokens[0], base) && (QUERY_COMMANDS.has(base) && !(base === 'rg' && (args.some(arg => /^--(?:pre|hostname-bin)(?:=|$)/.test(arg))
+        || process.env.RIPGREP_CONFIG_PATH && !args.includes('--no-config')))
       || (base === 'find' && !args.some(arg => /^-(?:exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)$/.test(arg)))
       || (git && gitQueryIsResolved(tokens, git, workspace))
       || (['node', 'python', 'python3', 'npm'].includes(base) && args.length === 1 && ['--version', '-v', '--help'].includes(args[0])));
