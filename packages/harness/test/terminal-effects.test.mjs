@@ -20,7 +20,7 @@ function fixture(t) {
   const globalConfig = path.join(root, 'global.gitconfig');
   fs.writeFileSync(globalConfig, '');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const env = { ...process.env, GIT_PAGER: undefined, PAGER: undefined, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig, HARNESS_HOME: home, HARNESS_BIN: bin, HARNESS_ENFORCEMENT: 'enforce' };
+  const env = { ...process.env, GIT_PAGER: undefined, PAGER: undefined, RIPGREP_CONFIG_PATH: undefined, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig, HARNESS_HOME: home, HARNESS_BIN: bin, HARNESS_ENFORCEMENT: 'enforce' };
   const run = (executable, argv, extra = {}) => spawnSync(executable, argv, { cwd: workspace, encoding: 'utf8', env, ...extra });
   const cli = (...argv) => runHarness([...argv, '--workspace', workspace, '--json', '--no-events'], { cwd: workspace, env, trust: false, injectHome: false });
   const hook = (name, command, extra = {}, environment = {}) => {
@@ -345,6 +345,79 @@ test('ripgrep execution options are opaque even though ordinary searches are que
   } else t.diagnostic('Actual ripgrep execution probes need ripgrep and POSIX executable scripts; lexical denials still execute.');
   for (const command of [`rg --pre '${preprocessor}' needle src`, `rg --pre='${preprocessor}' needle src`, `rg --hostname-bin '${preprocessor}' needle src`, `rg --hostname-bin='${preprocessor}' needle src`]) {
     assert.equal(f.hook('require-plan-gate.mjs', command).permissionDecision, 'deny', command);
+  }
+});
+
+function ripgrepConfig(f) {
+  const preprocessor = path.join(f.workspace, 'configured-preprocessor');
+  const config = path.join(f.workspace, 'ripgrep-config');
+  const marker = path.join(f.workspace, '.ripgrep-helper-effect');
+  fs.writeFileSync(preprocessor, "#!/bin/sh\nprintf 'configured helper changed bytes' > .ripgrep-helper-effect\ncat \"$1\"\n");
+  fs.chmodSync(preprocessor, 0o755);
+  fs.writeFileSync(config, `--pre=${preprocessor}\n`);
+  return { preprocessor, marker, environment: { RIPGREP_CONFIG_PATH: config } };
+}
+
+test('ambient ripgrep configuration gates a query whose helper changes hidden bytes', (t) => {
+  const f = fixture(t);
+  const configured = ripgrepConfig(f);
+  const command = 'rg before src/generated.txt';
+  const admission = f.hook('require-plan-gate.mjs', command, {}, configured.environment);
+  assert.equal(fs.existsSync(configured.marker), false, 'hook inspection must not execute the configured preprocessor');
+  const help = f.run('rg', ['--help']);
+  if (process.platform !== 'win32' && !help.error && help.status === 0) {
+    const execution = f.run('rg', ['before', 'src/generated.txt'], { env: { ...f.env, ...configured.environment } });
+    assert.equal(execution.status, 0, execution.stderr);
+    assert.equal(fs.readFileSync(configured.marker, 'utf8'), 'configured helper changed bytes');
+  } else t.diagnostic('Actual ambient ripgrep helper execution needs ripgrep and POSIX executable scripts; hook policy assertions still execute.');
+  assert.equal(admission.permissionDecision, 'deny');
+  assert.match(admission.permissionDecisionReason, /missing-implement-gate/);
+});
+
+for (const success of [true, false]) {
+  test(`ambient ripgrep configuration records potential effects after a ${success ? 'successful' : 'failed'} query`, (t) => {
+    const f = fixture(t);
+    const configured = ripgrepConfig(f);
+    f.hook('record-successful-edit.mjs', 'rg before src/generated.txt', { hook_event_name: success ? 'PostToolUse' : 'PostToolUseFailure', success }, configured.environment);
+    assert.equal(fs.existsSync(path.join(f.workspace, '.harness/session.json')), true, 'configured helpers require pending verification even when query execution fails');
+    assert.equal(f.session().lastEditEffect, 'unknown');
+    assert.deepEqual(f.session().lastEditTargets, []);
+    assert.equal(f.hook('require-verification.mjs', '', { hook_event_name: 'Stop', stop_hook_active: false }).decision, 'block');
+  });
+}
+
+test('explicit ripgrep --no-config remains a query with a configured preprocessor in the environment', (t) => {
+  const f = fixture(t);
+  const configured = ripgrepConfig(f);
+  const command = 'rg --no-config before src/generated.txt';
+  assert.equal(f.hook('require-plan-gate.mjs', command, {}, configured.environment).continue, true);
+  const help = f.run('rg', ['--help']);
+  if (process.platform !== 'win32' && !help.error && help.status === 0) {
+    const execution = f.run('rg', ['--no-config', 'before', 'src/generated.txt'], { env: { ...f.env, ...configured.environment } });
+    assert.equal(execution.status, 0, execution.stderr);
+    assert.equal(fs.existsSync(configured.marker), false, '--no-config must disable the actual configured helper');
+  } else t.diagnostic('Actual --no-config execution needs ripgrep and POSIX executable scripts; hook policy assertions still execute.');
+  f.hook('record-successful-edit.mjs', command, { hook_event_name: 'PostToolUse' }, configured.environment);
+  assert.equal(fs.existsSync(path.join(f.workspace, '.harness/session.json')), false, 'a configuration-disabled query must not create pending verification');
+});
+
+test('explicit ripgrep helper flags remain opaque with --no-config', (t) => {
+  const f = fixture(t);
+  const configured = ripgrepConfig(f);
+  const command = `rg --no-config --pre '${configured.preprocessor}' before src/generated.txt`;
+  assert.equal(f.hook('require-plan-gate.mjs', command, {}, configured.environment).permissionDecision, 'deny');
+  f.hook('record-successful-edit.mjs', command, { hook_event_name: 'PostToolUse' }, configured.environment);
+  assert.equal(f.session().lastEditEffect, 'unknown');
+  assert.deepEqual(f.session().lastEditTargets, []);
+});
+
+test('missing or unreadable ambient ripgrep configuration stays opaque without reading or executing it', (t) => {
+  const f = fixture(t);
+  const unreadable = path.join(f.workspace, 'unreadable-ripgrep-config');
+  fs.writeFileSync(unreadable, '--pre=./missing-helper\n');
+  fs.chmodSync(unreadable, 0);
+  for (const config of [path.join(f.workspace, 'missing-ripgrep-config'), unreadable]) {
+    assert.equal(f.hook('require-plan-gate.mjs', 'rg before src/generated.txt', {}, { RIPGREP_CONFIG_PATH: config }).permissionDecision, 'deny', config);
   }
 });
 
