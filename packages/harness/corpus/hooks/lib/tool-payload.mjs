@@ -533,7 +533,7 @@ function gitQueryIsResolved(tokens, git, workspace) {
   const args = tokens.slice(1);
   if (!GIT_QUERIES.has(git.subcommand) || args[0] !== git.subcommand) return false;
   if (args.some(arg => /^--(?:output|exec-path|config-env|ext-diff|textconv|open-files-in-pager|show-signature)(?:=|$)/.test(arg)
-    || git.subcommand === 'grep' && /^-O/.test(arg) || /%G[?NGSKFPTR]/.test(arg))) return false;
+    || git.subcommand === 'grep' && /^(?:-[^-]*O|--op)/.test(arg) || /%G[?NGSKFPTR]/.test(arg))) return false;
   if (git.subcommand === 'version') return true;
   if (GIT_DIFF_QUERIES.has(git.subcommand) && process.env.GIT_EXTERNAL_DIFF) return false;
   const result = spawnSync(tokens[0], ['--no-pager', 'config', '--includes', '--null', '--get-regexp', GIT_HELPER_CONFIG], {

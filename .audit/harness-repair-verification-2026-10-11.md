@@ -143,3 +143,14 @@ All final reproduction cases after repair
 ```
 
 Raw local receipts are `/tmp/harness-greptile-combined-red.log`, `/tmp/harness-greptile-impacted-green.log`, `/tmp/harness-greptile-ripgrep-value-red.log` and `/tmp/harness-greptile-final-repros-green.log`. Fresh collected review and authoritative source-CLI verification bind the subsequent final head before this PR is updated. A later Greptile score requires a new review; local repair proof does not change the recorded score.
+
+The fresh security review then reproduced another escape in the existing Git-query classifier. Git grep accepts a pager helper through clustered `-nO` and abbreviated long options, including `--op`. Four actual helper regressions failed before the existing predicate was repaired; ordinary grep remained a passing read-only control. Regression-only commit `7e8bb9d` precedes the fix. The final combined reproduction suite passed all 19 cases with no skips, in `/tmp/harness-greptile-final-repros-green-v2.log`; the failed cases are in `/tmp/harness-greptile-git-grep-red.log`. POSIX pager execution remains platform-specific, while its hook admission and post-effect assertions run on Windows too.
+
+```text
+Git pager spellings before repair
+ℹ pass 1
+ℹ fail 4
+All final reproduction cases after the Git repair
+ℹ pass 19
+ℹ fail 0
+```
