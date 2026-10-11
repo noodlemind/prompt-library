@@ -62,6 +62,31 @@ function assertAllowed(response, command) {
   assert.notEqual(response.permissionDecision, 'deny', command);
 }
 
+function installedEnvironment(env, shim, hydratedBin, copilotHome) {
+  return {
+    HARNESS_BIN: hydratedBin,
+    COPILOT_HOME: copilotHome,
+    PATH: `${path.dirname(shim)}${path.delimiter}${env.PATH || ''}`,
+  };
+}
+
+test('installed shim preserves the inherited executable search path with either key spelling', () => {
+  const inheritedPath = Object.entries(process.env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
+  const shim = path.join('fixture', 'bin', 'harness');
+  for (const pathKey of ['PATH', 'Path']) {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+    env[pathKey] = inheritedPath;
+    const installedEnv = installedEnvironment(env, shim, 'fixture/harness.mjs', 'fixture/copilot');
+    const child = spawnSync(process.execPath, ['-e', "process.stdout.write(JSON.stringify(Object.entries(process.env).filter(([key]) => key.toLowerCase() === 'path')))"], {
+      encoding: 'utf8', env: { ...env, ...installedEnv },
+    });
+    assert.equal(child.status, 0, child.stderr);
+    const searchPaths = JSON.parse(child.stdout);
+    assert.equal(searchPaths.length, 1, `${pathKey}: child must receive one executable search path`);
+    assert.equal(searchPaths[0][1], `${path.dirname(shim)}${path.delimiter}${inheritedPath}`, `${pathKey}: inherited executable directories must survive`);
+  }
+});
+
 test('default-branch delivery can create its authoritative worktree before the implement gate', (t) => {
   const f = fixture(t);
   const blocked = f.cli(['gate', '--phase', 'implement', '--plan', f.plan]);
@@ -114,14 +139,15 @@ test('hydrated hooks admit the installed worktree CLI and it creates a real isol
   const shim = installGlobalHarnessShim(copilotHome, {}, () => {}).path;
   const hydratedBin = path.join(copilotHome, '.harness-bin/bin/harness.mjs');
   const hydratedHook = path.join(copilotHome, '.harness-bin/corpus/hooks/require-plan-gate.mjs');
-  const installedEnv = {
-    HARNESS_BIN: hydratedBin,
-    COPILOT_HOME: copilotHome,
-    PATH: `${path.dirname(shim)}${path.delimiter}${f.env.PATH || ''}`,
-  };
+  const installedEnv = installedEnvironment(f.env, shim, hydratedBin, copilotHome);
   for (const command of ['harness worktree --slug installed-repair', `node "${hydratedBin}" worktree --slug installed-repair`]) {
     assertAllowed(f.hook(command, installedEnv, hydratedHook), command);
   }
+  const gitLookup = spawnSync('git', ['--version'], {
+    cwd: f.workspace, encoding: 'utf8', env: { ...f.env, ...installedEnv },
+  });
+  assert.equal(gitLookup.status, 0, gitLookup.error?.message || gitLookup.stderr);
+  assert.match(gitLookup.stdout, /^git version /);
   const execution = spawnSync(process.execPath, [shim, 'worktree', '--slug', 'installed-repair', '--workspace', f.workspace, '--json'], {
     cwd: f.workspace, encoding: 'utf8', env: { ...f.env, ...installedEnv },
   });
