@@ -17,12 +17,15 @@ function fixture(t) {
   const home = path.join(root, 'home');
   fs.mkdirSync(workspace);
   fs.mkdirSync(home);
+  const globalConfig = path.join(root, 'global.gitconfig');
+  fs.writeFileSync(globalConfig, '');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const env = { ...process.env, HARNESS_HOME: home, HARNESS_BIN: bin, HARNESS_ENFORCEMENT: 'enforce' };
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig, HARNESS_HOME: home, HARNESS_BIN: bin, HARNESS_ENFORCEMENT: 'enforce' };
   const run = (executable, argv, extra = {}) => spawnSync(executable, argv, { cwd: workspace, encoding: 'utf8', env, ...extra });
   const cli = (...argv) => runHarness([...argv, '--workspace', workspace, '--json', '--no-events'], { cwd: workspace, env, trust: false, injectHome: false });
-  const hook = (name, command, extra = {}) => {
+  const hook = (name, command, extra = {}, environment = {}) => {
     const result = run(process.execPath, [path.join(hooks, name)], {
+      env: { ...env, ...environment },
       input: JSON.stringify({ workspace, session_id: 'terminal-fixture', tool_name: 'run_in_terminal', tool_input: { command }, ...extra }),
     });
     assert.equal(result.status, 0, result.stderr);
@@ -48,8 +51,83 @@ function fixture(t) {
     assert.equal(result.status, 0, result.stderr + result.stdout);
   };
   const approve = () => assert.equal(cli('trust', 'approve').status, 0);
-  return { workspace, home, run, cli, hook, session, changeSession, gate, approve, plan };
+  return { workspace, home, env, run, cli, hook, session, changeSession, gate, approve, plan };
 }
+
+function gitHelper(f) {
+  const helper = path.join(f.workspace, 'git-helper');
+  fs.writeFileSync(helper, "#!/bin/sh\nprintf 'helper changed bytes' > src/hidden.txt\nprintf '\\0'\n");
+  fs.chmodSync(helper, 0o755);
+  return helper;
+}
+
+for (const mechanism of ['environment external diff', 'configured external diff', 'configured fsmonitor']) {
+  test(`Git query ${mechanism} is opaque without executing its helper during inspection`, (t) => {
+    const f = fixture(t);
+    const helper = gitHelper(f);
+    const environment = mechanism === 'environment external diff' ? { GIT_EXTERNAL_DIFF: helper } : {};
+    const query = mechanism === 'configured fsmonitor' ? ['status', '--short'] : ['diff', '--', 'src/generated.txt'];
+    if (mechanism === 'configured external diff') assert.equal(f.run('git', ['config', 'diff.external', helper]).status, 0);
+    if (mechanism === 'configured fsmonitor') assert.equal(f.run('git', ['config', 'core.fsmonitor', helper]).status, 0);
+    fs.writeFileSync(path.join(f.workspace, 'src/generated.txt'), 'changed\n');
+    const command = `git ${query.join(' ')}`;
+    const admission = f.hook('require-plan-gate.mjs', command, {}, environment);
+    assert.equal(fs.existsSync(path.join(f.workspace, 'src/hidden.txt')), false, 'metadata inspection must not execute the helper');
+    if (process.platform !== 'win32') {
+      const execution = f.run('git', query, { env: { ...f.env, ...environment } });
+      assert.equal(execution.status, 0, execution.stderr);
+      assert.equal(fs.readFileSync(path.join(f.workspace, 'src/hidden.txt'), 'utf8'), 'helper changed bytes');
+    } else t.diagnostic('Actual Git helper writes use POSIX executable scripts; metadata and hook policy assertions still execute on Windows.');
+    assert.equal(admission.permissionDecision, 'deny');
+    f.hook('record-successful-edit.mjs', command, { hook_event_name: 'PostToolUse' }, environment);
+    assert.equal(f.session().lastEditEffect, 'unknown');
+    assert.deepEqual(f.session().lastEditTargets, []);
+  });
+}
+
+test('Git query inspection follows included and environment configuration without caching or helper execution', (t) => {
+  const f = fixture(t);
+  const helper = gitHelper(f);
+  const included = path.join(f.workspace, 'included.gitconfig');
+  fs.writeFileSync(included, `[diff]\n\texternal = ${JSON.stringify(helper)}\n`);
+  assert.equal(f.hook('require-plan-gate.mjs', 'git diff').continue, true);
+  assert.equal(f.run('git', ['config', 'include.path', included]).status, 0);
+  assert.equal(f.hook('require-plan-gate.mjs', 'git diff').permissionDecision, 'deny');
+  assert.equal(f.run('git', ['config', '--unset', 'include.path']).status, 0);
+  assert.equal(f.hook('require-plan-gate.mjs', 'git diff').continue, true);
+  const environment = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.external', GIT_CONFIG_VALUE_0: helper };
+  assert.equal(f.hook('require-plan-gate.mjs', 'git diff', {}, environment).permissionDecision, 'deny');
+  assert.equal(fs.existsSync(path.join(f.workspace, 'src/hidden.txt')), false);
+});
+
+test('Git query inspection respects Boolean fsmonitor and effective helper applicability', (t) => {
+  const f = fixture(t);
+  for (const value of ['true', 'false', 'yes', 'no', 'on', 'off', '1', '0']) {
+    assert.equal(f.run('git', ['config', 'core.fsmonitor', value]).status, 0);
+    assert.equal(f.hook('require-plan-gate.mjs', 'git status --short').continue, true, value);
+  }
+  assert.equal(f.run('git', ['config', '--unset', 'core.fsmonitor']).status, 0);
+  for (const key of ['diff.fixture.command', 'diff.fixture.textconv', 'filter.fixture.clean', 'filter.fixture.process']) {
+    assert.equal(f.run('git', ['config', key, './git-helper']).status, 0);
+    assert.equal(f.hook('require-plan-gate.mjs', 'git diff').permissionDecision, 'deny', key);
+    assert.equal(f.run('git', ['config', '--unset', key]).status, 0);
+  }
+  assert.equal(f.run('git', ['config', 'core.pager', './git-helper']).status, 0);
+  assert.equal(f.hook('require-plan-gate.mjs', 'git log -1').permissionDecision, 'deny');
+  assert.equal(f.run('git', ['config', 'pager.log', 'false']).status, 0);
+  assert.equal(f.hook('require-plan-gate.mjs', 'git log -1').continue, true);
+  assert.equal(f.hook('require-plan-gate.mjs', 'git diff').permissionDecision, 'deny');
+  assert.equal(fs.existsSync(path.join(f.workspace, 'src/hidden.txt')), false);
+});
+
+test('Git queries with unresolved metadata or explicit global execution contexts remain opaque', (t) => {
+  const f = fixture(t);
+  for (const command of ['git -C . status', 'git --git-dir=.git status', 'git --work-tree=. diff', 'git --no-pager log', 'git --paginate log', 'git -p log', 'git -P log', 'git grep --open-files-in-pager=./git-helper needle', 'git grep -O./git-helper needle']) {
+    assert.equal(f.hook('require-plan-gate.mjs', command).permissionDecision, 'deny', command);
+  }
+  fs.appendFileSync(path.join(f.workspace, '.git/config'), '\ninvalid configuration\n');
+  assert.equal(f.hook('require-plan-gate.mjs', 'git status --short').permissionDecision, 'deny');
+});
 
 test('opaque terminal generators fail before execution without a current gate on both native aliases', (t) => {
   const f = fixture(t);

@@ -874,3 +874,29 @@ test('harness package prose does not name the prompt-library repository', () => 
   assert.deepEqual(repoHits.sort(), [], 'package prose names the prompt-library repository');
   assert.deepEqual(docHits.sort(), [], 'installed corpus points at a deleted doc');
 });
+
+test('repository startup context preserves Engineer review authority and exact-claim synthesis', () => {
+  const context = read('.github/agent-context.md');
+  const branch = context.split('### Code Review Branch Diffs\n')[1].split('\n### ', 1)[0];
+  assert.match(branch, /Engineer.*harness review prepare/);
+  assert.match(branch, /harness review assemble/);
+  assert.doesNotMatch(branch, /ask the user to run|coordinator uses `terminalLastCommand`/i);
+  const synthesis = context.split('### Confidence-Gated Code Review\n')[1].split('\n### ', 1)[0];
+  assert.match(synthesis, /description.*suggested_fix/);
+  assert.match(synthesis, /independence.*unverified|unverified.*independence/);
+  assert.match(synthesis, /Engineer.*adjudicat/i);
+  const document = context.split('### Document Review as Quality Gate\n')[1].split('\n### ', 1)[0];
+  assert.match(document, /authoriz/i);
+  assert.match(document, /revision-bound|harness plan-update/);
+  assert.doesNotMatch(document, /P2\/P3 auto-applied/);
+});
+
+test('host hook reference requires proof after recorded potential terminal mutations', () => {
+  const contract = read('packages/harness/corpus/skills/references/harness-tool-contract.md');
+  const boundary = contract.split('## Host hook boundary')[1];
+  assert.ok(boundary, 'host hook boundary must be documented');
+  assert.match(boundary, /opaque|unknown/);
+  assert.match(boundary, /failed[^\n]*terminal|terminal[^\n]*fail/i);
+  assert.match(boundary, /latest recorded potential mutation/);
+  assert.doesNotMatch(boundary, /only for a successful mutation|latest successful mutation/);
+});
