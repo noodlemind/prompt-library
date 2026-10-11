@@ -10,30 +10,30 @@ Read-only tools are allowed before the gate for classification, recall, investig
 
 ## When the gate applies
 
-- Bug fix, feature, refactor, or enhancement (not review-only / Q&A)
+- Any requested product file mutation, including documentation maintenance (not read-only review / Q&A)
 - Multi-file or multi-step work
-- No matching `.harness/plans/*.md` or `docs/plans/*.md` yet
+- No matching plan in the current project store or readable legacy plan locations yet
 - Plan `status: open` without `plan_lock: true`
 
 ## Exemptions
 
 | Exemption | Route |
 |-----------|--------|
-| Existing plan with `plan_lock: true` | Resume implement |
+| Existing locked plan | Resume only after its current implement gate passes |
 | Review-only | `/code-review` |
 | Pure Q&A | `@engineer` Answer mode |
-| Isolated bug | `@engineer` Deliver mode (direct TDD fix) |
-| User waived capture **this turn** (quoted) | Log waiver |
+| Small isolated fix or README maintenance | Proportional Deliver plan and gate, then focused checks |
+| Trusted scoped policy exemption or waiver | CLI validates its declared authority; an agent-authored Activity note grants none |
 
 ## Gate checklist (C1–C4)
 
 | ID | Check |
 |----|-------|
-| **C1** | Plan file exists under `.harness/plans/` or `docs/plans/` |
+| **C1** | Plan resolves in `~/.harness/projects/<repo-id>/plans/` or an existing readable legacy location |
 | **C2** | Plan created via **`/ensure-plan`** or **`/capture-issue`** (same schema — not ad-hoc engineer freeform) |
 | **C3** | `plan_lock: true` before implement (from **`/ensure-plan`** / **`/plan-issue`**) |
 | **C4** | Route in `## Activity` |
-| **C-intent-sources** | In-repo specs, ADRs, and intent files are listed on plan `intent_sources`. The check compares paths. `sha256` is the lock-time record and is not compared. |
+| **C-intent-sources** | Selected specs, ADRs, and intent files are listed on plan `intent_sources`. Under content-v1, changed, missing, or unreadable selected bytes require an explicit accepted source amendment; relock never silently rehashes. Legacy plans retain paths-only guarantees until explicit migration. |
 | **C-worktree** | Issue work is in a linked git worktree, not the default branch of the primary checkout |
 
 **Fail → invoke `/ensure-plan`** (preferred) or `/capture-issue`. **STOP** product edits.
@@ -54,7 +54,7 @@ Engineer **must not** ask the user to run `/capture-issue` or `/plan-issue` manu
 
 ## Forbidden
 
-- Ad-hoc `.harness/plans/*.md` or `docs/plans/*.md` with `plan_lock: true` without plan steps
+- Ad-hoc managed or legacy plan files with `plan_lock: true` without plan decisions
 - Ad-hoc quick planning as substitute for capture on new work — use `/ensure-plan` or `/capture-issue` → `/plan-issue`
 - Implement before C3 (unless exemption)
 

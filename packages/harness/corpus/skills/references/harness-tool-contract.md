@@ -66,7 +66,7 @@ This table tracks only what differs in runtime character across commands — whi
 | `gate` | agent-runtime | writes | mutates session state |
 | `verify` | agent-runtime | writes | mutates (evidence file + session) |
 | `validate-plan` | agent-runtime | writes¹ | read-only |
-| `plan-new` | agent-runtime | none | mutates workspace (writes the plan; `--stdout` prints instead) |
+| `plan-new` | agent-runtime | none | writes a plan in the current project's Harness store (`--stdout` prints instead) |
 | `plan-update` | agent-runtime | none | mutates the plan file |
 | `worktree` | agent-runtime | none | mutates git worktrees under `.worktrees/<slug>` |
 | `index` | agent-runtime | writes¹ | mutates the knowledge index (`--status` read-only); `--structural` mutates `~/.harness/index/<repo-id>/<worktree-id>/structural/` |
@@ -189,6 +189,8 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 
 Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
 
+Use focused TDD checks during implementation. The Engineer prepares a review packet, dispatches its required judgment, and assembles raw results before running authoritative `harness verify`. Read-only coordinators cannot start CLI commands using `terminalLastCommand`; incomplete coverage remains a verification prerequisite. Under content-v1, selected intent bytes are also bound and changed bytes require an explicit source amendment. Legacy plans retain their declared paths-only guarantee until deliberately migrated.
+
 **Per-check severity (policy v2).** `.github/harness/policy.yaml` may declare `version: 2` with an optional `checks:` map assigning each verify check a severity — the check-level knob is orthogonal to the run-level `enforcement` mode:
 
 | Severity | Effect of a failed check |
@@ -218,6 +220,9 @@ Every check in the `verify` payload carries its effective `severity`; non-passin
 ```
 
 **compound**
+
+For delivery completion, submit a publish or explicit no-learning decision with `harness compound --plan <path> --learning-decision <file> --json`; see [learning-operations.md](learning-operations.md). A bare legacy compound call does not record the required decision. Then submit a revision-bound complete decision with `harness plan-update --plan <path> --file <complete-decision.json> --json`; see [plan-operations.md](plan-operations.md). The legacy result shape below remains readable; use the returned decision/publication record for the current operation.
+
 ```json
 {
   "pass": true,
@@ -371,11 +376,11 @@ After orient: `read` ≤3 solution paths, ≤30 lines each per [`context-budget.
 
 | Skill | Harness command(s) |
 |-------|-------------------|
-| `@engineer` Deliver mode | proportional `orient` → read pack → explicit `gate` → work → `/code-review` (fix findings) → explicit `verify [--learnings <ids>]` (cite the orient-surfaced learning ids that materially shaped the change) → `compound` or `/auto-compound` |
+| `@engineer` Deliver mode | proportional `orient` → read pack → start/gate → focused TDD → required review prepare/assemble → `verify [--learnings <ids>]` → `compound --learning-decision` → complete plan-update decision |
 | `@engineer` Answer/Investigate modes | minimal reads → evidence-backed report; no delivery gate, verification, or compound |
 | `/recall` | `orient` or `recall` (`-c`, `--min-score`) |
 | `/index-memory` | `index` (manifest + BM25 postings) |
-| `/auto-compound` | classify learning, write selected destination, then explicit `compound` |
+| `/auto-compound` | classify durable learning or no-learning, then publish through `compound --learning-decision`; Engineer records completion |
 | `/code-review` plan-compliance audit | `validate-plan`, `gate` |
 
 ## CI examples

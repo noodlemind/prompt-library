@@ -12,8 +12,8 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 
 ## Plans and knowledge
 
-- Product **`.harness/plans/`** (gitignored) or committed **`docs/plans/`** when that directory already exists — per-issue context pack (`status`, `plan_lock`, `phase`, `## Memory Cards`).
-- Repo-private episodes **`~/.harness/projects/<repo-id>/docs/solutions/`** (or committed `docs/solutions/` if present).
+- Product **`~/.harness/projects/<repo-id>/plans/`** — new per-issue context packs (`status`, `plan_lock`, `phase`, `## Memory Cards`); existing **`.harness/plans/`** and **`docs/plans/`** remain readable legacy locations. Use CLI-returned plan paths and decision files for managed updates.
+- New repo-private episodes **`~/.harness/projects/<repo-id>/docs/solutions/`**; committed `docs/solutions/` remains readable.
 - Team **`packages/harness/corpus/knowledge/solutions/`** — cross-repo learnings (hydrated to `~/.copilot/knowledge/`).
 - Lookup order: `<copilot-home>/skills/references/knowledge-locations.md` (the home defaults to `~/.copilot`).
 
@@ -29,7 +29,7 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 
 ## Orchestration
 
-The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via `tools: ['agent']`. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` delegate to their coordinators (`plan-coordinator`, `code-review-coordinator`) when the `agent` tool is available. Coordinators use `agents:` allowlists to restrict which specialists they can invoke. Coordinators dispatch subagents in parallel batches (3-4 at a time) rather than sequentially.
+The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via the `agent` tool. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` may delegate bounded judgment to their coordinators (`plan-coordinator`, `code-review-coordinator`) when the `agent` tool is available. The Engineer applies planning decisions and owns CLI review preparation and assembly; the review coordinator returns packet-bound raw results. Coordinators use `agents:` allowlists and dispatch in parallel batches of 3-4. Missing required judgment remains incomplete coverage.
 
 Engineer harness: `@engineer` agent file owns the only normative delivery lifecycle; read-only modes stay outside it. Runtime details: `harness-tool-contract.md`. Delegation: `subagent-context-packet.md`. Risky work: `human-approval-policy.md`.
 

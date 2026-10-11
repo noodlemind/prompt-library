@@ -52,7 +52,7 @@ function event(fields) {
 
 function deny(message) {
   const planFlag = session?.activePlan ? ` --plan ${session.activePlan}` : '';
-  const recipe = `; next: run \`harness verify${planFlag} --workspace . --json\` after the edit is complete, record a publish or no-learning decision, and complete the plan with \`harness plan-update${planFlag} --status done\` before stopping`;
+  const recipe = `; next: run \`harness verify${planFlag} --workspace . --json\` after the edit is complete, record a publish or no-learning decision with \`harness compound${planFlag} --learning-decision <file>\`, and complete the plan with \`harness plan-update${planFlag} --file <complete-decision.json>\` before stopping`;
   const base = input.stop_hook_active
     ? `${message}; verification is still pending after the prior Stop block`
     : message;

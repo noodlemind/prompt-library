@@ -59,7 +59,7 @@ export function validateCompletion({ workspace, plan, copilotHome }) {
   const checked = completionPrerequisites({ workspace, plan, copilotHome });
   if (!checked.pass) return checked;
   const record = readReviewRecord(workspace, completionRel(plan));
-  if (!record || record.version !== 2 || record.id !== checked.id || recordHash(record.value) !== record.id) return { pass: false, message: 'No current bound completion record; record a learning decision and run harness plan-update --status done after review and verify' };
-  if (plan.status !== 'done') return { pass: false, message: 'Completion transaction is pending; retry harness plan-update --status done' };
+  if (!record || record.version !== 2 || record.id !== checked.id || recordHash(record.value) !== record.id) return { pass: false, message: 'No current bound completion record; record a learning decision and submit harness plan-update --file <complete-decision.json> after review and verify' };
+  if (plan.status !== 'done') return { pass: false, message: 'Completion transaction is pending; retry the same harness plan-update --file <complete-decision.json>' };
   return { pass: true, record: record.id, message: 'Current bound completion record validated' };
 }

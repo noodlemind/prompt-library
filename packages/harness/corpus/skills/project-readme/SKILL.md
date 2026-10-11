@@ -8,7 +8,7 @@ argument-hint: "[optional project focus, README path, or update request]"
 
 ## Pipeline Role
 
-Documentation generator and maintainer. Use this skill to create or refresh a project-level `README.md` without starting implementation work.
+Documentation generator and maintainer. Use this skill to create or refresh a project-level `README.md`. The Engineer enters Deliver before the first edit and keeps the documentation plan proportional to the change. Read-only README questions stay in Answer or Investigate.
 
 ## When to Use
 
@@ -91,6 +91,10 @@ Section expectations:
 
 ### 4. Edit README
 
+Reuse the current plan when its scope already includes the README. Otherwise use `/ensure-plan` with a concise full creation decision (`type: docs`), one phase, the README path, evidence-based acceptance criteria, and an inspected trusted documentation check. Full docs plans may have no required code review; retain any reviews required by the accepted plan or policy. A short plan retains its code-review requirement. Do not widen scope to code, configuration, or unrelated workflows.
+
+Submit a start decision and require its successful implement gate before editing. A missing adequate named check remains a verification gap; do not invent a check or claim completion.
+
 Preserve useful existing content. Remove stale or contradictory sections only when replacement content is evidence-backed.
 
 ### 5. Verification
@@ -101,9 +105,11 @@ Before finishing:
 - Confirm project workflows and conventions match the repo artifacts
 - Confirm incoming and outgoing integration points are called out when evidence exists
 
+Record accepted progress through Harness. Collect any required review, require passed `harness verify`, record durable learning or explicit no-learning through `harness compound --learning-decision <file>`, then submit a complete decision. A README edit uses the same evidence and completion authority as other file changes.
+
 ## Non-Interactive Mode
 
-When invoked by another skill, update `README.md` using available evidence, add an `Open Questions` section for unknowns, and return changed sections.
+When invoked by another skill, use its accepted Deliver plan and gate, update `README.md` using available evidence, add an `Open Questions` section for unknowns, and return changed sections and focused check results to the Engineer. The Engineer owns authoritative verification and completion.
 
 ## Error Handling
 
@@ -114,7 +120,7 @@ When invoked by another skill, update `README.md` using available evidence, add 
 
 ## Guardrails
 
-- Do not create a plan file. This is documentation work, not implementation planning.
+- Keep documentation planning concise and reuse the existing work identity when its scope fits.
 - Do not change code, configs, or workflows while updating README.
 - Do not expose secrets or private credentials.
 - Keep README practical for developers who need to build, run, understand, and safely change the project.
