@@ -14,6 +14,7 @@ import {
 } from '../lib/verify.mjs';
 import { createRedactor } from '../lib/redact.mjs';
 import { approveProject } from '../lib/trust.mjs';
+import { writeEvidence } from '../lib/evidence.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -178,7 +179,12 @@ test('writeEvidence redacts a secret-shaped check stdout before persisting to .h
   const result = await runVerify({ workspace, flags: { plan, base: 'HEAD', dryRun: false, enforcement: 'enforce', workspace } });
   assert.equal(result.outcome, 'passed');
   const check = result.checks.find((c) => c.id === 'leaky-check');
-    assert.match(check.stdout, /token=abcdef1234567890/, 'precondition: the raw secret really was captured in memory');
+  assert.match(check.stdout, /token=«redacted:kv-secret»/, 'retained check output is sanitized before result consumers see it');
+
+  // Exercise the persistence boundary independently of the check's earlier
+  // redaction: legacy or manually assembled results can still contain raw text.
+  const rawResult = { ...result, checks: result.checks.map(row => row.id === 'leaky-check' ? { ...row, stdout: 'token=abcdef1234567890\n' } : row) };
+  writeEvidence(workspace, rawResult);
 
   assert.ok(result.evidencePath, 'runVerify must have written evidence for a passed, non-cancelled run');
   const evidenceFull = path.join(workspace, result.evidencePath);
@@ -189,6 +195,9 @@ test('writeEvidence redacts a secret-shaped check stdout before persisting to .h
 
   const persistedCheck = JSON.parse(onDisk).checks.find((c) => c.id === 'leaky-check');
   assert.match(persistedCheck.stdout, /^token=«redacted:kv-secret»/);
+  for (const entry of fs.readdirSync(path.join(workspace, '.harness', 'evidence', 'history'))) {
+    assert.doesNotMatch(fs.readFileSync(path.join(workspace, '.harness', 'evidence', 'history', entry), 'utf8'), /abcdef1234567890/);
+  }
 });
 
 // --- AC8: per-check timeout is distinct from a generic failure ------------

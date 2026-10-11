@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { test } from 'node:test';
 import { buildContextPack } from '../lib/context-pack.mjs';
 import { extractGoalFromPlan } from '../lib/plan-goal.mjs';
 import { shortPlanDocument } from '../lib/plan-record.mjs';
+import { makeScopes, runHarness, writeVersionedPlan, initGit } from './helpers/index.mjs';
 
 test('orient extracts constraints and acceptance from both full and short plans', () => {
   const goal = 'Every accepted product remains searchable';
@@ -52,4 +54,19 @@ test('an oversized mandatory contract produces an explicit read barrier', () => 
   assert.match(body, /Context blocked/);
   assert.match(body, /before editing/);
   assert.doesNotMatch(body, /pass: true/);
+});
+
+test('orient names the learning decision and completion steps for an implement-ready plan', t => {
+  const { workspace, copilotHome } = makeScopes();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  const plan = writeVersionedPlan(workspace);
+  initGit(workspace);
+  const result = runHarness(['orient', '--plan', plan, '--workspace', workspace, '--copilot-home', copilotHome, '--json'], { env: { CI: '1' } });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const value = JSON.parse(result.stdout);
+  assert.equal(value.gateStatus, 'pass', JSON.stringify(value));
+  assert.ok(value.nextTools.some(tool => /harness compound.*--plan .*--learning-decision/.test(tool)), JSON.stringify(value.nextTools));
+  assert.ok(value.nextTools.some(tool => /harness plan-update.*--plan .*--file <complete-decision\.json>/.test(tool)), JSON.stringify(value.nextTools));
+  assert.ok(!value.nextTools.includes('harness compound'));
 });

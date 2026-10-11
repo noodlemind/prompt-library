@@ -96,6 +96,28 @@ test('scaffolded corpus skill plan includes governance and the gate requires cre
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
+test('a full creation decision can record the skills actually loaded for primitive maintenance', () => {
+  const ws = workspace();
+  try {
+    const decision = {
+      version: 1, format: 'full', type: 'fix', slug: 'maintain-skill',
+      goal: 'Repair an existing workflow', acceptance: ['The contract is consistent'],
+      scope: ['packages/harness/corpus/skills/existing/SKILL.md'], check: 'unit-tests',
+      skillsUsed: ['engineer', 'create-primitive', 'architect'],
+    };
+    fs.writeFileSync(path.join(ws, 'decision.json'), JSON.stringify(decision));
+    const created = harness(ws, ['plan-new', '--file', 'decision.json', '--json']);
+    assert.equal(created.status, 0, created.stdout + created.stderr);
+    const content = fs.readFileSync(JSON.parse(created.stdout).path, 'utf8');
+    assert.deepEqual(YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]).skills_used, decision.skillsUsed);
+    decision.skillsUsed = ['create-primitive\nengineer'];
+    fs.writeFileSync(path.join(ws, 'decision.json'), JSON.stringify(decision));
+    const invalid = harness(ws, ['plan-new', '--file', 'decision.json', '--json']);
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stdout + invalid.stderr, /skillsUsed/);
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
 test('scaffolded capability-gap plan is blocked-capability and the gate denies it', () => {
   const ws = workspace();
   const rel = writePlan(ws, {

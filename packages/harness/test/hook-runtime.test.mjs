@@ -237,7 +237,15 @@ test('normalizes observed VS Code and compatible mutation payloads', () => {
   }
 });
 
-test('terminal hook blocks configured named checks outside plan verification.required', () => {
+test('terminal hook blocks configured named checks outside plan verification.required', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-check-trust-'));
+  const previous = process.env.HARNESS_HOME;
+  process.env.HARNESS_HOME = home;
+  t.after(() => {
+    if (previous === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
   const workspace = tempWorkspace();
   const plan = writePlan(workspace);
   fs.writeFileSync(
@@ -254,6 +262,10 @@ checks:
     'utf8'
   );
   writePassedGate(workspace, plan);
+  const approved = spawnSync(process.execPath, [binPath, 'trust', 'approve', '--workspace', workspace, '--json', '--no-events'], {
+    cwd: workspace, encoding: 'utf8', env: process.env,
+  });
+  assert.equal(approved.status, 0, approved.stderr);
 
   const denied = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'run_in_terminal',
