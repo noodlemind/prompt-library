@@ -83,12 +83,12 @@ Focused results before the final package run:
 
 The accidental invocation of installed Harness 0.8.8 returned exit 2/inconclusive and is excluded from proof. The source CLI in this worktree supplies authoritative verification. Separate native agent contexts were used; model identity and cross-provider independence were not established.
 
-Final source receipts before the ordered commits:
+Receipts for the candidate before the final review:
 
 - Terminal and baseline hook tests passed 68/68. Independent security review retested the final changed-byte cases, 5/5, and reported no remaining actionable finding.
 - The short incomplete-PEM regression failed on both streams; the full checks-command file then passed 33/33. Independent privacy/runner/streaming review passed 62/63, with one existing Windows-only skip.
 - The first full suite passed 2,493 tests and failed one legacy sed diagnostic assertion, with three skips. That fixture now asserts opaque denial separately from explicit-writer scope.
-- The final full package suite passed 2,494 of 2,497 tests, with zero failures and three platform skips.
+- That candidate full package suite passed 2,494 of 2,497 tests, with zero failures and three platform skips.
 - Whitespace checks passed. Remote main still matches the starting source.
 
 Harness review assembly, final source-CLI verification, learning decision and completion are bound after the final commit. Their records stay in the ignored `.harness/` store; committing them or editing this artifact afterward would invalidate the captured head/content. The PR reports that final outcome.
@@ -103,3 +103,19 @@ After fixes
 ℹ pass 8
 ℹ fail 0
 ```
+
+## Findings resolved during final review
+
+Review found stale repository startup review instructions and a successful-mutation-only hook reference. The two new contract regressions failed before repair and then passed; the integrated prompt and orientation suite passed 45/45. Exact-claim agreement still uses the existing declared confidence policy, with reviewer independence explicitly unverified.
+
+Actual disposable Git fixtures demonstrated external diff, filesystem monitor and text conversion helper execution during apparent queries. Terminal admission now inspects effective helper configuration with an uncached, bounded metadata read and treats executable or unresolved queries as opaque. Configured filters conservatively make affected query classes opaque even when current attributes do not select the filter. An exact cat pager and Boolean builtin monitor remain usable. This classification is not a general Git sandbox.
+
+The existing authoritative diff and scope readers also executed configured helpers. Three public-export regression tests failed before repair, then passed with builtin monitor overrides and raw diff flags. All helpers wrote only disposable fixture markers. The regression-only commit is `159114d`; the terminal and stale-prose regression commit is `e268682`. POSIX helper execution tests skip explicitly on Windows; Windows policy assertions remain separate.
+
+Final collected review and source-CLI verification bind the subsequent final head and current plan. Earlier full-suite receipts above cover their stated candidate only.
+
+The final comment/style pass removed six introduced narration lines and named the secret-pattern overlap bound without changing behavior. Exported API contracts and the demonstrated lone-surrogate platform explanation were retained. The subsequent privacy/runner/streaming run passed 80/81 with one existing Windows-only skip; the combined terminal, hook and first internal Git regression run passed 78/78. No constraint approval or broad refactor was required.
+
+Clean-filter controls then exposed execution despite monitor and diff flags. Two actual filter regressions failed before repair; the shared existing-owner Git args helper now disables each effective filter driver, preserving its case, through ephemeral options. The seven reader tests (five actual helper cases plus malformed/oversized metadata) passed, and the impacted gate/hooks/review/evidence suite passed 132/132. Metadata inspection remains bounded and uncached, with one read reused by each scope collection. The additional regression commit is `27ae603`.
+
+Fresh security review demonstrated a pre-existing hard link from a decision-input file to protected session bytes. The critical-file guard now rejects multiply linked decision leaves. The actual shared-byte regression failed before repair (commit `75a25ef`); both decision-authoring tests then passed. Plan-gate exemption and critical-file sensitivity remain separate existing responsibilities. These checks do not guarantee filesystem race isolation.
