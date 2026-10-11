@@ -49,6 +49,28 @@ function resolvedTarget(workspace, target) {
   }
 }
 
+function isDecisionInput(workspace, target) {
+  const full = path.resolve(workspace, target);
+  const relative = path.relative(workspace, full).replace(/\\/g, '/');
+  if (!/^\.harness\/decisions\/[a-zA-Z0-9][a-zA-Z0-9_-]*\.json$/.test(relative)) return false;
+  if (String(target).replace(/\\/g, '/').split('/').some(part => part === '..')) return false;
+  let cursor = full;
+  while (true) {
+    try {
+      const stat = fs.lstatSync(cursor);
+      if (stat.isSymbolicLink() || (cursor === full ? !stat.isFile() : !stat.isDirectory())) return false;
+    }
+    catch (error) { if (error.code !== 'ENOENT') return false; }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  const resolved = resolvedTarget(workspace, target);
+  if (!resolved || resolved !== full) return false;
+  const ancestors = path.dirname(path.dirname(path.dirname(full))).replace(/\\/g, '/');
+  return !BLOCKED.some(pattern => pattern.test(`${ancestors}/`));
+}
+
 let payload;
 try {
   const raw = fs.readFileSync(0, 'utf8');
@@ -65,6 +87,7 @@ if (!mutation.mutation) {
   process.exit(0);
 }
 for (const target of mutation.targets) {
+  if (isDecisionInput(mutation.workspace, target)) continue;
   const candidates = [target, resolvedTarget(mutation.workspace, target)]
     .filter(Boolean)
     .map((value) => value.replace(/\\/g, '/'));

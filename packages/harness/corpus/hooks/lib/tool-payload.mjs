@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { authorityBin } from './authority-bin.mjs';
 
 export const FILE_MUTATION_TOOLS = new Set([
   'Edit',
@@ -24,6 +25,7 @@ export const TERMINAL_TOOLS = new Set([
   'run_in_terminal',
   'runTerminalCommand',
   'execute',
+  'execute/runInTerminal',
   'Bash',
 ]);
 
@@ -283,7 +285,7 @@ function withoutHeredocBodies(commandText) {
       if (delimiter) {
         if (line.trim() === delimiter) {
           delimiter = null;
-          return line;
+          return '';
         }
         return '';
       }
@@ -315,8 +317,10 @@ export function analyzeShellMutation(command) {
   let mutation = false;
   const commandText = String(command || '');
   const shellControlText = withoutHeredocBodies(commandText);
+  const shellRedirections = new Set(terminalSegments(shellControlText).redirections);
   const redirection = /(?<![<>])(?:\d*>>?\|?|&>>?)\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|]+)/g;
   for (const match of shellControlText.matchAll(redirection)) {
+    if (!shellRedirections.has(match.index + match[0].indexOf('>'))) continue;
     const target = cleanShellToken(match[1]);
     if (target.startsWith('&') || /^\/dev\/(?:null|stdout|stderr)$/.test(target)) continue;
     mutation = true;
@@ -325,7 +329,8 @@ export function analyzeShellMutation(command) {
 
   const interpreterWrite = /(?:^|[;&|]\s*)(?:python\d*|node|ruby)\b[\s\S]*\b(?:write_text|write_bytes|writeFile(?:Sync)?|appendFile(?:Sync)?|rmSync|mkdirSync|renameSync|copyFileSync|File\.write|File\.open)\s*\(/m;
   const mutatingOpen = /\bopen\s*\(\s*(['"])([^'"]+)\1\s*,\s*(['"])[wa+][^'"]*\3/g;
-  if (interpreterWrite.test(commandText) || mutatingOpen.test(commandText)) {
+  const interpreterInvocation = unwrapShellSegments(shellControlText).some(tokens => /^(?:python\d*|node|ruby)$/.test(path.basename(tokens[0] || '')));
+  if (interpreterInvocation && (interpreterWrite.test(commandText) || mutatingOpen.test(commandText))) {
     mutation = true;
     for (const match of commandText.matchAll(/\b(?:pathlib\.)?Path\s*\(\s*(['"])([^'"]+)\1\s*\)/g)) {
       targets.push(match[2]);
@@ -458,6 +463,125 @@ export function analyzeShellMutation(command) {
   return { mutation, targets, mkdirTargets: [...mkdirOnly] };
 }
 
+const QUERY_COMMANDS = new Set(['cat', 'ls', 'pwd', 'rg', 'grep', 'head', 'tail', 'wc', 'echo', 'printf', 'which', 'where', 'type', 'true', 'false']);
+const POWERSHELL_QUERIES = new Set(['get-content', 'get-childitem', 'get-location', 'select-string', 'test-path', 'write-output']);
+const EXPLICIT_WRITERS = new Set(['touch', 'rm', 'rmdir', 'unlink', 'truncate', 'del', 'erase', 'rd', 'mkdir', 'md', 'dd', 'cp', 'install', 'mv', 'ln', 'tee', ...POWERSHELL_WRITERS]);
+const GIT_QUERIES = new Set(['status', 'diff', 'log', 'show', 'ls-files', 'ls-tree', 'rev-parse', 'rev-list', 'describe', 'blame', 'grep', 'check-ignore', 'version']);
+const HARNESS_CONTROL = new Set(['plan-new', 'plan-update', 'gate', 'verify', 'review', 'compound', 'status', 'orient', 'prepare', 'index', 'recall', 'help', '--help', '-h', '--version', '-V', 'validate-plan', 'doctor', 'route']);
+
+function terminalSegments(command) {
+  const segments = [];
+  let start = 0;
+  let quote = null;
+  let ambiguous = false;
+  let opaqueExpansion = false;
+  let redirection = false;
+  const redirections = [];
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (char === '\\' && quote !== "'") { if (!quote) ambiguous = true; index += 1; continue; }
+    if (char === quote) {
+      if (command[index + 1] && !/[\s;&|]/.test(command[index + 1])) ambiguous = true;
+      quote = null;
+      continue;
+    }
+    if (!quote && (char === '"' || char === "'")) {
+      if (index > 0 && !/[\s;&|]/.test(command[index - 1])) ambiguous = true;
+      quote = char;
+      continue;
+    }
+    if (quote === "'") continue;
+    if (char === '`' || char === '$') ambiguous = true;
+    if (quote) continue;
+    if (char === '<' || char === '>') { redirection = true; redirections.push(index); }
+    if (/[*?\[\]~]/.test(char)) opaqueExpansion = true;
+    if (/[(){}]/.test(char) || (char === '&' && command[index + 1] !== '&' && command[index - 1] !== '&')) ambiguous = true;
+    if (char === ';' || char === '|' || char === '\n' || (char === '&' && command[index + 1] === '&')) {
+      segments.push(command.slice(start, index));
+      if ((char === '|' || char === '&') && command[index + 1] === char) index += 1;
+      start = index + 1;
+    }
+  }
+  segments.push(command.slice(start));
+  return { segments: segments.filter(segment => segment.trim()), ambiguous: ambiguous || Boolean(quote), opaqueExpansion, redirection, redirections };
+}
+
+function expandingHeredoc(command) {
+  let delimiter = null;
+  let literal = false;
+  for (const line of command.split('\n')) {
+    if (delimiter) {
+      if (line.trim() === delimiter) delimiter = null;
+      else if (!literal && /[$`]/.test(line)) return true;
+      continue;
+    }
+    const opener = line.match(/<<-?\s*(?:(['"])([^'"]+)\1|([A-Za-z0-9_]+))\s*$/);
+    if (opener) { delimiter = opener[2] || opener[3]; literal = Boolean(opener[1]); }
+  }
+  return false;
+}
+
+function isSystemCommand(token, base) {
+  return token === base || token === `/usr/bin/${base}` || token === `/bin/${base}`;
+}
+
+export function harnessControlCommand(tokens, workspace) {
+  let args;
+  if (tokens[0] === 'harness') args = tokens.slice(1);
+  else if ((tokens[0] === 'node' || tokens[0] === process.execPath) && tokens[1]) {
+    const bin = authorityBin();
+    if (!bin) return null;
+    try {
+      if (fs.realpathSync(path.resolve(workspace, tokens[1])) !== fs.realpathSync(bin)) return null;
+    } catch { return null; }
+    args = tokens.slice(2);
+  } else return null;
+  if (!args.length) return 'help';
+  if (HARNESS_CONTROL.has(args[0])) return args[0];
+  if (args[0] === 'checks' && ['list', 'show', 'help'].includes(args[1])) return 'checks';
+  if (args[0] === 'trust' && (!args[1] || args[1] === 'status')) return 'trust';
+  return null;
+}
+
+/** Unknown executable effects are kept separate from known write targets. */
+export function analyzeTerminalEffects(command, workspace = process.cwd()) {
+  const text = String(command || '');
+  const shellControl = withoutHeredocBodies(text);
+  const control = shellControl.replace(/<<-?\s*(?:(['"])([^'"]+)\1|([A-Za-z0-9_]+))\s*$/gm, '');
+  const parsed = terminalSegments(control);
+  if (expandingHeredoc(text)) parsed.ambiguous = true;
+  const opaqueInvocations = [];
+  const invocations = [];
+  let ambiguous = parsed.ambiguous || parsed.opaqueExpansion || terminalSegments(shellControl).redirection;
+  for (const segment of parsed.segments) {
+    const tokens = tokenizeShell(segment);
+    if (!tokens.length) continue;
+    invocations.push(tokens);
+    const base = path.basename(tokens[0]).toLowerCase();
+    const args = tokens.slice(1);
+    const wrapped = ASSIGNMENT.test(tokens[0]) || ['env', 'command', 'nohup', ...PREFIX_UTILS, ...POSIX_SHELLS, ...POWERSHELLS].includes(base);
+    const knownWrite = analyzeShellMutation(segment).mutation;
+    const git = base === 'git' ? parseGitInvocation(args) : null;
+    const query = POWERSHELL_QUERIES.has(base) && tokens[0].toLowerCase() === base
+      || isSystemCommand(tokens[0], base) && (QUERY_COMMANDS.has(base) && !(base === 'rg' && args.some(arg => /^--(?:pre|hostname-bin)(?:=|$)/.test(arg)))
+      || (base === 'find' && !args.some(arg => /^-(?:exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)$/.test(arg)))
+      || (git && GIT_QUERIES.has(git.subcommand) && !args.some(arg => /^-[cC]/.test(arg) || /^--(?:output|exec-path|config-env|ext-diff|textconv)(?:=|$)/.test(arg)))
+      || (['node', 'python', 'python3', 'npm'].includes(base) && args.length === 1 && ['--version', '-v', '--help'].includes(args[0])));
+    if (!parsed.ambiguous && !wrapped && (query || harnessControlCommand(tokens, workspace))) continue;
+    const inner = wrapped ? unwrapShellSegments(segment) : [tokens];
+    const explicit = inner.length > 0 && inner.every(argv => {
+      const executable = path.basename(argv[0] || '').toLowerCase();
+      const invocation = argv.join(' ');
+      return isSystemCommand(argv[0], executable) && (EXPLICIT_WRITERS.has(executable) && analyzeShellMutation(invocation).mutation
+        || executable === 'git' && ['apply', 'checkout', 'restore', 'rm', 'mv', 'clean', 'reset', 'stash', 'switch', 'merge', 'rebase', 'cherry-pick', 'revert', 'am', 'pull'].includes(parseGitInvocation(argv.slice(1)).subcommand));
+    });
+    if (!parsed.ambiguous && knownWrite && explicit) continue;
+    if (wrapped) ambiguous = true;
+    opaqueInvocations.push(tokens);
+  }
+  return { opaqueInvocations, invocations, ambiguous, hasOpaque: opaqueInvocations.length > 0 };
+}
+
 function addPath(targets, value) {
   if (typeof value === 'string' && value.trim()) targets.push(value.trim());
 }
@@ -564,30 +688,34 @@ export function normalizeToolPayload(payload = {}) {
   }
 
   const command = input.command || payload.command || '';
+  const workspace = resolveHookWorkspace(payload, targets);
   const shell = TERMINAL_TOOLS.has(toolName) || command
     ? analyzeShellMutation(command)
     : { mutation: false, targets: [], mkdirTargets: [] };
   targets.push(...shell.targets);
+  const terminalEffects = command ? analyzeTerminalEffects(command, workspace) : { opaqueInvocations: [], invocations: [], ambiguous: false, hasOpaque: false };
   const uniqueTargets = [...new Set(targets)];
   // Fail closed on unrecognized tools: any payload naming a concrete file
   // target is a mutation unless the tool is a known read-only or terminal tool
   // (terminal mutations are decided by shell analysis above).
   const mutation = FILE_MUTATION_TOOLS.has(toolName)
     || shell.mutation
+    || terminalEffects.hasOpaque
     || (uniqueTargets.length > 0 && !READ_ONLY_TOOLS.has(toolName) && !TERMINAL_TOOLS.has(toolName));
-  const workspace = resolveHookWorkspace(payload, uniqueTargets);
+  const resolvedWorkspace = resolveHookWorkspace(payload, uniqueTargets);
 
   return {
     toolName,
     toolInput: input,
     command,
     mutation,
+    terminalEffects,
     targets: uniqueTargets,
     mkdirTargets: [...new Set(shell.mkdirTargets)],
-    targetResolved: !mutation || uniqueTargets.length > 0,
+    targetResolved: !terminalEffects.hasOpaque && (!mutation || uniqueTargets.length > 0),
     sessionId: payload.session_id || payload.sessionId || null,
     hookEvent: payload.hook_event_name || payload.hookEventName || null,
-    workspace,
+    workspace: resolvedWorkspace,
   };
 }
 

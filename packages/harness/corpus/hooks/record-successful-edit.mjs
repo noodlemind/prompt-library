@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** PostToolUse recorder: only successful governed mutations create pending verification state. */
+/** PostToolUse recorder: explicit edits and unknown terminal effects need fresh verification. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { writeHookEvent } from './lib/events.mjs';
@@ -68,8 +68,10 @@ const governed = relatives.filter(
     !relative.startsWith('.harness/')
 );
 let session = readSessionState(normalized.workspace);
+const opaque = normalized.terminalEffects.hasOpaque;
+const unknownEffect = opaque || Boolean(normalized.command) && !success;
 
-if (success && governed.length > 0) {
+if (unknownEffect || (success && governed.length > 0)) {
   if (!session) {
     const editAt = new Date().toISOString();
     session = {
@@ -80,7 +82,8 @@ if (success && governed.length > 0) {
       lastEditAt: editAt,
       lastEditPlan: null,
       lastEditTool: normalized.toolName,
-      lastEditTargets: governed,
+      lastEditTargets: unknownEffect ? [] : governed,
+      lastEditEffect: unknownEffect ? 'unknown' : 'explicit',
       lastEditSession: normalized.sessionId,
     };
     writeSessionState(normalized.workspace, session);
@@ -88,25 +91,27 @@ if (success && governed.length > 0) {
       type: 'post_tool',
       tool: normalized.toolName,
       mutation: true,
-      targets: relatives,
+      targets: unknownEffect ? [] : relatives,
+      effect: unknownEffect ? 'unknown' : 'explicit',
       targetResolved: normalized.targetResolved,
       gate: 'missing',
       decision: 'record-ungated',
-      success: true,
+      success,
       result: 'warn',
-      blockedReason: 'successful mutation could not be bound to a Harness session',
+      blockedReason: unknownEffect ? 'unknown terminal effects could not be bound to a Harness session' : 'successful mutation could not be bound to a Harness session',
       durationMs: Date.now() - startedAt,
     });
     output({
       continue: true,
-      systemMessage: 'Successful mutation was recorded without an implement gate; establish a plan, rerun the gate, and verify before completion.',
+      systemMessage: `${unknownEffect ? 'Unknown terminal effects were' : 'Successful mutation was'} recorded without an implement gate; establish a plan, rerun the gate, and verify before completion.`,
     });
     process.exit(0);
   }
   session.lastEditAt = new Date().toISOString();
   session.lastEditPlan = session.activePlan || null;
   session.lastEditTool = normalized.toolName;
-  session.lastEditTargets = governed;
+  session.lastEditTargets = unknownEffect ? [] : governed;
+  session.lastEditEffect = unknownEffect ? 'unknown' : 'explicit';
   session.lastEditSession = normalized.sessionId || session.sessionId || null;
   writeSessionState(normalized.workspace, session);
 }
@@ -115,10 +120,11 @@ writeHookEvent(normalized.workspace, payload, {
   type: 'post_tool',
   tool: normalized.toolName,
   mutation: true,
-  targets: relatives,
+  targets: unknownEffect ? [] : relatives,
+  effect: unknownEffect ? 'unknown' : 'explicit',
   targetResolved: normalized.targetResolved,
   gate: session?.gateStatus || 'missing',
-  decision: success ? (governed.length ? 'record' : 'exempt') : 'ignore-failure',
+  decision: unknownEffect ? 'record-unknown-effects' : success ? (governed.length ? 'record' : 'exempt') : 'ignore-failure',
   success,
   plan: session?.activePlan || null,
   durationMs: Date.now() - startedAt,

@@ -35,3 +35,15 @@ export function loadHookPolicy(workspace, { ttlKey = 'gate_ttl_minutes', ttlDefa
 export function enforcementExitCode(enforcement) {
   return enforcement === 'enforce' ? 2 : 0;
 }
+
+export function projectTrustIsCurrent(workspace) {
+  const bin = authorityBin();
+  const result = spawnSync(bin ? process.execPath : 'harness', [...(bin ? [bin] : []), 'trust', 'status', '--json', '--no-events', '--workspace', workspace], {
+    cwd: workspace, encoding: 'utf8', timeout: 2500, maxBuffer: 128 * 1024,
+  });
+  if (result.error || result.status !== 0) return false;
+  try {
+    const status = JSON.parse(result.stdout);
+    return status.trusted === true && status.state === 'trusted' && status.project === fs.realpathSync(workspace);
+  } catch { return false; }
+}
