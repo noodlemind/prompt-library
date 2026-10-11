@@ -337,7 +337,7 @@ test('P5AC9: a refusal from the governed surface stops the loop rather than bein
 
 test('P5AC9: every stop reason maps to a distinct, named outcome', () => {
   assert.deepEqual(Object.keys(STOP_REASONS).sort(), [
-    'cancelled', 'done', 'provider-error', 'time-budget', 'tool-error', 'turn-budget',
+    'cancelled', 'delivery-incomplete', 'done', 'provider-error', 'time-budget', 'tool-error', 'turn-budget',
     'verifier-failed', 'verifier-missing', 'verifier-pass',
   ]);
   assert.equal(STOP_REASONS.done.status, 'ok');

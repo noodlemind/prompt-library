@@ -61,7 +61,9 @@ export function buildContextPack({
   neighborhood = null,
   intentSources = null,
   worktree = null,
+  trust = null,
 }) {
+  const deliveryContract = Boolean(trust || planGoal?.constraints?.length);
     const lines = [
     '# Harness Context Pack',
     '',
@@ -91,14 +93,16 @@ export function buildContextPack({
   }
 
   if (planGoal) {
-    lines.push('', '## Goal (Intent Contract)', `- Plan: \`${planGoal.planPath}\``);
-    if (planGoal.intent) lines.push(`- intent: ${planGoal.intent}`);
+    lines.push('', '## Goal (Intent Contract)');
+    if (planGoal.planPath !== activePlan?.path) lines.push(`- Plan: \`${inertLine(planGoal.planPath)}\``);
+    if (planGoal.intent) lines.push(`- intent: ${inertLine(redactSecrets(planGoal.intent))}`);
     if (planGoal.success_criteria?.length) {
-      lines.push('- success_criteria: ' + planGoal.success_criteria.slice(0, 3).join('; '));
+      lines.push('- success_criteria: ' + planGoal.success_criteria.map(value => inertLine(redactSecrets(value))).join('; '));
     }
     if (planGoal.expected_outputs?.length) {
       lines.push('- expected_outputs: ' + planGoal.expected_outputs.slice(0, 3).join('; '));
     }
+    if (planGoal.constraints?.length) lines.push('- constraints: ' + planGoal.constraints.map(value => inertLine(redactSecrets(value))).join('; '));
     if (planGoal.intentContractExcerpt) {
       lines.push('', '### Intent Contract (excerpt)', planGoal.intentContractExcerpt);
     }
@@ -114,7 +118,10 @@ export function buildContextPack({
     lines.push('', '## Worktree', '- Isolate with `harness worktree --slug <slug>` before editing. Do not edit this branch in place.');
   }
 
+  if (trust) lines.push('', '## Trust', `- ${trust.state}: ${inertLine(trust.reason)}`, ...(trust.trusted ? [] : ['- A person must review and approve policy; the agent cannot approve it.']));
+
   lines.push('', '## Gate (preview)');
+  if (deliveryContract) lines.push('- implement preview only; completion requires review, verify and a learning decision.');
   if (gatePreview) {
     lines.push(`- pass: ${gatePreview.pass}`);
     if (reviewCoverage) lines.push(`- coverage: ${reviewCoverage.pass ? 'current' : 'incomplete'}; required=${reviewCoverage.requiredCount}; missing=${reviewCoverage.missingCount}`);
@@ -136,7 +143,13 @@ export function buildContextPack({
   }
 
   if (neighborhood) {
-    lines.push('', '## Change neighborhood', ...boundedNeighborhoodLines(lines, neighborhood, learnings));
+    const known = new Set((neighborhood.files || []).map(file => file.rel));
+    const priority = [...(neighborhood.requested || []), ...known].filter(file => known.has(file));
+    const unique = [...new Set(priority)];
+    const visible = unique.slice(0, 4).map(inertLine);
+    if (unique.length > 4) visible.push(`Omitted ${unique.length - 4}`);
+    if (neighborhood.missing?.length) visible.push(`Missing: ${neighborhood.missing.map(inertLine).join(', ')}`);
+    lines.push('', '## Change neighborhood', ...(deliveryContract ? visible : boundedNeighborhoodLines(lines, neighborhood, learnings)));
   }
 
     lines.push(...buildLearningsLines(learnings));
@@ -173,9 +186,11 @@ export function buildContextPack({
   let body = lines.join('\n');
   if (pinnedIntent) {
     body = placeBeforeHeading(body, '## Gate (preview)', pinnedIntent);
+    if (deliveryContract) return fitDeliveryPack(body, activePlan?.path);
     body = fitPinnedIntent(body);
     return body;
   }
+  if (deliveryContract) return fitDeliveryPack(body, activePlan?.path);
   const gateAt = body.indexOf('\n## Gate (preview)');
   const routingAt = body.indexOf('\n## Routing');
   if (Array.isArray(routingLines) && gateAt !== -1 && Buffer.byteLength(body, 'utf8') > MAX_BYTES) {
@@ -203,6 +218,40 @@ export function buildContextPack({
     body = buf.subarray(0, end).toString('utf8') + '\n\n…(truncated to 2KB budget)\n';
   }
   return body;
+}
+
+/** Shed repeated paths and optional prose before task constraints or evidence. */
+function fitDeliveryPack(body, planPath) {
+  if (planPath) {
+    // Gate/verify select the active session plan when --plan is absent.
+    const escaped = planPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    body = body.replace(new RegExp(`(harness (?:gate|verify)[^\\n\u0060]*?) --plan ${escaped}`, 'g'), '$1');
+  }
+  if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
+  body = body.replace('# Harness Context Pack\n', `# Harness Context Pack\n\n${TRUNCATION_MARKER}\n`);
+  for (const heading of ['### Memory Cards (excerpt)', '## Plan view (current phase)', '### Intent Contract (excerpt)', '## Recall (top matches)', '## Plans', '## Repo map (code orientation)']) {
+    if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
+    body = removeSection(body, heading);
+  }
+  if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
+  body = body.replace(/\n---\n_Turn context[^\n]*\n?/, '\n');
+  // Keep the first learning and first two neighborhood files whenever possible.
+  const learningRows = body.match(/^- \[[^\n]+/gm) || [];
+  for (const row of learningRows.slice(1).reverse()) {
+    if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
+    body = body.replace(`\n${row}`, '');
+    const shown = (body.match(/^- \[([^\]]+)\]/gm) || []).map(line => /^- \[([^\]]+)\]/.exec(line)[1]);
+    body = body.replace(/^Retrieved learnings:.*$/m, `Retrieved learnings: ${shown.join(', ')}`);
+  }
+  if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
+  for (const heading of ['## Routing', '## Change neighborhood', '## Learnings (memory)', '## Next tools', '## Worktree']) {
+    if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
+    body = removeSection(body, heading);
+  }
+  if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
+  // An oversized contract is an explicit read barrier, never a partial goal
+  // presented as sufficient editing context.
+  return '# Harness Context Pack\n\n## Context blocked\nThe goal, constraints or intent sources exceed this pack budget. Read the full plan and `harness orient --read` before editing.\n\n## Next tools\n- `harness orient --read`\n';
 }
 
 function placeBeforeHeading(body, heading, block) {

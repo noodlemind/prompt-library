@@ -3,10 +3,14 @@ import { readStoreConfig } from './knowledge/store.mjs';
 import { runGate } from './gate.mjs';
 import { indexStatus } from './index-status.mjs';
 import { buildNeighborhood } from './repo-map/index.mjs';
-import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
+import { pickActivePlan, listPlanRels, loadPlan } from './plan-parse.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { findMatchingPlans } from './recall-rank.mjs';
 import { discoverInventory, routingCards, primitiveReadRoots } from './route.mjs';
+import { extractGoalFromPlan } from './plan-goal.mjs';
+import { parseImpactedFiles } from './plan-scope.mjs';
+import { trustStatus } from './trust.mjs';
+import { reviewCoverageFacts } from './report-facts.mjs';
 
 const INDEX_MISSING = { knowledge: 'missing', structural: 'missing' };
 
@@ -20,13 +24,14 @@ function indexPlane(plane) {
 export function readOrientSlice({ workspace, copilotHome, flags = {}, query = '', files } = {}) {
   const q = query || flags.query || '';
   const home = flags.harnessHome || flags.home;
-  const namedFiles = Array.isArray(files) ? files : flags.files;
+  let namedFiles = Array.isArray(files) ? files : flags.files;
   if (String(q).trim() && !flags.dryRun) {
     const prior = readSession(workspace) || {};
     try {
       writeSession(workspace, {
         ...prior,
         lastQuery: q,
+        lastOrientReadAt: new Date().toISOString(),
         files: Array.isArray(namedFiles) ? namedFiles : [],
       });
     } catch {
@@ -54,7 +59,7 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
   let active = null;
   try {
     const matches = findMatchingPlans(workspace, q, flags.limit || 3);
-    active = pickActivePlan(workspace, session, matches, listPlanRels(workspace));
+    active = flags.plan ? loadPlan(workspace, flags.plan) : pickActivePlan(workspace, session, matches, listPlanRels(workspace));
   } catch {
     active = null;
   }
@@ -86,6 +91,7 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
   }
 
   let neighborhood = null;
+  if (!namedFiles?.length && active) namedFiles = parseImpactedFiles(active);
   if (Array.isArray(namedFiles) && namedFiles.length) {
     try {
       neighborhood = buildNeighborhood({ workspace, files: namedFiles });
@@ -107,6 +113,9 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
 
   return {
     neighborhood,
+    planGoal: active ? extractGoalFromPlan(active) : null,
+    trust: trustStatus({ workspace, copilotHome, home }),
+    reviewCoverage: reviewCoverageFacts({ workspace, plan: active, copilotHome }),
     learnings,
     skills,
     instructions,

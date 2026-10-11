@@ -106,6 +106,8 @@ test('--profile deliver vs autonomous selects tracks and prompt shape (AC8–AC1
   );
   assert.equal(del.profile.id, 'deliver');
   assert.equal(del.profile.drops.length, 0);
+  assert.equal(del.status, 'failed');
+  assert.equal(del.stopReason, 'delivery-incomplete');
   assert.match(delProvider.requests[0].system, /deliver/i);
 });
 

@@ -12,6 +12,8 @@ The adaptive ladder spawns `bin/harness.mjs`. It does not start a model and it d
 
 ## Tasks
 
+Deliver regressions in `test/agent-delivery.test.mjs` and `test/orient-delivery-contract.test.mjs` use scripted model responses and disposable repositories. They cover ungated edits, missing touched-file orientation, stale trust, failed or stale verification, missing review/learning/completion, recovery after a premature final message, and crowded context packs. They make no paid model calls and do not establish Luna or Sonnet task quality. Configure the final check and routing files before approving the eval workspace; approval of an init stub does not cover later agent edits.
+
 | Id | Intent |
 |----|--------|
 | `fix-typo` | One-char fix; `verify.mjs` green |

@@ -9,6 +9,9 @@ const SLICE_KEYS = ['neighborhood', 'learnings', 'skills', 'instructions', 'cont
 function emptySlice() {
   return {
     neighborhood: null,
+    planGoal: null,
+    trust: null,
+    reviewCoverage: null,
     learnings: [],
     skills: [],
     instructions: [],
@@ -36,12 +39,10 @@ function takeFlag(argv, name) {
 
 function sliceFrom(parsed) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptySlice();
-  const slice = {};
   for (const key of SLICE_KEYS) {
     if (!Object.hasOwn(parsed, key)) return emptySlice();
-    slice[key] = parsed[key];
   }
-  return slice;
+  return { ...emptySlice(), ...parsed };
 }
 
 function orientSlice(workspace, { query = '', files = [], readOnly = true } = {}) {

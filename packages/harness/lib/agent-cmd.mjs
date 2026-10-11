@@ -267,6 +267,7 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
       task: p.task,
       runOrientFn,
       dryRun: true,
+      flags: p.flags,
     });
     const systemPrompt = buildSystemPrompt({
       persona,
@@ -314,6 +315,7 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
     copilotHome: p.copilotHome,
     task: p.task,
     runOrientFn,
+    flags: p.flags,
   });
   const spent = Math.floor((Date.now() - startedAt) / 1000);
 
@@ -325,6 +327,7 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
     profile: p.profile,
     orientation,
     verifyCmd: p.verifyCmd,
+    harnessHome: p.flags.harnessHome || process.env.HARNESS_HOME || null,
     maxTurns: p.maxTurns,
     maxSeconds: Math.max(1, p.maxSeconds - spent),
     toolTimeoutSeconds: p.toolTimeoutSeconds,

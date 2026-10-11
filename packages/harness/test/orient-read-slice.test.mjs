@@ -17,6 +17,9 @@ const readOnlySkip = process.platform === 'win32'
     : false;
 const SLICE_KEYS = [
   'neighborhood',
+  'planGoal',
+  'trust',
+  'reviewCoverage',
   'learnings',
   'skills',
   'instructions',

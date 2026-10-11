@@ -10,6 +10,7 @@ import { getResultOf } from './retrieval/compat-results.mjs';
 import { searchResultOf } from './retrieval/search-cmd.mjs';
 import { todoResultOf } from './todo-cmd.mjs';
 import { applyResultOf } from './apply-cmd.mjs';
+import { afterDeliveryTool, beforeDeliveryTool, deliveryCompletion, DELIVERY_BIN, runDeliveryCommand } from './agent-delivery.mjs';
 
 export const AGENT_SCHEMA = 1;
 
@@ -19,7 +20,7 @@ export const READ_DEFAULT_LINES = 240;
 export const READ_MAX_BYTES = TOOL_RESULT_MAX_BYTES + 2_000;
 export const SEARCH_ROWS = 8;
 /** Persona text beyond this is truncated — full engineer.md is not a runtime prompt. */
-export const PERSONA_MAX_BYTES = 2_000;
+export const PERSONA_MAX_BYTES = 8_000;
 /** Hard cap for the entire autonomous system card (AC9). */
 export const AUTONOMOUS_SYSTEM_MAX_BYTES = 2_048;
 /** Orientation pack ceiling in the system prompt (deliver / legacy). */
@@ -54,6 +55,7 @@ export const STOP_REASONS = Object.freeze({
   'verifier-pass': { status: 'ok', exit: EXIT.ok, summary: 'the task verifier passed' },
   'verifier-missing': { status: 'failed', exit: 1, summary: 'autonomous run needs a task verifier for proven success' },
   'verifier-failed': { status: 'failed', exit: 1, summary: 'the model stopped but the task verifier did not pass' },
+  'delivery-incomplete': { status: 'failed', exit: 1, summary: 'Deliver stopped without current bound completion proof' },
   'turn-budget': { status: 'failed', exit: 1, summary: 'the turn budget was reached before the model finished' },
   'time-budget': { status: 'timed-out', exit: EXIT.timedOut, summary: 'the wall clock was reached before the model finished' },
   'tool-error': { status: 'failed', exit: 1, summary: 'a tool could not be dispatched at all' },
@@ -283,7 +285,16 @@ export const AGENT_TOOLS = Object.freeze([
   }),
 ]);
 
-const TOOL_NAMES = new Set(AGENT_TOOLS.map((t) => t.name));
+export const DELIVER_AGENT_TOOLS = Object.freeze([
+  ...AGENT_TOOLS,
+  Object.freeze({
+    name: 'harness',
+    description: 'Deliver lifecycle command. argv starts with orient, plan-new, plan-update, gate, review, verify, compound, report, status or trust status. Optional decision stages JSON for --file (compound uses --learning-decision). Workspace and homes stay bound to this run.',
+    schema: { type: 'object', properties: { argv: { type: 'array', items: { type: 'string' } }, decision: { type: 'object' } }, required: ['argv'] },
+  }),
+]);
+
+const TOOL_NAMES = new Set(DELIVER_AGENT_TOOLS.map((t) => t.name));
 
 export const AGENT_VALUE_FLAGS = Object.freeze([
   '--agent', '--provider', '--model', '--max-turns', '--max-seconds', '--tool-timeout',
@@ -350,12 +361,14 @@ function deliverSystemBody({ persona, orientation = null }) {
     '## Runtime: deliver (optional agent)',
     '',
     'Product-oriented headless run. Host @engineer remains the accountable Deliver owner.',
-    'If the workspace has a locked plan, respect gate/verify norms. Prefer surgical edits.',
+    'Before product edits, require an explicit passed implement gate. Prefer surgical edits.',
     '',
     '### Workflow',
-    '1. Orient from context; reproduce failing commands with bash/exec.',
-    '2. Edit surgically; re-run checks.',
-    '3. Prefer product `harness verify --plan` when a plan exists; do not skip proof.',
+    '1. Call harness orient --read --query <task text> --file <each touched file>; load ensure-plan if no plan exists.',
+    '2. Use the harness tool with authored decision JSON for plan-new and plan-update start; wait for its passed implement gate before editing.',
+    '3. Edit surgically; collect /code-review results with harness review prepare/assemble; require passed harness verify --plan <path>.',
+    '4. Record a publish or no-learning decision with harness compound, then a plan-update complete decision. Completion is checked by the runtime.',
+    'Trust approval stays with a person. Never run trust approve or revoke; report a human approval blocker if policy changes.',
     '',
     '### Hard limits',
     `- Search is limited to ${MAX_SEARCH_PER_RUN} calls per run.`,
@@ -401,9 +414,9 @@ export function buildSystemPrompt({
   return deliverSystemBody({ persona, orientation });
 }
 
-export async function orientForTask({ workspace, copilotHome, task, runOrientFn, dryRun = false }) {
+export async function orientForTask({ workspace, copilotHome, task, runOrientFn, dryRun = false, flags = {} }) {
   try {
-    const result = runOrientFn({ workspace, copilotHome, flags: { workspace, limit: 3, dryRun }, query: task });
+    const result = runOrientFn({ workspace, copilotHome, flags: { ...flags, workspace, limit: 3, dryRun }, query: task, files: flags.files });
     if (!result) {
       return { available: false, materialized: false, reason: 'orientation refused (.harness is not a real directory)', pack: null };
     }
@@ -548,6 +561,8 @@ export async function dispatchToolCall(call, {
   timeoutSeconds = null,
   remainingSeconds = null,
   turns = [],
+  profile = null,
+  harnessHome = null,
 } = {}) {
   if (!TOOL_NAMES.has(call.name)) {
     return { dispatched: false, reason: `unknown tool: ${call.name}`, fatal: false };
@@ -559,6 +574,13 @@ export async function dispatchToolCall(call, {
   }
 
   const input = call.input && typeof call.input === 'object' ? call.input : {};
+  const delivery = profile?.id === 'deliver';
+  const deliveryOptions = { workspace, copilotHome, harnessHome, remainingSeconds };
+  if (call.name === 'harness' && !delivery) return { dispatched: false, reason: 'harness lifecycle tool requires the deliver profile', fatal: false };
+  if (delivery) {
+    const permission = beforeDeliveryTool(call, deliveryOptions);
+    if (!permission.pass) return { dispatched: false, reason: permission.reason, fatal: false };
+  }
   const base = ['--workspace', workspace];
   if (copilotHome) base.push('--copilot-home', copilotHome);
 
@@ -567,7 +589,15 @@ export async function dispatchToolCall(call, {
   let timeout = null;
   let fatalOnThrow = true;
 
-  if (call.name === 'bash' || call.name === 'exec') {
+  if (call.name === 'harness') {
+    timeout = resolveToolTimeout({ requested: remainingSeconds, ceiling: timeoutSeconds });
+    run = (_argv, runCtx) => runDeliveryCommand(input, command => execResultOf([
+      ...base, ...(timeout === null ? [] : ['--timeout', String(timeout)]), '--', process.execPath, DELIVERY_BIN, ...command,
+      '--workspace', workspace, ...(copilotHome ? ['--copilot-home', copilotHome] : []),
+      ...(harnessHome || process.env.HARNESS_HOME ? ['--harness-home', harnessHome || process.env.HARNESS_HOME] : []), '--json', '--no-events',
+    ], runCtx));
+    fatalOnThrow = false;
+  } else if (call.name === 'bash' || call.name === 'exec') {
     timeout = resolveToolTimeout({ requested: input.timeout, ceiling: timeoutSeconds });
     const execBase = timeout === null ? base : [...base, '--timeout', String(timeout)];
     if (call.name === 'bash') {
@@ -644,6 +674,10 @@ export async function dispatchToolCall(call, {
   const runCtx = bound && bound.signal ? { ...ctx, signal: bound.signal } : ctx;
   try {
     const result = await run(argv, runCtx);
+    if (delivery) {
+      const recorded = afterDeliveryTool(call, result, deliveryOptions);
+      if (!recorded.pass) return { dispatched: true, result: { ...result, status: 'failed', exitCode: 1, output: [...(result.output || []), { line: recorded.reason }] }, timeoutSeconds: timeout };
+    }
     return { dispatched: true, result, timeoutSeconds: timeout };
   } catch (error) {
     return {
@@ -807,6 +841,7 @@ export async function runAgentLoop({
   maxSeconds = DEFAULT_MAX_SECONDS,
   toolTimeoutSeconds = null,
   verifyCmd = null,
+  harnessHome = null,
   startProviderFn,
   ctx = {},
   signal = null,
@@ -837,6 +872,7 @@ export async function runAgentLoop({
   let completionRetries = 0;
   let verifier = null;
   let mutatedSinceVerifier = false;
+  let completionBlocked = false;
 
   try {
     while (!stop) {
@@ -881,7 +917,7 @@ export async function runAgentLoop({
           Math.min(remainingMs, AGENT_COMPLETION_TIMEOUT_MS, PROVIDER_TIMEOUT_MS),
         );
         completion = await provider.complete(
-          { system, messages: [...messages], tools: AGENT_TOOLS },
+          { system, messages: [...messages], tools: resolvedProfile.id === 'deliver' ? DELIVER_AGENT_TOOLS : AGENT_TOOLS },
           { timeout },
         );
         completionRetries = 0;
@@ -946,8 +982,18 @@ export async function runAgentLoop({
           // Without --verify-cmd, model prose alone is not ok success-with-proof.
           stop = 'verifier-missing';
           detail = 'pass --verify-cmd <argv...> for verifier-shaped success';
+        } else if (resolvedProfile.id === 'deliver') {
+          const completed = deliveryCompletion({ workspace, copilotHome, harnessHome, remainingSeconds: (deadline - now()) / 1000 });
+          if (completed.pass) stop = 'done';
+          else if (turns.length >= maxTurns || completionBlocked) {
+            stop = 'delivery-incomplete';
+            detail = completed.message;
+          } else {
+            completionBlocked = true;
+            messages.push({ role: 'user', text: `Completion blocked: ${completed.message}. Collect review, pass harness verify, record a learning decision and complete the plan. If a person is required, report the blocker.` });
+            continue;
+          }
         } else {
-          // deliver / benchmark fixture: model-done remains a valid stop
           stop = 'done';
         }
         break;
@@ -979,9 +1025,12 @@ export async function runAgentLoop({
         timeoutSeconds: toolTimeoutSeconds,
         remainingSeconds: (deadline - now()) / 1000,
         turns,
+        profile: resolvedProfile,
+        harnessHome,
       });
 
       const toolResults = [];
+      if (outcomes.some((outcome, index) => outcome.dispatched && outcome.result?.status === 'ok' && !['read', 'search'].includes(calls[index]?.name))) completionBlocked = false;
       const toolRecords = [];
       let fatal = null;
 

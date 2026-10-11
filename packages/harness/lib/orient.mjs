@@ -11,7 +11,7 @@ import { parseImpactedFiles } from './plan-scope.mjs';
 import { discoverInventory, routingCards, routingReadPointers, primitiveReadRoots } from './route.mjs';
 import { extractGoalFromPlan } from './plan-goal.mjs';
 import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
-import { pickActivePlan, listPlanRels } from './plan-parse.mjs';
+import { pickActivePlan, listPlanRels, loadPlan } from './plan-parse.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { rankLearnings, explainLearnings } from './knowledge/retrieve.mjs';
 import { readStoreConfig, storeDir } from './knowledge/store.mjs';
@@ -22,6 +22,7 @@ import { inertLine } from './knowledge/store.mjs';
 import { resolveObligation } from './intent-sources.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
+import { trustStatus } from './trust.mjs';
 
 const ORIENT_BRANCH_CAP = 80;
 function jsonGitContext(gitContext) {
@@ -85,7 +86,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }));
 
   const session = readSession(workspace) || {};
-  const active = pickActivePlan(workspace, session, plans, listPlanRels(workspace));
+  const active = flags.plan ? loadPlan(workspace, flags.plan) : pickActivePlan(workspace, session, plans, listPlanRels(workspace));
   const planGoal = active ? extractGoalFromPlan(active) : null;
   const planView = active ? buildPlanView(active) : null;
 
@@ -105,7 +106,8 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     query: q,
   });
 
-  const namedFiles = Array.isArray(files) ? files : flags.files;
+  const suppliedFiles = Array.isArray(files) ? files : flags.files;
+  const namedFiles = suppliedFiles?.length ? suppliedFiles : active ? parseImpactedFiles(active) : session.files || [];
 
     let learnings = [];
   let explain = null;
@@ -140,8 +142,10 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }
 
   const nextTools = gatePreview.pass
-    ? [`harness gate --phase implement --plan ${active?.path || '<path>'}`, 'read plan ## Impacted Files']
+    ? ['harness gate --phase implement', 'read plan ## Impacted Files', `harness review prepare --plan ${active?.path || '<path>'}`, 'harness verify', 'harness compound']
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
+  const trust = trustStatus({ workspace, copilotHome, home });
+  if (!trust.trusted) nextTools.push('harness trust status  # a person must approve policy before named checks run');
 
   const obligation = resolveObligation(workspace, active, q);
   const intentSources = obligation.paths;
@@ -211,6 +215,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   const reviewCoverage = reviewCoverageFacts({ workspace, plan: active, copilotHome });
   const packBody = buildContextPack({
     reviewCoverage,
+    trust,
     query: q,
     recall,
     learnings,
@@ -263,6 +268,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   return {
     recall,
+    trust,
     learnings,
     deliveredLearnings,
     explain,
@@ -276,6 +282,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
           planPath: planGoal.planPath,
           intent: planGoal.intent,
           success_criteria: planGoal.success_criteria,
+          constraints: planGoal.constraints,
           expected_outputs: planGoal.expected_outputs,
           intentContractExcerpt: planGoal.intentContractExcerpt,
         }

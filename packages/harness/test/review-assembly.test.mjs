@@ -47,6 +47,20 @@ test('prepare owns mandatory coverage and brace/comma/glob discovery', t => {
   assert.equal(f.prepare().id, packet.id);
 });
 
+test('a checks README without frontmatter is documentation; malformed declared checks still block', t => {
+  const f = fixture(t);
+  const directory = path.join(f.ws, '.github/checks');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'README.md'), '# Review checks\n\nHow to author product checks.\n');
+  const packet = f.prepare();
+  assert.deepEqual(packet.preparation.failures, []);
+  assert.equal(f.assemble(packet, packet.required.map(clean)).status, 0);
+  fs.writeFileSync(path.join(directory, 'README.md'), '---\nname: invalid name\n---\nDeclared check.\n');
+  const malformed = f.prepare();
+  assert.ok(malformed.preparation.failures.some(message => /valid name/.test(message)));
+  assert.equal(f.assemble(malformed, malformed.required.map(clean)).status, 1);
+});
+
 test('assembly is invariant to result order, gates before boosting and only merges exact identities', t => {
   const f = fixture(t), packet = f.prepare();
   const results = packet.required.map(clean);

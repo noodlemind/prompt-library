@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { binPath, runHarness } from './helpers/cli.mjs';
 
-const SLICE_KEYS = ['activePlan', 'contacts', 'gateStatus', 'index', 'instructions', 'learnings', 'neighborhood', 'skills'];
+const SLICE_KEYS = ['activePlan', 'contacts', 'gateStatus', 'index', 'instructions', 'learnings', 'neighborhood', 'planGoal', 'reviewCoverage', 'skills', 'trust'];
 
 function git(cwd, args) {
   return spawnSync('git', args, {
@@ -47,7 +47,7 @@ function checksOf(result) {
   return JSON.parse(result.stdout).checks;
 }
 
-test('doctor --adapter checks the installed file and grok-build start prints the eight keys', () => {
+test('doctor --adapter checks the installed file and grok-build start preserves the delivery context', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'host-adapter-home-'));
   const harnessHome = fs.mkdtempSync(path.join(os.tmpdir(), 'host-adapter-hh-'));
   const product = productWorkspace();
@@ -99,6 +99,8 @@ test('doctor --adapter checks the installed file and grok-build start prints the
   assert.equal(started.status, 0, started.stderr + started.stdout);
   const slice = JSON.parse(started.stdout);
   assert.deepEqual(Object.keys(slice).sort(), SLICE_KEYS);
+  assert.equal(slice.trust.trusted, false);
+  assert.equal(slice.planGoal, null);
   assert.equal(slice.neighborhood, null);
   assert.equal(fs.existsSync(path.join(ws, '.harness', 'repo-map.md')), false);
   assert.equal(fs.existsSync(path.join(ws, '.harness', 'context-pack.md')), false);
