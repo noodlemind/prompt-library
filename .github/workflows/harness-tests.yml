@@ -111,31 +111,32 @@ jobs:
         env:
           HARNESS_PROOF_LOG: windows-adaptive-transcripts.jsonl
           HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-focus
-          NODE_OPTIONS: --require="${{ github.workspace }}/packages/harness/test/helpers/domain-parent-profile.cjs"
-        run: >-
-          node --test
-          packages/harness/test/windows-authority.test.mjs
-          packages/harness/test/domain-contract.test.mjs
-          packages/harness/test/domain-context.test.mjs
-          packages/harness/test/domain-bindings.test.mjs
-          packages/harness/test/domain-delivery.test.mjs
-          packages/harness/test/domain-commands.test.mjs
-          packages/harness/test/domain-plans.test.mjs
-          packages/harness/test/experiment-state.test.mjs
-          packages/harness/test/experiment-snapshots.test.mjs
-          packages/harness/test/adaptive-intent.test.mjs
-          packages/harness/test/caffeinated.test.mjs
-          packages/harness/test/inventory.test.mjs
-          packages/harness/test/inventory-editors.test.mjs
-          packages/harness/test/diagnostic-commands.test.mjs
-          packages/harness/test/runner.test.mjs
-          packages/harness/test/verification-recipes.test.mjs
-          packages/harness/test/hook-runtime.test.mjs
-          packages/harness/test/project-layout.test.mjs
-          packages/harness/test/external-plan-review.test.mjs
-          packages/harness/test/cli-evidence-verify.test.mjs
-          packages/harness/test/agent-delivery.test.mjs
-          packages/harness/test/plan-operations.test.mjs
+        run: |
+          preload_root="${GITHUB_WORKSPACE//\\//}"
+          export NODE_OPTIONS="--require=\"$preload_root/packages/harness/test/helpers/domain-parent-profile.cjs\""
+          node --test \
+          packages/harness/test/windows-authority.test.mjs \
+          packages/harness/test/domain-contract.test.mjs \
+          packages/harness/test/domain-context.test.mjs \
+          packages/harness/test/domain-bindings.test.mjs \
+          packages/harness/test/domain-delivery.test.mjs \
+          packages/harness/test/domain-commands.test.mjs \
+          packages/harness/test/domain-plans.test.mjs \
+          packages/harness/test/experiment-state.test.mjs \
+          packages/harness/test/experiment-snapshots.test.mjs \
+          packages/harness/test/adaptive-intent.test.mjs \
+          packages/harness/test/caffeinated.test.mjs \
+          packages/harness/test/inventory.test.mjs \
+          packages/harness/test/inventory-editors.test.mjs \
+          packages/harness/test/diagnostic-commands.test.mjs \
+          packages/harness/test/runner.test.mjs \
+          packages/harness/test/verification-recipes.test.mjs \
+          packages/harness/test/hook-runtime.test.mjs \
+          packages/harness/test/project-layout.test.mjs \
+          packages/harness/test/external-plan-review.test.mjs \
+          packages/harness/test/cli-evidence-verify.test.mjs \
+          packages/harness/test/agent-delivery.test.mjs \
+          packages/harness/test/plan-operations.test.mjs \
           > windows-adaptive-proof.log 2>&1
       - name: Preserve native Windows proof
         if: always()

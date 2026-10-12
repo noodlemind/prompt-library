@@ -45,8 +45,10 @@ jobs:
         continue-on-error: true
         env:
           HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-full
-          NODE_OPTIONS: --require="${{ github.workspace }}/packages/harness/test/helpers/domain-parent-profile.cjs"
-        run: npm --prefix packages/harness test
+        run: |
+          $preloadRoot = $env:GITHUB_WORKSPACE.Replace('\', '/')
+          $env:NODE_OPTIONS = '--require="' + $preloadRoot + '/packages/harness/test/helpers/domain-parent-profile.cjs"'
+          npm --prefix packages/harness test
 
       - name: CLI scenarios
         continue-on-error: true
