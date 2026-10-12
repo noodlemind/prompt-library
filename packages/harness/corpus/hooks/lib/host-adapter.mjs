@@ -9,6 +9,7 @@ const SLICE_KEYS = ['neighborhood', 'learnings', 'skills', 'instructions', 'cont
 function emptySlice() {
   return {
     neighborhood: null,
+    verification: { state: 'unknown', path: null, warnings: [] },
     planGoal: null,
     trust: null,
     reviewCoverage: null,

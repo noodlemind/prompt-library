@@ -1,3 +1,4 @@
+import { locateVerification } from './verification-location.mjs';
 import { rankLearnings } from './knowledge/retrieve.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
 import { runGate } from './gate.mjs';
@@ -113,6 +114,7 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
 
   return {
     neighborhood,
+    verification: locateVerification(workspace, active?.fm?.verification?.recipe),
     planGoal: active ? extractGoalFromPlan(active) : null,
     trust: trustStatus({ workspace, copilotHome, home }),
     reviewCoverage: reviewCoverageFacts({ workspace, plan: active, copilotHome }),

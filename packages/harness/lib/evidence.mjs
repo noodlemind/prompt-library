@@ -12,8 +12,10 @@ import { resolveCopilotHome } from './paths.mjs';
 import { loadPolicy } from './policy.mjs';
 import { intentSourceBindings, intentSourcesCheck } from './intent-sources.mjs';
 import { gapEvidenceCheck } from './plan-readiness.mjs';
+import { loadNamedChecks } from './checks.mjs';
+import { validateCheckArtifacts } from './check-artifacts.mjs';
 
-export const EVIDENCE_VERSION = 4;
+export const EVIDENCE_VERSION = 5;
 export { planContractText } from './work-contract.mjs';
 
 function evidenceRel(planPath) {
@@ -166,7 +168,7 @@ export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24, 
     return { pass: false, message: `Latest harness verify outcome is ${evidence.outcome || 'unknown'}` };
   }
   const expectedVersion = plan.fm?.intent_source_policy === 'content-v1' ? 2 : 1;
-  if (evidence.version !== EVIDENCE_VERSION || !validBinding(evidence.binding) || evidence.binding.contractVersion !== expectedVersion) {
+  if (![4, EVIDENCE_VERSION].includes(evidence.version) || !validBinding(evidence.binding) || evidence.binding.contractVersion !== expectedVersion) {
     return { pass: false, message: 'Verification evidence is not bound to the current plan and workspace' };
   }
   const intent = plan.fm?.intent_source_policy !== undefined ? intentSourcesCheck(plan, workspace) : null;
@@ -177,6 +179,14 @@ export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24, 
   const required = plan.fm.verification?.required;
   if (!Array.isArray(evidence.checks) || !Array.isArray(required) || !required.length || required.some(id => !evidence.checks.some(check => check.id === id && check.status === 'passed' && ['behavior', 'type-check'].includes(check.proof))) || !evidence.checks.some(check => required.includes(check.id) && check.status === 'passed' && check.proof === 'behavior') || !evidence.checks.some(check => check.id === 'criteria-evidence' && check.status === 'passed')) return { pass: false, message: 'Verification record lacks executed proof for the current acceptance criteria' };
   if (evidence.binding.policyDigest !== proofPolicyDigest(workspace, copilotHome)) return { pass: false, message: 'Policy or trust changed after verification; refresh trust and reverify' };
+  const configured = loadNamedChecks(workspace);
+  if (configured.error) return { pass: false, message: configured.error };
+  for (const id of required) {
+    if (!configured.checks[id]) return { pass: false, message: 'Required named check is missing' };
+    if (configured.checks[id].artifacts !== undefined && evidence.version !== EVIDENCE_VERSION) return { pass: false, message: 'Required artifact integrity needs current verification evidence' };
+    const artifacts = validateCheckArtifacts(workspace, configured.checks[id], evidence.checks.find(check => check.id === id));
+    if (!artifacts.pass) return artifacts;
+  }
   if (evidence.binding.executionPhase !== String(plan.phase ?? 0)) return { pass: false, message: 'Execution phase changed after verification' };
   if (gitHead(workspace) !== evidence.binding.head) {
     return { pass: false, message: 'Verification evidence was recorded at a different head' };

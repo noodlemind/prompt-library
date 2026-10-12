@@ -62,6 +62,7 @@ export function buildContextPack({
   intentSources = null,
   worktree = null,
   trust = null,
+  verification = null,
 }) {
   const deliveryContract = Boolean(trust || planGoal?.constraints?.length);
     const lines = [
@@ -86,6 +87,12 @@ export function buildContextPack({
     if (activePlan.memoryExcerpt) {
       lines.push('', '### Memory Cards (excerpt)', activePlan.memoryExcerpt);
     }
+  }
+
+  if (verification) {
+    lines.push('', '## Product verification', `- Recipe state: ${inertLine(verification.state)}`);
+    if (verification.path) lines.push(`- Read: ${inertLine(verification.path)}`);
+    for (const warning of verification.warnings || []) lines.push(`- Inventory warning: ${inertLine(warning)}`);
   }
 
   if (planView) {

@@ -9,6 +9,7 @@ import { buildChildEnv } from './exec-policy.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { isProjectTrusted } from './trust.mjs';
 import { createRedactor, redactionMarker } from './redact.mjs';
+import { artifactPathsProblem, allocateCheckArtifacts, captureCheckArtifacts, discardCheckArtifacts } from './check-artifacts.mjs';
 
 export const CHECKS_REL = '.github/harness/checks.yaml';
 
@@ -64,7 +65,8 @@ export function validateCommand(name, config) {
   if (config.proof !== undefined && config.proof !== 'type-check' && config.proof !== 'behavior') {
     return `${name}.proof must be type-check or behavior`;
   }
-  return null;
+  const artifactProblem = artifactPathsProblem(config.artifacts);
+  return artifactProblem ? `${name}.${artifactProblem}` : null;
 }
 
 /** The canonical spelling of a path, falling back to the resolved lexical form
@@ -137,14 +139,17 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
     environmentAllowlisted: allowlisted,
   });
 
-  const { redactText } = createRedactor();
+  const { redactText, redactValue } = createRedactor();
   const overlap = secretScanOverlap(redactText);
   const stdout = observeCheckOutput(onStdout, redactText, overlap);
   const stderr = observeCheckOutput(onStderr, redactText, overlap);
+  let artifactRoot = null;
+  try { if (config.artifacts) artifactRoot = allocateCheckArtifacts(workspace, name); }
+  catch (error) { return finish(resultCheck(name, 'unavailable', error.message)); }
   const execution = await runProcess({
     argv: [...networkWrapper, ...config.command],
     cwd: workspace,
-    ...(envReport ? { env: envReport.env } : {}),
+    ...(artifactRoot || envReport ? { env: { ...(envReport ? envReport.env : process.env), ...(artifactRoot ? { HARNESS_CHECK_ARTIFACT_DIR: path.join(workspace, artifactRoot) } : {}) } } : {}),
     timeoutMs: timeoutSeconds * 1000,
     signal,
     onStdout: chunk => stdout.push(chunk),
@@ -181,7 +186,17 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
     truncated: execution.truncated,
     outputTruncation: execution.outputTruncation,
     durationMs: execution.durationMs,
+    ...(artifactRoot ? { artifactRoot } : {}),
   };
+
+  if (artifactRoot) {
+    try { output.artifacts = captureCheckArtifacts(workspace, artifactRoot, config.artifacts, redactValue); }
+    catch (error) {
+      discardCheckArtifacts(workspace, artifactRoot);
+      if (execution.status === 'ok') return finish(resultCheck(name, 'failed', error.message, { ...output, exitCode: execution.exitCode }));
+      output.artifactError = error.message;
+    }
+  }
 
   if (execution.status === 'cancelled') {
     return finish(resultCheck(name, 'unavailable', 'Cancelled — verification was interrupted', { ...output, cancelled: true }));

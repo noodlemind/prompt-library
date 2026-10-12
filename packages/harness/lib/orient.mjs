@@ -1,3 +1,4 @@
+import { locateVerification } from './verification-location.mjs';
 import fs from 'fs';
 import path from 'path';
 import { planStateFacts, reviewCoverageFacts } from './report-facts.mjs';
@@ -87,6 +88,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   const session = readSession(workspace) || {};
   const active = flags.plan ? loadPlan(workspace, flags.plan) : pickActivePlan(workspace, session, plans, listPlanRels(workspace));
+  const verification = locateVerification(workspace, active?.fm?.verification?.recipe);
   const planGoal = active ? extractGoalFromPlan(active) : null;
   const planView = active ? buildPlanView(active) : null;
 
@@ -153,6 +155,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   if (isolation.blocked) {
     nextTools.unshift(`harness worktree --slug ${planSlugFromPath(active?.path)}`);
   }
+  if (verification.path) nextTools.push(`read ${inertLine(verification.path)}`);
   if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
   if (!intentSources.length) nextTools.push(prepareNextTool(workspace));
 
@@ -233,6 +236,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
       : null,
     planGoal,
     planView,
+    verification,
     repoMapRef,
     gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
     nextTools,
@@ -287,6 +291,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
           intentContractExcerpt: planGoal.intentContractExcerpt,
         }
       : null,
+    verification,
     contextPack: packRel,
     repoMap: repoMapRef,
     knowledgeDebt,

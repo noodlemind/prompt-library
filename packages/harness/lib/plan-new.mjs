@@ -18,6 +18,7 @@ import { shortPlanDocument } from './plan-record.mjs';
 import { bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
 import { planRevision, scopePaths, applyPlanNotes, renderPlanPhases, planState } from './plan-decisions.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
+import { locateVerification } from './verification-location.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
@@ -91,6 +92,7 @@ export function buildPlanSkeleton({
   phases,
   outputs,
   skillsUsed = [],
+  verificationRecipe = null,
 } = {}) {
   const draft = ['open', 'needs-info'].includes(status);
   assertNoPersonalWrite([...(impacted || []), gap?.primitive]);
@@ -134,6 +136,7 @@ export function buildPlanSkeleton({
     expected_outputs: outputs || [`${slug} delivered`],
     success_criteria: [intent],
     verification: {
+      ...(verificationRecipe ? { recipe: verificationRecipe } : {}),
       required: check ? [check] : [],
       criteria: Object.fromEntries(acs.map((ac) => [ac.id, check ? [check] : []])),
     },
@@ -276,7 +279,7 @@ export async function cmdPlanNew(argv) {
     if (Object.keys(opts).some(key => !['impacted', 'criteria', 'acceptance', 'constraints', 'intentSources', 'copilotHome'].includes(key)) || [opts.impacted, opts.criteria, opts.acceptance, opts.constraints, opts.intentSources].some(values => values.length)) throw new Error('plan-new: --file cannot be combined with authoring flags');
     let input;
     try { input = JSON.parse(readFileNoFollow(path.resolve(workspace, file), { maxBytes: 1024 * 1024 })); } catch { throw new Error('plan-new: decision file must contain bounded JSON'); }
-    const keys = ['version', 'format', 'slug', 'type', 'title', 'goal', 'acceptance', 'constraints', 'scope', 'check', 'intentSources', 'risk', 'status', 'notes', 'phases', 'outputs', 'skillsUsed'];
+    const keys = ['version', 'format', 'slug', 'type', 'title', 'goal', 'acceptance', 'constraints', 'scope', 'check', 'intentSources', 'risk', 'status', 'notes', 'phases', 'outputs', 'skillsUsed', 'verificationRecipe'];
     if (!input || input.version !== 1 || !['full', 'short'].includes(input.format) || Object.keys(input).some(key => !keys.includes(key))) throw new Error('plan-new: unsupported creation decision schema');
     scalar(input.goal, 'goal', { required: true });
     if (!Array.isArray(input.acceptance) || input.acceptance.length === 0) throw new Error('plan-new: authored acceptance criteria are required');
@@ -285,7 +288,8 @@ export async function cmdPlanNew(argv) {
     if (input.skillsUsed !== undefined && (!Array.isArray(input.skillsUsed) || !input.skillsUsed.length || !input.skillsUsed.every(value => typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)))) throw new Error('plan-new: skillsUsed must be a nonempty list of skill names actually loaded');
     for (const key of ['acceptance', 'constraints', 'intentSources', 'outputs']) if (input[key] !== undefined && (!Array.isArray(input[key]) || !input[key].every(value => typeof value === 'string' && value.trim()))) throw new Error(`plan-new: ${key} must be a list of text`);
     if (input.status !== undefined && !['open', 'planned', 'in-progress', 'needs-info'].includes(input.status)) throw new Error('plan-new: unsupported initial status');
-    Object.assign(opts, { structured: true, slug: input.slug || shortSlug(input.goal), title: input.title, check: input.check, status: input.status, impacted: input.scope ? scopePaths(input.scope) : [], constraints: input.constraints || [], intentSources: input.intentSources || [], notes: input.notes || {}, phases: input.phases, outputs: input.outputs });
+    if (input.verificationRecipe !== undefined && (!input.verificationRecipe || typeof input.verificationRecipe !== 'string' || locateVerification(workspace, input.verificationRecipe).state !== 'selected')) throw new Error('plan-new: verificationRecipe requires a safe existing SKILL.md');
+    Object.assign(opts, { verificationRecipe: input.verificationRecipe, structured: true, slug: input.slug || shortSlug(input.goal), title: input.title, check: input.check, status: input.status, impacted: input.scope ? scopePaths(input.scope) : [], constraints: input.constraints || [], intentSources: input.intentSources || [], notes: input.notes || {}, phases: input.phases, outputs: input.outputs });
     if (input.format === 'short') { opts.goal = input.goal; opts.acceptance = input.acceptance || []; }
     else { opts.type = input.type || 'feat'; opts.intent = input.goal; opts.criteria = input.acceptance || []; opts.risk = input.risk; opts.skillsUsed = input.skillsUsed || []; }
   }
@@ -323,6 +327,11 @@ export async function cmdPlanNew(argv) {
     }
     const intentSources = bindLockedIntentSources(workspace, opts.intentSources, { query: opts.goal });
     let content = shortPlanDocument({ goal: opts.goal, acceptance, constraints, check: opts.check, intentSources, scope: opts.impacted, status: opts.status });
+    if (opts.verificationRecipe) content = content.replace(/^---\n([\s\S]*?)\n---/, (_match, source) => {
+      const fm = YAML.parse(source);
+      fm.verification.recipe = opts.verificationRecipe;
+      return `---\n${YAML.stringify(fm)}---`;
+    });
     content = applyPlanNotes(content, opts.notes || {});
     if (opts.phases) content += `\n## Plan\n\n${renderPlanPhases(opts.phases)}\n`;
     if (toStdout) {

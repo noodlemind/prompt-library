@@ -130,9 +130,9 @@ export async function runHarness(args, { ws, home, copilotHome, env = {} }) {
 
 export function writeEvidence(feature, payload) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dir = path.join(process.env.HARNESS_DRIVE_EVIDENCE_ROOT || path.join(skillRoot, 'evidence'), feature);
+  const dir = path.join(process.env.HARNESS_CHECK_ARTIFACT_DIR || process.env.HARNESS_DRIVE_EVIDENCE_ROOT || path.join(skillRoot, 'evidence'), feature);
   fs.mkdirSync(dir, { recursive: true });
-  const dest = path.join(dir, `${stamp}.json`);
+  const dest = path.join(dir, process.env.HARNESS_CHECK_ARTIFACT_DIR ? 'drive.json' : `${stamp}.json`);
   fs.writeFileSync(dest, `${JSON.stringify(payload, null, 2)}\n`);
   evidenceFiles.push(dest);
   lifecycle.outcome = 'passed';

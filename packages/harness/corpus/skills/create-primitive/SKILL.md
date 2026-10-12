@@ -168,6 +168,8 @@ Required file:
 
 Use when an existing skill needs dense criteria, templates, schemas, or examples without bloating `SKILL.md`.
 
+For a product verification recipe or feature-map audit, read [product-verification.md](references/product-verification.md). Reuse the selected recipe directory. Create a recipe only as scoped Deliver work after its plan and implement gate pass.
+
 Required location:
 - `packages/harness/corpus/skills/<skill>/references/<name>.md` for readable supporting material in the ship set
 - `packages/harness/corpus/skills/<skill>/assets/<name>` for templates or output resources in the ship set

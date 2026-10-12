@@ -6,6 +6,7 @@ import { extractAcceptanceCriteria } from './plan-schema.mjs';
 import { sourcePath, sourceHash, hashIntentFile, bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
 import { assertNoPersonalWrite } from './primitive-governance.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
+import { locateVerification } from './verification-location.mjs';
 
 export const PLAN_ACTIONS = Object.freeze(['start', 'amend', 'progress', 'finding', 'gap', 'complete']);
 export const planRevision = text => createHash('sha256').update(text).digest('hex');
@@ -132,9 +133,13 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     }
   }
   if (input.changes !== undefined) {
-    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps'], 'changes');
+    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe'], 'changes');
     const changes = input.changes, record = readPlanRecord(plan.text);
     let criterionIds = extractAcceptanceCriteria(plan);
+    if (changes.verificationRecipe !== undefined) {
+      if (!changes.verificationRecipe || typeof changes.verificationRecipe !== 'string' || locateVerification(workspace, changes.verificationRecipe).state !== 'selected') fail('verificationRecipe requires a safe existing SKILL.md');
+      fm.verification = { ...fm.verification, recipe: changes.verificationRecipe };
+    }
     if (changes.notes !== undefined) body = applyPlanNotes(body, changes.notes);
     if (changes.phases !== undefined) body = section(body, 'Plan', renderPlanPhases(changes.phases));
     if (changes.scope !== undefined) body = section(body, 'Impacted Files', scopePaths(changes.scope).map(value => `- \`${value}\``).join('\n'));
