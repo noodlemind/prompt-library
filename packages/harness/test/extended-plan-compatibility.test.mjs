@@ -12,7 +12,8 @@ const artifact = path.join(fixtureDir, 'prior-harness-0.10.0-af448f3.tgz');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function priorPackage(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-prior-compat-')));
+  const rawRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-prior-compat-'));
+  const root = fs.realpathSync(rawRoot);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const metadata = JSON.parse(fs.readFileSync(artifact.replace(/\.tgz$/, '.json'), 'utf8'));
   assert.equal(metadata.sourceCommit, 'af448f395493eb5ef5cc20c84221e67d0f4fc0ae');
@@ -26,7 +27,7 @@ function priorPackage(t) {
   const env = { ...process.env, HARNESS_HOME: path.join(root, 'home'), COPILOT_HOME: path.join(root, 'copilot'), HARNESS_NO_EVENTS: '1' };
   const cli = (...args) => spawnSync(process.execPath, [bin, ...args, '--workspace', workspace, '--json'], { env, cwd: workspace, encoding: 'utf8', timeout: 15_000 });
   assert.equal(cli('--version').stdout.trim(), '0.10.0');
-  return { root, workspace, cli };
+  return { root, rawRoot, workspace, cli };
 }
 
 test('the packaged prior reader has a live legacy mutation path for unsupported Markdown schemas', t => {
@@ -64,15 +65,18 @@ for (const schema of [3, 4]) test(`the prior packaged CLI refuses every work-bea
   }
 });
 
-test('the current CLI cannot relock an unsupported extended contract through legacy from flags', t => {
+for (const schema of [99, 3, 4]) test(`the current CLI refuses schema ${schema} through canonical and alias legacy from flags`, t => {
   const f = priorPackage(t);
   const rel = writeVersionedPlan(f.workspace, { name: '2026-10-12-feat-future-contract-plan.hplan' });
   const full = path.join(f.workspace, rel);
-  fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replace('plan_schema: 1', 'plan_schema: 99').replace('plan_lock: true', 'plan_lock: false'));
+  fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replace('plan_schema: 1', `plan_schema: ${schema}`).replace('plan_lock: true', 'plan_lock: false'));
   const before = fs.readFileSync(full);
   const currentBin = path.resolve(import.meta.dirname, '../bin/harness.mjs');
-  const result = spawnSync(process.execPath, [currentBin, 'plan-new', '--from', full, '--workspace', f.workspace, '--harness-home', path.join(f.root, 'current-home'), '--copilot-home', path.join(f.root, 'current-copilot'), '--json', '--no-events'], { encoding: 'utf8', timeout: 15_000 });
-  assert.notEqual(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stderr, /extended.*authored|unsupported/i);
-  assert.deepEqual(fs.readFileSync(full), before);
+  const paths = new Set([full, fs.realpathSync.native(full), path.join(f.rawRoot, 'product', rel)]);
+  for (const planPath of paths) {
+    const result = spawnSync(process.execPath, [currentBin, 'plan-new', '--from', planPath, '--workspace', f.workspace, '--harness-home', path.join(f.root, 'current-home'), '--copilot-home', path.join(f.root, 'current-copilot'), '--json', '--no-events'], { encoding: 'utf8', timeout: 15_000 });
+    assert.deepEqual(fs.readFileSync(full), before);
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stderr, /extended plans require an authored plan-update --file decision/i);
+  }
 });

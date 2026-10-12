@@ -18,11 +18,14 @@ function domainFixture(f, primary = f.primary.toUpperCase(), home = f.home.toUpp
   return readDomain('windows-authority', { home });
 }
 
-function shortAlias(full) {
-  const script = `$ErrorActionPreference='Stop'; Add-Type -TypeDefinition 'using System; using System.Text; using System.Runtime.InteropServices; public static class HarnessShortPath { [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern uint GetShortPathName(string longPath, StringBuilder shortPath, uint capacity); }'; $builder=New-Object System.Text.StringBuilder 4096; $length=[HarnessShortPath]::GetShortPathName($env:HARNESS_ALIAS_PATH,$builder,$builder.Capacity); if($length -eq 0 -or $length -ge $builder.Capacity){exit 1}; [Console]::Write($builder.ToString());`;
+function shortAlias(full, t) {
+  const script = `$ErrorActionPreference='Stop'; $timer=[Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('interop:start'); Add-Type -TypeDefinition 'using System; using System.Text; using System.Runtime.InteropServices; public static class HarnessShortPath { [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern uint GetShortPathName(string longPath, StringBuilder shortPath, uint capacity); }'; [Console]::Error.WriteLine('interop:ready elapsedMs=' + $timer.ElapsedMilliseconds); $builder=New-Object System.Text.StringBuilder 4096; $length=[HarnessShortPath]::GetShortPathName($env:HARNESS_ALIAS_PATH,$builder,$builder.Capacity); if($length -eq 0 -or $length -ge $builder.Capacity){exit 1}; [Console]::Write($builder.ToString());`;
   const command = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const started = Date.now();
   const result = spawnSync(command, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: { ...process.env, HARNESS_ALIAS_PATH: full }, encoding: 'utf8', timeout: 10000, maxBuffer: 8192, windowsHide: true });
-  assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
+  const diagnostic = JSON.stringify({ probe: 'native-short-path', elapsedMs: Date.now() - started, timeoutMs: 10000, status: result.status, signal: result.signal, errorCode: result.error?.code || null, phases: result.stderr });
+  t.diagnostic(diagnostic);
+  assert.equal(result.status, 0, diagnostic);
   const alias = result.stdout.trim();
   assert.equal(fs.realpathSync.native(alias), fs.realpathSync.native(full));
   return alias;
@@ -72,7 +75,7 @@ test('native Windows aliases share one experiment claim, reservation and charged
 
 test('native Windows short-name roots expand before Git and journal identity comparisons', { skip: process.platform !== 'win32' }, t => {
   const f = experimentFixture(t);
-  const primary = shortAlias(f.primary), workspace = shortAlias(f.workspace), home = shortAlias(f.home);
+  const primary = shortAlias(f.primary, t), workspace = shortAlias(f.workspace, t), home = shortAlias(f.home, t);
   assert.ok(primary && workspace && home, 'native Windows short-path observation must succeed');
   const distinct = [primary, workspace, home].some(alias => alias !== fs.realpathSync.native(alias));
   t.diagnostic(JSON.stringify({ shortNamesAvailable: distinct, primary, workspace, home }));

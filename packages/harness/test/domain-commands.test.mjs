@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import YAML from 'yaml';
@@ -14,9 +14,48 @@ import { approveProject } from '../lib/trust.mjs';
 import { initGit } from './helpers/cli-fixtures.mjs';
 import { resolveDomainContext } from '../lib/domain-context.mjs';
 import { resolveDomainCommandContext } from '../lib/domain-cmd.mjs';
+import parentProfile from './helpers/domain-parent-profile.cjs';
 
 const bin = path.resolve(import.meta.dirname, '../bin/harness.mjs');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+const parentProfilePreload = path.resolve(import.meta.dirname, 'helpers/domain-parent-profile.cjs');
+
+test('opt-in parent profiling retains bounded safe evidence when its child is terminated', async t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-command-journey-profile-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const log = path.join(root, 'profiles');
+  const source = `const cp=require('node:child_process');const profile=require(${JSON.stringify(parentProfilePreload)});const result=cp.spawnSync('git',['--version'],{encoding:'utf8',timeout:4000});profile.record('checkpoint',{payload:'PROFILE_PAYLOAD_SENTINEL',env:{SECRET:'PROFILE_ENV_SENTINEL'}});for(let i=0;i<8192;i++)profile.record('checkpoint');process.stdout.write(JSON.stringify({status:result.status,signal:result.signal,stdout:result.stdout,errorCode:result.error?.code||null})+'\\n');setInterval(()=>{},60000);`;
+  const child = spawn(process.execPath, ['--require', parentProfilePreload, '-e', source, root], { env: { ...process.env, HARNESS_PARENT_PROFILE_LOG: log }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  let output = '', stderr = '';
+  const ended = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill(); reject(new Error('Owned profile child did not report readiness')); }, 15_000);
+    child.stdout.on('data', chunk => { output += chunk; if (output.includes('\n')) child.kill('SIGTERM'); });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('close', (code, signal) => { clearTimeout(timer); resolve({ code, signal }); });
+  });
+  await ended;
+  const result = JSON.parse(output.trim());
+  assert.equal(result.status, 0, stderr);
+  assert.equal(result.signal, null);
+  assert.match(result.stdout, /^git version /);
+  assert.equal(result.errorCode, null);
+  const file = fs.readdirSync(log).find(name => name.startsWith(`${child.pid}-`));
+  assert.ok(file, 'a terminated child retains its own profile file');
+  const full = path.join(log, file), text = fs.readFileSync(full, 'utf8'), rows = text.trim().split('\n').map(JSON.parse);
+  assert.ok(Buffer.byteLength(text) <= 1024 * 1024);
+  assert.ok(rows.length <= 4096);
+  assert.doesNotMatch(text, /PROFILE_PAYLOAD_SENTINEL|PROFILE_ENV_SENTINEL|git version /);
+  assert.ok(rows.some(row => row.type === 'summary' && row.gitCalls === 1 && row.capped));
+  assert.ok(rows.some(row => row.type === 'spawn' && row.kind === 'git' && row.status === result.status && row.signal === result.signal));
+  assert.equal(rows.some(row => row.type === 'exit'), false, 'profiling remains useful without an exit handler');
+  const profileFiles = fs.readdirSync(log);
+  const disabled = spawnSync(process.execPath, ['--require', parentProfilePreload, '-e', `require(${JSON.stringify(parentProfilePreload)}).record('checkpoint');process.stdout.write('profile-disabled');`, root], { env: { ...process.env, HARNESS_PARENT_PROFILE_LOG: '' }, encoding: 'utf8' });
+  assert.equal(disabled.status, 0, disabled.stderr);
+  assert.equal(disabled.stdout, 'profile-disabled');
+  assert.deepEqual(fs.readdirSync(log), profileFiles);
+});
 
 test('native parent decisions use the same owned temporary staging as ordinary delivery', async () => {
   for (const argv of [
@@ -97,7 +136,9 @@ function cliFixture(t) {
   const cli = (command, ...args) => {
     const started = Date.now();
     const result = spawnSync(process.execPath, [bin, command, ...args, '--workspace', roots.coordinator, '--harness-home', home, '--copilot-home', copilotHome, '--json'], { encoding: 'utf8', timeout: 30_000 });
-    return { ...result, diagnostic: { elapsedMs: Date.now() - started, timeoutMs: 30_000, status: result.status, signal: result.signal, errorCode: result.error?.code || null } };
+    const diagnostic = { elapsedMs: Date.now() - started, timeoutMs: 30_000, status: result.status, signal: result.signal, errorCode: result.error?.code || null };
+    parentProfile.record('fixture-cli', { ...diagnostic, childPid: result.pid });
+    return { ...result, diagnostic };
   };
   const input = path.join(root, 'decision.json');
   const invoke = (...args) => {
@@ -176,9 +217,14 @@ test('actual parent CLI routes review, proof, learning, completion and journals 
   op('cli-complete', 'complete');
   assert.equal(YAML.parse(fs.readFileSync(plan, 'utf8').split('---')[1]).status, 'done');
   assert.equal(f.invoke('status', '--plan', plan).pass, true);
-  assert.equal(deliveryCompletion({ workspace: f.roots.coordinator, copilotHome: f.copilotHome, harnessHome: f.home, domainPlan: { name: 'catalogue', path: plan } }).pass, true, 'explicit native parent selection validates domain completion');
-  assert.equal(deliveryCompletion({ workspace: f.roots.coordinator, copilotHome: f.copilotHome, harnessHome: f.home, remainingSeconds: 0.001, domainPlan: { name: 'catalogue', path: plan } }).pass, false, 'parent completion respects the remaining run deadline');
-  assert.equal(deliveryCompletion({ workspace: f.roots.producer, copilotHome: f.copilotHome, harnessHome: f.home, domainPlan: { name: 'catalogue', path: plan } }).pass, false, 'a copied selection cannot grant coordinator authority');
+  const completion = options => {
+    const started = Date.now(), result = deliveryCompletion(options);
+    parentProfile.record('production-completion', { elapsedMs: Date.now() - started, timeoutMs: Math.max(1, Math.min(10_000, (options.remainingSeconds ?? 10) * 1000)), pass: result.pass });
+    return result;
+  };
+  assert.equal(completion({ workspace: f.roots.coordinator, copilotHome: f.copilotHome, harnessHome: f.home, domainPlan: { name: 'catalogue', path: plan } }).pass, true, 'explicit native parent selection validates domain completion');
+  assert.equal(completion({ workspace: f.roots.coordinator, copilotHome: f.copilotHome, harnessHome: f.home, remainingSeconds: 0.001, domainPlan: { name: 'catalogue', path: plan } }).pass, false, 'parent completion respects the remaining run deadline');
+  assert.equal(completion({ workspace: f.roots.producer, copilotHome: f.copilotHome, harnessHome: f.home, domainPlan: { name: 'catalogue', path: plan } }).pass, false, 'a copied selection cannot grant coordinator authority');
   for (const workspace of Object.values(f.roots)) {
     assert.equal(fs.existsSync(path.join(workspace, '.harness')), false, workspace);
     assert.equal(f.git(workspace, 'status', '--porcelain'), '', workspace);

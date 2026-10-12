@@ -110,6 +110,8 @@ jobs:
         shell: bash
         env:
           HARNESS_PROOF_LOG: windows-adaptive-transcripts.jsonl
+          HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-focus
+          NODE_OPTIONS: --require="${{ github.workspace }}/packages/harness/test/helpers/domain-parent-profile.cjs"
         run: >-
           node --test
           packages/harness/test/windows-authority.test.mjs
@@ -140,9 +142,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: windows-adaptive-proof
+          include-hidden-files: true
           path: |
             windows-adaptive-proof.log
             windows-adaptive-transcripts.jsonl
+            .harness/diagnostics/windows-parent-focus/
       - name: Require native Windows passing verdict
         if: always()
         shell: bash

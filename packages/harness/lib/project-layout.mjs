@@ -308,10 +308,12 @@ function contained(root, candidate) {
 export function normalizePlanRel(workspace, planPath, { home } = {}) {
   if (!planPath || typeof planPath !== 'string') return null;
   const external = externalPlansDir(workspace, { home });
+  let absoluteFull = null;
   if (path.isAbsolute(planPath)) {
     const resolved = path.resolve(planPath);
     try {
       const full = canonicalPath(resolved);
+      absoluteFull = full;
       const root = fs.existsSync(external) ? canonicalPath(external) : path.resolve(external);
       if (contained(root, full) && /\.(?:md|hplan)$/.test(full)) return full;
     } catch {
@@ -319,9 +321,16 @@ export function normalizePlanRel(workspace, planPath, { home } = {}) {
     }
   }
   const root = fs.existsSync(workspace) ? canonicalPath(workspace) : path.resolve(workspace);
-  const full = path.resolve(root, planPath);
+  const full = absoluteFull || path.resolve(root, planPath);
   const rel = path.relative(root, full).replace(/\\/g, '/');
   if (!rel.startsWith('..') && !path.isAbsolute(rel) && /\.(?:md|hplan)$/.test(rel) && isPlanRel(rel) && !rel.startsWith(`${EXTERNAL_PLANS_REL}/`)) {
+    if (absoluteFull) {
+      const raw = path.resolve(planPath);
+      const rawWorkspace = rel.split('/').reduce(parent => path.dirname(parent), raw);
+      try {
+        if (canonicalPath(rawWorkspace) !== root || !assertNoSymlinkAncestors(rawWorkspace, path.relative(rawWorkspace, raw))) return null;
+      } catch { return null; }
+    }
     if (fileExists(workspace, rel)) return rel;
   }
   if (path.isAbsolute(planPath)) return null;

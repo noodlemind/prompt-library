@@ -37,6 +37,108 @@ function run(args, { ws, home, harnessHome }) {
   });
 }
 
+test('legacy plan normalization retains native absolute filesystem aliases', t => {
+  const raw = temp('proj-alias-');
+  t.after(() => fs.rmSync(raw, { recursive: true, force: true }));
+  const ws = fs.realpathSync.native(raw);
+  if (raw === ws) return t.skip('the temporary directory has no native path alias');
+  const home = path.join(ws, 'home');
+  for (const namespace of [WORKSPACE_PLANS_REL, SESSION_PLANS_REL]) {
+    for (const extension of ['md', 'hplan']) {
+      const rel = `${namespace}/2026-10-12-feat-native-alias-plan.${extension}`;
+      const full = path.join(ws, rel), alias = path.join(raw, rel);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, 'original plan bytes\n');
+      assert.equal(normalizePlanRel(ws, alias, { home }), rel);
+      assert.equal(normalizePlanRel(raw, full, { home }), rel);
+      assert.equal(fs.readFileSync(full, 'utf8'), 'original plan bytes\n');
+    }
+  }
+});
+
+test('legacy plan normalization uses native identity for a retained short path spelling', t => {
+  const root = temp('proj-native-spelling-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ws = fs.realpathSync.native(path.join(root));
+  const alias = path.join(ws, 'LEGACY~1');
+  const rel = `${WORKSPACE_PLANS_REL}/2026-10-12-feat-native-spelling-plan.hplan`;
+  const full = path.join(ws, rel), raw = path.join(alias, rel);
+  for (const file of [full, raw]) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'unchanged native spelling fixture\n');
+  }
+  const native = fs.realpathSync.native;
+  t.mock.method(fs.realpathSync, 'native', (file, ...args) => {
+    const resolved = path.resolve(String(file));
+    if (resolved === alias) return ws;
+    if (resolved === raw) return full;
+    return native(file, ...args);
+  });
+  assert.equal(normalizePlanRel(ws, raw, { home: path.join(ws, 'home') }), rel);
+  for (const file of [full, raw]) assert.equal(fs.readFileSync(file, 'utf8'), 'unchanged native spelling fixture\n');
+});
+
+for (const code of ['ENOENT', 'EACCES']) test(`legacy plan normalization fails closed when its raw workspace alias becomes ${code}`, t => {
+  const root = temp('proj-invalidated-alias-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ws = fs.realpathSync.native(root), alias = path.join(ws, 'LEGACY~1');
+  const rel = `${WORKSPACE_PLANS_REL}/2026-10-12-feat-invalidated-alias-plan.hplan`;
+  const full = path.join(ws, rel), raw = path.join(alias, rel);
+  for (const file of [full, raw]) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'unchanged invalidated alias fixture\n');
+  }
+  const realpath = fs.realpathSync, native = realpath.native;
+  let leafResolved = false;
+  const unavailable = () => {
+    assert.equal(leafResolved, true, 'the existing leaf must resolve before its raw workspace becomes unavailable');
+    throw Object.assign(new Error('raw workspace alias became unavailable'), { code });
+  };
+  t.mock.method(fs, 'realpathSync', (file, ...args) => path.resolve(String(file)) === alias ? unavailable() : realpath(file, ...args));
+  fs.realpathSync.native = (file, ...args) => {
+    const resolved = path.resolve(String(file));
+    if (resolved === raw) { leafResolved = true; return full; }
+    if (resolved === alias) return unavailable();
+    return native(file, ...args);
+  };
+  assert.equal(normalizePlanRel(ws, raw, { home: path.join(ws, 'home') }), null);
+  assert.equal(leafResolved, true, 'the alias leaf was resolved before its workspace became unavailable');
+  for (const file of [full, raw]) assert.equal(fs.readFileSync(file, 'utf8'), 'unchanged invalidated alias fixture\n');
+});
+
+test('plan normalization preserves basename, relative, canonical legacy and external lookup', t => {
+  const root = temp('proj-lookup-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ws = fs.realpathSync.native(root), home = path.join(ws, 'home');
+  for (const namespace of [WORKSPACE_PLANS_REL, SESSION_PLANS_REL]) {
+    const name = `2026-10-12-feat-${namespace === WORKSPACE_PLANS_REL ? 'committed' : 'session'}-plan.md`;
+    const rel = `${namespace}/${name}`, full = path.join(ws, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, 'unchanged legacy fixture\n');
+    for (const arg of [name, rel, full]) assert.equal(normalizePlanRel(ws, arg, { home }), rel);
+    assert.equal(fs.readFileSync(full, 'utf8'), 'unchanged legacy fixture\n');
+  }
+  const outside = path.join(projectStoreDir(ws, { home }), 'plans', '2026-10-12-feat-external-plan.hplan');
+  fs.mkdirSync(path.dirname(outside), { recursive: true });
+  fs.writeFileSync(outside, 'unchanged external fixture\n');
+  for (const arg of [path.basename(outside), outside]) assert.equal(normalizePlanRel(ws, arg, { home }), outside);
+  assert.equal(normalizePlanRel(ws, path.join(ws, 'outside-plan.md'), { home }), null);
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'unchanged external fixture\n');
+});
+
+test('an absolute custom symlink cannot turn an unapproved path into a legacy plan path', t => {
+  const root = temp('proj-linked-plan-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ws = fs.realpathSync.native(root), home = path.join(ws, 'home');
+  const rel = `${WORKSPACE_PLANS_REL}/2026-10-12-feat-custom-link-plan.hplan`;
+  const full = path.join(ws, rel), link = path.join(ws, 'docs', 'custom-plans');
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, 'unchanged symlink target\n');
+  fs.symlinkSync(path.dirname(full), link, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(normalizePlanRel(ws, path.join(link, path.basename(full)), { home }), null);
+  assert.equal(fs.readFileSync(full, 'utf8'), 'unchanged symlink target\n');
+});
+
 test('fresh product repo writes plans under .harness/plans, not docs/', () => {
   const ws = gitWs();
   const home = temp('proj-cop-');
