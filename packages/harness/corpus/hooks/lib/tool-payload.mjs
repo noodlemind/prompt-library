@@ -575,6 +575,29 @@ export function harnessControlCommand(tokens, workspace) {
   } else return null;
   if (!args.length) return 'help';
   if (HARNESS_CONTROL.has(args[0])) return args[0];
+  if (['inventory', 'domain'].includes(args[0])) {
+    const inventory = args[0] === 'inventory', verb = args[1];
+    if (!(inventory ? ['show', 'refresh'].includes(verb) : verb === 'show')) return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--workspace', '--harness-home', '--copilot-home',
+      ...(inventory && verb === 'refresh' ? ['--editor', '--profile', '--installation', '--launcher', '--user-data', '--config-root', '--plugins-root'] : []),
+      ...(!inventory ? ['--name'] : [])]);
+    const values = new Map(), seen = new Set();
+    for (let index = 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('=');
+      const name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || /[\u0000-\u001f\u007f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    if (inventory && verb === 'refresh' && !['vscode', 'cursor', 'jetbrains'].includes(values.get('--editor'))) return null;
+    if (!inventory && (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(values.get('--name') || '') || values.get('--name').length > 64)) return null;
+    return args[0];
+  }
   if (args[0] === 'todo') {
     const hasVerb = args[1] && !args[1].startsWith('-');
     const verb = hasVerb ? args[1] : 'list';

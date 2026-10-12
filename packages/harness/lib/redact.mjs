@@ -19,6 +19,11 @@ const FALLBACK_MASK = mask('error');
 
 const DEFAULT_PATTERNS = [
   {
+    kind: 'url-credentials',
+    re: /((?:\b(?:https?|wss?|ftp):[\\/]*|\b[a-z][a-z0-9+.-]*:[\\/]{2,}|(?<![:\w])[\\/]{2,}))[^\\/?#\s]+@/i,
+    mask: (_match, scheme) => `${scheme}${mask('url-credentials')}@`,
+  },
+  {
         kind: 'github-token',
     re: /(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,255}\b|github_pat_[A-Za-z0-9_]{20,255}\b/,
   },

@@ -75,6 +75,8 @@ import { EVENT_TYPE, summarizeArgFlags } from './event-registry.mjs';
 import { createRedactor, redactedJson } from './redact.mjs';
 import { cmdModel, modelResultOf, MODEL_VERBS } from './model-cmd.mjs';
 import { cmdInspect, inspectResultOf, inspectExitFor, INSPECT_VERBS } from './inspect-cmd.mjs';
+import { cmdDomain, domainResultOf, DOMAIN_VERBS } from './domain-cmd.mjs';
+import { cmdInventory, inventoryResultOf, INVENTORY_VERBS } from './inventory-cmd.mjs';
 
 const REGISTRY = new Map();
 
@@ -1173,6 +1175,55 @@ registerCommand({
   handler: cmdTodo,
   resultOf: todoResultOf,
   exitOf: todoExitFor,
+});
+
+registerCommand({
+  name: 'domain',
+  summary: 'observe existing local domain membership and checkout drift',
+  group: 'engineer loop',
+  sideEffect: 'read',
+  instrument: false,
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<show> --name <name>',
+  verbs: [{ verb: 'show', summary: 'read version 1 membership without creating execution authority' }],
+  args: {
+    positionals: [{ name: 'verb', description: DOMAIN_VERBS.join('|'), required: true }],
+    flags: [{ name: '--name', type: 'string', valueName: 'name', description: 'existing local domain name', required: true, tui: 'prompt' }],
+  },
+  handler: cmdDomain,
+  resultOf: domainResultOf,
+  exitOf: result => result.exitCode,
+});
+
+registerCommand({
+  name: 'inventory',
+  summary: 'read or refresh an optional sourced local IDE snapshot',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  instrument: false,
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<show|refresh> [--editor <family>] [--profile <id>] [--installation <path>] [--launcher <path>] [--user-data <path>] [--config-root <path>] [--plugins-root <path>]',
+  verbs: [
+    { verb: 'show', summary: 'read the dated cache without collecting or creating files', sideEffect: 'read' },
+    { verb: 'refresh', summary: 'collect one IDE family and merge its cache in the selected home' },
+  ],
+  args: {
+    positionals: [{ name: 'verb', description: INVENTORY_VERBS.join('|'), required: true }],
+    flags: [
+      { name: '--editor', type: 'string', valueName: 'family', description: 'vscode, cursor or jetbrains', tui: 'prompt', appliesToVerbs: ['refresh'] },
+      { name: '--profile', type: 'string', valueName: 'id', description: 'existing profile directory ID', tui: 'prompt', appliesToVerbs: ['refresh'] },
+      ...['installation', 'launcher', 'user-data', 'config-root', 'plugins-root'].map(name => ({ name: `--${name}`, type: 'string', valueName: 'path', description: `read-only ${name} metadata location`, tui: 'prompt', appliesToVerbs: ['refresh'] })),
+    ],
+  },
+  handler: cmdInventory,
+  resultOf: inventoryResultOf,
+  exitOf: result => result.exitCode,
 });
 
 registerCommand({

@@ -55,7 +55,7 @@ export function beforeDeliveryTool(call, options) {
   if (call.name === 'harness') {
     const argv = call.input?.argv;
     if (!Array.isArray(argv) || !argv.length || !argv.every(arg => typeof arg === 'string')
-      || !(COMMANDS.has(argv[0]) || argv[0] === 'todo' && harnessControlCommand(['harness', ...argv], options.workspace) === 'todo')) return { pass: false, reason: 'harness requires argv for a supported lifecycle command or scoped todo control' };
+      || !(COMMANDS.has(argv[0]) || ['todo', 'inventory', 'domain'].includes(argv[0]) && harnessControlCommand(['harness', ...argv], options.workspace) === argv[0])) return { pass: false, reason: 'harness requires argv for a supported lifecycle command or exact diagnostic/worklist control' };
     if (argv[0] === 'trust' && argv[1] && argv[1] !== 'status') return { pass: false, reason: 'Trust approval or revocation requires a person; the agent may read trust status only.' };
     if (argv.some(arg => /^--(?:workspace|copilot-home|harness-home|home)(?:=|$)/.test(arg))) return { pass: false, reason: 'Lifecycle commands are bound to this run workspace and homes.' };
     return { pass: true };
@@ -92,6 +92,7 @@ export async function runDeliveryCommand(input, run) {
   let directory;
   try {
     const argv = [...input.argv];
+    if (['inventory', 'domain'].includes(argv[0]) && !argv.includes('--verbose') && !argv.includes('-v')) argv.push('--verbose');
     if (input.decision !== undefined) {
       const flag = argv[0] === 'compound' ? '--learning-decision' : '--file';
       if (!['plan-new', 'plan-update', 'compound', 'review'].includes(argv[0]) || argv.includes(flag)) throw new Error('decision requires plan-new, plan-update, review or compound without an existing input file');

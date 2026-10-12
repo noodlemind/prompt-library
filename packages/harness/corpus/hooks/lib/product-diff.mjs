@@ -1,10 +1,10 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-export function readGitArgs(workspace, { timeout = 4000 } = {}) {
+export function readGitArgs(workspace, { timeout = 4000, env = process.env } = {}) {
   const args = ['-c', 'core.fsmonitor=false'];
   const config = spawnSync('git', ['--no-pager', ...args, 'config', '--includes', '--null', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'], {
-    cwd: workspace, encoding: 'utf8', timeout, maxBuffer: 64 * 1024,
+    cwd: workspace, encoding: 'utf8', timeout, maxBuffer: 64 * 1024, env,
   });
   if (config.error || ![0, 1].includes(config.status)) return null;
   const output = String(config.stdout || '');

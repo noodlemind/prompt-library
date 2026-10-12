@@ -6,6 +6,33 @@ function redactor(overrides = {}) {
   return createRedactor({ env: {}, ...overrides });
 }
 
+test('URL userinfo is masked in values and mapping keys without changing public locations', () => {
+  const uri = 'https://canary-reader:canary-private-pass@example.invalid/skills';
+  const clean = 'https://example.invalid/skills';
+  const value = redactor().redactValue({ origin: uri, overrides: { [uri]: true }, public: clean });
+  const raw = JSON.stringify(value);
+  assert.doesNotMatch(raw, /canary-reader|canary-private-pass/);
+  assert.match(raw, /redacted:url-credentials/);
+  assert.equal(value.public, clean);
+});
+
+test('URL credentials containing an unescaped at sign are completely masked', () => {
+  const uri = 'https://reader:initial@private-tail@example.invalid/product.git';
+  assert.equal(new URL(uri).password, 'initial%40private-tail');
+  const value = redactor().redactValue({ origin: uri, locations: { [uri]: true } });
+  assert.doesNotMatch(JSON.stringify(value), /reader|initial|private-tail/);
+  assert.match(value.origin, /example\.invalid/);
+});
+
+test('protocol-relative and special-scheme authority forms mask credentials', () => {
+  for (const prefix of ['//', 'https:\\\\', 'https:\\', 'https:/', 'https:', 'https:/\\']) {
+    const uri = `${prefix}reader:private-tail-canary@example.invalid/skills`;
+    assert.equal((prefix === '//' ? new URL(uri, 'https://base.invalid') : new URL(uri)).password, 'private-tail-canary');
+    const value = redactor().redactValue({ origin: uri, locations: { [uri]: true } });
+    assert.doesNotMatch(JSON.stringify(value), /reader|private-tail-canary/);
+  }
+});
+
 test('github-token: masks ghp_/gho_/github_pat_ tokens', () => {
   const { redactText } = redactor();
   const ghp = 'ghp_' + 'a'.repeat(36);

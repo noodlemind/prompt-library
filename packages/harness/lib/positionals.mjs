@@ -4,6 +4,7 @@ export const VALUE_FLAGS = Object.freeze(new Set([
   '--cursor', '--cwd', '--date', '--depth', '--docid', '--does-not-apply', '--domain', '--enforcement',
   '--expect', '--expected-output', '--file', '--from', '--from-id', '--gap', '--gap-fulfillment', '--goal', '--harness-home', '--host', '--id', '--ids', '--impacted', '--intent', '--intent-source', '--layer', '--learnings',
   '--intent-page', '--intent-page-size',
+  '--editor', '--name', '--launcher', '--installation', '--user-data', '--config-root', '--plugins-root',
   '--limit', '--lines', '--match', '--max-bytes', '--max-seconds', '--max-turns',
   '--min-score', '--model', '--new', '--offset', '--old', '--ops', '--output', '--path', '--phase', '--plan',
   '--profile', '--provider', '--query', '--reason', '--review-completed', '--risk', '--scope', '--session', '--shows', '--since',

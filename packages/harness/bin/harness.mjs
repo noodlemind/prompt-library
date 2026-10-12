@@ -21,7 +21,7 @@ const ui = createStyle({ argv: args, stream: process.stderr });
 const out = createStyle({ argv: args });
 
 export const HELP_COMMAND_ORDER = [
-  'install', 'upgrade', 'doctor', 'status', 'uninstall',
+  'install', 'upgrade', 'doctor', 'inventory', 'domain', 'status', 'uninstall',
   'init-repo', 'prepare', 'migrate', 'index', 'plan-new', 'plan-update', 'worktree', 'route', 'config',
   'model', 'trust', 'resources', 'review',
     'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'agent', 'validate-plan', 'compound', 'recall', 'get', 'edit', 'write', 'apply', 'todo', 'undo', 'search', 'lookup', 'tree', 'run', 'inspect', 'tui', 'events', 'report',
@@ -193,7 +193,7 @@ async function main() {
       const { args: laneArgs, output } = extractOutputLane(args);
       const runFlags = parseFlags(args);
       const runWorkspace = path.resolve(runFlags.workspace);
-      const journaling = !shouldSkipRunJournal(runFlags);
+      const journaling = getCommand(command)?.workspaceJournal !== false && !shouldSkipRunJournal(runFlags);
       runId = newRunId();
       runStartedAt = Date.now();
             setRunContext({ run: runId, actor: detectActor() });

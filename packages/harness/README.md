@@ -68,6 +68,8 @@ The optional `harness agent --profile deliver` loop enforces explicit orientatio
 |---------|---------|
 | `install` / `upgrade` | Hydrate `~/.copilot/` and install the VS Code bridge; upgrade retires lock paths |
 | `doctor` | Health; `--host vscode` runs hook probes |
+| `inventory show` / `inventory refresh --editor <family>` | Optional sourced local IDE snapshot in the selected Harness home |
+| `domain show --name <name>` | Read-only local membership and identity drift from an existing domain configuration |
 | `status` / `uninstall` | Version/lock; remove tracked files only |
 | `init-repo` | Plan/session paths + checks/policy stubs; migrates leftover gitignored `docs/` artifacts |
 | `prepare` | Starter spec and ADR when those paths are missing; skips files that already exist |
