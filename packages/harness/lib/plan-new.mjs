@@ -477,9 +477,9 @@ async function relockPlan({ workspace, from, dryRun, toStdout, json, classificat
     ...(prepared.domains.length ? { domains: prepared.domains } : {}),
     ...(prepared.playbook ? { playbook: prepared.playbook } : {}),
   };
-  const lockedSources = bindLockedIntentSources(workspace, frontmatter.intent_sources, {
-    query: typeof frontmatter.intent === 'string' ? frontmatter.intent : '',
-  });
+  const lockedSources = frontmatter.intent_source_policy === 'content-v1' && frontmatter.intent_sources?.length
+    ? lockIntentSources(workspace, frontmatter.intent_sources, { rehash: false })
+    : bindLockedIntentSources(workspace, frontmatter.intent_sources, { query: typeof frontmatter.intent === 'string' ? frontmatter.intent : '' });
   if (lockedSources.length) frontmatter.intent_sources = lockedSources;
   else delete frontmatter.intent_sources;
   const content = original.replace(/^---\r?\n[\s\S]*?\r?\n---/, `---\n${YAML.stringify(frontmatter)}---`);

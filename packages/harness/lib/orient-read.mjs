@@ -1,3 +1,4 @@
+import { resolveObligation, intentPage } from './intent-sources.mjs';
 import { locateVerification } from './verification-location.mjs';
 import { rankLearnings } from './knowledge/retrieve.mjs';
 import { readStoreConfig } from './knowledge/store.mjs';
@@ -112,8 +113,12 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
     index = INDEX_MISSING;
   }
 
+  const obligation = resolveObligation(workspace, active, q);
   return {
     neighborhood,
+    intentSources: obligation.paths,
+    intentDiscovery: obligation.metadata,
+    intentDetail: flags.intentPage ? intentPage(workspace, active?.fm?.intent || q, { page: flags.intentPage, pageSize: flags.intentPageSize || 8 }) : null,
     verification: locateVerification(workspace, active?.fm?.verification?.recipe),
     planGoal: active ? extractGoalFromPlan(active) : null,
     trust: trustStatus({ workspace, copilotHome, home }),

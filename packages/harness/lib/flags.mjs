@@ -166,6 +166,11 @@ export function parseFlags(argv) {
     }
     else if (a.startsWith('--phase=')) flags.phase = parsePhase(a.split('=')[1]);
     else if (a === '--phase') flags.phase = parsePhase(scan[++i]);
+    else if (a === '--intent-page' || a.startsWith('--intent-page=')) flags.intentPage = parsePositiveInt(a === '--intent-page' ? scan[++i] : a.slice('--intent-page='.length), '--intent-page');
+    else if (a === '--intent-page-size' || a.startsWith('--intent-page-size=')) {
+      flags.intentPageSize = parsePositiveInt(a === '--intent-page-size' ? scan[++i] : a.slice('--intent-page-size='.length), '--intent-page-size');
+      if (flags.intentPageSize > 32) invalidFlag('--intent-page-size', flags.intentPageSize, 'must be at most 32');
+    }
     else if (a.startsWith('--limit=')) flags.limit = parseInt(a.split('=')[1], 10);
     else if (a === '--limit') flags.limit = parseInt(scan[++i], 10);
     else if (a === '--preserve-knowledge') flags.preserveKnowledge = true;

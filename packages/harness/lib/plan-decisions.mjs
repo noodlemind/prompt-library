@@ -80,12 +80,12 @@ export function scopePaths(values) {
 }
 
 export function validatePlanDecision(input) {
-  fields(input, ['version', 'id', 'action', 'expect', 'rationale', 'authority', 'changes', 'intentSources', 'finding', 'gap', 'migrateIntent', 'progress'], 'operation');
+  fields(input, ['version', 'id', 'action', 'expect', 'rationale', 'authority', 'changes', 'intentSources', 'intentSelection', 'finding', 'gap', 'migrateIntent', 'progress'], 'operation');
   if (input.version !== 1 || typeof input.id !== 'string' || !ID.test(input.id) || !PLAN_ACTIONS.includes(input.action) || !HASH.test(input.expect || '')) fail('operation requires version 1, id, action and observed plan sha256 in expect');
   if (input.migrateIntent !== undefined && typeof input.migrateIntent !== 'boolean') fail('migrateIntent must be boolean');
   if (['amend', 'gap'].includes(input.action)) text(input.rationale, 'rationale');
-  const allowed = { start: ['migrateIntent'], amend: ['changes', 'intentSources', 'migrateIntent'], progress: ['progress'], finding: ['finding'], gap: ['gap'], complete: [] }[input.action];
-  for (const key of ['changes', 'intentSources', 'finding', 'gap', 'migrateIntent', 'progress']) if (input[key] !== undefined && !allowed.includes(key)) fail(`${key} is not valid for ${input.action}`);
+  const allowed = { start: ['migrateIntent'], amend: ['changes', 'intentSources', 'intentSelection', 'migrateIntent'], progress: ['progress'], finding: ['finding'], gap: ['gap'], complete: [] }[input.action];
+  for (const key of ['changes', 'intentSources', 'intentSelection', 'finding', 'gap', 'migrateIntent', 'progress']) if (input[key] !== undefined && !allowed.includes(key)) fail(`${key} is not valid for ${input.action}`);
   if (input.authority !== undefined) {
     fields(input.authority, ['scope', 'basis'], 'authority');
     text(input.authority.scope, 'authority scope');
@@ -118,6 +118,23 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     if (readPlanRecord(plan.text)) fm.plan_format = 'short-v2'; else fm.plan_schema = 2;
   } else if (input.action === 'start' && !plan.plan_lock) {
     fm.intent_sources = fm.intent_sources?.length ? lockIntentSources(workspace, fm.intent_sources, { rehash: false }) : bindLockedIntentSources(workspace, fm.intent_sources || [], { query: fm.intent || readPlanRecord(plan.text)?.goal || '' });
+  }
+  if (input.intentSelection !== undefined) {
+    if (input.authority?.scope !== 'plan-intent' || input.intentSources !== undefined || fm.intent_source_policy !== 'content-v1') fail('selection amendments require current intent policy and exclusive plan-intent authority');
+    fields(input.intentSelection, ['previous', 'next'], 'intent selection');
+    const { previous, next } = input.intentSelection;
+    if (!Array.isArray(previous) || previous.length > 128 || previous.some(source => !sourcePath(source) || !sourceHash(source)) || new Set(previous.map(sourcePath)).size !== previous.length) fail('previous intent selection requires unique accepted bindings');
+    for (const source of previous) fields(source, ['path', 'sha256'], 'previous intent binding');
+    const canonical = entries => JSON.stringify(entries.map(source => ({ path: sourcePath(source), sha256: sourceHash(source) })).sort((a, b) => a.path.localeCompare(b.path)));
+    if (canonical(previous) !== canonical(fm.intent_sources || [])) fail('intent selection has a stale previous source set');
+    if (!Array.isArray(next) || next.length > 128 || next.some(source => typeof source !== 'string' || !source.trim()) || new Set(next.map(sourcePath)).size !== next.length) fail('next intent selection requires bounded unique paths');
+    const bindings = lockIntentSources(workspace, next, { rehash: true });
+    for (const rel of new Set([...previous.map(sourcePath), ...bindings.map(sourcePath)])) {
+      const oldHash = sourceHash(previous.find(source => sourcePath(source) === rel));
+      const newHash = sourceHash(bindings.find(source => source.path === rel));
+      if (oldHash !== newHash) amendments.push({ path: rel, oldHash, newHash });
+    }
+    fm.intent_sources = bindings;
   }
   if (input.intentSources !== undefined) {
     if (!Array.isArray(input.intentSources) || !input.intentSources.length || input.authority?.scope !== 'plan-intent') fail('source amendments require entries and explicit plan-intent authority scope');

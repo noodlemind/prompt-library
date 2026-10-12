@@ -3,6 +3,8 @@ const FLAGS_WITH_VALUES = new Set([
   '--copilot-home',
   '--harness-home',
   '--limit',
+  '--intent-page',
+  '--intent-page-size',
   '--phase',
   '--query',
   '--target',

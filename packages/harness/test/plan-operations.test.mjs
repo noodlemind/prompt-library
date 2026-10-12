@@ -511,3 +511,30 @@ test('unsupported declared schemas cannot grant a gate or contract authority', t
   assert.match(gate.blockedReason, /schema/i);
   assert.equal(JSON.parse(f.cli('status', '--contract-digest', '--plan', f.plan).stdout).digest, null);
 });
+
+test('reviewed intent replacement records additions and removals and rejects stale source sets', t => {
+  const f = fixture(t), previous = YAML.parse(f.text().split('---')[1]).intent_sources;
+  const nextPath = 'docs/specs/replacement.md';
+  fs.writeFileSync(path.join(f.ws, nextPath), '# Replacement\nReturn two with accepted constraints.\n');
+  const input = f.decision('amend', { rationale: 'User accepted the replacement specification.', authority: { scope: 'plan-intent', basis: 'user-request' }, intentSelection: { previous, next: [nextPath] } });
+  const result = f.op(input);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(YAML.parse(f.text().split('---')[1]).intent_sources, [{ path: nextPath, sha256: hash(fs.readFileSync(path.join(f.ws, nextPath))) }]);
+  assert.ok(result.value.amendments.some(source => source.path === f.source && source.newHash === null));
+  assert.ok(result.value.amendments.some(source => source.path === nextPath && source.oldHash === null));
+  assert.equal(f.op(input).value.replayed, true);
+  const accepted = f.text();
+  assert.equal(f.op({ ...input, id: 'stale-selection', expect: hash(accepted) }).status, 2);
+  assert.equal(f.text(), accepted);
+  assert.equal(f.op(f.decision('amend', { rationale: 'Cannot bypass intent authority.', intentSelection: { previous: YAML.parse(accepted.split('---')[1]).intent_sources, next: [f.source] } })).status, 2);
+});
+
+test('plan-new relock preserves accepted hashes and selected paths after source drift', t => {
+  const f = fixture(t), previous = YAML.parse(f.text().split('---')[1]).intent_sources;
+  fs.writeFileSync(f.full, f.text().replace('plan_lock: true', 'plan_lock: false'));
+  fs.appendFileSync(path.join(f.ws, f.source), 'Unaccepted change.\n');
+  const result = f.cli('plan-new', '--from', f.plan);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(YAML.parse(f.text().split('---')[1]).intent_sources, previous);
+  assert.equal(JSON.parse(f.cli('gate', '--plan', f.plan).stdout).pass, false);
+});

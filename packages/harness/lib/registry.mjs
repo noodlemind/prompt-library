@@ -621,6 +621,8 @@ registerCommand({
       },
     ],
     flags: [
+      { name: '--intent-page', type: 'number', valueName: 'n', description: 'read a bounded page of ranked intent candidates', required: false, default: null },
+      { name: '--intent-page-size', type: 'number', valueName: 'n', description: 'intent paths per page, 1 to 32', required: false, default: 8 },
       { name: '--plan', type: 'string', valueName: 'path', description: 'orient the selected plan instead of ranking active plans', required: false, default: null },
       { name: '--query', type: 'string', valueName: 'text', description: 'agent/internal task summary', required: false, default: null, tui: 'prompt' },
       { name: '--limit', type: 'number', valueName: 'n', description: 'recall result count (default 3)', required: false, default: 3, tui: 'prompt' },
@@ -637,7 +639,7 @@ registerCommand({
       { name: '--min-score', type: 'number', valueName: 'n', description: 'minimum score (default 0.15)', required: false, default: 0.15, tui: 'prompt' },
             { name: '--explain', type: 'boolean', description: 'decompose learning ranking (deterministic)', required: false, default: false, tui: 'verb' },
       { name: '--file', type: 'string', valueName: 'path', description: 'one file to place in the change neighborhood (repeatable)', required: false, default: null, tui: 'prompt' },
-      { name: '--read', type: 'boolean', description: 'print the eight-key session slice and write no context pack', required: false, default: false, tui: 'cli-only' },
+      { name: '--read', type: 'boolean', description: 'print the bounded session slice and write no context pack', required: false, default: false, tui: 'cli-only' },
     ],
   },
   handler: cmdOrient,

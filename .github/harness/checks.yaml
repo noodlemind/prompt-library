@@ -25,3 +25,7 @@ checks:
     command: ["node", "--test", "packages/harness/test/check-artifacts.test.mjs", "packages/harness/test/verification-location.test.mjs", "packages/harness/test/verification-recipes.test.mjs", "packages/harness/test/cli-evidence-verify.test.mjs"]
     timeout_seconds: 300
     proof: behavior
+  adaptive-intent-tests:
+    command: ["node", "--test", "packages/harness/test/adaptive-intent.test.mjs", "packages/harness/test/issue-intake.test.mjs", "packages/harness/test/plan-operations.test.mjs", "packages/harness/test/orient-read-slice.test.mjs"]
+    timeout_seconds: 300
+    proof: behavior

@@ -364,7 +364,8 @@ function structuredPlanUpdate({ workspace, full, input, flags, dryRun }) {
       if (!prerequisites.pass) missing.push(prerequisites.message);
     }
     if (missing.length || gate && (!gate.pass || gate.exitCode !== 0)) return { status: 'blocked', path: full, missing: [...new Set(missing)], allowedNextActions: ['Repair the named prerequisites, then retry the same decision if the revision is unchanged'], updated: false };
-    if (!decision.amendments.every(source => hashIntentFile(workspace, source.path) === source.newHash)) throw usage('intent source changed while applying the amendment');
+    if (!decision.amendments.every(source => source.newHash === null || hashIntentFile(workspace, source.path) === source.newHash)) throw usage('intent source changed while applying the amendment');
+    if (input.intentSelection && !intentSourcesCheck(proposed, workspace).pass) throw usage('selected intent source changed before amendment publication');
     if (gate && !intentSourcesCheck(proposed, workspace).pass) throw usage('selected intent source changed before start publication');
     const completion = input.action === 'complete' ? completeWork({ workspace, plan: proposed, copilotHome, dryRun }) : null;
     const affectedEvidence = planDigest(plan.text) === planDigest(proposed.text) ? null : {
