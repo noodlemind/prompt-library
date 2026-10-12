@@ -279,7 +279,8 @@ test('completed per-repo proof remains separate from joint compatibility, repair
   assert.equal(published.indexed.entries, 1);
   assert.equal(published.indexed.indexEntries, 1);
   assert.equal(published.indexed.indexDir, path.join(f.recordRoot, '.harness/knowledge-index'));
-  assert.equal(published.publishedPath.startsWith(`${f.recordRoot}/docs/solutions/`), true);
+  const publishedRelative = path.relative(path.join(f.recordRoot, 'docs/solutions'), published.publishedPath);
+  assert.ok(publishedRelative && !publishedRelative.startsWith('..') && !path.isAbsolute(publishedRelative), published.publishedPath);
   assert.equal(fs.existsSync(published.publishedPath), true);
   assert.equal(fs.existsSync(path.join(f.coordinator, 'docs/solutions')), false);
   assert.equal(fs.existsSync(path.join(f.copilotHome, 'knowledge')), false);
