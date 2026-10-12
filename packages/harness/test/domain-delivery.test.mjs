@@ -3,17 +3,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { test } from 'node:test';
 import YAML from 'yaml';
 import { readDomain } from '../lib/domain-contract.mjs';
 import { snapshotDomain } from '../lib/domain-bindings.mjs';
-import { approveProject, isProjectTrusted } from '../lib/trust.mjs';
+import { approveProject, isProjectTrusted, trustStatus } from '../lib/trust.mjs';
 import { resolveDomainContext, authorizeDomainPlan } from '../lib/domain-context.mjs';
 import { planFromText, loadPlan } from '../lib/plan-parse.mjs';
 import { createDomainPlans } from '../lib/domain-plans.mjs';
 import { updatePlanDecision } from '../lib/plan-update.mjs';
 import { planRevision } from '../lib/plan-decisions.mjs';
-import { planDigest, readEvidence, validateEvidence } from '../lib/evidence.mjs';
+import { createEvidenceBinding, planDigest, proofPolicyDigest, readEvidence, validateEvidence } from '../lib/evidence.mjs';
 import { prepareReview, assembleReview, recordHash } from '../lib/review.mjs';
 import { runVerify } from '../lib/verify.mjs';
 import { runCompound } from '../lib/compound.mjs';
@@ -61,6 +63,41 @@ function fixture(t) {
   const plan = authorizeDomainPlan(resolveDomainContext({ workspace: coordinator, home, name: 'catalog' }), planFromText(`---\n${YAML.stringify(fm)}---\n\n# Catalog\n`, { path: fullPath, fullPath }));
   return { dir, home, copilotHome, roots, coordinator, plan, recordRoot, options: { workspace: coordinator, plan, copilotHome, home, recordRoot } };
 }
+
+test('participating content keeps literal evidence bytes and selected-home trust without discarded per-repo HEAD probes', t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.roots.producer, 'schema.json'), '{"version":5}');
+  const previous = createEvidenceBinding({ workspace: f.roots.producer, plan: { path: '', text: '', fm: {}, phase: 0 }, base: f.plan.fm.domain_parent.repos[0].initial_head, changedFiles: ['schema.json'], copilotHome: f.copilotHome });
+  assert.equal(previous.workspaceDigest, '82fc568781d48c38f1528f2ccf707f14d129481cb105101f570e5c3198eb26c6');
+  assert.equal(trustStatus({ workspace: f.roots.producer, copilotHome: f.copilotHome }).state, 'untrusted');
+  assert.equal(trustStatus({ workspace: f.roots.producer, copilotHome: f.copilotHome, home: f.home }).state, 'trusted');
+  const spawn = childProcess.spawnSync;
+  const redundant = [];
+  t.mock.method(childProcess, 'spawnSync', function(command, args, options) {
+    if (command === 'git' && args.length === 4 && args[0] === '-C' && args[2] === 'rev-parse' && args[3] === 'HEAD' && Object.values(f.roots).includes(args[1])) redundant.push(args[1]);
+    return spawn.apply(this, arguments);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const binding = domainExecutionBinding(f.options);
+  const producer = binding.repos.find(repo => repo.id === 'producer');
+  assert.equal(JSON.stringify({ changedFiles: producer.changedFiles, workspaceDigest: producer.workspaceDigest }), JSON.stringify({ changedFiles: previous.changedFiles, workspaceDigest: previous.workspaceDigest }));
+  assert.equal(producer.policyDigest, proofPolicyDigest(f.roots.producer, f.copilotHome, f.home));
+  assert.equal(producer.trust, 'trusted');
+  assert.deepEqual(redundant, [], 'Member HEAD is already part of the live repository identity observation');
+});
+
+test('removing discarded content authority preserves refusal of an invalid selected-home trusted policy', t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.roots.producer, '.github/harness/policy.yaml'), 'version: 2\nenforcement: unsupported\n');
+  approveProject({ workspace: f.roots.producer, home: f.home, copilotHome: f.copilotHome });
+  assert.equal(trustStatus({ workspace: f.roots.producer, home: f.home, copilotHome: f.copilotHome }).state, 'trusted');
+  const binding = domainExecutionBinding(f.options);
+  const producer = binding.repos.find(repo => repo.id === 'producer');
+  assert.equal(producer.unavailable, true);
+  assert.equal(producer.completion.pass, false);
+  assert.match(producer.completion.message, /Invalid enforcement mode/);
+});
 
 test('joint proof executes against participating revision manifest and catches a producer consumer mismatch despite passing local checks', async t => {
   const f = fixture(t);

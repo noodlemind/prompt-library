@@ -6,7 +6,7 @@ import childProcess, { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { test } from 'node:test';
 import YAML from 'yaml';
-import { readDomain, inspectDomain } from '../lib/domain-contract.mjs';
+import { readDomain, inspectDomain, observeDomainRepositoryIdentity } from '../lib/domain-contract.mjs';
 import { domainResultOf, cmdDomain, DOMAIN_VERBS } from '../lib/domain-cmd.mjs';
 
 function git(root, args) {
@@ -64,6 +64,174 @@ function gitCommand(args) {
 function identityOutput(f) {
   return `${f.root}\n${path.join(f.root, '.git')}\n.git\n`;
 }
+
+function identityObservation(f, root = f.root) {
+  return observeDomainRepositoryIdentity(root, { id: 'product', origin: 'https://example.invalid/team/product' });
+}
+
+test('identity-only observation freshly reads bounded Git identity, HEAD and origin without branch or status', t => {
+  const f = fixture(t);
+  const head = git(f.root, ['rev-parse', 'HEAD']);
+  const calls = observeGitCalls(t);
+  const repo = identityObservation(f);
+  assert.equal(repo.status, 'available');
+  assert.equal(repo.observed.head, head);
+  assert.equal(repo.observed.root, f.root);
+  assert.equal(repo.observed.gitDir, path.join(f.root, '.git'));
+  assert.equal(repo.observed.commonDir, path.join(f.root, '.git'));
+  assert.equal(repo.observed.origin, f.config.repos[0].origin);
+  assert.equal(repo.observed.branch, null);
+  assert.equal(repo.observed.dirty, null);
+  assert.equal(repo.observed.statusEntries, null);
+  assert.doesNotMatch(repo.warnings.join(' '), /origin.*differs|Branch|Working tree/);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.slice(1).map(call => gitCommand(call.args)), [BATCH_ARGS, ['config', '--null', '--get-all', 'remote.origin.url']]);
+  for (const { args, options } of calls) {
+    assert.equal(args[0], '--no-pager');
+    assert.ok(args.includes('core.fsmonitor=false'));
+    assert.equal(options.timeout, 4000);
+    assert.equal(options.maxBuffer, 64 * 1024);
+    assert.equal(options.env.GIT_OPTIONAL_LOCKS, '0');
+    assert.equal(options.env.GIT_TERMINAL_PROMPT, '0');
+  }
+});
+
+test('identity-only calls observe current HEAD and origin after changes and detached checkout', t => {
+  const f = fixture(t);
+  const first = identityObservation(f).observed.head;
+  git(f.root, ['commit', '--allow-empty', '-m', 'Changed HEAD']);
+  const next = git(f.root, ['rev-parse', 'HEAD']);
+  assert.notEqual(next, first);
+  git(f.root, ['checkout', '--detach', next]);
+  git(f.root, ['remote', 'set-url', 'origin', 'https://example.invalid/team/changed.git']);
+  fs.writeFileSync(path.join(f.root, 'spec.md'), 'Changed intent\n');
+  const calls = observeGitCalls(t);
+  for (let index = 0; index < 2; index++) {
+    const repo = identityObservation(f);
+    assert.equal(repo.status, 'available');
+    assert.equal(repo.observed.head, next);
+    assert.equal(repo.observed.origin, 'https://example.invalid/team/changed.git');
+    assert.equal(repo.observed.branch, null);
+    assert.equal(repo.observed.dirty, null);
+    assert.match(repo.warnings.join(' '), /origin.*differs/i);
+  }
+  assert.equal(calls.length, 6, 'each call obtains new identity and origin reads');
+});
+
+test('identity-only observations preserve linked worktree and missing HEAD semantics', t => {
+  const f = fixture(t);
+  const linked = path.join(f.dir, 'identity-linked');
+  git(f.root, ['worktree', 'add', '--detach', linked]);
+  let repo = identityObservation(f, linked);
+  assert.equal(repo.status, 'available');
+  assert.equal(repo.observed.root, linked);
+  assert.equal(repo.observed.commonDir, path.join(f.root, '.git'));
+  assert.equal(repo.observed.isLinkedWorktree, true);
+  const unborn = path.join(f.dir, 'identity-unborn');
+  fs.mkdirSync(unborn);
+  git(unborn, ['init', '-b', 'main']);
+  const calls = observeGitCalls(t);
+  repo = identityObservation(f, unborn);
+  assert.equal(repo.status, 'available');
+  assert.equal(repo.observed.root, unborn);
+  assert.equal(repo.observed.head, null);
+  assert.equal(repo.observed.origin, null);
+  assert.match(repo.warnings.join(' '), /HEAD is unavailable/);
+  assert.match(repo.warnings.join(' '), /origin is unavailable/);
+  assert.equal(calls.length, 5);
+  assert.deepEqual(calls.filter(call => call.args.includes('rev-parse')).map(call => gitCommand(call.args)), [BATCH_ARGS, IDENTITY_ARGS, ['rev-parse', '--verify', 'HEAD']]);
+});
+
+test('identity-only observations reject uncertain and malformed batch responses before origin', async t => {
+  const variants = [
+    ['null result', () => null],
+    ['timeout', () => ({ status: null, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) })],
+    ['signal', f => ({ status: 0, signal: 'SIGTERM', stdout: `${identityOutput(f)}${'a'.repeat(40)}\n` })],
+    ['output overflow', () => ({ status: 0, stdout: 'x'.repeat(64 * 1024 + 1) })],
+    ['buffer error', f => ({ status: 0, error: Object.assign(new Error('bounded'), { code: 'ENOBUFS' }), stdout: `${identityOutput(f)}${'a'.repeat(40)}\n` })],
+    ['partial HEAD', f => ({ status: 0, stdout: `${identityOutput(f)}${'a'.repeat(39)}\n` })],
+    ['mixed framing', f => ({ status: 0, stdout: `${f.root}\r\n${path.join(f.root, '.git')}\n.git\n${'a'.repeat(40)}\n` })],
+    ['unexpected status', f => ({ status: 1, stdout: identityOutput(f) })],
+  ];
+  for (const [name, response] of variants) await t.test(name, child => {
+    const f = fixture(child);
+    const calls = observeGitCalls(child, args => gitCommand(args).join(' ') === BATCH_ARGS.join(' ') ? response(f) : undefined);
+    const repo = identityObservation(f);
+    assert.equal(repo.status, 'unavailable');
+    assert.equal(repo.observed.root, null);
+    assert.equal(repo.observed.head, null);
+    assert.equal(repo.observed.origin, null);
+    assert.equal(calls.length, 2);
+  });
+});
+
+test('identity-only fallback discards partial identity and observes current separate identity and HEAD', t => {
+  const f = fixture(t);
+  const foreign = path.join(f.dir, 'identity-foreign');
+  fs.mkdirSync(foreign);
+  fs.mkdirSync(path.join(foreign, '.git'));
+  const head = git(f.root, ['rev-parse', 'HEAD']);
+  const calls = observeGitCalls(t, args => gitCommand(args).join(' ') === BATCH_ARGS.join(' ')
+    ? { status: 128, stdout: `${foreign}\n${path.join(foreign, '.git')}\n.git\n` }
+    : undefined);
+  const repo = identityObservation(f);
+  assert.equal(repo.status, 'available');
+  assert.equal(repo.observed.root, f.root);
+  assert.equal(repo.observed.gitDir, path.join(f.root, '.git'));
+  assert.equal(repo.observed.head, head);
+  assert.equal(calls.length, 5);
+});
+
+test('identity-only fallback uncertainty stops before origin and other advisory metadata', async t => {
+  for (const stage of ['identity', 'HEAD']) await t.test(stage, child => {
+    const f = fixture(child);
+    const calls = observeGitCalls(child, args => {
+      const command = gitCommand(args).join(' ');
+      if (command === BATCH_ARGS.join(' ')) return { status: 128, stdout: identityOutput(f) };
+      if (command === (stage === 'identity' ? IDENTITY_ARGS.join(' ') : 'rev-parse --verify HEAD')) return { status: null, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) };
+    });
+    const repo = identityObservation(f);
+    assert.equal(repo.status, 'unavailable');
+    assert.equal(repo.observed.head, null);
+    assert.equal(repo.observed.origin, null);
+    assert.equal(calls.length, stage === 'identity' ? 3 : 4);
+  });
+});
+
+test('identity-only fallback rechecks the raw Git path before fresh reads', t => {
+  const f = fixture(t);
+  const calls = observeGitCalls(t, args => {
+    if (gitCommand(args).join(' ') !== BATCH_ARGS.join(' ')) return;
+    fs.renameSync(path.join(f.root, '.git'), path.join(f.dir, 'identity-moved-git'));
+    fs.symlinkSync(path.join(f.dir, 'identity-moved-git'), path.join(f.root, '.git'), 'dir');
+    return { status: 128, stdout: identityOutput(f) };
+  });
+  assert.throws(() => identityObservation(f), /Git identity path is unsafe or symlinked/);
+  assert.equal(calls.length, 2);
+});
+
+test('identity-only observation refuses a raw symlink checkout before Git reads', t => {
+  const f = fixture(t);
+  const link = path.join(f.dir, 'identity-root-link');
+  fs.symlinkSync(f.root, link, 'dir');
+  const calls = observeGitCalls(t);
+  assert.throws(() => identityObservation(f, link), /unsafe or symlinked/);
+  assert.equal(calls.length, 0);
+});
+
+test('identity-only missing and ambiguous origin observations remain explicitly unknown', async t => {
+  for (const output of ['', 'https://example.invalid/team/product.git\0https://example.invalid/team/other.git\0']) await t.test(output ? 'multiple URLs' : 'missing URL', child => {
+    const f = fixture(child);
+    const calls = observeGitCalls(child, args => gitCommand(args).join(' ') === 'config --null --get-all remote.origin.url'
+      ? { status: output ? 0 : 1, stdout: output }
+      : undefined);
+    const repo = identityObservation(f);
+    assert.equal(repo.status, 'available');
+    assert.equal(repo.observed.origin, null);
+    assert.match(repo.warnings.join(' '), /origin is unavailable/);
+    assert.equal(calls.length, 3);
+  });
+});
 
 test('one fresh bounded Git request observes checkout identity and HEAD', t => {
   const f = fixture(t);
