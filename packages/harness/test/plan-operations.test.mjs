@@ -19,6 +19,15 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 
 test('registered sibling checkouts retain shared legacy in-repo conversion guards without owning sibling mutations', t => {
   const f = conversionFixture(t, { linked: false });
+  const replaceMetadata = (file, bytes) => {
+    assert.ok(fs.lstatSync(file).isFile());
+    const fd = fs.openSync(file, 'r+');
+    try {
+      assert.ok(fs.fstatSync(fd).isFile());
+      fs.writeFileSync(fd, bytes);
+      fs.ftruncateSync(fd, Buffer.byteLength(bytes));
+    } finally { fs.closeSync(fd); }
+  };
   f.git(f.primary, 'remote', 'add', 'origin', 'https://example.test/team/shared-plans.git');
   const created = f.create({ experiment: undefined, status: 'open' });
   const old = path.join(f.primary, 'docs/plans', path.basename(created.path));
@@ -49,7 +58,7 @@ test('registered sibling checkouts retain shared legacy in-repo conversion guard
   const dottedGitDir = path.join(path.dirname(hiddenGitDir), '.hidden');
   if (hiddenGitDir !== dottedGitDir) {
     fs.renameSync(hiddenGitDir, dottedGitDir);
-    fs.writeFileSync(path.join(hidden, '.git'), `gitdir: ${dottedGitDir}\n`);
+    replaceMetadata(path.join(hidden, '.git'), `gitdir: ${dottedGitDir}\n`);
   }
   assert.equal(readPlanConversionGuard(hidden, old, { home: f.home }).state, 'pending');
   assert.ok(loadPlan(hidden, ordinary.path, { home: f.home }));
@@ -71,11 +80,13 @@ test('registered sibling checkouts retain shared legacy in-repo conversion guard
   const gitDir = f.git(sibling, 'rev-parse', '--absolute-git-dir').trim();
   const backlink = path.join(gitDir, 'gitdir'), backlinkBytes = fs.readFileSync(backlink);
   try {
-    fs.writeFileSync(backlink, `${path.join(customParent, 'registered-sibling', '.git')}\n`);
+    replaceMetadata(backlink, `${path.join(customParent, 'registered-sibling', '.git')}\n`);
     assert.equal(readPlanConversionGuard(sibling, old, { home: f.home }).state, 'invalid');
     assert.equal(loadPlan(sibling, ordinary.path, { home: f.home }), null);
     assert.deepEqual([fs.readFileSync(old), fs.readFileSync(pointerFile), fs.readFileSync(journal)], saved);
-  } finally { fs.writeFileSync(backlink, backlinkBytes); }
+  } finally { replaceMetadata(backlink, backlinkBytes); }
+  assert.deepEqual(fs.readFileSync(backlink), backlinkBytes);
+  assert.deepEqual([fs.readFileSync(old), fs.readFileSync(pointerFile), fs.readFileSync(journal)], saved);
 });
 
 for (const pending of [true, false]) test(`retired conversion case aliases reuse the ${pending ? 'pending' : 'completed'} canonical operation identity`, t => {
