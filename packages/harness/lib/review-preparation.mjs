@@ -3,6 +3,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { getCorpusRoot } from './assets.mjs';
+import { externalPlansDir } from './project-layout.mjs';
+import { harnessGlobalHome } from './paths.mjs';
 import { parsePlanFrontmatter } from './plan-parse.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { readProductDiff } from '../corpus/hooks/lib/product-diff.mjs';
@@ -54,6 +56,48 @@ function source(root, rel, origin) {
   try { fs.lstatSync(full); } catch (error) { missing = error.code === 'ENOENT' && Boolean(assertNoSymlinkAncestors(root, rel)); }
   return { origin, path: rel.replace(/\\/g, '/'), state: bytes === null ? (missing ? 'missing' : 'unreadable') : 'regular', sha256: bytes === null ? null : createHash('sha256').update(bytes).digest('hex') };
 }
+
+function projectPlanLocation(workspace, file) {
+  if (typeof file !== 'string' || !path.isAbsolute(file) || !file.endsWith('.md') || /[\0\r\n]/.test(file)) return null;
+  const full = path.resolve(file), root = externalPlansDir(workspace), rel = path.relative(root, full);
+  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+  const home = harnessGlobalHome(), homeRel = path.relative(home, full);
+  if (!assertNoSymlinkAncestors(home, homeRel)) return null;
+  return { root: home, rel: homeRel, full };
+}
+
+/** Rederive the selected project's store rather than trusting a root in a packet. */
+export function readReviewFile(workspace, ref, options = {}) {
+  if (ref?.origin === 'project-plan') {
+    const location = projectPlanLocation(workspace, ref.path);
+    return location ? readFileNoFollow(location.full, { ...options, root: location.root }) : null;
+  }
+  if (!['product', 'corpus'].includes(ref?.origin) || typeof ref.path !== 'string' || path.isAbsolute(ref.path) || path.win32.isAbsolute(ref.path)) return null;
+  const root = ref.origin === 'corpus' ? getCorpusRoot() : workspace;
+  return readFileNoFollow(path.join(root, ref.path), { ...options, root });
+}
+
+function currentSource(workspace, ref) {
+  if (ref.origin === 'project-plan') {
+    const location = projectPlanLocation(workspace, ref.path);
+    return location ? { ...source(location.root, location.rel, ref.origin), path: ref.path } : { ...ref, state: 'unreadable', sha256: null };
+  }
+  return source(ref.origin === 'corpus' ? getCorpusRoot() : workspace, ref.path, ref.origin);
+}
+
+function selectedSource(workspace, file, kind) {
+  const full = path.resolve(workspace, file), rel = path.relative(workspace, full).replace(/\\/g, '/');
+  if (rel && rel !== '..' && !rel.startsWith('../') && !path.isAbsolute(rel)) return source(workspace, rel, 'product');
+  if (kind === 'document') {
+    const location = projectPlanLocation(workspace, full);
+    if (location) {
+      const ref = { ...source(location.root, location.rel, 'project-plan'), path: full.replace(/\\/g, '/') };
+      if (ref.sha256) return ref;
+    }
+  }
+  throw new Error('Review files must be inside the workspace or readable plans in the current project store for document reviews');
+}
+
 export function discoverReviewChecks(workspace, files) {
   const corpus = getCorpusRoot(), checks = [], failures = [];
   for (const [root, dir, origin] of [[corpus, 'skills/code-review/references/checks', 'corpus'], [workspace, '.github/checks', 'product']]) {
@@ -83,8 +127,11 @@ export function discoverReviewChecks(workspace, files) {
 
 export function reviewPreparation({ workspace, scope, plan, kind, reviewers, files, maxBytes = 16384 }) {
   const corpus = getCorpusRoot();
-  const selected = files?.length ? [...new Set(files.map(f => path.relative(workspace, path.resolve(workspace, f)).replace(/\\/g, '/')))].sort(compareText) : scope.changedFiles;
-  if (selected.some(f => !f || f.startsWith('../') || path.isAbsolute(f))) throw new Error('Review files must be inside the workspace');
+  const selectedRefs = new Map((files?.length ? files : scope.changedFiles).map(file => {
+    const ref = selectedSource(workspace, file, kind);
+    return [ref.path, ref];
+  }));
+  const selected = [...selectedRefs.keys()].sort(compareText);
   const covered = [...new Set([...scope.changedFiles, ...selected])].sort(compareText);
   const discovery = kind === 'code' ? discoverReviewChecks(workspace, covered) : { checks: [], failures: [] };
   const declaredRequired = [...new Set(plan?.fm.reviews?.required || [])].sort(compareText);
@@ -95,7 +142,7 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
   const sources = kind === 'document' ? [source(corpus, 'skills/document-review/references/review-criteria.md', 'corpus')] : perspectives.map(id => source(corpus, `agents/${id}.agent.md`, 'corpus'));
   sources.push(source(corpus, 'skills/code-review/references/findings-schema.md', 'corpus'));
   const failures = [...discovery.failures, ...collisions, ...sources.filter(s => !s.sha256).map(s => `Review definition unavailable: ${s.path}`)];
-  const refs = covered.map(file => source(workspace, file, 'product'));
+  const refs = covered.map(file => selectedRefs.get(file) || source(workspace, file, 'product'));
   const diff = readProductDiff(workspace, { base: scope.base || 'HEAD', planPath: plan?.path });
   const branchResult = spawnSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8', timeout: 4000 });
   const budget = Math.max(1024, Math.min(maxBytes, 131072));
@@ -103,7 +150,7 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
   let bytes = 0;
   for (const ref of refs) {
     if (!selected.includes(ref.path)) { omitted.push({ ...ref, reason: 'not selected for excerpts; remains in the review scope' }); continue; }
-    const text = readFileNoFollow(path.join(workspace, ref.path), { root: workspace, maxBytes: 1024 * 1024 });
+    const text = readReviewFile(workspace, ref, { maxBytes: 1024 * 1024 });
     const remaining = budget - bytes;
     if (text === null || remaining < 256) { omitted.push({ ...ref, reason: text === null ? 'deleted, unsafe, binary or over read limit' : 'packet byte budget' }); continue; }
     const excerpt = Buffer.from(text).subarray(0, Math.min(remaining, 4096)).toString('utf8');
@@ -114,12 +161,13 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
 }
 
 export function preparationIsCurrent(workspace, preparation) {
+  if (preparation.kind !== 'document' && preparation.refs.some(ref => ref.origin === 'project-plan')) return false;
   if (preparation.kind === 'code') {
     const discovery = discoverReviewChecks(workspace, preparation.refs.map(ref => ref.path));
     if (stableJson(discovery.checks) !== stableJson(preparation.checks)) return false;
   }
   return [...preparation.sources, ...preparation.checks.map(c => c.ref), ...preparation.refs].every(ref => {
-    const current = source(ref.origin === 'corpus' ? getCorpusRoot() : workspace, ref.path, ref.origin);
+    const current = currentSource(workspace, ref);
     return current.sha256 === ref.sha256 && (ref.sha256 !== null || (ref.state === 'missing' && current.state === 'missing'));
   });
 }

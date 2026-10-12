@@ -41,8 +41,8 @@ Each persona returns a single JSON object:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `file` | string | Relative file path from repo root |
-| `line` | integer | Exact current line number in a readable workspace file |
+| `file` | string | Repo-relative product file path; for document review of an external current-project plan, use the exact packet source path |
+| `line` | integer | Exact current line number in that readable packet source (a workspace file or current-project plan) |
 | `severity` | enum | `P1` (critical), `P2` (important), `P3` (suggestion) |
 | `confidence` | float | 0.0 to 1.0 — how confident the reviewer is that this is a real issue |
 | `title` | string | One-line summary of the issue |

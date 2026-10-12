@@ -11,8 +11,8 @@ The Copilot home defaults to `~/.copilot`. `--copilot-home` replaces it for one 
 3. **Machine and shipped solutions** — `~/.copilot/knowledge/solutions/**/*.md` (kept across upgrade) or `packages/harness/corpus/knowledge/solutions/`
 4. **User preferences** — `~/.copilot/knowledge/profile.md` or `packages/harness/corpus/knowledge/profile.md.template`
 5. **Enterprise capability** — `~/.copilot/enterprise/capability-registry.enterprise.yaml` or `packages/harness/corpus/enterprise/`
-6. **Product active plans** — `.harness/plans/*.md` (default, gitignored) or committed `docs/plans/*.md` when that directory is git-tracked
-7. **Repo-private solution episodes** — `~/.harness/projects/<repo-id>/docs/solutions/` (default) or committed `docs/solutions/` when that directory is git-tracked
+6. **Product active plans** — `~/.harness/projects/<repo-id>/plans/` (default); existing `.harness/plans/` and `docs/plans/` remain readable legacy locations
+7. **Repo-private solution episodes** — `~/.harness/projects/<repo-id>/docs/solutions/`; committed `docs/solutions/` remains readable
 8. **Product repo context** — `.harness/agent-context.md` (default) or committed `docs/agent-context.md`, plus `README.md`
 
 ## Write targets
@@ -21,9 +21,11 @@ The Copilot home defaults to `~/.copilot`. `--copilot-home` replaces it for one 
 |---------------|----------|
 | Cross-repo verified fix | `<copilot-home>/knowledge/solutions/<category>/<slug>.md` then `/index-memory`. The home rule above applies. A fix for the next harness release is a commit under `packages/harness/corpus/knowledge/solutions/` |
 | Consolidated semantic learning | `~/.harness/knowledge/<repo-id>/` via `/consolidate`; `consolidate --apply` is the sole writer of learning content, and human retire/dispute/confirm/promote decisions land in the same store's governance ledger |
-| Repo-specific only | `~/.harness/projects/<repo-id>/docs/solutions/` (or committed `docs/solutions/` if git-tracked) |
+| Repo-specific only | `~/.harness/projects/<repo-id>/docs/solutions/` via Harness; committed `docs/solutions/` is a readable legacy source |
 | Repo convention one-liner | `.harness/agent-context.md` (or committed `docs/agent-context.md` if git-tracked) |
-| Active issue | `.harness/plans/` via `/ensure-plan` (or committed `docs/plans/` if git-tracked) |
+| Active issue | `~/.harness/projects/<repo-id>/plans/` via `/ensure-plan` and `harness plan-new --file`; Harness resolves existing legacy plans |
 | Existing gitignored leftovers | `harness migrate` (also runs from `harness init-repo`) |
 | New personal skill, agent, or instruction | `harness resources create skill <name>` (also `agent` and `instruction`) |
 | Skill, agent, or instruction for every install | commit under `packages/harness/corpus/skills/`, `packages/harness/corpus/agents/`, or `packages/harness/corpus/instructions/` |
+
+The Harness store root defaults to `~/.harness`. `--harness-home` overrides it for one command and wins over `HARNESS_HOME`. Use CLI-returned paths and `/recall` rather than reconstructing repository IDs or writing managed plans directly.

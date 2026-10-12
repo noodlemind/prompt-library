@@ -48,12 +48,12 @@ Write the minimal code to make the test pass:
 
 ### 4. Verify
 
-- Run the test suite to confirm all tests pass (new and existing)
+- Run the focused tests for each TDD unit, then the relevant affected tests; report command, outcome, and any unresolved coverage
 - Self-review the diff: does it do exactly what was asked? Nothing more?
 
 ### 5. Report Back
 
-The report is evidence. The Engineer reads the diff and writes the summary the person sees. Do not call `harness verify`.
+The report is evidence. The Engineer reads the diff, collects required review, runs authoritative `harness verify`, and writes the summary the person sees. Do not call `harness verify` or claim delivery completion from focused test results.
 
 Return a structured summary of what was done:
 

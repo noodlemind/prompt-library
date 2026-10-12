@@ -31,7 +31,7 @@ Deliver-mode internal skill chain:
 
 Harness architecture: `docs/adaptive-engineering.md`. Knowledge lookup: `~/.copilot/skills/references/knowledge-locations.md`.
 
-Plan files live in `.harness/plans/` (product repos, gitignored) or committed `docs/plans/` when git tracks files there. They track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `packages/harness/corpus/knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/adaptive-engineering.md`.
+New plan files live in `~/.harness/projects/<repo-id>/plans/`. Existing `.harness/plans/` and `docs/plans/` remain readable legacy locations. Harness returns the path and updates managed plans from authored decisions. Plans track state via YAML frontmatter (`status`, `plan_lock`, `phase`). Team-wide learnings hydrate from `packages/harness/corpus/knowledge/` to `~/.copilot/knowledge/`. Run `/recall` before engineering work. Inter-step memory flows through plan sections including `## Memory Cards`, `## Context`, `## Research Notes`, and `## Activity`. See `docs/adaptive-engineering.md`.
 
 ## Directory Structure
 
@@ -44,7 +44,6 @@ Plan files live in `.harness/plans/` (product repos, gitignored) or committed `d
   mcp.json         — MCP server configuration
 docs/
   adaptive-engineering.md — how the Engineer and Harness work, and how capability is acquired
-  plans/           — plan template; product repos default to `.harness/plans/`
 packages/harness/  — CLI package
   corpus/
     skills/        — 26 skill directories with SKILL.md
@@ -63,7 +62,7 @@ packages/harness/  — CLI package
 - **Primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; prompt wrappers are retired.
 - **Testing**: TDD mandatory — failing test → minimal fix → cleanup
 - **Diffs**: Surgical changes only. No drive-by refactoring.
-- **Knowledge compounding**: Team learnings in `packages/harness/corpus/knowledge/solutions/` (hydrated to `~/.copilot/knowledge/`). Product repos use `.harness/plans/` for issues (or committed `docs/plans/` if present) and `~/.harness/projects/<repo-id>/docs/solutions/` for private episodes (or committed `docs/solutions/` if present). Run `/recall` before similar work.
+- **Knowledge compounding**: Team learnings in `packages/harness/corpus/knowledge/solutions/` (hydrated to `~/.copilot/knowledge/`). New product plans use `~/.harness/projects/<repo-id>/plans/`; legacy plan paths remain readable. New private episodes use `~/.harness/projects/<repo-id>/docs/solutions/`; committed `docs/solutions/` remains readable. Run `/recall` before similar work.
 
 ## Coding Standards
 

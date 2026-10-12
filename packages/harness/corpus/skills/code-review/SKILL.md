@@ -12,6 +12,8 @@ user-invocable: false
 
 This skill coordinates multiple specialist personas to provide comprehensive code review. Each persona returns structured findings with severity and confidence scores. Harness captures the review scope, validates coverage, applies confidence policy, and renders the factual report. The Engineer assesses defects and ambiguous overlaps.
 
+The Engineer owns CLI `prepare` and `assemble`, including decision-file publication. The read-only `code-review-coordinator` dispatches the supplied packet and returns raw results; it does not acquire execution authority or replace Harness assembly.
+
 ## When to Use
 
 Activate when the user wants to:
@@ -47,8 +49,8 @@ Read the full packet at `packetPath` and retrieve omitted source content before 
 ### 2. Gather Context and Detect Intent
 
 - Read modified files and understand the changes
-- Check available repository context for accumulated codebase knowledge: `README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, `docs/codebase-snapshot.md`, and `docs/solutions/`.
-- Check `docs/solutions/` for prior solutions related to the changed areas
+- Check available repository context for accumulated codebase knowledge: `README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, and `docs/codebase-snapshot.md`.
+- Use `/recall` for prior solutions and current-project private episodes; follow `../references/knowledge-locations.md`. Legacy committed `docs/solutions/` remains readable. Do not search only the checkout's solution directory.
 - If a plan file is referenced, read `## Implementation Notes` for decisions and trade-offs
 - Detect project type (Java, Python, TypeScript, SQL/data, AWS) from project files
 - Read related code and dependencies touched by the changes
@@ -60,7 +62,7 @@ The CLI preserves the five mandatory perspectives and selects bundled/product ch
 
 ### 4. Dispatch Personas and Checks
 
-**Orchestration:** If the `agent` tool is available for subagent delegation, delegate to persona agents as isolated subagents in parallel batches (3-4 at a time). Otherwise, apply each persona's perspective sequentially within this session.
+**Orchestration:** If the `agent` tool is available, the Engineer may send the prepared packet, intent summary, and retrieved full sources to `code-review-coordinator` for isolated dispatch in batches of 3-4. Return all packet-required perspective/check results to the Engineer. A coordinator cannot run CLI commands through `terminalLastCommand`. Otherwise, the Engineer applies each required perspective sequentially within this session and preserves the actual provenance.
 
 Each persona receives:
 1. Their persona definition from `references/review-personas.md`
@@ -74,7 +76,7 @@ Each persona receives:
 3. The same review context as personas
 4. The check's `severity-default` as the default severity for findings
 
-Checks run in parallel with personas. Their findings are merged into the same synthesis pipeline.
+Checks run in parallel with personas when the host supports that bounded delegation. If the coordinator cannot dispatch a required check under its declared tools and agent allowlist, it reports the limitation to the Engineer for direct judgment or authorized dispatch. Required coverage is never dropped to fit a specialist cap.
 
 Each persona returns JSON:
 ```json
@@ -109,7 +111,7 @@ Before delivering the review, verify:
 
 Assess fix authority and behavior before acting. `autofix_class` is advisory routing metadata; it never grants permissions. Apply authorized fixes, then prepare and collect a new review for the changed content before verification. Clearing a plan string cannot discharge a recorded critical finding.
 
-When current coverage is complete and critical findings are resolved, run `harness verify`. Completion and Stop consume this same bound review record. Optional learning follows passed verification.
+When current coverage is complete and critical findings are resolved, run `harness verify`. Completion and Stop consume this same bound review record. After passed verification, record durable learning or explicit no-learning with `harness compound --learning-decision <file>`, then submit a complete plan-update decision. A standalone read-only review ends with its report and has no delivery completion ceremony.
 
 ## Error Handling
 

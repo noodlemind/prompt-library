@@ -56,6 +56,14 @@ test('canonical concept doc defines task modes, ownership, gap handling, and run
   }
 });
 
+test('Engineer review handoff reaches the role that can prepare the packet', () => {
+  const engineer = read('packages/harness/corpus/agents/engineer.agent.md');
+  const fm = YAML.parse(engineer.match(/^---\n([\s\S]*?)\n---/)[1]);
+  const review = fm.handoffs.find(handoff => handoff.label === 'Code Review');
+  assert.equal(review.agent, 'engineer');
+  assert.match(review.prompt, /code-review.*prepare.*packet/i);
+});
+
 test('docs surface is the adaptive engineering explanation', () => {
   const docsRoot = path.join(repoRoot, 'docs');
   const generatedTopLevel = ['codebase-map.md', 'codebase-snapshot.md'];
@@ -232,6 +240,56 @@ test('engineer loads capabilities on demand and owns bounded consultations', () 
     assert.match(engineer, new RegExp(field, 'i'), `consultation packet missing ${field}`);
   }
   assert.match(engineer, /own(?:s| the) final/i);
+});
+
+test('README maintenance enters proportional docs delivery before mutation', () => {
+  const skill = read('packages/harness/corpus/skills/project-readme/SKILL.md');
+  assert.match(skill, /Deliver before the first edit/i);
+  assert.match(skill, /type: docs/);
+  assert.match(skill, /one phase/i);
+  assert.match(skill, /start decision[\s\S]{0,160}implement gate/i);
+  assert.match(skill, /harness verify/);
+  assert.match(skill, /no-learning/);
+  assert.match(skill, /complete decision/);
+  assert.doesNotMatch(skill, /Do not create a plan file/i);
+});
+
+test('review delegation keeps CLI authority with the Engineer and returns packet-bound raw results', () => {
+  const coordinator = read('packages/harness/corpus/agents/code-review-coordinator.agent.md');
+  const fm = YAML.parse(coordinator.match(/^---\n([\s\S]*?)\n---/)[1]);
+  assert.ok(!fm.tools.some(tool => tool === 'execute' || tool.startsWith('execute/')));
+  assert.match(coordinator, /Engineer[\s\S]{0,160}harness review prepare/);
+  assert.match(coordinator, /Engineer[\s\S]{0,160}harness review assemble/);
+  assert.match(coordinator, /packet\.required/);
+  assert.match(coordinator, /"packet":/);
+  assert.match(coordinator, /"results":/);
+  assert.match(coordinator, /timed-out/);
+  assert.doesNotMatch(coordinator, /Ask the user to run|Cap at 8|dedupe same-location|Code Review Summary/i);
+  const skill = read('packages/harness/corpus/skills/code-review/SKILL.md');
+  assert.match(skill, /Engineer owns[\s\S]{0,180}prepare[\s\S]{0,180}assemble/i);
+  assert.match(skill, /coordinator[\s\S]{0,140}raw results/i);
+});
+
+test('document review preserves one packet and routes managed-plan fixes through decisions', () => {
+  const skill = read('packages/harness/corpus/skills/document-review/SKILL.md');
+  assert.equal((skill.match(/harness review prepare --domain document/g) || []).length, 1);
+  assert.match(skill, /same packet/i);
+  assert.match(skill, /harness plan-update/);
+  assert.match(skill, /Deliver[\s\S]{0,120}gate/i);
+  const schema = read('packages/harness/corpus/skills/code-review/references/findings-schema.md');
+  assert.match(schema, /exact[\s\S]{0,80}packet[\s\S]{0,80}path/i);
+});
+
+test('focused implementation checks precede review and authoritative verification', () => {
+  const principles = read('packages/harness/corpus/skills/references/delivery-principles.md');
+  const section = principles.split('## verify-between-units')[1].split('\n## ')[0];
+  assert.match(section, /focused[\s\S]{0,100}TDD/i);
+  assert.match(section, /required review[\s\S]{0,140}harness verify/i);
+  assert.doesNotMatch(section, /require outcome `passed` before the next unit/i);
+  const gate = read('packages/harness/corpus/skills/references/capture-gate.md');
+  assert.match(gate, /content-v1[\s\S]{0,180}changed[\s\S]{0,160}amend/i);
+  assert.match(gate, /legacy[\s\S]{0,100}paths-only/i);
+  assert.doesNotMatch(gate, /sha256.*is not compared|User waived capture/i);
 });
 
 test('active entry points use the accountable Engineer vocabulary', () => {
@@ -815,4 +873,30 @@ test('harness package prose does not name the prompt-library repository', () => 
   }
   assert.deepEqual(repoHits.sort(), [], 'package prose names the prompt-library repository');
   assert.deepEqual(docHits.sort(), [], 'installed corpus points at a deleted doc');
+});
+
+test('repository startup context preserves Engineer review authority and exact-claim synthesis', () => {
+  const context = read('.github/agent-context.md');
+  const branch = context.split('### Code Review Branch Diffs\n')[1].split('\n### ', 1)[0];
+  assert.match(branch, /Engineer.*harness review prepare/);
+  assert.match(branch, /harness review assemble/);
+  assert.doesNotMatch(branch, /ask the user to run|coordinator uses `terminalLastCommand`/i);
+  const synthesis = context.split('### Confidence-Gated Code Review\n')[1].split('\n### ', 1)[0];
+  assert.match(synthesis, /description.*suggested_fix/);
+  assert.match(synthesis, /independence.*unverified|unverified.*independence/);
+  assert.match(synthesis, /Engineer.*adjudicat/i);
+  const document = context.split('### Document Review as Quality Gate\n')[1].split('\n### ', 1)[0];
+  assert.match(document, /authoriz/i);
+  assert.match(document, /revision-bound|harness plan-update/);
+  assert.doesNotMatch(document, /P2\/P3 auto-applied/);
+});
+
+test('host hook reference requires proof after recorded potential terminal mutations', () => {
+  const contract = read('packages/harness/corpus/skills/references/harness-tool-contract.md');
+  const boundary = contract.split('## Host hook boundary')[1];
+  assert.ok(boundary, 'host hook boundary must be documented');
+  assert.match(boundary, /opaque|unknown/);
+  assert.match(boundary, /failed[^\n]*terminal|terminal[^\n]*fail/i);
+  assert.match(boundary, /latest recorded potential mutation/);
+  assert.doesNotMatch(boundary, /only for a successful mutation|latest successful mutation/);
 });

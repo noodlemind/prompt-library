@@ -25,12 +25,12 @@ Issues flow through a state machine tracked in YAML frontmatter:
 
 Key fields: `status`, `plan_lock` (must be `true` before coding), `phase` (current phase number).
 
-Plan files live in `.harness/plans/` by default (gitignored), or committed `docs/plans/` when git tracks files there. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes` (from planning), `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes` (from work), `## Review Findings` (from review). Treat each plan file as the local context pack for the issue.
+New plan files live in `~/.harness/projects/<repo-id>/plans/`; existing `.harness/plans/` and `docs/plans/` remain readable legacy locations. Use Harness-returned paths and authored decisions to update managed plans. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes` (from planning), `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes` (from work), `## Review Findings` (from review). Treat each plan file as the local context pack for the issue.
 
 ### Knowledge Compounding
 
 - **Accumulated knowledge**: `.github/agent-context.md` — prompt-library repo knowledge, not a global Copilot primitive.
-- **Team solutions**: `packages/harness/corpus/knowledge/solutions/` (hydrated to `~/.copilot/knowledge/`). Product repos write private episodes to `~/.harness/projects/<repo-id>/docs/solutions/` unless committed `docs/solutions/` already exists. Use `/recall` before similar work.
+- **Team solutions**: `packages/harness/corpus/knowledge/solutions/` (hydrated to `~/.copilot/knowledge/`). Product repos write new private episodes to `~/.harness/projects/<repo-id>/docs/solutions/`; committed `docs/solutions/` remains readable. Use `/recall` before similar work.
 
 ## Directory Structure
 
@@ -43,7 +43,6 @@ Plan files live in `.harness/plans/` by default (gitignored), or committed `docs
   mcp.json             — MCP server configuration (Context7)
 docs/
   adaptive-engineering.md — how the Engineer and Harness work, and how capability is acquired
-  plans/               — plan template; product repos default to `.harness/plans/`
 packages/harness/      — CLI package
   corpus/
     skills/            — 26 skill directories with SKILL.md
@@ -104,7 +103,7 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 4. **/triage-issues**: Analyze and prioritize backlog
 
 ### Engineer-Internal (loaded on demand) — Connected Pipeline
-5. **/capture-issue**: Create initial plan file under `.harness/plans/` (or committed `docs/plans/` when git tracks files there)
+5. **/capture-issue**: Create the initial plan in the current project's Harness store; existing legacy plans remain readable
 6. **/plan-issue**: Generate phased implementation plan with research
 7. **/code-review**: Confidence-scored, persona-based code review with action routing
 8. **/compound-learnings**: Document solved problems with tagged solution templates

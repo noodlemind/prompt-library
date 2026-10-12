@@ -68,7 +68,7 @@ export function assembleReview({ workspace, plan, packetId, input, copilotHome, 
   const scope = currentReviewScope(workspace, plan, packet.scope.base, copilotHome);
   if (packet.plan !== (plan?.path || null) || JSON.stringify(scope) !== JSON.stringify(packet.scope) || (packet.version === 2 && !preparationIsCurrent(workspace, packet.preparation))) throw usage('Review packet is stale; prepare and review the current scope');
   if (input?.packet !== packetId || !Array.isArray(input.results)) throw usage('Results must reference the packet and contain a results array');
-  const synthesis = synthesizeReview(workspace, packet.required, input, packet.preparation?.failures || []);
+  const synthesis = synthesizeReview(workspace, packet.required, input, packet.preparation?.failures || [], packet.kind === 'document' ? packet.preparation.refs : []);
   const value = { version: packet.version, plan: packet.plan, packet: packetId, kind: packet.kind || 'code', scope, required: packet.required, declaredRequired: packet.declaredRequired || packet.required, ...synthesis };
   const id = reviewHash(value);
   const record = { ...value, id, recordedAt: new Date().toISOString() };

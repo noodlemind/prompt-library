@@ -10,8 +10,8 @@ import { currentPlanDigest } from './lib/proof-authority.mjs';
 import { resolveAcceptedPlan } from './lib/external-plans.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
-import { loadHookPolicy } from './lib/policy.mjs';
-import { isPersonalWritePath, isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive, unwrapShellSegments } from './lib/tool-payload.mjs';
+import { loadHookPolicy, projectTrustIsCurrent } from './lib/policy.mjs';
+import { harnessControlCommand, isPersonalWritePath, isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive, unwrapShellSegments } from './lib/tool-payload.mjs';
 
 const startedAt = Date.now();
 let payload = {};
@@ -303,11 +303,10 @@ function unplannedNamedChecks(commands, command, planText) {
     .map(({ name }) => name);
 }
 
-function isSoleHarnessGate(command) {
-  const segments = unwrapShellSegments(command);
-  return segments.length > 0 && segments.every((tokens) => (
-    path.basename(tokens[0] || '') === 'harness' && tokens[1] === 'gate'
-  ));
+function isSoleHarnessRecovery() {
+  const effects = normalized.terminalEffects;
+  return !normalized.mutation && !effects.ambiguous && !effects.hasOpaque && effects.invocations.length === 1
+    && ['gate', 'worktree'].includes(harnessControlCommand(effects.invocations[0], normalized.workspace));
 }
 
 try {
@@ -320,8 +319,7 @@ try {
 
 normalized = normalizeToolPayload(payload);
 policy = loadHookPolicy(normalized.workspace, { ttlKey: 'gate_ttl_minutes', ttlDefault: 30 });
-if (!normalized.mutation) {
-  if (normalized.command) {
+if (normalized.command) {
     const sessionPath = path.join(normalized.workspace, '.harness', 'session.json');
     try {
       const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
@@ -330,7 +328,7 @@ if (!normalized.mutation) {
       const currentDigest = configuredChecksDigest(normalized.workspace);
       if (Object.hasOwn(session, 'gatedChecksDigest')
         && session.gatedChecksDigest !== currentDigest
-        && !isSoleHarnessGate(normalized.command)) {
+        && !isSoleHarnessRecovery()) {
         deny(
           'changed-check-config',
           'The configured check manifest changed after the implement gate. Rerun harness gate before running terminal commands',
@@ -349,11 +347,13 @@ if (!normalized.mutation) {
     } catch {
       // No readable active session/plan means there is no plan-scoped verification contract to enforce here.
     }
-  }
+}
+if (!normalized.mutation) {
   output({ continue: true });
   process.exit(0);
 }
-if (!normalized.targetResolved) {
+const opaque = normalized.terminalEffects.hasOpaque;
+if (!normalized.targetResolved && !opaque) {
   deny('unresolved-mutation-target', 'Mutation target could not be resolved for scope validation; next: retry the edit with an explicit file path, or read ~/.copilot/skills/ensure-plan/SKILL.md', 'unresolved');
 }
 
@@ -390,7 +390,7 @@ const governed = relatives.filter((relative) =>
   && relative !== '.harness'
   && !relative.startsWith('.harness/')
 );
-if (governed.length === 0) {
+if (governed.length === 0 && !opaque) {
   record({ gate: 'exempt', decision: 'allow', result: 'pass' });
   output({ continue: true });
   process.exit(0);
@@ -435,6 +435,25 @@ if (planStatus === 'planned') {
     'After the initial gate, change plan status from planned to in-progress, rerun the implement gate as its own tool call, wait for pass, then retry this product mutation',
     'invalid'
   );
+}
+if (opaque) {
+  if (normalized.terminalEffects.ambiguous) {
+    deny('ambiguous-terminal-command', 'Run each required named check with its exact argv, without wrappers, substitutions, or changed working directories; next: use harness verify for plan verification', 'invalid');
+  }
+  if (!Object.hasOwn(session, 'gatedChecksDigest') || session.gatedChecksDigest !== configuredChecksDigest(normalized.workspace)) {
+    deny('unbound-terminal-command', 'Opaque execution needs a frozen current check manifest; next: rerun harness gate, then use the exact required check command', 'invalid');
+  }
+  if (!projectTrustIsCurrent(normalized.workspace)) {
+    deny('untrusted-terminal-command', 'Project checks are not currently approved; next: request explicit project trust approval, then rerun harness gate and use harness verify', 'invalid');
+  }
+  const required = new Set(requiredChecks(planText));
+  const commands = Array.isArray(session.gatedCheckCommands) ? session.gatedCheckCommands : [];
+  const admitted = normalized.terminalEffects.opaqueInvocations.every(actual => commands.some(({ name, argv }) =>
+    required.has(name) && Array.isArray(argv) && actual.length === argv.length && actual.every((part, index) => part === argv[index])
+  ));
+  if (!admitted) {
+    deny('unclassified-terminal-command', 'Executable effects are unknown and the invocation is not an exact required named check; next: declare and approve the check, rerun harness gate, then use harness verify', 'invalid');
+  }
 }
 const planRecord = readPlanRecord(planText);
 const allowed = impactedFiles(planText);
@@ -491,7 +510,7 @@ if (governed.some(isPrimitivePath)) {
   }
 }
 
-if (typeof session.diffFingerprint === 'string' && session.diffFingerprint.length > 0) {
+if (!opaque && typeof session.diffFingerprint === 'string' && session.diffFingerprint.length > 0) {
   const nextDiff = readProductDiff(normalized.workspace, { planPath: session.activePlan });
   if (nextDiff === null) {
     deny('unreadable-diff', 'The current diff could not be read; retry the edit once git diff HEAD succeeds', 'invalid');

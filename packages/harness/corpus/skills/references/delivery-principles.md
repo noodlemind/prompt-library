@@ -21,7 +21,7 @@ Read this file before the first edit of a Deliver task. Name a principle in the 
 | standards-over-local-drift | Match the module layout. New code follows the language or framework standard when the surrounding code does not. |
 | one-writer | When `orient --read` stored a non-empty file list, a product path must be one of those files. `mkdir` may create a parent of a listed file. |
 | parent-reads-the-diff | The implementer report is evidence. The Engineer reads the diff and writes the summary the person sees. |
-| verify-between-units | Call `harness verify` and require outcome `passed` before the next unit. |
+| verify-between-units | Run focused TDD checks between units; collect required review before authoritative `harness verify`. |
 | spec-before-code | Read in-repo specs and intents named by orient before implementing. A repo with none yet runs `harness prepare`, then a person edits the starter files. Ambiguity is `needs-info`, not a guess. If shipped behavior contradicts a locked spec, update that spec in the same PR or a stacked PR. |
 | isolate-issue-work | Automatic issue work runs in a linked git worktree from `harness worktree`, not the current default-branch checkout. |
 
@@ -95,11 +95,11 @@ The implementer report is evidence. The Engineer reads the diff and writes the s
 
 ## verify-between-units
 
-Call `harness verify` and require outcome `passed` before the next unit. Outcome `type-check-only` is not a pass for behavioral work. A new git head voids the stored verification.
+Run focused tests through the failing-test, minimal-fix, cleanup TDD loop for each unit. Record the command, outcome, and what the check proves. Focused tests do not establish delivery completion. After changed work has complete required review, the Engineer runs `harness verify` and requires outcome `passed`. Outcome `type-check-only` is not a pass for behavioral work. A changed contract, product content, selected content-v1 intent bytes, or new git head invalidates relevant stored evidence.
 
 ## spec-before-code
 
-Orient lists in-repo specs, ADRs, RFCs, intent files, and issue notes. A repository with none of those yet runs `harness prepare`, then a person edits the starter files. Read those paths before implementing. Record them on plan `intent_sources`. Lock writes `{ path, sha256 }` for each source on that tip. If a source is ambiguous, set `status: needs-info` and write `## Missing` questions. Do not invent the requirement. If shipped behavior contradicts a locked spec, update that spec in the same PR or a stacked PR. Do not rewrite the spec from the code in silence.
+Orient lists in-repo specs, ADRs, RFCs, intent files, and issue notes. A repository with none of those yet runs `harness prepare`, then a person supplies the missing intent in the starter files. Read those paths before implementing. Record them on plan `intent_sources`. Under content-v1, lock writes `{ path, sha256 }` for each source on that tip and later changed, missing, or unreadable selected bytes block current authority. Accept reviewed source changes with an explicit plan-intent amendment, then refresh the gate; relock does not silently accept new bytes. Legacy plans retain their paths-only guarantee until explicit migration. If a source is ambiguous, capture `needs-info` and missing questions through plan decisions. Do not invent the requirement. If shipped behavior contradicts a locked spec, update that spec in the same PR or a stacked PR. Do not rewrite the spec from the code in silence.
 
 ## isolate-issue-work
 

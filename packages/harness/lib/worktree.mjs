@@ -1,6 +1,8 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { readGitArgs } from '../corpus/hooks/lib/product-diff.mjs';
 import { EXIT } from './style.mjs';
 import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
 import { appendFileContained, readFileNoFollow, writeFileContained } from './fs-safe.mjs';
@@ -197,6 +199,8 @@ export function addIsolatedWorktree({ workspace, slug, from, dryRun = false } = 
   if (dryRun) {
     return { path: dest, branch, created: false, isolated: true, dryRun: true };
   }
+  const prefix = readGitArgs(root);
+  if (!prefix) throw usage('worktree: Git helper configuration could not be resolved safely');
   ensureWorktreeIgnore(root);
   if (fs.existsSync(dest)) {
     let destReal = dest;
@@ -224,13 +228,34 @@ export function addIsolatedWorktree({ workspace, slug, from, dryRun = false } = 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const branchExists = Boolean(gitOut(root, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]));
   const args = branchExists
-    ? ['worktree', 'add', dest, branch]
-    : ['worktree', 'add', '-b', branch, dest, start];
-  const res = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 15_000 });
-  if (res.status !== 0) {
-    throw Object.assign(new Error(`worktree: git worktree add failed: ${(res.stderr || res.stdout || '').trim()}`), {
-      exit: 1,
+    ? ['worktree', 'add', '--no-checkout', dest, branch]
+    : ['worktree', 'add', '--no-checkout', '-b', branch, dest, start];
+  const hooksDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-worktree-hooks-'));
+  const safeArgs = ['--no-pager', ...prefix, '-c', `core.hooksPath=${hooksDir}`];
+  let added = false;
+  try {
+    const res = spawnSync('git', [...safeArgs, ...args], { cwd: root, encoding: 'utf8', timeout: 15_000 });
+    if (res.status !== 0) {
+      throw Object.assign(new Error(`worktree: git worktree add failed: ${(res.stderr || res.stdout || '').trim()}`), { exit: 1 });
+    }
+    added = true;
+    // Branch-conditional includes become active only after the target HEAD exists.
+    const checkoutPrefix = readGitArgs(dest);
+    if (!checkoutPrefix) throw usage('worktree: target Git helper configuration could not be resolved safely');
+    const checkout = spawnSync('git', ['--no-pager', ...checkoutPrefix, '-c', `core.hooksPath=${hooksDir}`, 'reset', '--hard', 'HEAD'], {
+      cwd: dest, encoding: 'utf8', timeout: 15_000,
     });
+    if (checkout.status !== 0) {
+      throw Object.assign(new Error(`worktree: git checkout failed: ${(checkout.stderr || checkout.stdout || '').trim()}`), { exit: 1 });
+    }
+  } catch (error) {
+    if (added) {
+      const cleanup = spawnSync('git', [...safeArgs, 'worktree', 'remove', '--force', dest], { cwd: root, encoding: 'utf8', timeout: 15_000 });
+      if (cleanup.status !== 0) error.message += `; cleanup failed: ${(cleanup.stderr || cleanup.stdout || '').trim()}`;
+    }
+    throw error;
+  } finally {
+    fs.rmSync(hooksDir, { recursive: true, force: true });
   }
   carryCheckoutPlans(root, dest);
   return { path: dest, branch, created: true, isolated: true };

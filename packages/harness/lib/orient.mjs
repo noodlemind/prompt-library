@@ -142,7 +142,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }
 
   const nextTools = gatePreview.pass
-    ? ['harness gate --phase implement', 'read plan ## Impacted Files', `harness review prepare --plan ${active?.path || '<path>'}`, 'harness verify', 'harness compound']
+    ? ['harness gate --phase implement', 'read plan ## Impacted Files', `harness review prepare --plan ${active?.path || '<path>'}`, 'harness verify', `harness compound --plan ${active?.path || '<path>'} --learning-decision <file>`, `harness plan-update --plan ${active?.path || '<path>'} --file <complete-decision.json>`]
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
   const trust = trustStatus({ workspace, copilotHome, home });
   if (!trust.trusted) nextTools.push('harness trust status  # a person must approve policy before named checks run');

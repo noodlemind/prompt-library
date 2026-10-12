@@ -27,6 +27,45 @@ function createBoundedSink(maxBuffer) {
   };
 }
 
+function createHeadTailSink(maxBuffer) {
+  const headLimit = Math.ceil(maxBuffer / 2);
+  const tailLimit = Math.floor(maxBuffer / 2);
+  let buffer = '';
+  let head = '';
+  let tail = '';
+  let totalChars = 0;
+  let truncated = false;
+  const takeHead = text => text.slice(0, headLimit).replace(/[\uD800-\uDBFF]$/, '');
+  const takeTail = text => tailLimit ? text.slice(-tailLimit).replace(/^[\uDC00-\uDFFF]/, '') : '';
+  const omittedChars = () => truncated ? totalChars - head.length - tail.length : 0;
+  return {
+    push(chunk) {
+      const text = String(chunk);
+      totalChars += text.length;
+      if (truncated) {
+        tail = takeTail(tail + text);
+        return;
+      }
+      buffer += text;
+      if (buffer.length > maxBuffer) {
+        head = takeHead(buffer);
+        tail = takeTail(buffer);
+        buffer = '';
+        truncated = true;
+      }
+    },
+    get text() {
+      return truncated ? `${head}\n…truncated: ${omittedChars()} characters omitted…\n${tail}` : buffer;
+    },
+    get truncated() {
+      return truncated;
+    },
+    get omittedChars() {
+      return omittedChars();
+    },
+  };
+}
+
 function defaultKill(pid, signal, platform) {
   if (platform === 'win32') {
     try {
@@ -64,6 +103,7 @@ export function runProcess({
   onStdout,
   onStderr,
   maxBuffer = DEFAULT_MAX_BUFFER,
+  bufferMode = 'prefix',
   spawnFn = spawn,
   now = () => Date.now(),
   platform = process.platform,
@@ -75,12 +115,19 @@ export function runProcess({
   if (!Array.isArray(argv) || argv.length === 0 || !argv.every((part) => typeof part === 'string')) {
     throw new TypeError('runProcess: argv must be a non-empty array of strings');
   }
+  if (bufferMode !== 'prefix' && bufferMode !== 'head-tail') {
+    throw new TypeError('runProcess: bufferMode must be prefix or head-tail');
+  }
+  if (bufferMode === 'head-tail' && (!Number.isInteger(maxBuffer) || maxBuffer < 1)) {
+    throw new TypeError('runProcess: head-tail maxBuffer must be a positive integer');
+  }
 
   return new Promise((resolve) => {
     const start = now();
     const [cmd, ...args] = argv;
-    const stdoutSink = createBoundedSink(maxBuffer);
-    const stderrSink = createBoundedSink(maxBuffer);
+    const createSink = bufferMode === 'head-tail' ? createHeadTailSink : createBoundedSink;
+    const stdoutSink = createSink(maxBuffer);
+    const stderrSink = createSink(maxBuffer);
 
     let settled = false;
     let timeoutTimer = null;
@@ -131,6 +178,12 @@ export function runProcess({
         stdout: stdoutSink.text,
         stderr: stderrSink.text,
         truncated: stdoutSink.truncated || stderrSink.truncated,
+        ...(bufferMode === 'head-tail' ? {
+          outputTruncation: {
+            stdout: { omittedChars: stdoutSink.omittedChars },
+            stderr: { omittedChars: stderrSink.omittedChars },
+          },
+        } : {}),
       });
     }
 

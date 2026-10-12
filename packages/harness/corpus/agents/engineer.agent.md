@@ -5,8 +5,8 @@ tools: ["agent", "search/codebase", "search", "read", "edit/editFiles", "search/
 agents: ["code-implementer", "code-review-coordinator", "plan-coordinator", "repo-research-analyst", "best-practices-researcher", "framework-docs-researcher", "bug-reproduction-validator", "security-sentinel", "performance-oracle", "architecture-strategist", "git-history-analyzer", "java-reviewer", "python-reviewer", "sql-reviewer", "aws-reviewer", "delivery-classifier"]
 handoffs:
   - label: Code Review
-    agent: code-review-coordinator
-    prompt: Review the verified changes.
+    agent: engineer
+    prompt: Run /code-review to prepare the packet and collect judgments.
   - label: Harness Doctor
     agent: engineer
     prompt: Run /harness-doctor.

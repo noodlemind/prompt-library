@@ -7,9 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { getCommand } from '../lib/registry.mjs';
 import { EXIT } from '../lib/style.mjs';
-import { loadNamedChecks, validateCommand } from '../lib/checks.mjs';
+import { loadNamedChecks, validateCommand, runNamedCheck } from '../lib/checks.mjs';
 import { approveProject } from '../lib/trust.mjs';
 import { setConfigValue } from '../lib/config.mjs';
+import { withTemp } from './helpers/temp.mjs';
+import { runHarness } from './helpers/cli.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -161,14 +163,14 @@ test('checks.env_allowlist is off by default and opt-in-able', () => {
   const ws = workspaceWithChecks(`version: 1
 checks:
   echo-env:
-    command: ${JSON.stringify([process.execPath, '-e', 'console.log("SEEN=" + String(process.env.MY_CHECK_SECRET))'])}
+    command: ${JSON.stringify([process.execPath, '-e', 'console.log("SEEN=" + String(process.env.MY_CHECK_VARIABLE))'])}
 `);
   const copilotHome = tempDir('checks-env-home-');
   approveProject({ workspace: ws, copilotHome });
   const invoke = () => spawnSync(
     process.execPath,
     [binPath, 'checks', 'run', 'echo-env', '--workspace', ws, '--copilot-home', copilotHome, '--no-events'],
-    { cwd: packageRoot, encoding: 'utf8', env: { ...process.env, MY_CHECK_SECRET: 'inherited-value' } },
+    { cwd: packageRoot, encoding: 'utf8', env: { ...process.env, MY_CHECK_VARIABLE: 'inherited-value' } },
   );
 
   assert.match(invoke().stdout, /SEEN=inherited-value/,
@@ -269,4 +271,152 @@ test('a timed-out check exits with the reserved timed-out code', () => {
   );
   assert.equal(res.status, EXIT.timedOut, 'the reported status and the exit code must mean the same thing');
   assert.equal(JSON.parse(res.stdout).status, 'timed-out');
+});
+
+for (const length of [9000, 2 * 1024 * 1024]) {
+  test(`checks run retains separate late diagnostics after ${length} characters`, async () => {
+    await withTemp('checks-output-', async workspace => {
+      const script = `process.stdout.write('stdout setup\\n' + 'x'.repeat(${length}) + '\\nSTDOUT_LATE_ASSERTION\\n', () => process.stderr.write('stderr setup\\n' + 'y'.repeat(${length}) + '\\nSTDERR_LATE_ASSERTION\\n', () => process.exit(7)));`;
+      fs.mkdirSync(path.join(workspace, '.github', 'harness'), { recursive: true });
+      fs.writeFileSync(path.join(workspace, '.github', 'harness', 'checks.yaml'), JSON.stringify({ version: 1, checks: { failure: { command: [process.execPath, '-e', script] } } }));
+      const result = runHarness(['checks', 'run', 'failure', '--workspace', workspace, '--json', '--no-events']);
+      assert.equal(result.status, 1, result.stderr);
+      const { outcome } = JSON.parse(result.stdout);
+      assert.equal(outcome.status, 'failed');
+      assert.equal(outcome.exitCode, 7);
+      assert.equal(outcome.truncated, true);
+      assert.match(outcome.stdout, /^stdout setup\n/);
+      assert.match(outcome.stdout, /STDOUT_LATE_ASSERTION\n$/);
+      assert.match(outcome.stderr, /^stderr setup\n/);
+      assert.match(outcome.stderr, /STDERR_LATE_ASSERTION\n$/);
+      assert.doesNotMatch(outcome.stdout, /STDERR_LATE_ASSERTION/);
+      for (const stream of ['stdout', 'stderr']) {
+        assert.ok(outcome[stream].length <= 4080);
+        assert.ok(outcome.outputTruncation[stream].omittedChars > 0);
+        assert.match(outcome[stream], /characters omitted/);
+      }
+    });
+  });
+}
+
+for (const status of ['timeout', 'unavailable']) {
+  test(`named-check ${status} retains the last observed output without changing its verdict`, async () => {
+    await withTemp('checks-interrupted-output-', async workspace => {
+      const controller = new AbortController();
+      const result = await runNamedCheck(workspace, 'interrupted', {
+        command: [process.execPath, '-e', "process.stdout.write('setup\\n' + 'x'.repeat(9000) + '\\nLAST_OBSERVED_DIAGNOSTIC\\n', () => setInterval(() => {}, 1000));"],
+        timeout_seconds: 1,
+      }, {
+        copilotHome: path.join(workspace, 'home'),
+        signal: controller.signal,
+        onStdout: chunk => { if (status === 'unavailable' && chunk.includes('LAST_OBSERVED_DIAGNOSTIC')) controller.abort(); },
+      });
+      assert.equal(result.status, status);
+      assert.equal(result.cancelled, status === 'unavailable' ? true : undefined);
+      assert.match(result.stdout, /LAST_OBSERVED_DIAGNOSTIC\n$/);
+      assert.equal(result.truncated, true);
+    });
+  });
+}
+
+for (const lane of ['ledger', 'json']) {
+  test(`secret-bearing truncated output is suppressed on the ${lane} lane`, async () => {
+    await withTemp('checks-output-redaction-', async workspace => {
+      const secret = 'ghp_' + 'a'.repeat(36);
+      const script = `process.stdout.write('x'.repeat(9000) + '\\n${secret}\\nLATE_ASSERTION\\n', () => process.exit(3));`;
+      fs.mkdirSync(path.join(workspace, '.github', 'harness'), { recursive: true });
+      fs.writeFileSync(path.join(workspace, '.github', 'harness', 'checks.yaml'), JSON.stringify({ version: 1, checks: { failure: { command: [process.execPath, '-e', script] } } }));
+      const result = runHarness(['checks', 'run', 'failure', '--workspace', workspace, '--no-events', ...(lane === 'json' ? ['--json'] : [])]);
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout.includes(secret), false);
+      const output = lane === 'json' ? JSON.parse(result.stdout).outcome.stdout : result.stdout;
+      assert.match(output, /redacted:truncated-output/);
+    });
+  });
+}
+
+test('truncation cannot expose a PEM body whose header was in the omitted middle', async () => {
+  await withTemp('checks-output-pem-', async workspace => {
+    const secretBody = 'PRIVATE_KEY_BODY_MUST_STAY_MASKED';
+    const script = `process.stdout.write('setup\\n' + 'x'.repeat(9000) + '\\n-----BEGIN PRIVATE KEY-----\\n' + 'y'.repeat(9000) + '\\n${secretBody}\\n-----END PRIVATE KEY-----\\n', () => process.exit(3));`;
+    fs.mkdirSync(path.join(workspace, '.github', 'harness'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, '.github', 'harness', 'checks.yaml'), JSON.stringify({ version: 1, checks: { failure: { command: [process.execPath, '-e', script] } } }));
+    const result = runHarness(['checks', 'run', 'failure', '--workspace', workspace, '--json', '--no-events']);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout.includes(secretBody), false);
+    const { outcome } = JSON.parse(result.stdout);
+    assert.match(outcome.stdout, /redacted:private-key/);
+    assert.equal(outcome.truncated, true);
+    assert.ok(outcome.outputTruncation.stdout.omittedChars > 0);
+  });
+});
+
+for (const lane of ['stdout', 'stderr']) {
+  test(`unterminated private-key output is suppressed without truncation on ${lane}`, async () => {
+    await withTemp('checks-open-key-', async workspace => {
+      const outcome = await runNamedCheck(workspace, 'partial-key', {
+        command: [process.execPath, '-e', `process.${lane}.write('-----BEGIN PRIVATE KEY-----\\nSYNTHETIC_PRIVATE_KEY_BODY\\n');`],
+      }, { copilotHome: path.join(workspace, 'home') });
+      assert.equal(outcome.status, 'passed');
+      assert.equal(outcome.truncated, false);
+      assert.equal(outcome[lane], '«redacted:private-key»');
+    });
+  });
+}
+
+for (const cut of ['head', 'tail']) {
+  test(`a known env secret crossing the retained ${cut} cut cannot leak a fragment`, async () => {
+    await withTemp('checks-output-cut-secret-', async workspace => {
+      const secret = 'KNOWN_ENV_SECRET_DO_NOT_EXPOSE_' + 'a'.repeat(200);
+      const after = 'END_OF_CHECK\n';
+      const before = cut === 'head' ? 'x'.repeat(1990) : 'x'.repeat(9000);
+      const suffix = cut === 'head' ? 'y'.repeat(9000) + after : 'y'.repeat(2000 - Math.floor(secret.length / 2) - after.length) + after;
+      const script = `process.stdout.write(${JSON.stringify(before)} + process.env.HARNESS_CHECK_OUTPUT_SECRET + ${JSON.stringify(suffix)}, () => process.stderr.write('OTHER_STREAM_DIAGNOSTIC\\n', () => process.exit(3)));`;
+      fs.mkdirSync(path.join(workspace, '.github', 'harness'), { recursive: true });
+      fs.writeFileSync(path.join(workspace, '.github', 'harness', 'checks.yaml'), JSON.stringify({ version: 1, checks: { failure: { command: [process.execPath, '-e', script] } } }));
+      const result = runHarness(['checks', 'run', 'failure', '--workspace', workspace, '--json', '--no-events'], { env: { HARNESS_CHECK_OUTPUT_SECRET: secret } });
+      assert.equal(result.status, 1);
+      const { outcome } = JSON.parse(result.stdout);
+      assert.equal(outcome.stdout, '«redacted:truncated-output»');
+      assert.equal(outcome.stderr, 'OTHER_STREAM_DIAGNOSTIC\n');
+      assert.ok(outcome.outputTruncation.stdout.omittedChars > 0);
+    });
+  });
+}
+
+test('a Bearer credential stays masked when its prefix is clipped and split across raw chunks', async () => {
+  await withTemp('checks-output-bearer-', async workspace => {
+    const credential = 'a'.repeat(200);
+    const chunks = [];
+    const result = await runNamedCheck(workspace, 'failure', {
+      command: [process.execPath, '-e', `process.stdout.write('x'.repeat(9000) + '\\nBearer ', () => setTimeout(() => process.stdout.write('${credential}' + 'z'.repeat(1800), () => process.exit(3)), 50));`],
+    }, { copilotHome: path.join(workspace, 'home'), onStdout: chunk => chunks.push(chunk) });
+    assert.equal(chunks.some(chunk => chunk.includes('Bearer ' + credential)), false, 'the fixture must exercise reassembly across raw chunks');
+    assert.equal(chunks.join('').includes('Bearer ' + credential), true, 'stream callbacks keep their raw-output contract');
+    assert.equal(result.status, 'failed');
+    assert.equal(result.exitCode, 3);
+    assert.equal(result.stdout, '«redacted:truncated-output»');
+    assert.ok(result.outputTruncation.stdout.omittedChars > 0);
+  });
+});
+
+test('secret scanning overlap includes known env values beyond the pattern overlap', { skip: process.platform === 'win32' ? 'Windows environment block size cannot hold this fixture value' : false }, async () => {
+  await withTemp('checks-output-large-env-', async workspace => {
+    const secret = 'KNOWN_LARGE_ENV_SECRET_' + 'a'.repeat(120000);
+    const previous = process.env.HARNESS_CHECK_OUTPUT_SECRET;
+    process.env.HARNESS_CHECK_OUTPUT_SECRET = secret;
+    try {
+      const chunks = [];
+      const result = await runNamedCheck(workspace, 'failure', {
+        command: [process.execPath, '-e', "process.stdout.write('x'.repeat(9000) + process.env.HARNESS_CHECK_OUTPUT_SECRET.slice(0, 100000), () => setTimeout(() => process.stdout.write(process.env.HARNESS_CHECK_OUTPUT_SECRET.slice(100000) + 'z'.repeat(1800), () => process.exit(3)), 50));"],
+      }, { copilotHome: path.join(workspace, 'home'), onStdout: chunk => chunks.push(chunk) });
+      assert.equal(chunks.some(chunk => chunk.includes(secret)), false);
+      assert.equal(chunks.join('').includes(secret), true);
+      assert.equal(result.status, 'failed');
+      assert.equal(result.stdout, '«redacted:truncated-output»');
+    } finally {
+      if (previous === undefined) delete process.env.HARNESS_CHECK_OUTPUT_SECRET;
+      else process.env.HARNESS_CHECK_OUTPUT_SECRET = previous;
+    }
+  });
 });
