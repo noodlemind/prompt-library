@@ -6,7 +6,7 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 
 This repository is a skill-driven prompt library containing AI agent systems:
 - `packages/harness/corpus/agents/` — 22 agents (17 specialists + 1 delivery classifier + 1 engineer + 1 implementer + 2 coordinators, judgment-criteria style), read from `~/.copilot/agents/`
-- `packages/harness/corpus/skills/` — 26 skills including internal planning (`ensure-plan`), on-demand gap resolution (`ensure-capability`), design-before-code (`architect`), verified learning (`auto-compound`), and knowledge consolidation (`consolidate`), read from `~/.copilot/skills/`
+- `packages/harness/corpus/skills/` — 27 skills including internal planning (`ensure-plan`), experimental accepted delivery (`caffeinated`), on-demand gap resolution (`ensure-capability`), design-before-code (`architect`), verified learning (`auto-compound`), and knowledge consolidation (`consolidate`), read from `~/.copilot/skills/`
 - `packages/harness/corpus/enterprise/` — optional corp overlay (skills, agents, capability-gaps) hydrated to `~/.copilot/enterprise/`
 - `harness index` — deterministic manifest rebuild (replaces manual index steps)
 - `docs/adaptive-engineering.md` — canonical Engineer and Harness explanation
@@ -59,6 +59,8 @@ The `/document-review` skill uses 4 personas (design, scope, coherence, feasibil
 
 ### Explicit execution boundary
 `@engineer` Deliver mode executes or resumes locked plans and owns ordinary end-to-end work, while planning, review, and compounding retain their dedicated procedures.
+
+Orient returns the internal experimental `/caffeinated` procedure read pointer only for an accepted Deliver plan with a current playbook binding. `/ensure-plan` follows that pointer after establishing prerequisites. Actual skill loading, scoped worklist use and named proof need their own evidence; declaration and packaging do not establish model outcomes or native editor activation.
 
 ### Verification Before Completion
 `@engineer` Deliver mode runs evidence-based verification before claiming completion: tests pass (actual output reported), files match plan scope, all phase tasks checked, clean working state. Verification results logged in activity entries. Failed verification blocks completion claims.

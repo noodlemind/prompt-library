@@ -1,6 +1,6 @@
 # Discoverable capability inventory. Skill metadata remains the primary trigger surface.
 version: 2
-updated: 2026-09-19
+updated: 2026-10-12
 lifecycle_states: [candidate, experimental, active, deprecated, retired]
 
 engineer:
@@ -44,6 +44,16 @@ capabilities:
     replacement: engineer-agent Answer mode
     reason: Ceremony-free Answer mode made a separate quick-Q&A entry redundant.
   capture-issue: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  caffeinated:
+    type: skill
+    status: experimental
+    owner: developer-experience
+    version: 1
+    origin: starter
+    triggers: [accepted Deliver playbook, resume scoped worklist, continue established plan]
+    usage_count: 0
+    eval_suite: packages/harness/test/caffeinated.test.mjs
+    promotion_evidence: [docs/adaptive-engineering.md#caffeinated-delivery-continuation]
   code-review:
     type: skill
     status: active

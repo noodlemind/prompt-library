@@ -5,6 +5,7 @@ import { readPlanRecord } from './plan-record.mjs';
 import { extractAcceptanceCriteria } from './plan-schema.mjs';
 import { sourcePath, sourceHash, hashIntentFile, bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
 import { assertNoPersonalWrite } from './primitive-governance.mjs';
+import { readSession } from './session.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 import { bindPlaybook, validatePlaybookBinding } from './playbook-binding.mjs';
 import { locateVerification } from './verification-location.mjs';
@@ -151,9 +152,21 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     }
   }
   if (input.changes !== undefined) {
-    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe', 'playbook', 'workflowNotApplicable'], 'changes');
+    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe', 'playbook', 'workflowNotApplicable', 'skillsUsed'], 'changes');
     const changes = input.changes, record = readPlanRecord(plan.text);
     let criterionIds = extractAcceptanceCriteria(plan);
+    if (changes.skillsUsed !== undefined) {
+      if (record || !Array.isArray(changes.skillsUsed) || !changes.skillsUsed.length || changes.skillsUsed.length > 32 || changes.skillsUsed.some(name => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))) fail('skillsUsed requires bounded skill names on a full plan');
+      if (fm.skills_used !== undefined && !Array.isArray(fm.skills_used)) fail('existing skill provenance is malformed');
+      const session = readSession(workspace);
+      if (typeof session?.sessionId !== 'string' || !session.sessionId) fail('skill provenance requires a current session identity');
+      for (const name of changes.skillsUsed) {
+        const activation = session.activatedSkills?.[name], at = Date.parse(activation?.activatedAt || '');
+        const start = session.sessionStartedAt === undefined ? null : Date.parse(session.sessionStartedAt);
+        if (activation?.complete !== true || activation?.sessionId !== session.sessionId || !Number.isFinite(at) || at > Date.now() + 1000 || start !== null && (!Number.isFinite(start) || at < start)) fail(`skill ${name} needs an actual complete read in the current session`);
+      }
+      fm.skills_used = [...new Set([...(fm.skills_used || []), ...changes.skillsUsed])];
+    }
     if (changes.playbook !== undefined) {
       try { fm.playbook_binding = bindPlaybook(changes.playbook, { copilotHome }); }
       catch (error) { fail(error.message); }

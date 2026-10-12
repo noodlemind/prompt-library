@@ -37,3 +37,14 @@ export function validatePlaybookBinding(plan, { copilotHome } = {}) {
     return { pass: true, message: 'Accepted playbook content is current', binding, steps: current.steps };
   } catch (error) { return { pass: false, message: error.message, binding, steps: [] }; }
 }
+
+export function caffeinatedPointer(plan, { copilotHome } = {}) {
+  if (!plan?.plan_lock || !['planned', 'in-progress', 'review'].includes(plan.status) || plan.fm?.playbook === 'investigation'
+    || !/^[a-f0-9-]{36}$/.test(plan.fm?.plan_id || '') || !validatePlaybookBinding(plan, { copilotHome }).pass) return null;
+  const rel = 'skills/caffeinated/SKILL.md';
+  const home = resolveCopilotHome(copilotHome);
+  const base = fs.existsSync(path.join(home, rel)) ? home : getCorpusRoot();
+  const full = assertNoSymlinkAncestors(base, rel);
+  if (!full || readFileNoFollow(full, { root: base, maxBytes: 64 * 1024 }) === null) return null;
+  return { id: 'caffeinated', path: full };
+}

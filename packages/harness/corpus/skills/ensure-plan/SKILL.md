@@ -41,6 +41,8 @@ Escalate when investigation reveals a data migration, security or concurrency im
 
 ## Continue delivery
 
+After prerequisites pass, follow orient's returned procedure read pointers. A current accepted playbook activates the internal /caffeinated skill by an actual read; a path or `skills_used` declaration alone is insufficient. That skill continues the established Deliver work without repeating intake classification or planning. Missing prerequisites stay with /ensure-plan, and high uncertainty remains abstention.
+
 Implement within the accepted scope. Use focused TDD checks during implementation. Record accepted progress through the CLI. Prepare review with `harness review prepare`, obtain the required judgments, fix valid findings, and collect them with `harness review assemble`. Require passed `harness verify`, then record durable learning or explicit no-learning with `harness compound --learning-decision <file>`. Submit a complete decision.
 
 An intent amendment records accepted source bytes and affected evidence. Refresh the start/gate before a later product correction when its contract changed. Do not repair an unrelated optional check or add its files to scope.

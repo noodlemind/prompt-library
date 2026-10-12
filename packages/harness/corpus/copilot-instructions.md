@@ -33,6 +33,8 @@ The engineer selects the skill/flow first, then delegates only when separate jud
 
 Engineer harness: `@engineer` agent file owns the only normative delivery lifecycle; read-only modes stay outside it. Runtime details: `harness-tool-contract.md`. Delegation: `subagent-context-packet.md`. Risky work: `human-approval-policy.md`.
 
+For an accepted Deliver plan with a current playbook binding, follow orient's procedure read pointer to the internal experimental `/caffeinated` skill. It continues the existing lifecycle and scoped worklist. A returned path or declaration alone is not activation evidence.
+
 ## Cross-Environment Tool Compatibility
 
 This library primarily targets GitHub Copilot in VS Code and IntelliJ IDEA. Agent frontmatter declares VS Code tool names. When a tool is unavailable in another host, use the closest host-native equivalent:

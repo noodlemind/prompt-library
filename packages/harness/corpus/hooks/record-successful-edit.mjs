@@ -25,16 +25,19 @@ const activatedSkill = activatedSkillFromPayload(payload);
 if (success && activatedSkill) {
   const session = readSessionState(normalized.workspace) || {};
   const activatedAt = new Date().toISOString();
+  const sessionId = normalized.sessionId || session.sessionId || null;
   writeSessionState(normalized.workspace, {
     version: 1,
     ...session,
-    sessionId: session.sessionId || normalized.sessionId || null,
+    sessionId,
+    ...(sessionId !== session.sessionId ? { sessionStartedAt: activatedAt } : {}),
     updatedAt: activatedAt,
     activatedSkills: {
       ...(session.activatedSkills || {}),
       [activatedSkill]: {
-        sessionId: normalized.sessionId || session.sessionId || null,
+        sessionId: normalized.sessionId || null,
         activatedAt,
+        complete: payload.tool_response?.truncated === false || ['read_skill', 'readSkill'].includes(normalized.toolName),
       },
     },
   });

@@ -1,3 +1,4 @@
+import { caffeinatedPointer } from './playbook-binding.mjs';
 import { resolveObligation, intentPage } from './intent-sources.mjs';
 import { locateVerification } from './verification-location.mjs';
 import { rankLearnings } from './knowledge/retrieve.mjs';
@@ -113,6 +114,7 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
     index = INDEX_MISSING;
   }
 
+  const procedure = caffeinatedPointer(active, { copilotHome });
   const obligation = resolveObligation(workspace, active, q);
   return {
     neighborhood,
@@ -124,7 +126,7 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
     trust: trustStatus({ workspace, copilotHome, home }),
     reviewCoverage: reviewCoverageFacts({ workspace, plan: active, copilotHome }),
     learnings,
-    skills,
+    skills: procedure && !skills.some(skill => skill.id === procedure.id) ? [...skills, procedure] : skills,
     instructions,
     contacts,
     index,

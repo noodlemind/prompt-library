@@ -49,11 +49,21 @@ An amendment's `changes` can contain `scope`, `goal`, `constraints`, `criteria`,
 
 Authored note keys are overview, context, memory, technical, research, routing, and implementation. Values contain prose or Markdown content without owned `##` headings. Harness creates or updates the corresponding section while preserving other reasoning. Progress uses `{ "criteria": ["AC1"], "tasks": ["P1T1"], "phase": 1 }`; omit fields that did not change. Accepted progress is a declaration. Executed verification remains a separate requirement.
 
+## Procedure and verification amendments
+
+Full and short creation can select a `playbook` and an explicit `verificationRecipe`. Harness binds the selected playbook's source identity and content. An amendment can change either field with a rationale. Changed playbook bytes require a fresh accepted binding; relock preserves the prior binding.
+
+Use `changes.workflowNotApplicable` entries with `playbook`, `sha256`, `step`, and a nonempty `reason` for accepted exceptions to bound numbered steps. Synchronize with `harness todo sync --plan <path>`. Worklist completion records performed procedure steps. It cannot check acceptance criteria or plan tasks.
+
+For a full plan, `changes.skillsUsed` appends skill names only after a complete successful read recorded under the current session identity. An old activation, partial read, declaration, or missing session identity cannot establish provenance. Short plans keep the activation in session activity instead.
+
 ## Selected intent bytes
 
 New full plans use plan_schema 2. New short plans use short-v2. Both declare intent_source_policy content-v1. Source selection freezes when locked. Changed, missing, or unreadable selected bytes block current authority and invalidate proof. Relock never silently accepts them.
 
 Accept a reviewed spec change with an amend decision, rationale, `authority` containing scope `plan-intent` and the basis for the decision, and `intentSources` containing `{ "path": "selected/spec.md" }`. Harness reads and records old/new hashes and affected evidence. Optional supplied oldHash/newHash values act as additional conflict guards. The authority field records the decision's scope; it grants no tool permissions.
+
+Use top-level `intentSelection` with the complete observed `previous` path/hash list and the desired `next` path list to replace a frozen selection. Supply a rationale and plan-intent authority. The revision and prior bindings guard the amendment. Orient's paged discovery reports omitted candidates; absence of a selected path does not mean absence of intent.
 
 Legacy plan_schema 1 and short-v1 retain their declared paths-only policy. Explicit migration uses `migrateIntent: true`, rationale, and plan-intent authority on an amend or start decision. Harness preserves an existing frozen selection and records upgraded bindings. Never describe a legacy plan as content-bound until migration succeeds.
 

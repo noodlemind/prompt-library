@@ -381,6 +381,71 @@ test('recognizes successful native skill reads without treating them as mutation
   assert.equal(activatedSkillFromPayload({ tool_name: 'read_file', tool_input: { filePath: 'src/example.js' } }), null);
 });
 
+test('explicitly truncated native skill reads cannot establish activation', t => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const payload = {
+    tool_name: 'read_file',
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
+  };
+  for (const metadata of [{ truncated: true }, { tool_response: { truncated: true } }]) {
+    assert.equal(activatedSkillFromPayload({ ...payload, ...metadata }), null);
+    assert.equal(runHook('record-successful-edit.mjs', workspace, { ...payload, ...metadata }).status, 0);
+    assert.equal(fs.existsSync(path.join(workspace, '.harness/session.json')), false);
+  }
+  assert.equal(activatedSkillFromPayload({ ...payload, tool_response: { truncated: false } }), 'create-primitive');
+});
+
+test('native skill read updates current session identity while preserving prior lifecycle and activation state', t => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const plan = writePlan(workspace, { createPrimitive: true });
+  writePassedGate(workspace, plan);
+  const sessionPath = path.join(workspace, '.harness/session.json');
+  const previous = JSON.parse(fs.readFileSync(sessionPath));
+  previous.sessionStartedAt = '2000-01-01T00:00:00.000Z';
+  previous.activatedSkills = { prior: { sessionId: previous.sessionId, activatedAt: previous.lastGateAt } };
+  fs.writeFileSync(sessionPath, JSON.stringify(previous));
+  const result = runHook('record-successful-edit.mjs', workspace, {
+    session_id: 'new-native-session',
+    tool_name: 'read_file',
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
+    tool_response: { truncated: false },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const current = JSON.parse(fs.readFileSync(sessionPath));
+  assert.equal(current.sessionId, 'new-native-session');
+  assert.equal(current.activatedSkills['create-primitive'].sessionId, current.sessionId);
+  assert.equal(current.sessionStartedAt, current.activatedSkills['create-primitive'].activatedAt);
+  assert.deepEqual(current.activatedSkills.prior, previous.activatedSkills.prior);
+  for (const field of ['activePlan', 'gatedPlan', 'gatedPlanDigest', 'gateStatus', 'lastGateAt']) {
+    assert.deepEqual(current[field], previous[field], field);
+  }
+});
+
+test('native skill reads without a host session id retain only TTL activation evidence', t => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const plan = writePlan(workspace, { createPrimitive: true });
+  writePassedGate(workspace, plan);
+  const read = runHook('record-successful-edit.mjs', workspace, {
+    session_id: null,
+    tool_name: 'read_file',
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
+    tool_response: { truncated: false },
+  });
+  assert.equal(read.status, 0, read.stderr);
+  const current = JSON.parse(fs.readFileSync(path.join(workspace, '.harness/session.json')));
+  assert.equal(current.sessionId, 'fixture-session');
+  assert.equal(current.activatedSkills['create-primitive'].sessionId, null);
+  const mutation = runHook('require-plan-gate.mjs', workspace, {
+    session_id: null,
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'packages/harness/corpus/skills/example/SKILL.md' },
+  });
+  assert.notEqual(outputJson(mutation).hookSpecificOutput?.permissionDecision, 'deny');
+});
+
 test('workspace normalization resolves host path aliases before scope checks', () => {
   const workspace = tempWorkspace();
   const aliasRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-hook-alias-'));
@@ -538,11 +603,20 @@ test('passed gate allows scoped mutation and primitive target requires current-s
   assert.match(outputJson(notActivated).hookSpecificOutput.permissionDecisionReason, /create-primitive-activation/i);
   assert.match(outputJson(notActivated).hookSpecificOutput.permissionDecisionReason, /create-primitive\/SKILL\.md/i);
 
+  runHook('record-successful-edit.mjs', workspace, {
+    tool_name: 'read_file', tool_input: { filePath: skillFixturePath(workspace, 'create-primitive'), startLine: 1, endLine: 1 },
+    tool_response: { content: '---' },
+  });
+  const partial = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file', tool_input: { filePath: 'packages/harness/corpus/skills/example/SKILL.md' },
+  });
+  assert.match(outputJson(partial).hookSpecificOutput.permissionDecisionReason, /create-primitive-activation/i);
+
   const activation = runHook('record-successful-edit.mjs', workspace, {
     hook_event_name: 'PostToolUse',
     tool_name: 'read_file',
     tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
-    tool_response: 'Skill loaded',
+    tool_response: { content: 'Skill loaded', truncated: false },
   });
   assert.equal(activation.status, 0, activation.stderr);
   const recorded = JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8'));
@@ -565,7 +639,7 @@ test('scoped shell creation permits only ancestor directories of planned files',
     hook_event_name: 'PostToolUse',
     tool_name: 'read_file',
     tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
-    tool_response: 'Skill loaded',
+    tool_response: { content: 'Skill loaded', truncated: false },
   });
 
   const allowed = runHook('require-plan-gate.mjs', workspace, {

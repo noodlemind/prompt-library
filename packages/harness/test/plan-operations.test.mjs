@@ -597,3 +597,30 @@ test('legacy relock binds a selected procedure once and unsupported amendments f
   assert.equal(invalid.status, 2);
   assert.equal(f.text(), accepted);
 });
+
+test('skillsUsed amendments require an actual complete read in the current session', t => {
+  const f = fixture(t);
+  assert.equal(f.op(f.decision('start')).status, 0);
+  const source = path.resolve(import.meta.dirname, '../corpus/skills/caffeinated/SKILL.md');
+  const input = () => f.decision('amend', { rationale: 'Record the internal procedure actually loaded.', changes: { skillsUsed: ['caffeinated'] } });
+  assert.equal(f.op(input()).status, 2);
+  const sessionPath = path.join(f.ws, '.harness/session.json');
+  const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  const loaded = fs.readFileSync(source, 'utf8');
+  assert.match(loaded, /todo sync/);
+  const hookRead = metadata => spawnSync(process.execPath, [path.resolve(import.meta.dirname, '../corpus/hooks/record-successful-edit.mjs')], { cwd: f.ws, encoding: 'utf8', input: JSON.stringify({ workspace: f.ws, cwd: f.ws, session_id: session.sessionId, tool_name: 'read_file', tool_input: { filePath: source, startLine: 1, endLine: 1 }, success: true, ...metadata }) });
+  assert.equal(hookRead({ tool_response: { content: loaded.split('\n')[0] } }).status, 0);
+  assert.equal(f.op({ ...input(), id: 'partial-skill-read' }).status, 2, 'unproven complete native read cannot establish provenance');
+  const recorded = hookRead({ tool_input: { filePath: source }, tool_response: { truncated: false } });
+  assert.equal(recorded.status, 0, recorded.stderr);
+  const actual = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+  assert.equal(actual.activatedSkills.caffeinated.sessionId, session.sessionId);
+  const amended = f.op({ ...input(), id: 'actual-skill-read' });
+  assert.equal(amended.status, 0, amended.stdout + amended.stderr);
+  assert.ok(YAML.parse(f.text().split('---')[1]).skills_used.includes('caffeinated'));
+  const control = spawnSync(process.execPath, [path.resolve(import.meta.dirname, '../corpus/hooks/require-plan-gate.mjs')], { cwd: f.ws, encoding: 'utf8', input: JSON.stringify({ workspace: f.ws, session_id: 'another-session', tool_name: 'Bash', tool_input: { command: 'harness plan-update --plan ' + f.plan + ' --file .harness/operation.json' } }) });
+  assert.equal(control.status, 0, control.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(sessionPath)).sessionId, 'another-session');
+  const stale = f.op({ ...input(), id: 'stale-skill-read' });
+  assert.equal(stale.status, 2);
+});

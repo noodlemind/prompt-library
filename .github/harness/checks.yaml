@@ -33,3 +33,7 @@ checks:
     command: ["node", "--test", "packages/harness/test/scoped-todo.test.mjs", "packages/harness/test/todo-command.test.mjs", "packages/harness/test/plan-operations.test.mjs", "packages/harness/test/hook-runtime.test.mjs"]
     timeout_seconds: 300
     proof: behavior
+  adaptive-caffeinated-tests:
+    command: ["node", "--test", "packages/harness/test/caffeinated.test.mjs", "packages/harness/test/agent-delivery.test.mjs", "packages/harness/test/plan-operations.test.mjs", "packages/harness/test/hook-runtime.test.mjs", "packages/harness/test/get-command.test.mjs"]
+    timeout_seconds: 300
+    proof: behavior

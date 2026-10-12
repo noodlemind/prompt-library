@@ -6,6 +6,7 @@ const FLAGS_WITH_VALUES = new Set([
   '--intent-page',
   '--intent-page-size',
   '--phase',
+  '--plan',
   '--query',
   '--target',
   '--workspace',

@@ -1,3 +1,4 @@
+import { caffeinatedPointer } from './playbook-binding.mjs';
 import { locateVerification } from './verification-location.mjs';
 import fs from 'fs';
 import path from 'path';
@@ -157,6 +158,8 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   if (isolation.blocked) {
     nextTools.unshift(`harness worktree --slug ${planSlugFromPath(active?.path)}`);
   }
+  const procedure = caffeinatedPointer(active, { copilotHome });
+  if (procedure) nextTools.push(`read ${inertLine(procedure.path)}`);
   if (verification.path) nextTools.push(`read ${inertLine(verification.path)}`);
   if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
   if (obligation.reason === 'none') nextTools.push(prepareNextTool(workspace));
@@ -202,7 +205,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     ({ skills, instructions, contacts } = routingCards(active.fm.routing, inventory));
     if (gatePreview.pass) {
       for (const line of routingLines) {
-        if (line.startsWith('read ')) nextTools.push(line);
+        if (line.startsWith('read ') && !nextTools.includes(line)) nextTools.push(line);
       }
       const javaFile = parseImpactedFiles(active).find((rel) => rel.endsWith('.java'));
       if (javaFile) nextTools.push(`read ${javaFile}`);
@@ -315,7 +318,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     blockedReason: newSession.blockedReason,
     nextTools,
     neighborhood,
-    skills,
+    skills: procedure && !skills.some(skill => skill.id === procedure.id) ? [...skills, procedure] : skills,
     instructions,
     contacts,
     index,

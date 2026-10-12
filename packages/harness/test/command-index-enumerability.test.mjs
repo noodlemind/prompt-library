@@ -163,7 +163,7 @@ const DECLARED_VERBS = Object.freeze({
   resources: ['validate', 'scaffold', 'candidates', 'propose', 'list', 'show', 'register', 'unregister', 'discard', 'create', 'bundles', 'add', 'update', 'remove'],
   review: ['prepare', 'assemble'],
   undo: ['list'],
-  todo: ['list', 'add', 'complete', 'clear'],
+  todo: ['list', 'sync', 'add', 'complete', 'clear'],
   inspect: ['config', 'permissions', 'workspace', 'tools'],
 });
 
@@ -252,7 +252,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 71, '67 existing verbs plus four resource governance actions');
+  assert.equal(Object.values(actual).flat().length, 72, '71 existing verbs plus scoped worklist synchronization');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -312,7 +312,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
   // Modal families leave the verb strip; remaining verb rows + flag-verbs only.
   const tuiVerbs = rows.filter((r) => r.kind === 'verb').length;
   assert.ok(tuiVerbs < 40, `TUI verb strip should fold heavily (got ${tuiVerbs})`);
-  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 86, 'the CLI surface keeps every declared verb including review');
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 87, 'the CLI surface keeps every declared verb including scoped synchronization');
 });
 
 /**

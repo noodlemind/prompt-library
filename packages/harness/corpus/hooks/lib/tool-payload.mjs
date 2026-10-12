@@ -787,6 +787,7 @@ export function toolMutationSucceeded(payload = {}) {
 }
 
 export function activatedSkillFromPayload(payload = {}) {
+  if (payload.truncated === true || payload.tool_response?.truncated === true) return null;
   const normalized = normalizeToolPayload(payload);
   if (!SKILL_READ_TOOLS.has(normalized.toolName)) return null;
 

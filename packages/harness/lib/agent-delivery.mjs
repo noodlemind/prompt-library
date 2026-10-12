@@ -4,23 +4,26 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { readSession } from './session.mjs';
-import { loadPlan } from './plan-parse.mjs';
+import { planFromText } from './plan-parse.mjs';
+import { resolvePlanUpdateFile } from './plan-update.mjs';
+import { readFileNoFollow } from './fs-safe.mjs';
 import { readEvidence } from './evidence.mjs';
-import { normalizeToolPayload, unwrapShellSegments } from '../corpus/hooks/lib/tool-payload.mjs';
+import { harnessControlCommand, normalizeToolPayload, unwrapShellSegments } from '../corpus/hooks/lib/tool-payload.mjs';
 
 export const DELIVERY_BIN = fileURLToPath(new URL('../bin/harness.mjs', import.meta.url));
 const HOOK_ROOT = fileURLToPath(new URL('../corpus/hooks/', import.meta.url));
 const COMMANDS = new Set(['orient', 'recall', 'plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound', 'report', 'status', 'trust', 'prepare', 'index']);
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 
-function toolPayload(call, workspace) {
+function toolPayload(call, workspace, sessionId) {
   const input = call.input || {};
-  if (call.name === 'apply') return { workspace, tool_name: 'MultiEdit', tool_input: { edits: input.changes } };
+  const context = { workspace, session_id: sessionId || null };
+  if (call.name === 'apply') return { ...context, tool_name: 'MultiEdit', tool_input: { edits: input.changes } };
   if (call.name === 'exec' || call.name === 'bash') {
     const command = call.name === 'exec' ? (input.argv || []).map(quote).join(' ') : input.script;
-    return { workspace, tool_name: 'Bash', tool_input: { command } };
+    return { ...context, tool_name: 'Bash', tool_input: { command } };
   }
-  return { workspace, tool_name: call.name === 'write' ? 'Write' : call.name, tool_input: input };
+  return { ...context, tool_name: call.name === 'write' ? 'Write' : call.name, tool_input: input };
 }
 
 function trustMutation(command) {
@@ -51,12 +54,13 @@ export function beforeDeliveryTool(call, options) {
   if (call.name === 'todo') return { pass: true };
   if (call.name === 'harness') {
     const argv = call.input?.argv;
-    if (!Array.isArray(argv) || !argv.length || !argv.every(arg => typeof arg === 'string') || !COMMANDS.has(argv[0])) return { pass: false, reason: 'harness requires argv for a supported lifecycle command' };
+    if (!Array.isArray(argv) || !argv.length || !argv.every(arg => typeof arg === 'string')
+      || !(COMMANDS.has(argv[0]) || argv[0] === 'todo' && harnessControlCommand(['harness', ...argv], options.workspace) === 'todo')) return { pass: false, reason: 'harness requires argv for a supported lifecycle command or scoped todo control' };
     if (argv[0] === 'trust' && argv[1] && argv[1] !== 'status') return { pass: false, reason: 'Trust approval or revocation requires a person; the agent may read trust status only.' };
     if (argv.some(arg => /^--(?:workspace|copilot-home|harness-home|home)(?:=|$)/.test(arg))) return { pass: false, reason: 'Lifecycle commands are bound to this run workspace and homes.' };
     return { pass: true };
   }
-  const payload = toolPayload(call, options.workspace);
+  const payload = toolPayload(call, options.workspace, options.sessionId);
   if (trustMutation(payload.tool_input.command)) return { pass: false, reason: 'Trust approval or revocation requires a person; the agent may read trust status only.' };
   for (const name of ['block-destructive-commands.mjs', 'guard-critical-files.mjs', 'require-plan-gate.mjs']) {
     const checked = hook(name, payload, options);
@@ -76,7 +80,11 @@ export function beforeDeliveryTool(call, options) {
 
 export function afterDeliveryTool(call, result, options) {
   if (call.name === 'harness' || call.name === 'todo') return { pass: true };
-  return hook('record-successful-edit.mjs', { ...toolPayload(call, options.workspace), success: result.status === 'ok' && result.exitCode === 0 }, options);
+  return hook('record-successful-edit.mjs', {
+    ...toolPayload(call, options.workspace, options.sessionId),
+    success: result.status === 'ok' && result.exitCode === 0,
+    ...(call.name === 'read' ? { tool_response: { truncated: result.truncated } } : {}),
+  }, options);
 }
 
 /** Stage authored decisions outside product scope; only Harness serializes them. */
@@ -110,7 +118,10 @@ export function deliveryCompletion({ workspace, copilotHome, harnessHome, remain
     if (result.status !== 0) return { pass: false, message: 'Completion authority failed; read status --validate-completion and repair the reported error.' };
     const value = JSON.parse(result.stdout);
     if (value?.pass) {
-      const plan = loadPlan(workspace, session.activePlan);
+      const full = resolvePlanUpdateFile(workspace, session.activePlan, { home: harnessHome });
+      const source = readFileNoFollow(full, { root: path.dirname(full), maxBytes: 1024 * 1024 });
+      if (source === null) return { pass: false, message: 'Completion plan is missing, unsafe or unreadable.' };
+      const plan = planFromText(source, { path: session.activePlan, fullPath: full });
       const evidence = readEvidence(workspace, session.activePlan);
       if (evidence?.binding?.changedFiles?.length && !plan?.fm.reviews?.required?.includes('code-review')) return { pass: false, message: 'Changed Deliver work requires code-review. Amend the plan review obligations, collect the bound review, then verify and complete again.' };
     }

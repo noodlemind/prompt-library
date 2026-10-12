@@ -5,11 +5,12 @@ import { findEntryByDocid, resolveDocPath } from './recall-rank.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 import { getCorpusRoot } from './assets.mjs';
+import { externalPlansDir } from './project-layout.mjs';
 
 const PACKAGED_REL = /^(skills|agents|instructions)\//;
 
 function resolvePackagedRel(relPath, copilotHome) {
-  const normalized = String(relPath).replace(/\\/g, '/');
+  const normalized = path.posix.normalize(String(relPath).replace(/\\/g, '/'));
   if (!PACKAGED_REL.test(normalized)) return null;
   const roots = [];
   if (copilotHome) roots.push(path.resolve(copilotHome));
@@ -21,6 +22,22 @@ function resolvePackagedRel(relPath, copilotHome) {
   for (const root of roots) {
     const fullPath = safeResolveUnderRoot(root, normalized);
     if (fullPath && fs.existsSync(fullPath)) return { fullPath, readRoot: root };
+  }
+  return null;
+}
+
+function resolveReadPointer(fullPath, workspace, copilotHome, home) {
+  if (!path.isAbsolute(fullPath)) return null;
+  const roots = [{ root: workspace, allow: () => true },
+    { root: copilotHome, allow: rel => PACKAGED_REL.test(rel) },
+    { root: getCorpusRoot(), allow: rel => PACKAGED_REL.test(rel) },
+    { root: externalPlansDir(workspace, { home }), allow: rel => !rel.includes('/') && rel.endsWith('.md') }];
+  for (const { root, allow } of roots) {
+    if (!root) continue;
+    const rel = path.relative(root, fullPath).replace(/\\/g, '/');
+    if (!rel || !allow(rel)) continue;
+    const safe = safeResolveUnderRoot(root, rel);
+    if (safe) return { fullPath: safe, readRoot: root };
   }
   return null;
 }
@@ -62,7 +79,7 @@ export function runGet({ workspace, copilotHome, flags, home }) {
     fullPath = resolved?.full ?? null;
     readRoot = resolved?.root ?? null;
   } else if (relPath) {
-    const packaged = resolvePackagedRel(relPath, copilotHome);
+    const packaged = resolveReadPointer(relPath, workspaceResolved, copilotHome, home || flags.home) || resolvePackagedRel(relPath, copilotHome);
     if (packaged) {
       fullPath = packaged.fullPath;
       readRoot = packaged.readRoot;
