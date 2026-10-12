@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { readProductDiff } from './lib/product-diff.mjs';
-import { currentPlanDigest } from './lib/proof-authority.mjs';
+import { callProofAuthority } from './lib/proof-authority.mjs';
 import { resolveAcceptedPlan } from './lib/external-plans.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { syncSessionIdentity } from './lib/session-state.mjs';
@@ -427,7 +427,10 @@ if (!planPath) deny('invalid-implement-gate', 'Gated plan is missing or outside 
 const planText = fs.readFileSync(planPath, 'utf8');
 // Digest the Activity-stripped contract text so routine session logging does
 // not invalidate the gate; this must match the evidence-binding digest rule.
-const planDigest = currentPlanDigest(normalized.workspace, session.gatedPlan);
+const planAuthority = callProofAuthority(normalized.workspace, ['--contract-digest', '--plan', session.gatedPlan]);
+const planDigest = planAuthority?.digest || null;
+if (planAuthority?.experiment && !planAuthority.experiment.pass) deny('unreserved-experiment-candidate', planAuthority.experiment.message || 'Keep the baseline and reserve a candidate before editing', 'invalid');
+if (planAuthority?.experiment && (session.gatedPhase !== 'implement' || lastGateAt > Date.now())) deny('invalid-experiment-gate', 'Experiment edits require a current implement gate and reserved candidate', 'invalid');
 if (!planDigest) deny('unreadable-plan-authority', 'Installed Harness could not establish the current plan contract; restore required helpers and rerun the gate', 'invalid');
 if (!session.gatedPlanDigest || session.gatedPlanDigest !== planDigest) {
   deny('changed-implement-plan', 'Plan changed after the implement gate; rerun the gate', 'invalid');
@@ -460,7 +463,7 @@ if (opaque) {
   }
 }
 const planRecord = readPlanRecord(planText);
-const allowed = impactedFiles(planText);
+const allowed = planAuthority?.experiment ? planAuthority.experiment.files || [] : impactedFiles(planText);
 // The planned-ancestor exception applies only to paths mkdir itself creates,
 // not to every target of a compound command that happens to include mkdir.
 const mkdirRelatives = new Set(

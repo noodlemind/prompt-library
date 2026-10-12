@@ -45,3 +45,7 @@ checks:
     command: ["node", "--test", "packages/harness/test/domain-contract.test.mjs", "packages/harness/test/domain-bindings.test.mjs", "packages/harness/test/domain-context.test.mjs", "packages/harness/test/domain-plans.test.mjs", "packages/harness/test/domain-delivery.test.mjs", "packages/harness/test/domain-commands.test.mjs", "packages/harness/test/extended-plan-compatibility.test.mjs", "packages/harness/test/git-context.test.mjs", "packages/harness/test/policy.test.mjs", "packages/harness/test/hook-runtime.test.mjs", "packages/harness/test/registry.test.mjs", "packages/harness/test/flag-value-guards.test.mjs", "packages/harness/test/command-index-enumerability.test.mjs"]
     timeout_seconds: 600
     proof: behavior
+  adaptive-experiment-tests:
+    command: ["node", "--test", "packages/harness/test/experiment-contract.test.mjs", "packages/harness/test/experiment-isolation.test.mjs", "packages/harness/test/experiment-measurement.test.mjs", "packages/harness/test/experiment-state.test.mjs", "packages/harness/test/experiment-snapshots.test.mjs", "packages/harness/test/experiment-commands.test.mjs", "packages/harness/test/experiment-release.test.mjs", "packages/harness/test/agent-delivery.test.mjs", "packages/harness/test/domain-context.test.mjs", "packages/harness/test/registry.test.mjs", "packages/harness/test/flag-value-guards.test.mjs", "packages/harness/test/command-index-enumerability.test.mjs"]
+    timeout_seconds: 600
+    proof: behavior

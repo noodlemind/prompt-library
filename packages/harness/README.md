@@ -186,7 +186,15 @@ Human lines: ledger rows (`✓` / `!` / `✗`; ASCII under `NO_COLOR`). `--json`
 | 7 | network |
 | 130 | interrupted |
 
-Gate and verify keep their documented policy-driven exits. New ordinary full plans use `plan_schema: 2`, short plans use `short-v2`, and domain plans use full schema 3 `.hplan` records. Legacy plans retain their declared guarantee. Named checks live in `.github/harness/checks.yaml`.
+Gate and verify keep their documented policy-driven exits. New ordinary full plans use `plan_schema: 2`, short plans use `short-v2`, domain plans use full schema 3 `.hplan` records, and supported ordinary experiments use full schema 4 `.hplan` records. Schema 4 preserves domain validation. Legacy plans retain their declared guarantee. Named checks live in `.github/harness/checks.yaml`.
+
+### Experiments
+
+`experiment status --json` reports the installed trusted evaluator paths without probing or writing. An accepted full experiment binds one tracked finite JSON weights candidate, a frozen `linear-json-v1` workload, metric, hard correctness, target and budgets. Only an actual registered linked issue worktree on a probed supported macOS runtime can execute it.
+
+Reserve with `experiment begin --plan <path> --file <decision.json>`, evaluate the returned `attempt_id` once with `experiment evaluate --plan <path> --attempt <UUID>`, then keep/discard/cancel through `experiment resolve --plan <path> --file <decision.json>`. Begin/resolve decisions are bound to the current raw plan hash. Establish and keep the baseline before reserving candidate edits. Every reserved score/guard pair spends two slots; crashes, failed launches and bounded repairs retain that cost. `experiment status --plan <path>` reads durable state without recovery.
+
+Keep requires validated owned artifacts, hard correctness and meaningful improvement. Discard restores recognized editable bytes/modes while preserving HEAD, the user index and unrelated work. Frozen input drift, unknown bytes or unproven child ownership blocks unsafe transitions. An exhausted or cancelled series does not complete the plan; a retained correct target still needs ordinary review, separate behavioral verification, learning/no-learning and completion. See [bounded experiments](../../docs/adaptive-engineering.md#bounded-experiments) for exact contracts, check configuration and recovery.
 
 **VS Code:** `install --configure-vscode` registers hooks (PreToolUse gate, PostToolUse record, Stop requires passed evidence). `harness doctor --host vscode` after install/upgrade.
 

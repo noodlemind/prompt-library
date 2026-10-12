@@ -273,6 +273,23 @@ test('a plain failed spawn (no abort) still settles as failed', async () => {
   assert.equal(result.exitCode, null);
 });
 
+test('a provenance callback failure terminates and reaps the owned process group', async () => {
+  let pid;
+  const result = await runProcess({ argv: [process.execPath, '-e', 'setTimeout(() => {}, 10000)'], onSpawn: details => { pid = details.pid; throw new Error('durable provenance failed'); }, killGraceMs: 20 });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.groupReaped, true);
+  assert.equal(processExists(pid), false);
+  assert.match(result.provenanceError, /durable provenance failed/);
+});
+
+test('group reap deadline reports a surviving group without inventing safe recovery', async () => {
+  const child = new EventEmitter(); child.pid = 424243; child.stdout = null; child.stderr = null;
+  const controller = new AbortController();
+  const pending = runProcess({ argv: ['fake'], spawnFn: () => child, platform: 'linux', signal: controller.signal, killFn: () => {}, groupAliveFn: () => true, killGraceMs: 1, groupReapTimeoutMs: 10 });
+  controller.abort(); child.emit('close', null, 'SIGTERM');
+  assert.equal((await pending).groupReaped, false);
+});
+
 test('a throwing killFn never breaks the always-resolve contract', async () => {
   const controller = new AbortController();
   const resultPromise = runProcess({

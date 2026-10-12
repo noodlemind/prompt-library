@@ -27,6 +27,8 @@ export const NON_ADVISORY_CHECK_IDS = new Set([
   'workspace-stability',
   'domain-coordinator',
   'domain-children',
+  'experiment-target',
+  'experiment-retention-stability',
 ]);
 
 function parseCheckSeverities(policy, policyPath) {

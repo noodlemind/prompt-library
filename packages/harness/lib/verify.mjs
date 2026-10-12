@@ -25,6 +25,7 @@ import { inertLine } from './knowledge/store.mjs';
 import { CHECKS_REL, loadNamedChecks, validateCommand, runNamedCheck } from './checks.mjs';
 import { createRedactor, redactionMarker } from './redact.mjs';
 import { intentSourcesCheck } from './intent-sources.mjs';
+import { experimentProof } from './experiment-authority.mjs';
 
 const DEFAULT_CHECK_SEVERITIES = { [STRUCTURAL_CHECK_ID]: 'advisory' };
 
@@ -475,6 +476,10 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     if (signal?.aborted) break; // stop running further checks once cancelled
   }
   checks.push(...namedResults);
+  if (plan.fm.experiment) {
+    const proof = preBinding.experiment;
+    checks.push(resultCheck('experiment-target', proof?.pass ? 'passed' : 'failed', proof?.message || 'Retained experiment target proof required'));
+  }
   if (plan.fm.domain_parent) {
     const prerequisites = domainPrerequisites({ workspace, plan, copilotHome: resolveCopilotHome(flags.copilotHome), home: planHome(workspace, plan) });
     checks.push(resultCheck('domain-children', prerequisites.pass ? 'passed' : 'failed', prerequisites.message));
@@ -566,9 +571,12 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     JSON.stringify(preBinding.domainAuthority) === JSON.stringify(binding.domainAuthority) &&
     (!binding.domainAuthority || binding.domainAuthority.pass) &&
     JSON.stringify(preBinding.domainExecution) === JSON.stringify(binding.domainExecution) &&
+    JSON.stringify(preBinding.experiment) === JSON.stringify(binding.experiment) &&
+    (!binding.experiment || binding.experiment.pass) &&
     ((currentPlan || plan).fm?.intent_source_policy === undefined || intentSourcesCheck(currentPlan || plan, workspace).pass) &&
     Boolean(currentPlan) &&
     !headMoved;
+  if (plan.fm.experiment) checks.push(resultCheck('experiment-retention-stability', stable && experimentProof({ workspace, plan: currentPlan || plan, copilotHome: resolveCopilotHome(flags.copilotHome), home: planHome(workspace, plan) }).pass ? 'passed' : 'failed', 'Experiment retained candidate, target and immutable receipts must remain current throughout final verification'));
   checks.push(
     resultCheck(
       'workspace-stability',

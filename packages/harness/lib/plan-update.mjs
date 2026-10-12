@@ -445,8 +445,10 @@ export function updatePlanDecision({ workspace, home, domainContext = null, plan
 
 export function convertFullPlan({ workspace, home = harnessGlobalHome(), domainContext = null, planPath, input, copilotHome, dryRun = false }) {
   const fields = ['version', 'id', 'action', 'expect', 'rationale', 'authority', 'changes'];
+  const experiment = Boolean(input?.changes?.experiment);
+  const validChanges = experiment ? Object.keys(input.changes).length === 1 : input?.changes && Object.keys(input.changes).length === 2 && input.changes.domain_child && input.changes.domain_binding;
   if (domainContext || input?.changes?.domain_parent) throw usage('Parent plans require fresh domain creation; project history cannot be moved into a parent');
-  if (!input || Object.keys(input).some(key => !fields.includes(key)) || input.version !== 1 || input.action !== 'convert' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.id || '') || !/^[a-f0-9]{64}$/.test(input.expect || '') || typeof input.rationale !== 'string' || !input.rationale.trim() || input.authority?.scope !== 'domain-intent' || typeof input.authority.basis !== 'string' || !input.authority.basis.trim() || Object.keys(input.authority).some(key => !['scope', 'basis'].includes(key)) || !input.changes || Object.keys(input.changes).length !== 2 || !input.changes.domain_child || !input.changes.domain_binding) throw usage('Conversion requires a revision-bound authored child domain decision and domain-intent authority');
+  if (!input || Object.keys(input).some(key => !fields.includes(key)) || input.version !== 1 || input.action !== 'convert' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.id || '') || !/^[a-f0-9]{64}$/.test(input.expect || '') || typeof input.rationale !== 'string' || !input.rationale.trim() || input.authority?.scope !== (experiment ? 'experiment-intent' : 'domain-intent') || typeof input.authority.basis !== 'string' || !input.authority.basis.trim() || Object.keys(input.authority).some(key => !['scope', 'basis'].includes(key)) || !validChanges) throw usage('Conversion requires a revision-bound authored child domain or experiment decision with matching authority');
   const raw = typeof planPath === 'string' && planPath;
   if (!raw || !raw.endsWith('.md')) throw usage('Conversion requires an ordinary full .md plan');
   const full = path.isAbsolute(raw) ? path.resolve(raw) : raw.includes('/') ? path.resolve(workspace, raw) : path.join(externalPlansDir(workspace, { home }), raw);
@@ -476,8 +478,8 @@ export function convertFullPlan({ workspace, home = harnessGlobalHome(), domainC
     const original = prior?.value.original ?? source;
     if (original === null || planRevision(original) !== input.expect || (source !== null && source !== original)) throw usage('Stale plan revision; conversion cannot replace changed or missing original bytes');
     const plan = authorizeProjectPlan(planFromText(original, { path: full, fullPath: full }), home);
-    if (Number(plan.fm.plan_schema) !== 2 || readPlanRecord(original) || plan.fm.domain_parent || plan.fm.domain_child || plan.fm.domain_binding || !plan.fm.plan_id) throw usage('Only ordinary schema 2 full plans with an existing UUID can convert to a domain child');
-    const fm = { ...plan.fm, plan_schema: 3, domain_child: input.changes.domain_child, domain_binding: input.changes.domain_binding };
+    if (Number(plan.fm.plan_schema) !== 2 || readPlanRecord(original) || plan.fm.domain_parent || plan.fm.domain_child || plan.fm.domain_binding || plan.fm.experiment || !plan.fm.plan_id) throw usage('Only ordinary schema 2 full plans with an existing UUID can convert to an extended contract');
+    const fm = { ...plan.fm, plan_schema: experiment ? 4 : 3, ...(experiment ? { experiment: input.changes.experiment } : { domain_child: input.changes.domain_child, domain_binding: input.changes.domain_binding }) };
     const text = original.replace(/^---\r?\n[\s\S]*?\r?\n---/, `---\n${YAML.stringify(fm, { lineWidth: 0 })}---`);
     const proposed = authorizeProjectPlan(planFromText(text, { path: nextPath, fullPath: nextPath }), home);
     const schema = validatePlanSchema(proposed), shared = sharedIntentCheck(workspace, proposed, { home }), link = domainLinkCheck({ workspace, plan: proposed, copilotHome, home });

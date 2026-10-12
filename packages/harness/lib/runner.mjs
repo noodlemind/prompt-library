@@ -102,6 +102,7 @@ export function runProcess({
   signal,
   onStdout,
   onStderr,
+  onSpawn,
   maxBuffer = DEFAULT_MAX_BUFFER,
   bufferMode = 'prefix',
   spawnFn = spawn,
@@ -130,6 +131,8 @@ export function runProcess({
     const stderrSink = createSink(maxBuffer);
 
     let settled = false;
+    let child;
+    let provenanceError = null;
     let timeoutTimer = null;
     let killGraceTimer = null;
     let groupReapTimer = null;
@@ -178,6 +181,8 @@ export function runProcess({
         stdout: stdoutSink.text,
         stderr: stderrSink.text,
         truncated: stdoutSink.truncated || stderrSink.truncated,
+        ...(onSpawn ? { pid: child?.pid ?? null, groupId: platform === 'win32' ? null : child?.pid ?? null, provenanceError } : {}),
+        groupReaped: !child?.pid || (watchGroupDeath ? (() => { try { return !groupAlive(child.pid, platform); } catch { return false; } })() : platform === 'win32' ? partial.status === 'ok' : null),
         ...(bufferMode === 'head-tail' ? {
           outputTruncation: {
             stdout: { omittedChars: stdoutSink.omittedChars },
@@ -192,7 +197,6 @@ export function runProcess({
       return;
     }
 
-    let child;
     try {
       child = spawnFn(cmd, args, {
         cwd,
@@ -283,5 +287,12 @@ export function runProcess({
         finish(partial);
       }
     });
+    if (onSpawn && Number.isInteger(child.pid) && child.pid > 0) {
+      try { onSpawn({ pid: child.pid, groupId: platform === 'win32' ? null : child.pid }); }
+      catch (error) {
+        provenanceError = String(error?.message || 'Spawn provenance could not be retained').slice(0, 240);
+        terminateTree('failed');
+      }
+    }
   });
 }

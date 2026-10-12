@@ -9,6 +9,7 @@ import { readSession } from './session.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 import { bindPlaybook, validatePlaybookBinding } from './playbook-binding.mjs';
 import { locateVerification } from './verification-location.mjs';
+import { validateExperimentContract } from './experiment-contract.mjs';
 
 export const PLAN_ACTIONS = Object.freeze(['start', 'amend', 'progress', 'finding', 'gap', 'complete']);
 export const planRevision = text => createHash('sha256').update(text).digest('hex');
@@ -152,8 +153,14 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     }
   }
   if (input.changes !== undefined) {
-    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe', 'playbook', 'workflowNotApplicable', 'skillsUsed', 'domainBinding', 'domainParent', 'domainChild'], 'changes');
+    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe', 'playbook', 'workflowNotApplicable', 'skillsUsed', 'domainBinding', 'domainParent', 'domainChild', 'experiment'], 'changes');
     const changes = input.changes, record = readPlanRecord(plan.text);
+    if (changes.experiment !== undefined) {
+      if (record || Number(fm.plan_schema) !== 4 || !fm.experiment || input.authority?.scope !== 'experiment-intent') fail('Experiment amendments require an existing full experiment and explicit experiment-intent authority');
+      validateExperimentContract(changes.experiment);
+      if (changes.experiment.budget.max_invocations < fm.experiment.budget.max_invocations || changes.experiment.budget.max_seconds < fm.experiment.budget.max_seconds) fail('Experiment global budget limits cannot decrease');
+      fm.experiment = changes.experiment;
+    }
     const domainChanges = ['domainBinding', 'domainParent', 'domainChild'].filter(key => changes[key] !== undefined);
     if (domainChanges.length) {
       if (record || Number(fm.plan_schema) < 3 || input.authority?.scope !== 'domain-intent') fail('Domain amendments require a full extended plan and explicit domain-intent authority');

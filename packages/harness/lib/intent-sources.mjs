@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { assertNoSymlinkAncestors, readFileNoFollow, readPrefixNoFollow } from './fs-safe.mjs';
+import { gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 
 const PATH_CAP = 8;
 const LINE_BUDGET = 512;
@@ -63,11 +64,11 @@ function preferredBasename(item) {
 
 function catalog(workspace) {
   if (!workspace) return [];
-  const listed = spawnSync('git', ['-C', workspace, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+  const listed = spawnSync('git', ['-C', workspace, '-c', 'core.fsmonitor=false', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     encoding: 'buffer',
     timeout: 10_000,
     maxBuffer: 1024 * 1024,
-    env: { ...process.env, LC_ALL: 'C' },
+    env: { ...gitMetadataEnvironment(), LC_ALL: 'C' },
   });
   if (listed.status !== 0 || !listed.stdout) {
     if (!listed.error && listed.stderr?.toString('utf8').includes('fatal: not a git repository')) return [];

@@ -575,6 +575,27 @@ export function harnessControlCommand(tokens, workspace) {
   } else return null;
   if (!args.length) return 'help';
   if (HARNESS_CONTROL.has(args[0])) return args[0];
+  if (args[0] === 'experiment') {
+    const verb = args[1], options = { begin: ['--plan', '--file'], evaluate: ['--plan', '--attempt'], resolve: ['--plan', '--file'], status: ['--plan', '--attempt'] };
+    if (!Object.hasOwn(options, verb)) return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--workspace', '--harness-home', '--copilot-home', ...options[verb]]), seen = new Set(), values = new Map();
+    for (let index = 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('='), name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || Buffer.byteLength(value) > 4096 || /[\x00-\x1f\x7f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    if (verb !== 'status' && options[verb].some(key => !values.has(key))) return null;
+    if (values.has('--attempt') && !values.has('--plan')) return null;
+    if (values.has('--attempt') && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(values.get('--attempt'))) return null;
+    if (values.has('--workspace') && path.resolve(values.get('--workspace')) !== path.resolve(workspace)) return null;
+    return 'experiment';
+  }
   if (args[0] === 'domain') {
     const verb = args[1], reviewVerb = verb === 'review' ? args[2] : null;
     const options = {

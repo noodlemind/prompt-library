@@ -15,6 +15,17 @@ import { prepareReview } from '../lib/review.mjs';
 import { readDomain } from '../lib/domain-contract.mjs';
 import { snapshotDomain } from '../lib/domain-bindings.mjs';
 import { publishGateSession } from '../lib/gate.mjs';
+import { experimentFixture as experimentCliFixture } from './helpers/experiment-command-fixtures.mjs';
+
+test('a valid experiment contract stays current before candidate edit permission exists', t => {
+  const f = experimentCliFixture(t); f.create(); f.start();
+  const current = f.invoke('status', '--contract-digest', '--plan', f.plan);
+  assert.match(current.digest || '', /^[a-f0-9]{64}$/);
+  assert.equal(current.experiment.pass, false);
+  const denied = f.hook('config/weights.json');
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /baseline|reservation/i);
+});
 import { runGate } from '../lib/gate.mjs';
 import { preparationIsCurrent } from '../lib/review-preparation.mjs';
 import { runIndexKnowledge } from '../lib/index-knowledge.mjs';
@@ -73,6 +84,8 @@ test('schema and extension cannot be exchanged to make an old reader accept exte
   assert.equal(validatePlanSchema(oldHplan).checks.find(c => c.id === 'schema-extension')?.pass, false);
   const unsupported = planWithText(loadPlan(f.workspace, f.full, { domainContext: f.context }), source.replace('plan_schema: 3', 'plan_schema: 3\nexperiment: {version: 1, target: 0}'));
   assert.equal(validatePlanSchema(unsupported).pass, false, 'schema 3 cannot ignore experiment guarantees');
+  const inherited = planWithText(loadPlan(f.workspace, f.full, { domainContext: f.context }), source.replace('plan_schema: 3', 'plan_schema: 4'));
+  assert.equal(validatePlanSchema(inherited).pass, true, 'schema 4 preserves strict domain authority without requiring an experiment');
 });
 
 test('a global domain publication indexes global knowledge without creating a private domain index', t => {
@@ -101,6 +114,8 @@ test('parent review, evidence and gate records use the domain authority without 
   publishGateSession({ workspace: f.workspace, plan, result: { pass: false, exitCode: 1, plan: { path: plan.path }, blockedReason: 'fixture' }, policy: { enforcement: 'enforce' } });
   assert.ok(fs.existsSync(path.join(root, '.harness/session.json')));
   assert.equal(fs.existsSync(path.join(f.workspace, '.harness')), false);
+  publishGateSession({ workspace: f.workspace, plan, result: { pass: true, exitCode: 0, phase: 'implement', plan: { path: plan.path, digest: 'accepted' } }, policy: { enforcement: 'enforce' } });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.harness/session.json'), 'utf8')).gatedPhase, 'implement');
 });
 
 test('null optional home preserves ordinary direct and CLI plan loading', t => {

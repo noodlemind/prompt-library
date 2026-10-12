@@ -76,6 +76,7 @@ import { createRedactor, redactedJson } from './redact.mjs';
 import { cmdModel, modelResultOf, MODEL_VERBS } from './model-cmd.mjs';
 import { cmdInspect, inspectResultOf, inspectExitFor, INSPECT_VERBS } from './inspect-cmd.mjs';
 import { cmdDomain, domainResultOf, parseDomainArguments, DOMAIN_VERBS } from './domain-cmd.mjs';
+import { cmdExperiment, experimentResultOf, parseExperimentArguments, EXPERIMENT_VERBS } from './experiment-cmd.mjs';
 import { cmdInventory, inventoryResultOf, INVENTORY_VERBS } from './inventory-cmd.mjs';
 
 const REGISTRY = new Map();
@@ -1220,6 +1221,36 @@ registerCommand({
   },
   handler: cmdDomain,
   resultOf: domainResultOf,
+  exitOf: result => result.exitCode,
+});
+
+registerCommand({
+  name: 'experiment',
+  summary: 'reserve, measure and retain a bounded accepted numerical experiment',
+  group: 'engineer loop',
+  sideEffect: 'execute',
+  instrument: argv => parseExperimentArguments(argv).verb !== 'status',
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<begin|evaluate|resolve|status> [--plan <path>]',
+  verbs: [
+    { verb: 'begin', summary: 'reserve a charged baseline, candidate or repair pair', sideEffect: 'mutate' },
+    { verb: 'evaluate', summary: 'execute one reserved pair once through trusted isolated checks', sideEffect: 'execute' },
+    { verb: 'resolve', summary: 'keep, discard or cancel the observed candidate', sideEffect: 'mutate' },
+    { verb: 'status', summary: 'read setup or current durable experiment state', sideEffect: 'read' },
+  ],
+  args: {
+    positionals: [{ name: 'verb', description: EXPERIMENT_VERBS.join('|'), required: true }],
+    flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'accepted full experiment plan', tui: 'prompt' },
+      { name: '--file', type: 'string', valueName: 'path', description: 'revision-bound authored reservation or resolution', tui: 'prompt' },
+      { name: '--attempt', type: 'string', valueName: 'uuid', description: 'durably reserved invocation identity', tui: 'prompt' },
+    ],
+  },
+  handler: cmdExperiment,
+  resultOf: experimentResultOf,
   exitOf: result => result.exitCode,
 });
 

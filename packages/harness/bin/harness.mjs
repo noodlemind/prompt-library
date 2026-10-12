@@ -23,7 +23,7 @@ const ui = createStyle({ argv: args, stream: process.stderr });
 const out = createStyle({ argv: args });
 
 export const HELP_COMMAND_ORDER = [
-  'install', 'upgrade', 'doctor', 'inventory', 'domain', 'status', 'uninstall',
+  'install', 'upgrade', 'doctor', 'inventory', 'domain', 'experiment', 'status', 'uninstall',
   'init-repo', 'prepare', 'migrate', 'index', 'plan-new', 'plan-update', 'worktree', 'route', 'config',
   'model', 'trust', 'resources', 'review',
     'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'agent', 'validate-plan', 'compound', 'recall', 'get', 'edit', 'write', 'apply', 'todo', 'undo', 'search', 'lookup', 'tree', 'run', 'inspect', 'tui', 'events', 'report',
@@ -221,9 +221,10 @@ async function main() {
       };
             const events = createProcessEventRegistry(args, runId, { recordWorkspace: runWorkspace });
             let signal;
-            if (['verify', 'exec', 'bash', 'checks', 'agent', 'domain'].includes(command)) {
+            if (['verify', 'exec', 'bash', 'checks', 'agent', 'domain', 'experiment'].includes(command)) {
         const controller = new AbortController();
         process.once('SIGINT', () => controller.abort());
+        if (command === 'experiment') process.once('SIGTERM', () => controller.abort());
         signal = controller.signal;
       }
       code = await dispatchRegistered([command, ...laneArgs], {

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { runNamedCheck, validateCommand } from '../lib/checks.mjs';
-import { validateCheckArtifacts } from '../lib/check-artifacts.mjs';
+import { validateCheckArtifacts, allocateCheckArtifacts, captureCheckArtifacts } from '../lib/check-artifacts.mjs';
 import { tempDir } from './helpers/temp.mjs';
 
 function fixture(t) {
@@ -75,4 +75,11 @@ test('another check invocation cannot replace the retained directory through a s
 
 test('redaction-sensitive artifact filenames are rejected before launch', () => {
   assert.match(validateCommand('proof', { command: ['node', 'unused.mjs'], artifacts: ['sk-zzzzzzzzzzzzzzzzzzzzzzzz.json'] }), /artifact/i);
+});
+
+test('internal raw validator runs before duplicate fields can disappear during JSON capture', t => {
+  const { workspace } = fixture(t); const root = allocateCheckArtifacts(workspace, 'strict');
+  const raw = '{"version":1,"version":2}'; fs.writeFileSync(path.join(workspace, root, 'receipt.json'), raw);
+  assert.throws(() => captureCheckArtifacts(workspace, root, ['receipt.json'], value => value, (name, bytes) => { assert.equal(name, 'receipt.json'); assert.equal(bytes.toString(), raw); throw new Error('duplicate identity'); }), /duplicate identity/);
+  assert.equal(fs.readFileSync(path.join(workspace, root, 'receipt.json'), 'utf8'), raw);
 });

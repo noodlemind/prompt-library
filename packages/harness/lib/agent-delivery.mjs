@@ -19,13 +19,13 @@ const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 
 function inlineDecisionFlag(input) {
   if (input.decision === undefined) return null;
-  const offset = input.argv[0] === 'domain' ? 1 : 0;
+  const offset = ['domain', 'experiment'].includes(input.argv[0]) ? 1 : 0;
   const operation = input.argv[offset];
   const flag = operation === 'compound' ? '--learning-decision' : '--file';
-  if (!['plan-new', 'plan-update', 'compound', 'review'].includes(operation)
+  if (!(input.argv[0] === 'experiment' ? ['begin', 'resolve'] : ['plan-new', 'plan-update', 'compound', 'review']).includes(operation)
     || operation === 'review' && input.argv[offset + 1] !== 'assemble'
     || input.argv.some(arg => arg === flag || arg.startsWith(`${flag}=`))) {
-    throw new Error('decision requires plan-new, plan-update, review assemble or compound without an existing input file');
+    throw new Error('decision requires plan-new, plan-update, review assemble, compound, experiment begin or experiment resolve without an existing input file');
   }
   return flag;
 }
@@ -74,7 +74,7 @@ export function beforeDeliveryTool(call, options) {
     try { decisionFlag = inlineDecisionFlag(call.input); }
     catch (error) { return { pass: false, reason: error.message }; }
     const effectiveArgv = decisionFlag ? [...argv, decisionFlag, path.join(os.tmpdir(), 'harness-agent-decision-placeholder', 'decision.json')] : argv;
-    if (!(COMMANDS.has(argv[0]) || ['todo', 'inventory', 'domain'].includes(argv[0]) && harnessControlCommand(['harness', ...effectiveArgv], options.workspace) === argv[0])) return { pass: false, reason: 'harness requires argv for a supported lifecycle command or exact diagnostic/worklist control' };
+    if (!(COMMANDS.has(argv[0]) || ['todo', 'inventory', 'domain', 'experiment'].includes(argv[0]) && harnessControlCommand(['harness', ...effectiveArgv], options.workspace) === argv[0])) return { pass: false, reason: 'harness requires argv for a supported lifecycle command or exact diagnostic/worklist control' };
     if (argv[0] === 'trust' && argv[1] && argv[1] !== 'status') return { pass: false, reason: 'Trust approval or revocation requires a person; the agent may read trust status only.' };
     if (argv.some(arg => /^--(?:workspace|copilot-home|harness-home|home)(?:=|$)/.test(arg))) return { pass: false, reason: 'Lifecycle commands are bound to this run workspace and homes.' };
     return { pass: true };
@@ -113,7 +113,7 @@ export function afterDeliveryTool(call, result, options) {
             options.deliveryState.domainPlan = { name, path: plan.path };
           } catch (error) { return { pass: false, reason: error.message }; }
         }
-      } else if (['plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound'].includes(argv[0])) options.deliveryState.domainPlan = null;
+      } else if (['plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound'].includes(argv[0]) || argv[0] === 'experiment' && parseFlags(argv).plan) options.deliveryState.domainPlan = null;
     }
     return { pass: true };
   }
@@ -131,7 +131,7 @@ export async function runDeliveryCommand(input, run) {
   try {
     const argv = [...input.argv];
     const flag = inlineDecisionFlag(input);
-    if (['inventory', 'domain'].includes(argv[0]) && !argv.includes('--verbose') && !argv.includes('-v')) argv.push('--verbose');
+    if (['inventory', 'domain', 'experiment'].includes(argv[0]) && !argv.includes('--verbose') && !argv.includes('-v')) argv.push('--verbose');
     if (flag) {
       directory = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-agent-decision-'));
       const file = path.join(directory, 'decision.json');

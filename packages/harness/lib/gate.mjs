@@ -290,6 +290,7 @@ export function publishGateSession({ workspace, plan = null, result, policy, dry
     activePlan: result.plan?.path || previous.activePlan || null,
     gatedPlan: result.plan?.path || null,
     gatedPlanDigest: passed ? result.plan?.digest || null : null,
+    gatedPhase: passed ? result.phase || null : null,
     gatedChecksDigest: passed ? snapshot.digest : null,
     gatedCheckCommands: passed ? snapshot.commands : [],
     lastGateAt: new Date().toISOString(),

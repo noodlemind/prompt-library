@@ -24,6 +24,7 @@ import { locateVerification } from './verification-location.mjs';
 import { authorizeDomainPlan, authorizeProjectPlan, validateDomainContext, domainPlanPath } from './domain-context.mjs';
 import { domainLinkCheck } from './domain-delivery.mjs';
 import { validatePlanSchema } from './plan-schema.mjs';
+import { parseExperimentJson, validateExperimentContract } from './experiment-contract.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
@@ -104,6 +105,7 @@ export function buildPlanSkeleton({
   domainParent = null,
   domainChild = null,
   domainBinding = null,
+  experiment = null,
 } = {}) {
   const draft = ['open', 'needs-info'].includes(status);
   assertNoPersonalWrite([...(impacted || []), gap?.primitive]);
@@ -140,6 +142,7 @@ export function buildPlanSkeleton({
     ...(domainParent ? { domain_parent: domainParent } : {}),
     ...(domainChild ? { domain_child: domainChild } : {}),
     ...(domainBinding ? { domain_binding: domainBinding } : {}),
+    ...(experiment ? { experiment } : {}),
     intent_source_policy: 'content-v1',
     title: heading,
     type,
@@ -253,8 +256,9 @@ export function createFullPlan({ workspace, home = harnessGlobalHome(), domainCo
     risk: decision.risk || 'green', status: decision.status || (parent ? 'planned' : 'open'), check: decision.check, constraints: decision.constraints || [],
     notes: decision.notes || {}, phases: decision.phases, outputs: decision.outputs, skillsUsed: decision.skillsUsed || [],
     playbook: decision.playbook, verificationRecipe: decision.verificationRecipe, copilotHome,
-    plansBase: target.base, plansRel: target.dirRel, planId, planSchema: extended ? 3 : 2,
+    plansBase: target.base, plansRel: target.dirRel, planId, planSchema: decision.experiment ? 4 : extended ? 3 : 2,
     domainParent: parent, domainChild: child, domainBinding: decision.domain_binding,
+    experiment: decision.experiment,
     intentSources: bindLockedIntentSources(workspace, decision.intentSources || [], { query: decision.goal }),
   });
   let plan = planFromText(generated.content, { path: generated.path, fullPath: generated.path });
@@ -326,20 +330,21 @@ export async function cmdPlanNew(argv) {
   if (file) {
     if (Object.keys(opts).some(key => !['impacted', 'criteria', 'acceptance', 'constraints', 'intentSources', 'copilotHome'].includes(key)) || [opts.impacted, opts.criteria, opts.acceptance, opts.constraints, opts.intentSources].some(values => values.length)) throw new Error('plan-new: --file cannot be combined with authoring flags');
     let input;
-    try { input = JSON.parse(readFileNoFollow(path.resolve(workspace, file), { maxBytes: 1024 * 1024 })); } catch { throw new Error('plan-new: decision file must contain bounded JSON'); }
-    const keys = ['version', 'format', 'slug', 'type', 'title', 'goal', 'acceptance', 'constraints', 'scope', 'check', 'intentSources', 'risk', 'status', 'notes', 'phases', 'outputs', 'skillsUsed', 'verificationRecipe', 'playbook'];
+    try { input = parseExperimentJson(readFileNoFollow(path.resolve(workspace, file), { maxBytes: 1024 * 1024 })); } catch { throw new Error('plan-new: decision file must contain bounded JSON without duplicate keys or nonfinite values'); }
+    const keys = ['version', 'format', 'slug', 'type', 'title', 'goal', 'acceptance', 'constraints', 'scope', 'check', 'intentSources', 'risk', 'status', 'notes', 'phases', 'outputs', 'skillsUsed', 'verificationRecipe', 'playbook', 'experiment'];
     if (!input || input.version !== 1 || !['full', 'short'].includes(input.format) || Object.keys(input).some(key => !keys.includes(key))) throw new Error('plan-new: unsupported creation decision schema');
+    if (Object.hasOwn(input, 'experiment')) validateExperimentContract(input.experiment, { impactedFiles: input.scope });
     scalar(input.goal, 'goal', { required: true });
     if (!Array.isArray(input.acceptance) || input.acceptance.length === 0) throw new Error('plan-new: authored acceptance criteria are required');
     if (input.outputs !== undefined && (!Array.isArray(input.outputs) || input.outputs.length === 0)) throw new Error('plan-new: outputs must be a non-empty list');
-    if (input.format === 'short' && ['type', 'title', 'risk', 'outputs', 'skillsUsed'].some(key => input[key] !== undefined)) throw new Error('plan-new: type, title, risk, outputs and skillsUsed require the full format');
+    if (input.format === 'short' && ['type', 'title', 'risk', 'outputs', 'skillsUsed', 'experiment'].some(key => input[key] !== undefined)) throw new Error('plan-new: type, title, risk, outputs, skillsUsed and experiment require the full format');
     if (input.skillsUsed !== undefined && (!Array.isArray(input.skillsUsed) || !input.skillsUsed.length || !input.skillsUsed.every(value => typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)))) throw new Error('plan-new: skillsUsed must be a nonempty list of skill names actually loaded');
     for (const key of ['acceptance', 'constraints', 'intentSources', 'outputs']) if (input[key] !== undefined && (!Array.isArray(input[key]) || !input[key].every(value => typeof value === 'string' && value.trim()))) throw new Error(`plan-new: ${key} must be a list of text`);
     if (input.status !== undefined && !['open', 'planned', 'in-progress', 'needs-info'].includes(input.status)) throw new Error('plan-new: unsupported initial status');
     if (input.verificationRecipe !== undefined && (!input.verificationRecipe || typeof input.verificationRecipe !== 'string' || locateVerification(workspace, input.verificationRecipe).state !== 'selected')) throw new Error('plan-new: verificationRecipe requires a safe existing SKILL.md');
     Object.assign(opts, { playbook: input.playbook, verificationRecipe: input.verificationRecipe, structured: true, slug: input.slug || shortSlug(input.goal), title: input.title, check: input.check, status: input.status, impacted: input.scope ? scopePaths(input.scope) : [], constraints: input.constraints || [], intentSources: input.intentSources || [], notes: input.notes || {}, phases: input.phases, outputs: input.outputs });
     if (input.format === 'short') { opts.goal = input.goal; opts.acceptance = input.acceptance || []; }
-    else { opts.type = input.type || 'feat'; opts.intent = input.goal; opts.criteria = input.acceptance || []; opts.risk = input.risk; opts.skillsUsed = input.skillsUsed || []; }
+    else { opts.type = input.type || 'feat'; opts.intent = input.goal; opts.criteria = input.acceptance || []; opts.risk = input.risk; opts.skillsUsed = input.skillsUsed || []; opts.experiment = input.experiment; opts.planSchema = input.experiment ? 4 : 2; }
   }
 
   if (opts.from) {
@@ -444,6 +449,10 @@ export async function cmdPlanNew(argv) {
 
   const { path: rel, content } = buildPlanSkeleton(opts);
   const full = path.isAbsolute(rel) ? rel : path.join(workspace, rel);
+  if (opts.experiment) {
+    const schema = validatePlanSchema(planFromText(content, { path: rel, fullPath: full }));
+    if (!schema.pass) throw new Error(`plan-new: ${schema.checks.filter(check => !check.pass).map(check => check.message).join('; ')}`);
+  }
   if (toStdout) {
     process.stdout.write(content);
     return 0;

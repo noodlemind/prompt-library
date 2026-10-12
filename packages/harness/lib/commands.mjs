@@ -43,6 +43,8 @@ import { planRevision } from './plan-decisions.mjs';
 import { sharedIntentCheck } from './domain-bindings.mjs';
 import { domainLinkCheck } from './domain-delivery.mjs';
 import { planHome } from './domain-context.mjs';
+import { experimentStatus, experimentEditabilityCheck } from './experiment-state.mjs';
+import { experimentInputsCheck } from './experiment-measurement.mjs';
 import { gapEvidenceCheck } from './plan-readiness.mjs';
 import { validatePlanSchema } from './plan-schema.mjs';
 import { prepareConsolidationPacket, applyConsolidationProposal } from './knowledge/packet-ops.mjs';
@@ -367,7 +369,13 @@ export function statusDomainResult(flags, copilotHome) {
     const shared = sharedIntentCheck(workspace, plan, { home });
     const domainLink = domainLinkCheck({ workspace, plan, copilotHome, home });
     const schema = plan.fm.plan_schema !== undefined || plan.fm.plan_format !== undefined ? validatePlanSchema(plan) : { pass: true, version: null };
-    const result = flags.validateCompletion ? validateCompletion({ workspace, plan, copilotHome }) : flags.contractDigest ? { version: Number(plan.fm.plan_schema) >= 3 ? 3 : plan.fm.intent_source_policy === 'content-v1' ? 2 : 1, digest: intent.pass && gaps.pass && schema.pass && shared.pass && domainLink.pass ? planDigest(plan.text) : null, revision: planRevision(plan.text), intent, gaps, shared, domainLink, schema }
+    let experiment = null;
+    if (flags.contractDigest && plan.fm.experiment) {
+      experiment = experimentEditabilityCheck({ workspace, plan, home });
+      const state = experimentStatus({ workspace, plan, home });
+      if (experiment.pass && !experimentInputsCheck({ workspace, plan, accepted: state.series?.acceptedInputs, copilotHome, home }).pass) experiment = { pass: false, files: [], message: 'Frozen experiment inputs changed' };
+    }
+    const result = flags.validateCompletion ? validateCompletion({ workspace, plan, copilotHome }) : flags.contractDigest ? { version: Number(plan.fm.plan_schema) >= 4 ? 4 : Number(plan.fm.plan_schema) >= 3 ? 3 : plan.fm.intent_source_policy === 'content-v1' ? 2 : 1, digest: intent.pass && gaps.pass && schema.pass && shared.pass && domainLink.pass ? planDigest(plan.text) : null, revision: planRevision(plan.text), intent, gaps, shared, domainLink, schema, ...(experiment ? { experiment } : {}) }
       : { ...validateEvidence({ workspace, plan, evidence, maxAgeHours: loadPolicy(workspace, null, { copilotHome, home }).evidenceTtlHours, copilotHome }), evidenceIdentity: createHash('sha256').update(JSON.stringify(evidence)).digest('hex') };
     return result;
   }

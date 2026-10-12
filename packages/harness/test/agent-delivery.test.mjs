@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { DELIVER_AGENT_TOOLS, DELIVER_PROFILE, buildSystemPrompt, dispatchToolBatch, dispatchToolCall, runAgentLoop } from '../lib/agent-loop.mjs';
 import { approveProject, trustStatus } from '../lib/trust.mjs';
-import { deliveryCompletion } from '../lib/agent-delivery.mjs';
+import { deliveryCompletion, afterDeliveryTool } from '../lib/agent-delivery.mjs';
 import { initGit, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 import { cliHarnessHome } from './helpers/cli.mjs';
 
@@ -16,6 +16,18 @@ const bin = path.resolve(import.meta.dirname, '../bin/harness.mjs');
 const persona = { name: 'engineer', text: fs.readFileSync(path.resolve(import.meta.dirname, '../corpus/agents/engineer.agent.md'), 'utf8') };
 const say = text => ({ text, toolCalls: [] });
 const call = (name, input) => ({ text: '', toolCalls: [{ id: 'call', name, input }] });
+
+test('an explicit ordinary experiment replaces a previous domain completion selection', () => {
+  for (const verb of ['begin', 'evaluate', 'resolve', 'status']) {
+    const deliveryState = { domainPlan: { name: 'catalogue', path: 'parent.hplan' } };
+    const checked = afterDeliveryTool({ name: 'harness', input: { argv: ['experiment', verb, '--plan', 'weights.hplan'] } }, { status: 'ok', exitCode: 0 }, { deliveryState });
+    assert.equal(checked.pass, true);
+    assert.equal(deliveryState.domainPlan, null);
+  }
+  const parent = { name: 'catalogue', path: 'parent.hplan' }, deliveryState = { domainPlan: parent };
+  afterDeliveryTool({ name: 'harness', input: { argv: ['experiment', 'status'] } }, { status: 'ok', exitCode: 0 }, { deliveryState });
+  assert.equal(deliveryState.domainPlan, parent, 'setup metadata does not select another work identity');
+});
 
 function fixture(t, { gated = false, reviewRequired = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-delivery-')));

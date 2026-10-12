@@ -7,6 +7,7 @@ const FLAGS_WITH_VALUES = new Set([
   '--intent-page-size',
   '--phase',
   '--plan',
+  '--attempt',
   '--editor',
   '--name',
   '--launcher',

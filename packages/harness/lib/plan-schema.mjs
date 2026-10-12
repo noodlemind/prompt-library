@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { extractSection } from './plan-parse.mjs';
 import { readPlanRecord } from './plan-record.mjs';
+import { validateExperimentContract } from './experiment-contract.mjs';
+import { parseImpactedFiles } from './plan-scope.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const schemas = new Map();
@@ -75,7 +77,7 @@ export function validatePlanSchema(plan) {
     };
   }
 
-  if (version === 3) {
+  if (version >= 3 && (version === 3 || plan.fm.domain_parent || plan.fm.domain_child || plan.fm.domain_binding)) {
     const authority = Boolean(plan.fm.domain_parent) !== Boolean(plan.fm.domain_child);
     let supported = authority && plan.fm.domain_binding?.version === 1 && !plan.fm.experiment;
     try {
@@ -87,6 +89,15 @@ export function validatePlanSchema(plan) {
       }
     } catch { supported = false; }
     checks.push({ id: 'domain-contract', pass: supported, message: 'Schema 3 requires exactly one strict parent or child domain contract and accepted domain binding' });
+  }
+  if (version === 4) {
+    const hasDomain = Boolean(plan.fm.domain_parent || plan.fm.domain_child || plan.fm.domain_binding);
+    let supported = hasDomain && !plan.fm.experiment;
+    if (!hasDomain && plan.fm.experiment) {
+      try { validateExperimentContract(plan.fm.experiment, { impactedFiles: parseImpactedFiles(plan) }); supported = true; }
+      catch { supported = false; }
+    }
+    checks.push({ id: 'experiment-contract', pass: supported, message: 'Schema 4 requires a strict ordinary experiment or preserved domain contract; combined execution is unsupported' });
   }
   for (const field of schema.required_frontmatter) {
     const emptyArrayAllowed = !plan.plan_lock || field === 'capability_gaps';

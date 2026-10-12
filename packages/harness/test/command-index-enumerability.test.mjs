@@ -165,6 +165,7 @@ const DECLARED_VERBS = Object.freeze({
   undo: ['list'],
   todo: ['list', 'sync', 'add', 'complete', 'clear'],
   domain: ['show', 'status', 'get', 'plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound'],
+  experiment: ['begin', 'evaluate', 'resolve', 'status'],
   inventory: ['show', 'refresh'],
   inspect: ['config', 'permissions', 'workspace', 'tools'],
 });
@@ -254,7 +255,7 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 83, '75 existing verbs plus eight domain forms');
+  assert.equal(Object.values(actual).flat().length, 87, 'Domain lifecycle and four bounded experiment verbs remain enumerable');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -314,7 +315,7 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
   // Modal families leave the verb strip; remaining verb rows + flag-verbs only.
   const tuiVerbs = rows.filter((r) => r.kind === 'verb').length;
   assert.ok(tuiVerbs < 40, `TUI verb strip should fold heavily (got ${tuiVerbs})`);
-  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 98, 'the CLI surface keeps every declared verb including domain lifecycle forms');
+  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 102, 'the CLI surface keeps domain and experiment lifecycle forms');
 });
 
 /**

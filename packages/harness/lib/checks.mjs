@@ -11,6 +11,7 @@ import { resolveCopilotHome } from './paths.mjs';
 import { isProjectTrusted } from './trust.mjs';
 import { createRedactor, redactionMarker } from './redact.mjs';
 import { artifactPathsProblem, allocateCheckArtifacts, captureCheckArtifacts, discardCheckArtifacts } from './check-artifacts.mjs';
+import { isExperimentCheck, consumeExperimentInvocation } from './experiment-contract.mjs';
 
 export const CHECKS_REL = '.github/harness/checks.yaml';
 
@@ -115,7 +116,7 @@ function observeCheckOutput(onChunk, redactText, overlap) {
   };
 }
 
-export async function runNamedCheck(workspace, name, config, { signal, onStdout, onStderr, copilotHome = null, events = null, recordRoot = workspace, controllerEnv = null, controllerPlan = null, controllerWorkspace = workspace, home: harnessHome } = {}) {
+export async function runNamedCheck(workspace, name, config, { signal, onStdout, onStderr, copilotHome = null, events = null, recordRoot = workspace, controllerEnv = null, controllerPlan = null, controllerWorkspace = workspace, home: harnessHome, experimentInvocation = null } = {}) {
   const proof = declaredProof(config);
   let extraEnv = {};
   if (controllerEnv) {
@@ -128,6 +129,11 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   const finish = (result) => (proof == null ? result : { ...result, proof });
   const invalid = validateCommand(name, config);
   if (invalid) return finish(resultCheck(name, 'unavailable', invalid));
+  let experiment = null;
+  if (isExperimentCheck(config) || experimentInvocation) {
+    try { experiment = consumeExperimentInvocation(experimentInvocation, { workspace, name, config, recordRoot }); }
+    catch (error) { return finish(resultCheck(name, 'unavailable', error.message)); }
+  }
 
   const timeoutSeconds = config.timeout_seconds ?? CHECK_TIMEOUT_DEFAULT_SECONDS;
 
@@ -155,16 +161,22 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   let artifactRoot = null;
   try { if (config.artifacts) artifactRoot = allocateCheckArtifacts(recordRoot, name); }
   catch (error) { return finish(resultCheck(name, 'unavailable', error.message)); }
+  let isolated = null;
+  if (experiment) {
+    try { isolated = experiment.prepare({ artifactRoot: path.join(recordRoot, artifactRoot) }); }
+    catch (error) { if (artifactRoot) discardCheckArtifacts(recordRoot, artifactRoot); return finish(resultCheck(name, 'unavailable', error.message)); }
+  }
   const execution = await runProcess({
-    argv: [...networkWrapper, ...config.command],
+    argv: isolated?.argv || [...networkWrapper, ...config.command],
     cwd: workspace,
-    ...(artifactRoot || envReport || controllerEnv ? { env: { ...(envReport ? envReport.env : process.env), ...(artifactRoot ? { HARNESS_CHECK_ARTIFACT_DIR: path.join(recordRoot, artifactRoot) } : {}), ...extraEnv } } : {}),
-    timeoutMs: timeoutSeconds * 1000,
+    ...(isolated ? { env: isolated.env } : artifactRoot || envReport || controllerEnv ? { env: { ...(envReport ? envReport.env : process.env), ...(artifactRoot ? { HARNESS_CHECK_ARTIFACT_DIR: path.join(recordRoot, artifactRoot) } : {}), ...extraEnv } } : {}),
+    timeoutMs: isolated?.timeoutMs ?? timeoutSeconds * 1000,
     signal,
     onStdout: chunk => stdout.push(chunk),
     onStderr: chunk => stderr.push(chunk),
     maxBuffer: CHECK_OUTPUT_MAX_CHARS,
     bufferMode: 'head-tail',
+    ...(experiment ? { onSpawn: experiment.onSpawn } : {}),
   });
 
     const sink = typeof events?.withCommand === 'function' ? events.withCommand('exec') : events;
@@ -179,14 +191,14 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
       argv: config.command,
             cwd: canonicalPath(workspace),
       timeoutSeconds,
-      env: envReport
+      env: isolated ? { sanitized: true, allowed: Object.keys(isolated.env), droppedCount: Object.keys(process.env).filter(key => !Object.hasOwn(isolated.env, key)).length } : envReport
         ? { allowed: envReport.allowed, droppedCount: envReport.dropped.length, refused: envReport.refused }
         : { inherited: true },
       signal: execution.signalName,
       truncated: execution.truncated,
       outputTruncation: execution.outputTruncation,
-      controls,
-      degraded: degraded.map((c) => ({ id: c.id, declared: c.declared, realized: c.realized, reason: c.reason })),
+      controls: isolated ? [{ id: 'fixed-evaluator-isolation', declared: 'read-only/no-network', realized: 'read-only/no-network' }] : controls,
+      degraded: isolated ? [] : degraded.map((c) => ({ id: c.id, declared: c.declared, realized: c.realized, reason: c.reason })),
     },
   });
   const output = {
@@ -195,11 +207,12 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
     truncated: execution.truncated,
     outputTruncation: execution.outputTruncation,
     durationMs: execution.durationMs,
+    ...(experiment ? { execution: { status: execution.status, pid: execution.pid, groupId: execution.groupId, groupReaped: execution.groupReaped, provenanceError: execution.provenanceError } } : {}),
     ...(artifactRoot ? { artifactRoot } : {}),
   };
 
   if (artifactRoot) {
-    try { output.artifacts = captureCheckArtifacts(recordRoot, artifactRoot, config.artifacts, redactValue); }
+    try { output.artifacts = captureCheckArtifacts(recordRoot, artifactRoot, config.artifacts, redactValue, experiment?.validateRaw); }
     catch (error) {
       discardCheckArtifacts(recordRoot, artifactRoot);
       if (execution.status === 'ok') return finish(resultCheck(name, 'failed', error.message, { ...output, exitCode: execution.exitCode }));
@@ -211,7 +224,7 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
     return finish(resultCheck(name, 'unavailable', 'Cancelled — verification was interrupted', { ...output, cancelled: true }));
   }
   if (execution.status === 'timed-out') {
-    return finish(resultCheck(name, 'timeout', `Timed out after ${timeoutSeconds}s`, output));
+    return finish(resultCheck(name, 'timeout', isolated ? `Experiment invocation timed out after ${isolated.timeoutMs}ms within its remaining wall budget` : `Timed out after ${timeoutSeconds}s`, output));
   }
   if (execution.status === 'failed' && execution.exitCode === null) {
         const detail = execution.signalName ? `Terminated by signal ${execution.signalName}` : 'Named check could not be spawned';

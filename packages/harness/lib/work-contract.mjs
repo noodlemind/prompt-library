@@ -22,5 +22,5 @@ export function planContractText(text) {
     .replace(/\r\n/g, '\n')
     .replace(/\n## Activity\s*\n[\s\S]*?(?=\n## |$)/gi, '')
     .replace(/^(-\s*\[)[xX](\]\s)/gm, '$1 $2').trim();
-  return JSON.stringify({ version: Number(fm.plan_schema) >= 3 ? 3 : fm.intent_source_policy === 'content-v1' ? 2 : WORK_CONTRACT_VERSION, frontmatter: canonical(fm), body });
+  return JSON.stringify({ version: Number(fm.plan_schema) >= 4 ? 4 : Number(fm.plan_schema) >= 3 ? 3 : fm.intent_source_policy === 'content-v1' ? 2 : WORK_CONTRACT_VERSION, frontmatter: canonical(fm), body });
 }

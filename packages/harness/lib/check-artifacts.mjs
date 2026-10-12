@@ -25,12 +25,13 @@ export function allocateCheckArtifacts(workspace, check) {
   return root;
 }
 
-export function captureCheckArtifacts(workspace, root, paths, redactValue) {
+export function captureCheckArtifacts(workspace, root, paths, redactValue, validateRaw = null) {
   return paths.map(name => {
     const rel = `${root}/${name}`;
     if (!assertNoSymlinkAncestors(workspace, rel)) throw new Error(`Required artifact is unsafe: ${name}`);
     const bytes = readFileNoFollow(path.join(workspace, rel), { root: workspace, maxBytes: MAX_BYTES, encoding: null });
     if (!bytes) throw new Error(`Required artifact is missing, unsafe or oversized: ${name}`);
+    validateRaw?.(name, bytes);
     let value;
     try { value = JSON.parse(bytes.toString('utf8')); } catch { throw new Error(`Required artifact is not JSON: ${name}`); }
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Required artifact must be a JSON object: ${name}`);

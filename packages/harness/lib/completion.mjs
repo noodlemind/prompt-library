@@ -4,6 +4,7 @@ import { readEvidence, validateEvidence } from './evidence.mjs';
 import { loadPolicy } from './policy.mjs';
 import { validateReview, recordHash, readReviewRecord, publishReviewRecord } from './review.mjs';
 import { validateLearningDecision } from './learning-record.mjs';
+import { experimentProof } from './experiment-authority.mjs';
 
 export function openHardGaps(plan, policy) {
   return (plan.fm.capability_gaps || []).filter(gap => {
@@ -17,6 +18,8 @@ export function proofPrerequisites({ workspace, plan, copilotHome }) {
   const recordRoot = planRecordRoot(workspace, plan);
   const domain = domainPrerequisites({ workspace, plan, copilotHome, home: planHome(workspace, plan) });
   if (!domain.pass) return domain;
+  const experiment = experimentProof({ workspace, plan, copilotHome, home: planHome(workspace, plan) });
+  if (!experiment.pass) return experiment;
   const policy = loadPolicy(workspace, null, { copilotHome, home: planTrustHome(workspace, plan) });
   const evidence = readEvidence(recordRoot, plan.path);
   const proof = validateEvidence({ workspace, plan, evidence, maxAgeHours: policy.evidenceTtlHours, copilotHome });
