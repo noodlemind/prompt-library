@@ -188,7 +188,7 @@ test('execution overrides require registered linked metadata, not merely a borro
   fs.writeFileSync(path.join(fakeGit, 'HEAD'), 'ref: refs/heads/main\n');
   fs.writeFileSync(path.join(fakeGit, 'gitdir'), `${path.join(fake, '.git')}\n`);
   fs.copyFileSync(path.join(f.root, '.git/index'), path.join(fakeGit, 'index'));
-  assert.equal(git(fake, ['rev-parse', '--git-common-dir']), path.join(f.root, '.git'));
+  assert.equal(fs.realpathSync.native(git(fake, ['rev-parse', '--git-common-dir'])), fs.realpathSync.native(path.join(f.root, '.git')));
   assert.throws(() => snapshotDomain(f.read(), { executionRoots: { repos: { product: fake } } }), /registered|linked|identity/i);
 });
 

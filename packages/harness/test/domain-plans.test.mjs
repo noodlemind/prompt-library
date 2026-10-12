@@ -19,7 +19,7 @@ import { externalPlansDir, projectStoreDir, conversionPointerRel } from '../lib/
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 function fixture(t) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-domain-plans-')));
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-domain-plans-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const home = path.join(base, 'home'), roots = {};
   for (const id of ['coordinator', 'producer', 'consumer']) {
@@ -44,7 +44,8 @@ function fixture(t) {
 test('creation reserves linked identities and replays without replacing child progress', t => {
   const f = fixture(t), result = createDomainPlans(f.options);
   assert.equal(result.children.length, 2);
-  assert.match(result.parent.path, /\/domains\/catalogue\/plans\/.*\.hplan$/);
+  assert.equal(path.dirname(result.parent.path), path.join(f.home, 'domains', 'catalogue', 'plans'));
+  assert.match(path.basename(result.parent.path), /^\d{4}-\d{2}-\d{2}-feat-catalogue-plan\.hplan$/);
   const child = result.children[0], original = fs.readFileSync(child.path, 'utf8');
   fs.writeFileSync(child.path, original.replace('status: open', 'status: in-progress'));
   const replay = createDomainPlans(f.options);
@@ -188,7 +189,8 @@ test('conversion reserves a shared source guard before publishing its pending jo
   const f = conversionFixture(t), sibling = siblingCheckout(f);
   const rename = fs.renameSync;
   fs.renameSync = (source, destination) => {
-    if (String(destination).includes('/.harness/operations/plans/') && !String(destination).includes('/conversions/')) throw new Error('simulated journal interruption');
+    const normalized = String(destination).replace(/\\/g, '/');
+    if (normalized.includes('/.harness/operations/plans/') && !normalized.includes('/conversions/')) throw new Error('simulated journal interruption');
     return rename(source, destination);
   };
   try { assert.throws(() => updatePlanDecision(f.options), /Could not publish/); } finally { fs.renameSync = rename; }
@@ -200,7 +202,7 @@ test('conversion reserves a shared source guard before publishing its pending jo
 
 test('a failed conversion guard publication cannot leave an orphan pending journal', t => {
   const f = conversionFixture(t), rename = fs.renameSync;
-  fs.renameSync = (source, destination) => { if (String(destination).includes('/conversions/')) throw new Error('simulated guard interruption'); return rename(source, destination); };
+  fs.renameSync = (source, destination) => { if (String(destination).replace(/\\/g, '/').includes('/conversions/')) throw new Error('simulated guard interruption'); return rename(source, destination); };
   try { assert.throws(() => updatePlanDecision(f.options), /Could not publish/); } finally { fs.renameSync = rename; }
   const operations = path.join(projectStoreDir(f.workspace, { home: f.home }), '.harness/operations/plans');
   assert.deepEqual(fs.readdirSync(operations).filter(file => file.endsWith('.json')), [], 'no pending conversion can precede its source guard');
@@ -212,7 +214,8 @@ test('a published pending conversion has no Markdown path for the real prior CLI
   const rename = fs.renameSync;
   let publications = 0;
   fs.renameSync = (source, destination) => {
-    if (String(destination).includes('/.harness/operations/plans/') && !String(destination).includes('/conversions/') && ++publications === 2) throw new Error('simulated completion interruption');
+    const normalized = String(destination).replace(/\\/g, '/');
+    if (normalized.includes('/.harness/operations/plans/') && !normalized.includes('/conversions/') && ++publications === 2) throw new Error('simulated completion interruption');
     return rename(source, destination);
   };
   try { assert.throws(() => updatePlanDecision(f.options), /Could not publish/); } finally { fs.renameSync = rename; }

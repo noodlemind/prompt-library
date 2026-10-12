@@ -8,7 +8,7 @@ import { getCorpusRoot } from './assets.mjs';
 import { externalPlansDir } from './project-layout.mjs';
 import { harnessGlobalHome } from './paths.mjs';
 import { parsePlanFrontmatter } from './plan-parse.mjs';
-import { readFileNoFollow, assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors, canonicalPath } from './fs-safe.mjs';
 import { readProductDiff, gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 
 export const CODE_REVIEWERS = Object.freeze(['architecture-strategist', 'security-sentinel', 'performance-oracle', 'code-simplicity-reviewer', 'pattern-recognition-specialist']);
@@ -60,9 +60,15 @@ function source(root, rel, origin) {
 }
 
 function projectPlanLocation(workspace, file, { plan } = {}) {
-  if (plan && domainContextOf(plan) && file === plan.path) {
-    const root = planRecordRoot(workspace, plan);
-    try { return { root, rel: path.relative(root, domainPlanPath(domainContextOf(plan), file)), full: file, origin: 'domain-plan' }; } catch { return null; }
+  const context = domainContextOf(plan);
+  if (context && typeof file === 'string') {
+    try {
+      const full = domainPlanPath(context, file);
+      if (full === plan.fullPath) {
+        const root = planRecordRoot(workspace, plan);
+        return { root, rel: path.relative(root, full), full, origin: 'domain-plan' };
+      }
+    } catch { /* other selected files still require project-store authority below */ }
   }
   if (typeof file !== 'string' || !path.isAbsolute(file) || !/\.(?:md|hplan)$/.test(file) || /[\0\r\n]/.test(file)) return null;
   const home = plan ? planHome(workspace, plan) : harnessGlobalHome();
@@ -71,16 +77,16 @@ function projectPlanLocation(workspace, file, { plan } = {}) {
   try {
     const rawHome = [home, harnessGlobalHome()].find(candidate => {
       const relative = path.relative(candidate, raw);
-      return relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && fs.realpathSync(candidate) === fs.realpathSync(home);
+      return relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && canonicalPath(candidate) === canonicalPath(home);
     });
     if (!rawHome || !assertNoSymlinkAncestors(rawHome, path.relative(rawHome, raw))) return null;
-    full = fs.realpathSync(raw);
+    full = canonicalPath(raw);
   } catch { return null; }
   let root;
-  try { root = fs.realpathSync(externalPlansDir(workspace, { home })); } catch { return null; }
+  try { root = canonicalPath(externalPlansDir(workspace, { home })); } catch { return null; }
   const rel = path.relative(root, full);
   if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
-  const canonicalHome = fs.realpathSync(home);
+  const canonicalHome = canonicalPath(home);
   return { root: canonicalHome, rel: path.relative(canonicalHome, full), full };
 }
 

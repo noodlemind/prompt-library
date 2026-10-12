@@ -4,7 +4,7 @@ import YAML from 'yaml';
 import { externalPlansDir, isPlanRel, planConversionPublished, planConversionPending, listPlanRels as listLayoutPlanRels, normalizePlanRel as normalizeLayoutPlanRel } from './project-layout.mjs';
 
 import { authorizeDomainPlan, authorizeProjectPlan, domainPlanPath, domainContextOf, withPlanAuthority, validateDomainContext, planHome } from './domain-context.mjs';
-import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, readFileNoFollow, canonicalPath } from './fs-safe.mjs';
 
 const ACTIVE_STATUSES = new Set(['planned', 'in-progress', 'review']);
 
@@ -16,8 +16,8 @@ function isWithin(root, candidate) {
 function canonicalPlanPath(workspace, normalized, { home } = {}) {
   if (path.isAbsolute(normalized)) {
     try {
-      const root = fs.realpathSync(externalPlansDir(workspace, { home }));
-      const full = fs.realpathSync(normalized);
+      const root = canonicalPath(externalPlansDir(workspace, { home }));
+      const full = canonicalPath(normalized);
       return isWithin(root, full) && /\.(?:md|hplan)$/.test(full) ? full : null;
     } catch {
       return null;

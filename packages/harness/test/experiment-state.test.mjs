@@ -71,14 +71,28 @@ test('primary and second-home claims are refused without creating foreign series
 
 test('baseline binding cannot adopt edited bytes and an evaluated pair cannot launch twice', t => {
   const f = experimentFixture(t);
+  const baselineBytes = fs.readFileSync(path.join(f.workspace, 'config/weights.json'));
   const first = reserve(f, 'begin');
   f.write([1, 1]);
   assert.throws(() => markExperimentRunning({ ...f, reservation: first }), /baseline|changed/);
-  f.write([0, 0]);
+  fs.writeFileSync(path.join(f.workspace, 'config/weights.json'), baselineBytes);
   const running = markExperimentRunning({ ...f, reservation: first });
   markExperimentChildStarted({ ...f, reservation: running, token: running.token, mode: 'score' });
   assert.throws(() => markExperimentChildStarted({ ...f, reservation: running, token: running.token, mode: 'score' }), /started|launch/);
   assert.throws(() => markExperimentRunning({ ...f, reservation: first }), /running|started/);
+});
+
+test('baseline authority binds exact newline bytes even when the JSON candidate is unchanged', t => {
+  const f = experimentFixture(t);
+  const full = path.join(f.workspace, 'config/weights.json');
+  const baselineBytes = fs.readFileSync(full);
+  const first = reserve(f, 'begin');
+  const text = baselineBytes.toString('utf8');
+  fs.writeFileSync(full, text.includes('\r\n') ? text.replace(/\r\n/g, '\n') : text.replace(/\n/g, '\r\n'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(full, 'utf8')).weights, [0, 0]);
+  assert.throws(() => markExperimentRunning({ ...f, reservation: first }), /baseline.*changed/);
+  fs.writeFileSync(full, baselineBytes);
+  assert.equal(markExperimentRunning({ ...f, reservation: first }).state, 'running');
 });
 
 test('odd remaining budgets refuse a pair and accepted increases retain origin and spend', t => {
@@ -329,7 +343,7 @@ test('published series without its first reservation recovers the original guard
   const originalOpen = fs.openSync;
   try {
     fs.openSync = function(full, flags, ...rest) {
-      if (String(full).includes('/reservations/') && flags === 'wx') throw Object.assign(new Error('reservation publication crash'), { code: 'EIO' });
+      if (path.basename(path.dirname(String(full))) === 'reservations' && flags === 'wx') throw Object.assign(new Error('reservation publication crash'), { code: 'EIO' });
       return originalOpen.call(fs, full, flags, ...rest);
     };
     assert.throws(() => reserve(f, 'begin'), /replay|publication|crash/);
@@ -347,13 +361,14 @@ test('published series without its first reservation recovers the original guard
 
 test('keep rejects a snapshot captured from candidate bytes changed after measurement validation', t => {
   const f = experimentFixture(t);
+  const baselineBytes = fs.readFileSync(path.join(f.workspace, 'config/weights.json'));
   const baseline = reserve(f, 'begin');
   measured(f, baseline, 2);
   const originalMkdir = fs.mkdirSync;
   let raced = false;
   try {
     fs.mkdirSync = function(full, ...args) {
-      if (!raced && String(full).endsWith('/snapshots')) { raced = true; f.write([1, 1]); }
+      if (!raced && path.basename(String(full)) === 'snapshots') { raced = true; f.write([1, 1]); }
       return originalMkdir.call(fs, full, ...args);
     };
     assert.throws(() => resolve(f, baseline), /snapshot.*candidate|candidate.*snapshot/);
@@ -364,7 +379,7 @@ test('keep rejects a snapshot captured from candidate bytes changed after measur
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.workspace, 'config/weights.json'), 'utf8')).weights, [1, 1]);
   const publication = path.join(experimentStatus(f).root, 'snapshots', `keep-${baseline.id}.publication.json`);
   assert.equal(fs.existsSync(publication), false, 'foreign candidate cannot poison the immutable publication intent');
-  f.write([0, 0]);
+  fs.writeFileSync(path.join(f.workspace, 'config/weights.json'), baselineBytes);
   const kept = resolve(f, baseline);
   assert.equal(kept.state, 'kept');
   assert.deepEqual(kept.retainedSnapshot.candidate, kept.evaluatedCandidate);

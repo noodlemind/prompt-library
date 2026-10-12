@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from './paths.mjs';
 import { workspaceStorageId } from './knowledge/store.mjs';
 import { createHash } from 'node:crypto';
-import { readFileNoFollow } from './fs-safe.mjs';
+import { readFileNoFollow, canonicalPath } from './fs-safe.mjs';
 
 const objectHash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const textHash = value => createHash('sha256').update(value).digest('hex');
@@ -196,8 +196,8 @@ export function normalizePlanRel(workspace, planPath, { home } = {}) {
   if (path.isAbsolute(planPath)) {
     const resolved = path.resolve(planPath);
     try {
-      const full = fs.realpathSync(resolved);
-      const root = fs.existsSync(external) ? fs.realpathSync(external) : path.resolve(external);
+      const full = canonicalPath(resolved);
+      const root = fs.existsSync(external) ? canonicalPath(external) : path.resolve(external);
       if (contained(root, full) && /\.(?:md|hplan)$/.test(full)) return full;
     } catch {
       if (contained(path.resolve(external), resolved) && /\.(?:md|hplan)$/.test(resolved)) return resolved;

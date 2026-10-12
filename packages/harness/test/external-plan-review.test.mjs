@@ -7,6 +7,11 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { initGit } from './helpers/cli-fixtures.mjs';
 import { runHarness } from './helpers/cli.mjs';
+import YAML from 'yaml';
+import { resolveDomainContext, authorizeDomainPlan } from '../lib/domain-context.mjs';
+import { planFromText, loadPlan } from '../lib/plan-parse.mjs';
+import { readReviewFile, preparationIsCurrent } from '../lib/review-preparation.mjs';
+import { planContractText } from '../lib/work-contract.mjs';
 
 const clean = reviewer => ({ reviewer, status: 'completed', findings: [], residual_risks: [], testing_gaps: [] });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -37,6 +42,54 @@ function fixture(t) {
   };
   return { dir, ws, home, plan, cli, prepare, assemble };
 }
+
+test('ordinary external review retains selected-store authority across legacy and native path spellings', t => {
+  const f = fixture(t);
+  const previous = process.env.HARNESS_HOME;
+  process.env.HARNESS_HOME = f.home;
+  t.after(() => { if (previous === undefined) delete process.env.HARNESS_HOME; else process.env.HARNESS_HOME = previous; });
+  const plan = loadPlan(f.ws, f.plan, { home: f.home });
+  assert.ok(plan);
+  const text = fs.readFileSync(f.plan, 'utf8');
+  const ref = { origin: 'project-plan', path: f.plan.replace(/\\/g, '/'), state: 'regular', sha256: hash(text) };
+  assert.equal(readReviewFile(f.ws, ref, { plan }), text);
+  const realpath = fs.realpathSync, native = realpath.native;
+  t.mock.method(fs, 'realpathSync', (file, ...args) => path.resolve(String(file)) === path.resolve(f.plan)
+    ? path.join(path.parse(f.plan).root, 'LEGACY~1', path.basename(f.plan))
+    : realpath(file, ...args));
+  fs.realpathSync.native = native;
+  assert.equal(readReviewFile(f.ws, ref, { plan }), text, 'a retained raw alias cannot make an unchanged current-store source unreadable');
+  const preparation = { kind: 'document', refs: [ref], sources: [], checks: [] };
+  assert.equal(preparationIsCurrent(f.ws, preparation, { plan }), true);
+  const outside = path.join(f.home, 'projects/another-project/plans', path.basename(f.plan));
+  fs.mkdirSync(path.dirname(outside), { recursive: true });
+  fs.writeFileSync(outside, text);
+  assert.equal(readReviewFile(f.ws, { ...ref, path: outside }, { plan }), null);
+  fs.appendFileSync(f.plan, '\nUnreviewed content.\n');
+  assert.equal(preparationIsCurrent(f.ws, preparation, { plan }), false);
+});
+
+test('serialized domain review paths preserve only the selected opaque parent authority', t => {
+  const f = fixture(t), workspace = fs.realpathSync.native(f.ws), home = fs.realpathSync.native(f.home);
+  fs.mkdirSync(path.join(home, 'domains'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'domains/catalogue.yaml'), YAML.stringify({ domain_version: 2, name: 'catalogue', repos: [{ id: 'product', local_identity: { id: 'product', approved: true } }], sources: [], bindings: { repos: { product: workspace }, sources: {} } }));
+  const context = resolveDomainContext({ workspace, home, name: 'catalogue' });
+  const full = path.join(home, 'domains/catalogue/plans/2026-10-12-feat-parent-plan.hplan');
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const text = '---\nplan_schema: 3\ndomain_parent: {name: catalogue}\n---\n\n# Accepted catalogue goal\n';
+  fs.writeFileSync(full, text);
+  const plan = authorizeDomainPlan(context, planFromText(text, { path: full, fullPath: full }));
+  const ref = { origin: 'domain-plan', path: full.replace(/\\/g, '/'), state: 'regular', sha256: hash(planContractText(text)), hashPolicy: 'work-contract-v3' };
+  assert.equal(readReviewFile(workspace, ref, { plan }), text);
+  const preparation = { kind: 'document', refs: [ref], sources: [], checks: [] };
+  assert.equal(preparationIsCurrent(workspace, preparation, { plan }), true);
+  const sibling = path.join(path.dirname(full), '2026-10-12-feat-sibling-plan.hplan');
+  fs.writeFileSync(sibling, text);
+  assert.equal(readReviewFile(workspace, { ...ref, path: sibling.replace(/\\/g, '/') }, { plan }), null);
+  assert.throws(() => readReviewFile(workspace, ref, { plan: { ...plan } }), /authority|context/);
+  fs.writeFileSync(full, text.replace('Accepted catalogue goal', 'Unreviewed catalogue goal'));
+  assert.equal(preparationIsCurrent(workspace, preparation, { plan }), false);
+});
 
 for (const bound of [false, true]) test(`${bound ? 'plan-bound' : 'standalone'} document review accepts a plan-new external draft and its findings`, t => {
   const f = fixture(t);

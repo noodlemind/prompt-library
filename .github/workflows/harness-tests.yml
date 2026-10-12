@@ -117,6 +117,8 @@ jobs:
           packages/harness/test/domain-context.test.mjs
           packages/harness/test/domain-bindings.test.mjs
           packages/harness/test/domain-delivery.test.mjs
+          packages/harness/test/domain-commands.test.mjs
+          packages/harness/test/domain-plans.test.mjs
           packages/harness/test/experiment-state.test.mjs
           packages/harness/test/experiment-snapshots.test.mjs
           packages/harness/test/adaptive-intent.test.mjs
@@ -127,6 +129,9 @@ jobs:
           packages/harness/test/runner.test.mjs
           packages/harness/test/verification-recipes.test.mjs
           packages/harness/test/hook-runtime.test.mjs
+          packages/harness/test/project-layout.test.mjs
+          packages/harness/test/external-plan-review.test.mjs
+          packages/harness/test/cli-evidence-verify.test.mjs
           > windows-adaptive-proof.log 2>&1
       - name: Preserve native Windows proof
         if: always()

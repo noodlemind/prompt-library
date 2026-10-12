@@ -12,6 +12,8 @@ import { beforeDeliveryTool, runDeliveryCommand, deliveryCompletion } from '../l
 import { DELIVER_PROFILE, dispatchToolCall, runAgentLoop } from '../lib/agent-loop.mjs';
 import { approveProject } from '../lib/trust.mjs';
 import { initGit } from './helpers/cli-fixtures.mjs';
+import { resolveDomainContext } from '../lib/domain-context.mjs';
+import { resolveDomainCommandContext } from '../lib/domain-cmd.mjs';
 
 const bin = path.resolve(import.meta.dirname, '../bin/harness.mjs');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -68,7 +70,7 @@ test('inline decisions do not weaken native domain argument or input-file contro
 });
 
 function cliFixture(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-command-journey-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-command-journey-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), copilotHome = path.join(root, 'copilot');
   const roots = {};
@@ -101,6 +103,29 @@ function cliFixture(t) {
   };
   return { root, roots, home, copilotHome, cli, invoke, input, git };
 }
+
+test('domain commands retain opaque home authority and reject symlink selectors', t => {
+  const f = cliFixture(t);
+  const context = resolveDomainContext({ workspace: f.roots.coordinator, home: f.home, name: 'catalogue' });
+  const argumentsFor = home => ['status', '--name', 'catalogue', '--plan', '2026-10-12-feat-parent-plan.hplan', '--workspace', f.roots.coordinator, '--harness-home', home];
+  assert.equal(resolveDomainCommandContext(argumentsFor(f.home), { domainContext: context }), context);
+  const symlink = path.join(f.root, 'home-link');
+  fs.symlinkSync(f.home, symlink, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => resolveDomainCommandContext(argumentsFor(symlink), { domainContext: context }), /selected domain differs/);
+  assert.throws(() => resolveDomainCommandContext(argumentsFor(f.home), { domainContext: { ...context } }), /copied context|explicit domain context/);
+  assert.throws(() => resolveDomainCommandContext(argumentsFor(path.join(f.root, 'missing-home')), { domainContext: context }), /selected domain differs/);
+});
+
+test('native Windows domain selectors accept case, separator and cached temporary-path aliases', { skip: process.platform !== 'win32' }, t => {
+  const f = cliFixture(t);
+  const context = resolveDomainContext({ workspace: f.roots.coordinator, home: f.home, name: 'catalogue' });
+  const legacyHome = path.join(os.tmpdir(), path.relative(fs.realpathSync.native(os.tmpdir()), f.home));
+  t.diagnostic(JSON.stringify({ legacyHome, canonicalHome: f.home, legacyAliasDistinct: legacyHome !== f.home }));
+  for (const home of [f.home.toUpperCase(), f.home.replace(/\\/g, '/'), legacyHome]) {
+    assert.equal(fs.realpathSync.native(home), f.home);
+    assert.equal(resolveDomainCommandContext(['status', '--name', 'catalogue', '--plan', '2026-10-12-feat-parent-plan.hplan', '--workspace', f.roots.coordinator, '--harness-home', home], { domainContext: context }), context);
+  }
+});
 
 test('native parent reads preserve their successful result without granting coordinator completion', async t => {
   const f = cliFixture(t);

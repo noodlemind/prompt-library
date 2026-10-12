@@ -5,7 +5,7 @@ import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { redactedJson, createRedactor } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { readDomain, inspectDomain } from './domain-contract.mjs';
-import { readFileNoFollow } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, canonicalPath, readFileNoFollow } from './fs-safe.mjs';
 import { resolveDomainContext, validateDomainContext } from './domain-context.mjs';
 import { createDomainPlans } from './domain-plans.mjs';
 import { domainStatus, domainCoordinatorCheck } from './domain-delivery.mjs';
@@ -83,7 +83,12 @@ export function resolveDomainCommandContext(argv, ctx = {}) {
   let context = ctx.domainContext;
   if (context) {
     const authority = validateDomainContext(ctx.domainContext, workspace);
-    if (authority.name !== parsed.name || authority.home !== path.resolve(home)) throw usage('selected domain differs from command authority');
+    let selectedHome = null;
+    try {
+      const requested = path.resolve(home), anchor = path.parse(requested).root;
+      if (assertNoSymlinkAncestors(anchor, path.relative(anchor, requested))) selectedHome = canonicalPath(requested);
+    } catch {}
+    if (authority.name !== parsed.name || authority.home !== selectedHome) throw usage('selected domain differs from command authority');
   } else context = resolveDomainContext({ workspace, home, name: parsed.name });
   if (!['status', 'get', 'plan-new'].includes(parsed.verb) || parsed.flags.validateCompletion) {
     const plan = loadPlan(workspace, parsed.flags.plan, { home, domainContext: context });

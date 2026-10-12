@@ -19,11 +19,13 @@ function domainFixture(f, primary = f.primary.toUpperCase(), home = f.home.toUpp
 }
 
 function shortAlias(full) {
-  const result = spawnSync('cmd.exe', ['/d', '/c', 'for %I in ("%HARNESS_ALIAS_PATH%") do @echo "%~sI"'], { env: { ...process.env, HARNESS_ALIAS_PATH: full }, encoding: 'utf8', timeout: 4000, maxBuffer: 8192, windowsHide: true });
-  const output = result.stdout?.trim();
-  if (result.error || result.status !== 0 || !/^"[^"\r\n]+"$/.test(output || '')) return null;
-  const alias = output.slice(1, -1);
-  return fs.realpathSync.native(alias) === fs.realpathSync.native(full) ? alias : null;
+  const script = `$ErrorActionPreference='Stop'; Add-Type -TypeDefinition 'using System; using System.Text; using System.Runtime.InteropServices; public static class HarnessShortPath { [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern uint GetShortPathName(string longPath, StringBuilder shortPath, uint capacity); }'; $builder=New-Object System.Text.StringBuilder 4096; $length=[HarnessShortPath]::GetShortPathName($env:HARNESS_ALIAS_PATH,$builder,$builder.Capacity); if($length -eq 0 -or $length -ge $builder.Capacity){exit 1}; [Console]::Write($builder.ToString());`;
+  const command = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const result = spawnSync(command, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: { ...process.env, HARNESS_ALIAS_PATH: full }, encoding: 'utf8', timeout: 10000, maxBuffer: 8192, windowsHide: true });
+  assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
+  const alias = result.stdout.trim();
+  assert.equal(fs.realpathSync.native(alias), fs.realpathSync.native(full));
+  return alias;
 }
 
 test('native Windows case and separator aliases retain domain and coordinator physical authority', { skip: process.platform !== 'win32' }, t => {
@@ -51,10 +53,13 @@ test('native Windows case and separator aliases retain domain and coordinator ph
 test('native Windows aliases share one experiment claim, reservation and charged journal', { skip: process.platform !== 'win32' }, t => {
   const f = experimentFixture(t);
   const aliased = { ...f, workspace: f.workspace.toUpperCase().replace(/\\/g, '/'), home: f.home.toUpperCase() };
+  const dryClaim = claimExperimentWorkspace({ ...aliased, dryRun: true });
+  assert.equal(dryClaim.binding.root, fs.realpathSync.native(f.workspace));
+  assert.equal(validateExperimentWorkspace(f).pass, false, 'a dry claim cannot create ownership');
+  const first = reserveExperimentAttempt({ ...aliased, operation: 'windows-alias-baseline', kind: 'baseline', hypothesis: 'Canonical aliases share the same bounded attempt.' });
   const claim = claimExperimentWorkspace(aliased);
   assert.equal(claim.binding.root, fs.realpathSync.native(f.workspace));
   assert.equal(validateExperimentWorkspace(f).pass, true);
-  const first = reserveExperimentAttempt({ ...aliased, operation: 'windows-alias-baseline', kind: 'baseline', hypothesis: 'Canonical aliases share the same bounded attempt.' });
   const replay = reserveExperimentAttempt({ ...f, operation: 'windows-alias-baseline', kind: 'baseline', hypothesis: 'Canonical aliases share the same bounded attempt.' });
   assert.equal(replay.id, first.id);
   assert.equal(experimentStatus(f).spent, 2);
@@ -79,10 +84,10 @@ test('native Windows short-name roots expand before Git and journal identity com
   assert.equal(validateDomainContext(context, f.primary).workspace, fs.realpathSync.native(f.primary));
   assert.equal(validateCoordinatorBinding(primary, snapshotDomainCoordinator(f.primary)).pass, true);
   const aliased = { ...f, workspace, home };
-  claimExperimentWorkspace(aliased);
-  assert.equal(validateExperimentWorkspace(f).pass, true);
   const input = { operation: 'short-alias-baseline', kind: 'baseline', hypothesis: 'Expanded and short paths share one journal.' };
   const first = reserveExperimentAttempt({ ...aliased, ...input });
+  assert.equal(claimExperimentWorkspace(aliased).pass, true);
+  assert.equal(validateExperimentWorkspace(f).pass, true);
   assert.equal(reserveExperimentAttempt({ ...f, ...input }).id, first.id);
   assert.equal(experimentStatus(f).spent, 2);
 });

@@ -131,7 +131,8 @@ test('global Git tracing cannot write into the coordinator during authority reso
   const f = fixture(t), original = process.env.HOME, synthetic = path.join(path.dirname(f.home), 'git-home');
   fs.mkdirSync(synthetic);
   const trace = path.join(f.workspace, 'trace.json');
-  fs.writeFileSync(path.join(synthetic, '.gitconfig'), `[trace2]\n eventTarget = ${trace}\n perfTarget = ${trace}\n normalTarget = ${trace}\n`);
+  const quotedTrace = JSON.stringify(trace.replace(/\\/g, '/'));
+  fs.writeFileSync(path.join(synthetic, '.gitconfig'), `[trace2]\n eventTarget = ${quotedTrace}\n perfTarget = ${quotedTrace}\n normalTarget = ${quotedTrace}\n`);
   try {
     process.env.HOME = synthetic;
     assert.ok(resolveDomainContext({ workspace: f.workspace, home: f.home, name: 'catalogue' }));
