@@ -12,12 +12,17 @@ import { inertLine } from './knowledge/store.mjs';
 import { writeFileContained, readFileNoFollow } from './fs-safe.mjs';
 import { ensureHarnessDir } from './session.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
+import { runScopedTodo } from './scoped-todo.mjs';
+import { resolvePlanUpdateFile, withPlanUpdateLock } from './plan-update.mjs';
+import { validatePlanSchema } from './plan-schema.mjs';
+import { planFromText } from './plan-parse.mjs';
+import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
 
 export const TODO_SCHEMA = 1;
 export const TODO_REL = '.harness/todo.json';
-export const TODO_VERBS = Object.freeze(['list', 'add', 'complete', 'clear']);
+export const TODO_VERBS = Object.freeze(['list', 'add', 'complete', 'clear', 'sync']);
 
 function usageError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
@@ -267,6 +272,22 @@ export function todoResultOf(argv, ctx = {}) {
   const verb = pos[0] || 'list';
   const text = stringFlag(argv, '--text') ?? (pos[1] && verb === 'add' ? pos.slice(1).join(' ') : null);
   const id = stringFlag(argv, '--id') ?? (verb === 'complete' ? pos[1] : null);
+  if (flags.plan) {
+    const workspace = path.resolve(flags.workspace);
+    const home = flags.harnessHome || harnessGlobalHome();
+    const full = resolvePlanUpdateFile(workspace, flags.plan, { home });
+    const perform = () => {
+      const source = readFileNoFollow(full, { root: path.dirname(full), maxBytes: 1024 * 1024 });
+      if (source === null) throw usageError('todo: selected plan is unreadable', 'pass a regular plan file');
+      const plan = planFromText(source, { path: full, fullPath: full });
+      const schema = validatePlanSchema(plan);
+      if (!schema.pass) throw usageError('todo: selected plan schema is unsupported or malformed', 'read the accepted plan with a compatible CLI');
+      if (verb !== 'list' && (!plan.plan_lock || !['planned', 'in-progress', 'review'].includes(plan.status))) throw usageError('todo: scoped mutation requires a locked active plan', 'accept and start the plan before synchronizing its procedure');
+      return runScopedTodo({ workspace, home, copilotHome: resolveCopilotHome(flags.copilotHome), plan, verb, id, dryRun: flags.dryRun });
+    };
+    return verb === 'list' || flags.dryRun ? perform() : withPlanUpdateLock(full, perform);
+  }
+  if (verb === 'sync') throw usageError('todo sync needs --plan <path>', 'select the accepted plan');
   return runTodo({
     workspace: path.resolve(flags.workspace),
     verb,

@@ -575,6 +575,25 @@ export function harnessControlCommand(tokens, workspace) {
   } else return null;
   if (!args.length) return 'help';
   if (HARNESS_CONTROL.has(args[0])) return args[0];
+  if (args[0] === 'todo') {
+    const hasVerb = args[1] && !args[1].startsWith('-');
+    const verb = hasVerb ? args[1] : 'list';
+    if (!['list', 'sync', 'complete'].includes(verb)) return null;
+    const values = new Map();
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--plan', '--id', '--workspace', '--harness-home', '--copilot-home']);
+    for (let index = hasVerb ? 2 : 1; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('=');
+      const name = split < 0 ? token : token.slice(0, split);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name) || values.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-')) return null;
+      values.set(name, value);
+    }
+    if (verb !== 'list' && !values.has('--plan') || verb === 'complete' && !values.has('--id') || verb !== 'complete' && values.has('--id')) return null;
+    return 'todo';
+  }
   if (args[0] === 'checks' && ['list', 'show', 'help'].includes(args[1])) return 'checks';
   if (args[0] === 'trust' && (!args[1] || args[1] === 'status')) return 'trust';
   return null;

@@ -13,6 +13,7 @@ import { loadPolicy } from './policy.mjs';
 import { intentSourceBindings, intentSourcesCheck } from './intent-sources.mjs';
 import { gapEvidenceCheck } from './plan-readiness.mjs';
 import { loadNamedChecks } from './checks.mjs';
+import { validatePlaybookBinding } from './playbook-binding.mjs';
 import { validateCheckArtifacts } from './check-artifacts.mjs';
 
 export const EVIDENCE_VERSION = 5;
@@ -173,6 +174,10 @@ export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24, 
   }
   const intent = plan.fm?.intent_source_policy !== undefined ? intentSourcesCheck(plan, workspace) : null;
   if (intent && !intent.pass) return { pass: false, message: intent.message };
+  if (plan.fm.playbook_binding !== undefined) {
+    const procedure = validatePlaybookBinding(plan, { copilotHome });
+    if (!procedure.pass) return procedure;
+  }
   const gaps = gapEvidenceCheck(workspace, plan);
   if (!gaps.pass) return { pass: false, message: gaps.message };
   if (expectedVersion === 2 && JSON.stringify(evidence.binding.intentSources) !== JSON.stringify(intentSourceBindings(plan, workspace))) return { pass: false, message: 'Selected intent source evidence changed; amend and reverify' };

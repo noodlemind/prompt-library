@@ -1144,15 +1144,17 @@ registerCommand({
 
 registerCommand({
   name: 'todo',
-  summary: 'durable worklist for long-horizon tasks (list/add/complete/clear)',
+  bareSideEffect: 'read',
+  summary: 'durable workspace or accepted plan worklist',
   group: 'engineer loop',
   sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
   surfaces: ['cli', 'tui', 'agent'],
-  usage: '<list|add|complete|clear> [--text <item>] [--id <id>]',
+  usage: '<list|sync|add|complete|clear> [--plan <path>] [--text <item>] [--id <id>]',
   verbs: [
     { verb: 'list', summary: 'show open and completed items', sideEffect: 'read' },
+    { verb: 'sync', summary: 'reconcile an accepted plan playbook into its durable worklist' },
     { verb: 'add', summary: 'append a work item' },
     { verb: 'complete', summary: 'mark an item done' },
     { verb: 'clear', summary: 'remove all items' },
@@ -1162,6 +1164,7 @@ registerCommand({
       { name: 'verb', description: TODO_VERBS.join('|'), required: false, default: 'list' },
     ],
     flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'accepted plan identity for scoped list, sync or complete', required: false, default: null, verbs: ['list', 'sync', 'complete'] },
       // Mutate flags are only offered on mutating verb rows (not on list / bare read paths).
       { name: '--text', type: 'string', valueName: 'item', description: 'work item text for add', required: false, default: null, tui: 'prompt', valueIsLiteral: true, verbs: ['add'] },
       { name: '--id', type: 'string', valueName: 'id', description: 'item id for complete', required: false, default: null, tui: 'prompt', verbs: ['complete'] },

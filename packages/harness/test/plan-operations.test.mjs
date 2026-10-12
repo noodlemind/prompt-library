@@ -538,3 +538,62 @@ test('plan-new relock preserves accepted hashes and selected paths after source 
   assert.deepEqual(YAML.parse(f.text().split('---')[1]).intent_sources, previous);
   assert.equal(JSON.parse(f.cli('gate', '--plan', f.plan).stdout).pass, false);
 });
+
+test('accepted playbook selection binds source content and a stable plan identity', t => {
+  const f = fixture(t), input = f.decision('amend', { rationale: 'Use the existing feature playbook.', changes: { playbook: 'feature' } });
+  const selected = f.op(input);
+  assert.equal(selected.status, 0, selected.stdout + selected.stderr);
+  const fm = YAML.parse(f.text().split('---')[1]);
+  assert.match(fm.plan_id, /^[a-f0-9-]{36}$/);
+  assert.equal(fm.playbook, 'feature');
+  assert.match(fm.playbook_binding.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(fm.playbook_binding.version, 1);
+  const updated = f.op({ ...f.decision('amend', { rationale: 'Accept a different procedure.', changes: { playbook: 'bug-fix' } }), id: 'change-playbook' });
+  assert.equal(updated.status, 0, updated.stdout + updated.stderr);
+  assert.equal(YAML.parse(f.text().split('---')[1]).plan_id, fm.plan_id);
+  assert.equal(YAML.parse(f.text().split('---')[1]).playbook, 'bug-fix');
+});
+
+test('inapplicable worklist steps require an accepted reason and never complete plan tasks', t => {
+  const f = fixture(t);
+  assert.equal(f.op(f.decision('amend', { rationale: 'Use the feature procedure.', changes: { playbook: 'feature' } })).status, 0);
+  const fm = YAML.parse(f.text().split('---')[1]);
+  const result = f.op({ ...f.decision('amend', { rationale: 'No delegation needed for this bounded fixture.', changes: { workflowNotApplicable: [{ playbook: fm.playbook, sha256: fm.playbook_binding.sha256, step: 'S4', reason: 'The fixture has one implementation owner.' }] } }), id: 'inapplicable' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(YAML.parse(f.text().split('---')[1]).workflow_not_applicable[0].step, 'S4');
+  assert.match(f.text(), /- \[ \] .+/);
+  const before = f.text();
+  assert.notEqual(f.op({ ...f.decision('amend', { rationale: 'Unknown step.', changes: { workflowNotApplicable: [{ playbook: 'feature', sha256: fm.playbook_binding.sha256, step: 'S99', reason: 'Does not exist.' }] } }), id: 'unknown-step' }).status, 0);
+  assert.equal(f.text(), before);
+});
+
+test('verify gate validates bound procedure in the explicitly selected Copilot home', t => {
+  const f = fixture(t), copilotHome = path.join(f.ws, '.harness/copilot');
+  const procedure = path.join(copilotHome, 'skills/references/playbooks/feature.md');
+  fs.mkdirSync(path.dirname(procedure), { recursive: true });
+  fs.writeFileSync(procedure, '# Feature\n\n1. Read the fixture.\n2. Verify its result.\n');
+  const selected = f.op(f.decision('amend', { rationale: 'Use the selected host procedure.', changes: { playbook: 'feature' } }));
+  assert.equal(selected.status, 0, selected.stderr + selected.stdout);
+  assert.equal(f.op(f.decision('start')).status, 0);
+  assert.equal(f.op(f.decision('progress', { progress: { tasks: ['T1'], criteria: ['AC1'] } })).status, 0);
+  approveProject({ workspace: f.ws, copilotHome, home: path.join(f.ws, '.harness/home') });
+  const proof = f.cli('verify', '--plan', f.plan, '--base', 'HEAD');
+  assert.equal(proof.status, 0, proof.stderr + proof.stdout);
+  const gate = JSON.parse(f.cli('gate', '--phase', 'verify', '--plan', f.plan).stdout);
+  assert.equal(gate.checks.find(check => check.id === 'C-playbook-binding').pass, true);
+  assert.equal(gate.checks.find(check => check.id === 'V1').pass, true, gate.blockedReason);
+});
+
+
+test('legacy relock binds a selected procedure once and unsupported amendments fail without writes', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.full, f.text().replace('plan_lock: true', 'plan_lock: false').replace('risk: green', 'risk: green\nplaybook: feature'));
+  const locked = f.cli('plan-new', '--from', f.plan);
+  assert.equal(locked.status, 0, locked.stdout + locked.stderr);
+  const accepted = f.text(), fm = YAML.parse(accepted.split('---')[1]);
+  assert.equal(fm.playbook_binding.id, 'feature');
+  assert.match(fm.plan_id, /^[a-f0-9-]{36}$/);
+  const invalid = f.op(f.decision('amend', { rationale: 'Unsupported procedure must be rejected.', changes: { playbook: '../escape' } }));
+  assert.equal(invalid.status, 2);
+  assert.equal(f.text(), accepted);
+});

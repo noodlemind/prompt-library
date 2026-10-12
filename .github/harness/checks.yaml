@@ -29,3 +29,7 @@ checks:
     command: ["node", "--test", "packages/harness/test/adaptive-intent.test.mjs", "packages/harness/test/issue-intake.test.mjs", "packages/harness/test/plan-operations.test.mjs", "packages/harness/test/orient-read-slice.test.mjs"]
     timeout_seconds: 300
     proof: behavior
+  adaptive-worklist-tests:
+    command: ["node", "--test", "packages/harness/test/scoped-todo.test.mjs", "packages/harness/test/todo-command.test.mjs", "packages/harness/test/plan-operations.test.mjs", "packages/harness/test/hook-runtime.test.mjs"]
+    timeout_seconds: 300
+    proof: behavior

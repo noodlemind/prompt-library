@@ -53,7 +53,7 @@ export function runGate({ workspace, flags, query = '', planOverride = null }) {
       if (!schema.pass) pass = false;
     }
 
-    const readiness = validatePlanReadiness(workspace, plan);
+    const readiness = validatePlanReadiness(workspace, plan, { copilotHome: resolveCopilotHome(flags.copilotHome) });
     for (const check of readiness.checks) {
       checks.push({
         id: `C-${check.id}`,
@@ -207,6 +207,7 @@ export function runGate({ workspace, flags, query = '', planOverride = null }) {
         workspace,
         plan,
         evidence,
+        copilotHome: resolveCopilotHome(flags.copilotHome),
         maxAgeHours: loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) }).evidenceTtlHours,
       });
       if (!freshness.pass) {

@@ -346,19 +346,19 @@ function structuredPlanUpdate({ workspace, full, input, flags, dryRun }) {
     const current = planRevision(plan.text);
     if (existing ? ![existing.value.before, existing.value.after].includes(current) : input.expect !== current) throw usage('stale plan revision; reread before accepting a new decision');
     const recordedAt = existing?.value.recordedAt || new Date().toISOString();
-    const decision = existing ? { text: existing.value.text, amendments: existing.value.amendments, authority: existing.value.authority } : applyPlanDecision(workspace, plan, input, { applyUpdate: applyPlanUpdate, recordedAt });
+    const decision = existing ? { text: existing.value.text, amendments: existing.value.amendments, authority: existing.value.authority } : applyPlanDecision(workspace, plan, input, { applyUpdate: applyPlanUpdate, recordedAt, copilotHome });
     const proposed = planFromText(decision.text, { path: plan.path, fullPath: full });
     const schema = validatePlanSchema(proposed);
     const missing = schema.checks.filter(check => !check.pass).map(check => check.message);
     let gate = null;
     if (input.action === 'start') {
-      if (!existing) missing.push(...validatePlanReadiness(workspace, plan).checks.filter(check => !check.pass).map(check => check.message));
+      if (!existing) missing.push(...validatePlanReadiness(workspace, plan, { copilotHome }).checks.filter(check => !check.pass).map(check => check.message));
       gate = runGate({ workspace, flags: { ...flags, plan: plan.path, phase: 'implement' }, planOverride: proposed });
       missing.push(...gate.checks.filter(check => !check.pass).map(check => check.message));
       const scope = validatePlanScope({ workspace, plan: proposed });
       if (scope.status !== 'passed') missing.push(scope.message);
     }
-    if (input.changes?.criteria) missing.push(...validatePlanReadiness(workspace, proposed).checks.filter(check => !check.pass).map(check => check.message));
+    if (input.changes?.criteria) missing.push(...validatePlanReadiness(workspace, proposed, { copilotHome }).checks.filter(check => !check.pass).map(check => check.message));
     if (input.action === 'complete') {
       const prerequisites = completionPrerequisites({ workspace, plan: proposed, copilotHome });
       if (!prerequisites.pass) missing.push(prerequisites.message);

@@ -389,7 +389,7 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     return finalize(workspace, flags, { plan: plan.path, checks });
   }
 
-  const readiness = validatePlanReadiness(workspace, plan);
+  const readiness = validatePlanReadiness(workspace, plan, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   const intent = plan.fm?.intent_source_policy !== undefined ? intentSourcesCheck(plan, workspace) : { pass: true, message: 'Legacy source policy; selected bytes are not bound until explicit migration' };
   checks.push(resultCheck('intent-sources', intent.pass ? 'passed' : 'failed', intent.message));
   checks.push(

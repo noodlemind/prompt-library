@@ -1,11 +1,12 @@
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import YAML from 'yaml';
 import { readPlanRecord } from './plan-record.mjs';
 import { extractAcceptanceCriteria } from './plan-schema.mjs';
 import { sourcePath, sourceHash, hashIntentFile, bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
 import { assertNoPersonalWrite } from './primitive-governance.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
+import { bindPlaybook, validatePlaybookBinding } from './playbook-binding.mjs';
 import { locateVerification } from './verification-location.mjs';
 
 export const PLAN_ACTIONS = Object.freeze(['start', 'amend', 'progress', 'finding', 'gap', 'complete']);
@@ -95,7 +96,7 @@ export function validatePlanDecision(input) {
   return input;
 }
 
-export function applyPlanDecision(workspace, plan, input, { applyUpdate, recordedAt }) {
+export function applyPlanDecision(workspace, plan, input, { applyUpdate, recordedAt, copilotHome }) {
   validatePlanDecision(input);
   const change = { activity: [`${recordedAt} ${input.action} (${input.id})${input.rationale ? `: ${text(input.rationale, 'rationale')}` : ''}`] };
   if (input.action === 'start') {
@@ -150,9 +151,32 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     }
   }
   if (input.changes !== undefined) {
-    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe'], 'changes');
+    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe', 'playbook', 'workflowNotApplicable'], 'changes');
     const changes = input.changes, record = readPlanRecord(plan.text);
     let criterionIds = extractAcceptanceCriteria(plan);
+    if (changes.playbook !== undefined) {
+      try { fm.playbook_binding = bindPlaybook(changes.playbook, { copilotHome }); }
+      catch (error) { fail(error.message); }
+      fm.playbook = changes.playbook;
+      if (!fm.plan_id) fm.plan_id = randomUUID();
+    }
+    if (changes.workflowNotApplicable !== undefined) {
+      const procedure = validatePlaybookBinding({ fm }, { copilotHome });
+      if (!procedure.pass || !Array.isArray(changes.workflowNotApplicable) || !changes.workflowNotApplicable.length || changes.workflowNotApplicable.length > 100) fail('inapplicability requires a current procedure and bounded reasons');
+      const accepted = fm.workflow_not_applicable || [];
+      if (!Array.isArray(accepted)) fail('existing workflow inapplicability is malformed');
+      for (const entry of changes.workflowNotApplicable) {
+        fields(entry, ['playbook', 'sha256', 'step', 'reason'], 'workflow inapplicability');
+        if (entry.playbook !== fm.playbook || entry.sha256 !== fm.playbook_binding.sha256 || !procedure.steps.some(step => step.id === entry.step)) fail('inapplicability names an unknown bound step');
+        const reason = text(entry.reason, 'inapplicability reason');
+        if (reason.length > 1000) fail('inapplicability reason is oversized');
+        const existing = accepted.find(item => item.playbook === entry.playbook && item.sha256 === entry.sha256 && item.step === entry.step);
+        if (existing) existing.reason = reason;
+        if (!existing) accepted.push({ ...entry, reason });
+      }
+      if (accepted.length > 512) fail('accepted workflow inapplicability exceeds its bound');
+      fm.workflow_not_applicable = accepted;
+    }
     if (changes.verificationRecipe !== undefined) {
       if (!changes.verificationRecipe || typeof changes.verificationRecipe !== 'string' || locateVerification(workspace, changes.verificationRecipe).state !== 'selected') fail('verificationRecipe requires a safe existing SKILL.md');
       fm.verification = { ...fm.verification, recipe: changes.verificationRecipe };

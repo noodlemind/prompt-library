@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import YAML from 'yaml';
 import { extractAcceptanceCriteria } from './plan-schema.mjs';
+import { validatePlaybookBinding } from './playbook-binding.mjs';
 import { hashIntentFile } from './intent-sources.mjs';
 
 const CHECKS_REL = '.github/harness/checks.yaml';
@@ -76,10 +77,15 @@ function relevantAlternatives(configured) {
     .map(([name]) => name);
 }
 
-export function validatePlanReadiness(workspace, plan) {
+export function validatePlanReadiness(workspace, plan, { copilotHome } = {}) {
   const checks = [];
   if (!plan) return { pass: false, checks: [result('readiness-plan', false, 'Plan not found')] };
   checks.push(gapEvidenceCheck(workspace, plan));
+  if (plan.fm.plan_id !== undefined) checks.push(result('plan-identity', typeof plan.fm.plan_id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(plan.fm.plan_id), 'CLI-owned plan identity requires a UUID'));
+  if (plan.fm.playbook_binding !== undefined) {
+    const procedure = validatePlaybookBinding(plan, { copilotHome });
+    checks.push(result('playbook-binding', procedure.pass, procedure.message));
+  }
 
   if (plan.status === 'planned') {
     const checkedCriteria = [...(plan.sections.acceptanceText || '').matchAll(/^-\s*\[[xX]\]\s+(.+)$/gm)].map((match) => match[1]);

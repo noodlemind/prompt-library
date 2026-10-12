@@ -1,3 +1,4 @@
+import { harnessControlCommand } from '../corpus/hooks/lib/tool-payload.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -1418,4 +1419,12 @@ test('every enforcement denial names an actionable next command', () => {
   });
   const stop = runHook('require-verification.mjs', workspace, { hook_event_name: 'Stop', stop_hook_active: false });
   assert.match(outputJson(stop).hookSpecificOutput?.reason || '', /next: run `harness verify/, 'Stop denial must carry a verify recipe');
+});
+
+test('scoped todo controls recognize only exact supported metadata operations', () => {
+  assert.equal(harnessControlCommand(['harness', 'todo', 'list'], process.cwd()), 'todo');
+  assert.equal(harnessControlCommand(['harness', 'todo', '--json', '--plan', 'accepted.md'], process.cwd()), 'todo');
+  assert.equal(harnessControlCommand(['harness', 'todo', 'sync', '--plan', 'docs/plans/accepted.md', '--json'], process.cwd()), 'todo');
+  assert.equal(harnessControlCommand(['harness', 'todo', 'complete', '--plan=docs/plans/accepted.md', '--id', `${'a'.repeat(64)}:S1`], process.cwd()), 'todo');
+  for (const args of [['sync'], ['clear'], ['add', '--text', 'opaque'], ['sync', '--plan', 'accepted.md', '--unknown'], ['complete', '--id', 't1'], ['list', '--plan'], ['sync', '--plan', 'a', '--plan', 'b']]) assert.equal(harnessControlCommand(['harness', 'todo', ...args], process.cwd()), null);
 });
