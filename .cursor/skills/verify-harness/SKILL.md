@@ -1,11 +1,11 @@
 ---
 name: verify-harness
-description: Prove Harness CLI intent lock, prepare, and worktree isolation with real commands. Use for runtime verification. Not for code review or general CLI questions.
+description: Prove Harness CLI intent lock, prepare, worktree isolation, and installed release behavior with real commands. Use for runtime verification. Not for code review or general CLI questions.
 ---
 
 # Verify Harness
 
-The user-facing surface is the `harness` CLI in `packages/harness`. There is no web UI. Agents call `orient`, `prepare`, `plan-new`, `plan-update --lock`, `gate --phase implement`, and `worktree`. Prove those commands by spawning `packages/harness/bin/harness.mjs` in a disposable git workspace.
+The user-facing surface is the `harness` CLI in `packages/harness`. There is no web UI. Agents call `orient`, `prepare`, `plan-new --file`, `plan-update --file`, `gate --phase implement`, and `worktree`. Prove those commands in disposable git workspaces. The installed-release drive packs the checkout, installs that archive, upgrades the preceding source-package fixture, and then runs the hydrated CLI.
 
 ## Launch
 
@@ -42,18 +42,20 @@ Use isolated temp git repos. Do not drive the operator checkout.
 3. Spawn `node packages/harness/bin/harness.mjs <command> --json`.
 4. Parse stdout JSON and the written plan file. Assert the observable values named in the feature map.
 
-Bind `verify-intent-lock`, `verify-prepare`, or `verify-issue-worktree` to the accepted plan. Harness runs their configured helper argv. Each helper owns readiness, doctor, drive, evidence, and cleanup. These helpers do not start a long-lived server.
+Bind `verify-intent-lock`, `verify-prepare`, `verify-issue-worktree`, or `verify-installed-release` to the accepted plan. Harness runs their configured helper argv. Each helper owns readiness, drive, evidence, and cleanup. Run doctor before selecting a drive. These helpers do not start a long-lived server.
 
 ## Evidence
 
 Proof standards:
 
-- Exercise the real CLI path (`plan-new`, `plan-update --lock`, `gate`, `orient`, `worktree`), not internal setters.
+- Exercise the real CLI path (`plan-new`, authored `plan-update`, `gate`, `orient`, `worktree`), not internal setters.
 - Capture the command, argv, exit code, stdout, and the resulting plan frontmatter or gate check.
 - For a mutation, read the file again after the command returns.
 - Do not treat a passing unit test file as proof of the CLI.
 
 Write artifacts to `.cursor/skills/verify-harness/evidence/<feature>/`. The helper can use `HARNESS_DRIVE_EVIDENCE_ROOT` for an isolated output root. Keep evidence out of git. Each receipt records invocations, owned resource paths, doctor outcome, and cleanup. When `/opt/cursor/artifacts` exists, copy the same files there.
+
+The installed-release drive requires the verification controller's `HARNESS_CHECK_ARTIFACT_DIR`. It writes `installed-release.json` there and preserves its archive, command receipts, completed plan, numerical artifacts, and final evidence in `build/` and `drive/`. The receipt records the source SHA and dirty state. It distinguishes the preceding source-package fixture from a published release and makes no native editor or model-quality claim.
 
 A proof includes the action and the resulting state. Example for intent lock: `plan-new` stdout path, the plan's `intent_sources[0].path`, `intent_sources[0].sha256` equal to the sha256 of the spec bytes at lock, then `gate --phase implement` exits `1` after the spec file is rewritten and exits `0` only after an accepted source amendment.
 
@@ -67,6 +69,7 @@ Delete temp workspaces, temp `HARNESS_HOME` dirs, and linked git worktrees the d
 - Intent lock proof: `node .cursor/skills/verify-harness/scripts/prove-intent-lock.mjs`
 - Worktree proof: `node .cursor/skills/verify-harness/scripts/prove-issue-worktree.mjs`
 - Prepare proof: `node .cursor/skills/verify-harness/scripts/prove-prepare.mjs`
+- Installed release proof: `harness checks run verify-installed-release --json` from a trusted checkout on macOS; see [the installed-release recipe](./features/installed-release.md).
 
 ## Trigger Examples
 

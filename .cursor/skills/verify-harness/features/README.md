@@ -39,3 +39,4 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Intent lock](./intent-lock.md) covers spec discovery, hashes at plan lock, missing-source gate failure, and no mid-flight hash fail.
 - [Issue worktree](./issue-worktree.md) covers isolation from the default-branch checkout and `harness worktree --slug`.
 - [Prepare](./prepare.md) covers starter spec and ADR files, orient discovery, skip-on-edit, and gitignored `docs/`.
+- [Installed release](./installed-release.md) covers a packed fresh installation, predecessor upgrade, matching hydrated runtime and corpus, and completed bounded experiment delivery.

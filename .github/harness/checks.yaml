@@ -21,6 +21,11 @@ checks:
     command: ["node", ".cursor/skills/verify-harness/scripts/prove-issue-worktree.mjs"]
     timeout_seconds: 120
     proof: behavior
+  verify-installed-release:
+    artifacts: ["installed-release.json"]
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-installed-release.mjs"]
+    timeout_seconds: 300
+    proof: behavior
   adaptive-verification-tests:
     command: ["node", "--test", "packages/harness/test/check-artifacts.test.mjs", "packages/harness/test/verification-location.test.mjs", "packages/harness/test/verification-recipes.test.mjs", "packages/harness/test/cli-evidence-verify.test.mjs"]
     timeout_seconds: 300
