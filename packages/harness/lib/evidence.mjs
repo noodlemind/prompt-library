@@ -147,6 +147,11 @@ function workspaceDigest(workspace, files, planPath) {
   return hash.digest('hex');
 }
 
+export function createWorkspaceContentBinding({ workspace, changedFiles = [], planPath }) {
+  const files = normalizedFiles(changedFiles).filter(file => file !== planPath);
+  return { changedFiles: files, workspaceDigest: workspaceDigest(workspace, files, planPath) };
+}
+
 export function proofPolicyDigest(workspace, copilotHome = resolveCopilotHome(), home) {
   const policy = loadPolicy(workspace, null, { copilotHome, home });
   const trust = trustStatus({ workspace, copilotHome, home });
@@ -154,9 +159,6 @@ export function proofPolicyDigest(workspace, copilotHome = resolveCopilotHome(),
 }
 
 export function createEvidenceBinding({ workspace, plan, base = null, changedFiles = [], copilotHome }) {
-  // The plan has its own semantic binding. Lifecycle-only edits must not add
-  // it to the product diff and invalidate otherwise current product proof.
-  const files = normalizedFiles(changedFiles).filter(file => file !== plan.path);
   return {
     contractVersion: Number(plan.fm?.plan_schema) >= 4 ? 4 : Number(plan.fm?.plan_schema) >= 3 ? 3 : plan.fm?.intent_source_policy === 'content-v1' ? 2 : 1,
     ...(plan.fm?.domain_binding ? { domainAuthority: domainAuthorityBinding(workspace, plan, { home: planHome(workspace, plan) }), domainExecution: domainExecutionBinding({ workspace, plan, copilotHome, home: planHome(workspace, plan) }) } : {}),
@@ -166,8 +168,7 @@ export function createEvidenceBinding({ workspace, plan, base = null, changedFil
     policyDigest: proofPolicyDigest(workspace, copilotHome, planTrustHome(workspace, plan)),
     base: base || null,
     planDigest: digest(planContractText(plan.text)),
-    changedFiles: files,
-    workspaceDigest: workspaceDigest(workspace, files, plan.path),
+    ...createWorkspaceContentBinding({ workspace, changedFiles, planPath: plan.path }),
     head: gitHead(workspace),
   };
 }

@@ -2,12 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { domainAuthorityBinding } from './domain-bindings.mjs';
-import { observeDomainRepository } from './domain-contract.mjs';
+import { observeDomainRepositoryIdentity } from './domain-contract.mjs';
 import { planHome, planRecordRoot, resolveDomainContext } from './domain-context.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { externalPlansDir } from './project-layout.mjs';
 import { collectChangedFiles, matchesScope } from './plan-scope.mjs';
-import { createEvidenceBinding, planDigest, proofPolicyDigest } from './evidence.mjs';
+import { createWorkspaceContentBinding, planDigest, proofPolicyDigest } from './evidence.mjs';
 import { validateCompletion } from './completion.mjs';
 import { loadNamedChecks, runNamedCheck, validateCommand } from './checks.mjs';
 import { isProjectTrusted, trustStatus } from './trust.mjs';
@@ -50,7 +50,7 @@ export function validateDomainCoordinator(coordinator) {
 }
 
 export function snapshotDomainCoordinator(workspace) {
-  const observation = observeDomainRepository(workspace, { id: 'coordinator' });
+  const observation = observeDomainRepositoryIdentity(workspace, { id: 'coordinator' });
   const observed = observation.observed;
   if (observation.status !== 'available' || !observed.head || !observed.root || !observed.commonDir || !observed.gitDir) throw failure('coordinator root, Git identity or HEAD is unavailable');
   const identity = { root: observed.root, commonDir: observed.commonDir, gitDir: observed.gitDir, initial_head: observed.head };
@@ -160,13 +160,13 @@ export function domainExecutionBinding({ workspace, plan, copilotHome, home }) {
     try {
       if (!member) throw failure(`${repo.id} accepted execution root is missing`);
       const descriptor = binding.logical.repos.find(item => item.id === repo.id);
-      const observed = observeDomainRepository(member.root, descriptor);
+      const observed = observeDomainRepositoryIdentity(member.root, descriptor);
       if (observed.status !== 'available' || !observed.observed.head) throw failure(`${repo.id} root or Git identity is unavailable`);
       const changed = collectChangedFiles(member.root, repo.initial_head);
       if (changed.error) throw failure(`${repo.id}: ${changed.error}`);
       const excluded = changed.files.filter(file => !matchesScope(file, repo.touched_scope));
       if (excluded.length) diagnostics.push(`${repo.id} changed files outside its accepted touched scope: ${excluded.slice(0, 8).join(', ')}`);
-      const content = createEvidenceBinding({ workspace: member.root, plan: { path: '', text: '', fm: {}, phase: 0 }, base: repo.initial_head, changedFiles: changed.files, copilotHome });
+      const content = createWorkspaceContentBinding({ workspace: member.root, changedFiles: changed.files });
       const checked = childState(repo, member, plan, selected, copilotHome);
       repos.push({ id: repo.id, root: member.root, primaryRoot: member.primaryRoot, origin: member.origin, commonDir: member.commonDir, gitDir: member.gitDir, filesystemIdentity: member.filesystemIdentity, head: observed.observed.head, base: repo.initial_head, changedFiles: content.changedFiles, workspaceDigest: content.workspaceDigest, policyDigest: proofPolicyDigest(member.root, copilotHome, selected), trust: trustStatus({ workspace: member.root, copilotHome, home: selected }).state, child: checked.plan ? { planId: checked.plan.fm.plan_id, contractDigest: planDigest(checked.plan.text), completionId: checked.result.pass ? checked.result.record : null, current: checked.result.pass } : null, completion: { pass: checked.result.pass, message: checked.result.message } });
     } catch (error) { diagnostics.push(`${repo.id}: ${error.message}`); repos.push({ id: repo.id, root: member?.root || null, unavailable: true, completion: { pass: false, message: error.message } }); }

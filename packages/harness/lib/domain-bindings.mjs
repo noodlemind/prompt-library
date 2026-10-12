@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { readDomain, logicalDomainContract, normalizeDomainOrigin, observeDomainRepository } from './domain-contract.mjs';
+import { readDomain, logicalDomainContract, normalizeDomainOrigin, observeDomainRepositoryIdentity } from './domain-contract.mjs';
 import { hashIntentFile } from './intent-sources.mjs';
 import { assertNoSymlinkAncestors, canonicalPath, readFileNoFollow } from './fs-safe.mjs';
 
@@ -69,7 +69,7 @@ function distinctRepositoryBindings(entries) {
 }
 
 function observedIdentity(root, descriptor) {
-  const result = observeDomainRepository(root, descriptor);
+  const result = observeDomainRepositoryIdentity(root, descriptor);
   const observed = result.observed;
   if (result.status !== 'available' || !observed.head || !observed.root || !observed.commonDir || !observed.gitDir) throw failure(`${descriptor.id} Git identity or HEAD is unavailable`);
   const origin = observed.origin === null ? null : normalizeDomainOrigin(observed.origin);

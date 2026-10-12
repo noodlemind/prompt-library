@@ -208,7 +208,7 @@ function checksObservation(root) {
   return { path: full, present: Boolean(stat?.isFile()), status: stat ? (stat.isFile() ? 'present' : 'nonregular') : 'missing' };
 }
 
-function inspectRepo(repo, { normalizeIdentity = false } = {}) {
+function inspectRepo(repo, { normalizeIdentity = false, diagnostics = true } = {}) {
   const warnings = [];
   const observed = emptyObserved();
   const result = { id: repo.id, status: 'unavailable', expected: { origin: repo.origin ?? null, root: repo.root, ...(repo.local_identity ? { local_identity: repo.local_identity } : {}) }, observed, checks: { path: path.join(repo.root, '.github/harness/checks.yaml'), present: false, status: 'unavailable' }, warnings };
@@ -245,9 +245,11 @@ function inspectRepo(repo, { normalizeIdentity = false } = {}) {
     else if (head?.status === 128 && head.output === '') warnings.push('HEAD is unavailable; the repository may have no commits.');
     else { warnings.push('Git HEAD metadata is unavailable or malformed.'); return result; }
   } else observed.head = lines[3];
-  const branch = gitObservation(repo.root, prefix, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
-  if (branch?.status === 0 && boundedText(branch.output.trimEnd(), 1024)) observed.branch = branch.output.trimEnd();
-  else if (branch?.status !== 1) warnings.push('Branch metadata is unavailable.');
+  if (diagnostics) {
+    const branch = gitObservation(repo.root, prefix, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+    if (branch?.status === 0 && boundedText(branch.output.trimEnd(), 1024)) observed.branch = branch.output.trimEnd();
+    else if (branch?.status !== 1) warnings.push('Branch metadata is unavailable.');
+  }
   const origin = gitObservation(repo.root, prefix, ['config', '--null', '--get-all', 'remote.origin.url']);
   if (origin?.status === 0 && origin.output.endsWith('\0')) {
     const urls = origin.output.slice(0, -1).split('\0');
@@ -261,11 +263,13 @@ function inspectRepo(repo, { normalizeIdentity = false } = {}) {
     if (originIdentity === null) warnings.push(normalizeIdentity ? 'A single valid observed origin is unavailable.' : 'A single observed origin is unavailable.');
     else if (originIdentity !== repo.origin) warnings.push('Observed origin differs from expected origin.');
   }
-  const status = gitObservation(repo.root, prefix, ['status', '--porcelain=v1', '-z', '--untracked-files=normal']);
-  if (status?.status === 0 && (!status.output || status.output.endsWith('\0'))) {
-    observed.dirty = status.output.length > 0;
-    observed.statusEntries = status.output ? status.output.split('\0').length - 1 : 0;
-  } else warnings.push('Working tree status is unavailable or exceeds the metadata bound.');
+  if (diagnostics) {
+    const status = gitObservation(repo.root, prefix, ['status', '--porcelain=v1', '-z', '--untracked-files=normal']);
+    if (status?.status === 0 && (!status.output || status.output.endsWith('\0'))) {
+      observed.dirty = status.output.length > 0;
+      observed.statusEntries = status.output ? status.output.split('\0').length - 1 : 0;
+    } else warnings.push('Working tree status is unavailable or exceeds the metadata bound.');
+  }
   result.status = 'available';
   return result;
 }
@@ -288,4 +292,8 @@ export function inspectDomain(record) {
 
 export function observeDomainRepository(root, descriptor) {
   return inspectRepo({ ...descriptor, root: safeAbsolute(root, `${descriptor.id} checkout root`) }, { normalizeIdentity: true });
+}
+
+export function observeDomainRepositoryIdentity(root, descriptor) {
+  return inspectRepo({ ...descriptor, root: safeAbsolute(root, `${descriptor.id} checkout root`) }, { normalizeIdentity: true, diagnostics: false });
 }

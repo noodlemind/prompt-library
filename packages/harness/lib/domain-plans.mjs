@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { readDomain, observeDomainRepository } from './domain-contract.mjs';
+import { readDomain, observeDomainRepositoryIdentity } from './domain-contract.mjs';
 import { snapshotDomain, domainAuthorityBinding } from './domain-bindings.mjs';
 import { resolveDomainContext, domainPlanPath } from './domain-context.mjs';
 import { createFullPlan } from './plan-new.mjs';
@@ -90,7 +90,7 @@ function preview({ workspace, home, name, decision, copilotHome, record, reserva
     const touched = repo.scope.length > 0;
     const prior = reservation?.repos.find(item => item.id === repo.id);
     const childId = touched ? prior?.childId || randomUUID() : null;
-    const initialHead = prior?.initialHead || observeDomainRepository(member.root, primary.logical.repos.find(item => item.id === repo.id)).observed.head;
+    const initialHead = prior?.initialHead || observeDomainRepositoryIdentity(member.root, primary.logical.repos.find(item => item.id === repo.id)).observed.head;
     const isolation = touched ? inspectIsolation({ workspace: member.root, home }) : { blocked: false };
     const worktree = isolation.blocked ? addIsolatedWorktree({ workspace: member.root, slug: `domain-${parentId.slice(0, 8)}-${repo.id}`, from: initialHead, dryRun: true }) : null;
     const root = prior?.root || worktree?.path || member.root;
