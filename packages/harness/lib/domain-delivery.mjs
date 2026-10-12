@@ -14,7 +14,7 @@ import { isProjectTrusted, trustStatus } from './trust.mjs';
 import { loadPolicy } from './policy.mjs';
 import { validateCheckArtifacts } from './check-artifacts.mjs';
 import { recordHash } from './review.mjs';
-import { readFileNoFollow, writeFileContained, assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { readFileNoFollow, writeFileContained, assertNoSymlinkAncestors, canonicalPath } from './fs-safe.mjs';
 
 const ID = /^[a-z][a-z0-9-]{0,63}$/;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -56,7 +56,7 @@ export function snapshotDomainCoordinator(workspace) {
   const identity = { root: observed.root, commonDir: observed.commonDir, gitDir: observed.gitDir, initial_head: observed.head };
   const filesystemIdentity = Object.fromEntries(['root', 'commonDir', 'gitDir'].map(key => {
     const full = identity[key];
-    if (!assertNoSymlinkAncestors(path.parse(full).root, path.relative(path.parse(full).root, full)) || fs.realpathSync(full) !== full) throw failure('coordinator identity path is unsafe or noncanonical');
+    if (!assertNoSymlinkAncestors(path.parse(full).root, path.relative(path.parse(full).root, full)) || canonicalPath(full) !== full) throw failure('coordinator identity path is unsafe or noncanonical');
     const stat = fs.lstatSync(full, { bigint: true });
     if (!stat.isDirectory()) throw failure('coordinator identity path must be a directory');
     return [key, Object.fromEntries(STAT_FIELDS.map(field => [field, stat[field]?.toString()]))];

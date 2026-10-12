@@ -49,6 +49,9 @@ test('compact discovery applies the byte bound to multibyte paths', t => {
 
 test('an oversized first candidate is omitted and remains readable through a detail page', t => {
   const { workspace, write } = fixture(t);
+  const configured = spawnSync('git', ['-C', workspace, 'config', 'core.longpaths', 'false'], { encoding: 'utf8' });
+  assert.equal(configured.status, 0, configured.stderr);
+  const configPath = path.join(workspace, '.git/config'), config = fs.readFileSync(configPath);
   const oversized = write(`docs/specs/${'a'.repeat(180)}/${'b'.repeat(180)}/${'c'.repeat(160)}.md`);
   assert.ok(Buffer.byteLength(oversized, 'utf8') > 512);
   const result = discoverIntent(workspace, '');
@@ -62,6 +65,7 @@ test('an oversized first candidate is omitted and remains readable through a det
   const accepted = bindLockedIntentSources(workspace, [oversized]);
   assert.deepEqual(accepted.map(source => source.path), [oversized]);
   assert.equal(intentSourcesCheck({ fm: { intent_source_policy: 'content-v1', intent_sources: accepted } }, workspace).pass, true);
+  assert.deepEqual(fs.readFileSync(configPath), config, 'long-path enumeration must not change repository configuration');
 });
 
 test('an empty bounded selection is omitted intent and fails an unbound plan gate', t => {

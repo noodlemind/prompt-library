@@ -27,7 +27,7 @@ for (const [prompt, playbook, status] of shouldLoad) test(`procedure pointer: ${
   const plan = { status, plan_lock: true, fm: { plan_id: randomUUID(), playbook, playbook_binding: bindPlaybook(playbook, { copilotHome: home }) } };
   const pointer = caffeinatedPointer(plan, { copilotHome: home });
   assert.equal(pointer.id, 'caffeinated');
-  assert.match(pointer.path, /skills\/caffeinated\/SKILL\.md$/);
+  assert.ok(pointer.path.endsWith(path.join('skills', 'caffeinated', 'SKILL.md')));
   assert.match(fs.readFileSync(pointer.path, 'utf8'), /todo sync/);
 });
 

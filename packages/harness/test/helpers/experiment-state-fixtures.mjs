@@ -11,7 +11,7 @@ export function git(workspace, args, options = {}) {
 }
 
 export function experimentFixture(t, budget = {}) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'experiment-state-')));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'experiment-state-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const primary = path.join(dir, 'primary');
   const workspace = path.join(dir, 'issue');

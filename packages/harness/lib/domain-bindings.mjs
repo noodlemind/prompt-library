@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readDomain, logicalDomainContract, normalizeDomainOrigin, observeDomainRepository } from './domain-contract.mjs';
 import { hashIntentFile } from './intent-sources.mjs';
-import { readFileNoFollow } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, canonicalPath, readFileNoFollow } from './fs-safe.mjs';
 
 const HASH = /^[a-f0-9]{64}$/;
 const MAX_BINDING_BYTES = 256 * 1024;
@@ -42,7 +42,7 @@ function directoryIdentity(root) {
   let stat;
   try {
     stat = fs.lstatSync(root, { bigint: true });
-    if (!stat.isDirectory() || fs.realpathSync(root) !== root) throw failure('filesystem identity path must be a canonical directory');
+    if (!stat.isDirectory() || canonicalPath(root) !== root) throw failure('filesystem identity path must be a canonical directory');
   } catch { throw failure('stable filesystem directory identity is unavailable'); }
   const identity = Object.fromEntries(STAT_FIELDS.map(key => [key, typeof stat[key] === 'bigint' ? stat[key].toString() : null]));
   validateDirectoryIdentity(identity);
@@ -89,8 +89,10 @@ function memberBindings(config, kind, overrides) {
     if (execution.root !== primary.root) {
       const registration = path.relative(path.join(primary.commonDir, 'worktrees'), execution.gitDir);
       const backlink = readFileNoFollow(path.join(execution.gitDir, 'gitdir'), { root: execution.gitDir, maxBytes: 4096 });
+      const backlinkPath = backlink ? path.resolve(execution.gitDir, backlink.trim()) : null;
+      const safeBacklink = backlinkPath && assertNoSymlinkAncestors(path.parse(backlinkPath).root, path.relative(path.parse(backlinkPath).root, backlinkPath));
       if (!execution.isLinkedWorktree || execution.commonDir !== primary.commonDir || !registration || registration.startsWith('..') || registration.includes(path.sep)
-        || !backlink || path.resolve(execution.gitDir, backlink.trim()) !== path.join(execution.root, '.git')) throw failure(`${member.id} execution override must be a registered linked worktree with the same primary common Git identity`);
+        || !safeBacklink || canonicalPath(safeBacklink) !== canonicalPath(path.join(execution.root, '.git'))) throw failure(`${member.id} execution override must be a registered linked worktree with the same primary common Git identity`);
     }
     const filesystemIdentity = { primaryRoot: directoryIdentity(primary.root), executionRoot: directoryIdentity(execution.root), commonDir: directoryIdentity(execution.commonDir), gitDir: directoryIdentity(execution.gitDir) };
     return { id: member.id, primaryRoot: primary.root, root: execution.root, origin: execution.origin, commonDir: execution.commonDir, gitDir: execution.gitDir, filesystemIdentity };
@@ -178,8 +180,11 @@ export function domainAuthorityBinding(workspace, plan, { home } = {}) {
       if (!member) diagnostics.push('Domain child names a repository outside the accepted membership.');
       else {
         let realWorkspace = null;
-        try { realWorkspace = fs.realpathSync(workspace); } catch {}
-        if (realWorkspace !== member.root || path.resolve(workspace) !== member.root) diagnostics.push('Domain child workspace differs from its accepted execution root.');
+        try {
+          const requested = path.resolve(workspace);
+          if (assertNoSymlinkAncestors(path.parse(requested).root, path.relative(path.parse(requested).root, requested))) realWorkspace = canonicalPath(requested);
+        } catch {}
+        if (realWorkspace !== member.root) diagnostics.push('Domain child workspace differs from its accepted execution root.');
       }
     }
   } catch (error) {

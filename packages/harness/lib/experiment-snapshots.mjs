@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, canonicalPath, readFileNoFollow } from './fs-safe.mjs';
 import { gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 
 const MAX_BYTES = 1024 * 1024;
@@ -37,7 +37,7 @@ function safeRoot(root, create = false) {
   if (!assertNoSymlinkAncestors(path.parse(resolved).root, path.relative(path.parse(resolved).root, resolved))) throw fail('snapshot authority contains a symlink');
   if (create) fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
   if (!fs.lstatSync(resolved).isDirectory()) throw fail('snapshot authority must be a directory');
-  return fs.realpathSync(resolved);
+  return canonicalPath(resolved);
 }
 
 function writeRecord(root, name, record) {

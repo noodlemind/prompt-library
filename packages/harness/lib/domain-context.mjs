@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { readDomain } from './domain-contract.mjs';
 import { harnessGlobalHome } from './paths.mjs';
-import { assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, canonicalPath } from './fs-safe.mjs';
 
 const contexts = new WeakMap();
 const plans = new WeakMap();
@@ -17,7 +17,7 @@ function failure(message) {
 function safePath(full) {
   const resolved = path.resolve(full), anchor = path.parse(resolved).root;
   if (!assertNoSymlinkAncestors(anchor, path.relative(anchor, resolved))) throw failure('storage is unsafe or symlinked');
-  return resolved;
+  return fs.existsSync(resolved) ? canonicalPath(resolved) : resolved;
 }
 
 function directoryIdentity(full) {
@@ -33,8 +33,8 @@ function coordinatorIdentity(workspace) {
   const result = spawnSync('git', ['-c', 'core.fsmonitor=false', 'rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'], { cwd: root, encoding: 'utf8', timeout: 4000, maxBuffer: 16384, env: gitMetadataEnvironment() });
   const values = String(result.stdout || '').trimEnd().split('\n');
   if (result.error || result.status !== 0 || values.length !== 3) throw failure('coordinator Git identity is unavailable');
-  const identity = values.map(value => fs.realpathSync(safePath(path.resolve(root, value))));
-  if (identity[0] !== fs.realpathSync(root)) throw failure('coordinator must be the checkout root');
+  const identity = values.map(value => canonicalPath(safePath(path.resolve(root, value))));
+  if (identity[0] !== canonicalPath(root)) throw failure('coordinator must be the checkout root');
   return identity;
 }
 
@@ -42,7 +42,7 @@ export function resolveDomainContext({ workspace, home = harnessGlobalHome(), na
   const record = readDomain(name, { home });
   if (record.config.domain_version !== 2) throw failure('execution requires domain_version 2');
   const root = safePath(path.join(record.home, 'domains', name));
-  const context = Object.freeze({ name, home: record.home, workspace: fs.realpathSync(workspace), root, plansDir: path.join(root, 'plans') });
+  const context = Object.freeze({ name, home: record.home, workspace: canonicalPath(workspace), root, plansDir: path.join(root, 'plans') });
   contexts.set(context, { ...context, identity: coordinatorIdentity(workspace), directories: new Map([context.home, context.root, context.plansDir].map(full => [full, directoryIdentity(full)])) });
   return context;
 }
@@ -50,7 +50,7 @@ export function resolveDomainContext({ workspace, home = harnessGlobalHome(), na
 export function validateDomainContext(context, workspace = context?.workspace) {
   const authority = contexts.get(context);
   if (!authority) throw failure('an explicit domain context is required; copied context data grants no authority');
-  if (fs.realpathSync(workspace) !== authority.workspace || JSON.stringify(coordinatorIdentity(workspace)) !== JSON.stringify(authority.identity)) throw failure('coordinator identity changed');
+  if (canonicalPath(workspace) !== authority.workspace || JSON.stringify(coordinatorIdentity(workspace)) !== JSON.stringify(authority.identity)) throw failure('coordinator identity changed');
   for (const full of [authority.home, authority.root, authority.plansDir]) {
     safePath(full);
     const current = directoryIdentity(full), accepted = authority.directories.get(full);
@@ -63,14 +63,14 @@ export function validateDomainContext(context, workspace = context?.workspace) {
 export function domainPlanPath(context, argument) {
   const authority = validateDomainContext(context);
   if (typeof argument !== 'string' || !argument || argument.includes('\0')) throw failure('parent plan path is invalid');
-  const full = path.isAbsolute(argument) ? path.resolve(argument) : path.join(authority.plansDir, argument);
+  const full = safePath(path.isAbsolute(argument) ? path.resolve(argument) : path.join(authority.plansDir, argument));
   if (path.dirname(full) !== authority.plansDir || !/^[^._/][^/]*\.hplan$/.test(path.basename(full))) throw failure('parent plan must be an .hplan directly inside the selected domain plans directory');
   return safePath(full);
 }
 
 export function authorizeDomainPlan(context, plan) {
   const authority = validateDomainContext(context);
-  if (!plan?.fm?.domain_parent || plan.fm.domain_child || plan.fm.domain_parent.name !== authority.name || Number(plan.fm.plan_schema) < 3 || domainPlanPath(context, plan.fullPath) !== path.resolve(plan.fullPath)) throw failure('plan does not match the explicit domain parent authority');
+  if (!plan?.fm?.domain_parent || plan.fm.domain_child || plan.fm.domain_parent.name !== authority.name || Number(plan.fm.plan_schema) < 3 || domainPlanPath(context, plan.fullPath) !== safePath(plan.fullPath)) throw failure('plan does not match the explicit domain parent authority');
   plans.set(plan, context);
   return plan;
 }
@@ -80,7 +80,7 @@ export function domainContextOf(plan) { return plans.get(plan) || null; }
 export function authorizeProjectPlan(plan, home) {
   if (plan?.fm?.domain_parent) throw failure('project context cannot authorize a parent');
   const selected = home || harnessGlobalHome();
-  homes.set(plan, { home: fs.existsSync(selected) ? fs.realpathSync(selected) : path.resolve(selected), explicit: home !== undefined && home !== null });
+  homes.set(plan, { home: fs.existsSync(selected) ? canonicalPath(selected) : path.resolve(selected), explicit: home !== undefined && home !== null });
   return plan;
 }
 

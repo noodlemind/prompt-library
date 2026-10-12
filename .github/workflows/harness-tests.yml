@@ -93,3 +93,54 @@ jobs:
         run: |
           cat delivery-proof.log || true
           test "$PROOF_OUTCOME" = success
+
+  windows-adaptive-contracts:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: npm ci --prefix packages/harness
+      - name: Native Windows authority, discovery and cleanup contracts
+        id: adaptive
+        continue-on-error: true
+        shell: bash
+        env:
+          HARNESS_PROOF_LOG: windows-adaptive-transcripts.jsonl
+        run: >-
+          node --test
+          packages/harness/test/windows-authority.test.mjs
+          packages/harness/test/domain-contract.test.mjs
+          packages/harness/test/domain-context.test.mjs
+          packages/harness/test/domain-bindings.test.mjs
+          packages/harness/test/domain-delivery.test.mjs
+          packages/harness/test/experiment-state.test.mjs
+          packages/harness/test/experiment-snapshots.test.mjs
+          packages/harness/test/adaptive-intent.test.mjs
+          packages/harness/test/caffeinated.test.mjs
+          packages/harness/test/inventory.test.mjs
+          packages/harness/test/inventory-editors.test.mjs
+          packages/harness/test/diagnostic-commands.test.mjs
+          packages/harness/test/runner.test.mjs
+          packages/harness/test/verification-recipes.test.mjs
+          packages/harness/test/hook-runtime.test.mjs
+          > windows-adaptive-proof.log 2>&1
+      - name: Preserve native Windows proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-adaptive-proof
+          path: |
+            windows-adaptive-proof.log
+            windows-adaptive-transcripts.jsonl
+      - name: Require native Windows passing verdict
+        if: always()
+        shell: bash
+        env:
+          ADAPTIVE_OUTCOME: ${{ steps.adaptive.outcome }}
+        run: |
+          cat windows-adaptive-proof.log || true
+          test "$ADAPTIVE_OUTCOME" = success

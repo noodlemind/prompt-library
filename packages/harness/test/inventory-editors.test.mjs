@@ -84,7 +84,7 @@ test('an uninstalled editor reports absence and launcher selection cannot execut
   const script = f.write('unrelated-script', '#!/bin/sh\ntouch forbidden\n');
   assert.throws(() => collectEditorInventory({ ...f.base, editor: 'vscode', launcher: script }), /known launcher/i);
   const launcher = f.write('bin/code', '#!/bin/sh\ntouch forbidden\n');
-  fs.chmodSync(launcher, 0o755);
+  if (process.platform !== 'win32') fs.chmodSync(launcher, 0o755);
   const picked = collectEditorInventory({ ...f.base, editor: 'vscode', launcher });
   assert.equal(picked.launcher.value, launcher);
   assert.equal(picked.launcher.scope, 'cli_selected');
@@ -163,26 +163,34 @@ test('JetBrains macOS installation metadata is observed under bundle Resources',
   assert.equal(contents.product.source, source);
 });
 
-test('known launcher symlinks resolve read-only and Unix non-executable files cannot be cli-selected', t => {
+test('known launcher symlinks resolve read-only without executing their targets', t => {
   const f = fixture(t);
   const target = f.write('Code.app/Contents/Resources/app/bin/code', '#!/bin/sh\ntouch forbidden\n');
-  fs.chmodSync(target, 0o755);
+  if (process.platform !== 'win32') fs.chmodSync(target, 0o755);
   const bin = path.join(f.root, 'bin');
   fs.mkdirSync(bin);
   const link = path.join(bin, 'code');
   fs.symlinkSync(target, link);
-  const picked = collectEditorInventory({ ...f.base, editor: 'vscode', env: { PATH: bin } });
+  const picked = collectEditorInventory({ ...f.base, platform: process.platform, editor: 'vscode', env: { PATH: bin } });
   assert.equal(picked.launcher.value, link);
   assert.equal(picked.launcher.resolved_path, target);
   assert.equal(picked.launcher.observed, true);
   assert.equal(picked.coverage.complete, true);
   assert.equal(fs.existsSync(path.join(f.root, 'forbidden')), false);
-  fs.unlinkSync(link);
+});
+
+test('Unix non-executable files cannot be cli-selected', { skip: process.platform === 'win32' }, t => {
+  const f = fixture(t);
   const file = f.write('bin/code', 'not executable');
   fs.chmodSync(file, 0o644);
-  const unavailable = collectEditorInventory({ ...f.base, editor: 'vscode', env: { PATH: bin } });
+  const unavailable = collectEditorInventory({ ...f.base, platform: process.platform, editor: 'vscode', env: { PATH: path.dirname(file) } });
   assert.equal(unavailable.launcher.value, null);
   assert.equal(unavailable.launcher.observed, false);
+});
+
+test('Windows launcher selection does not require Unix executable bits', t => {
+  const f = fixture(t);
+  const file = f.write('bin/code', 'not executable');
   const windows = collectEditorInventory({ ...f.base, platform: 'win32', editor: 'vscode', launcher: file });
   assert.equal(windows.launcher.value, file);
 });

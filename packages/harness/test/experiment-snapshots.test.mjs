@@ -47,13 +47,17 @@ test('journaled restore recognizes publication interrupted before exact mode res
   const f = experimentFixture(t);
   const root = path.join(f.home, 'snapshots');
   fs.chmodSync(path.join(f.workspace, 'config/weights.json'), 0o640);
+  const acceptedMode = fs.statSync(path.join(f.workspace, 'config/weights.json')).mode & 0o777;
+  const modeProbe = path.join(f.dir, 'mode-probe');
+  fs.writeFileSync(modeProbe, 'probe', { mode: 0o600 });
+  const publishedMode = fs.statSync(modeProbe).mode & 0o777;
   const snapshot = createExperimentSnapshot({ workspace: f.workspace, root, id: 'baseline', paths: ['config/weights.json'] });
   f.write([1, 1], 0o660);
   const before = readExperimentCandidate({ workspace: f.workspace, paths: ['config/weights.json'] });
   assert.throws(() => restoreExperimentSnapshot({ workspace: f.workspace, root, id: 'discard', snapshot, before, afterWrite() { throw new Error('simulated crash'); } }), /simulated crash/);
-  assert.equal(fs.statSync(path.join(f.workspace, 'config/weights.json')).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(f.workspace, 'config/weights.json')).mode & 0o777, publishedMode);
   restoreExperimentSnapshot({ workspace: f.workspace, root, id: 'discard', snapshot, before });
-  assert.equal(fs.statSync(path.join(f.workspace, 'config/weights.json')).mode & 0o777, 0o640);
+  assert.equal(fs.statSync(path.join(f.workspace, 'config/weights.json')).mode & 0o777, acceptedMode);
 });
 
 test('snapshot publication replays an exact pending ref and rejects a foreign ref value', t => {

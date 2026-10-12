@@ -31,6 +31,7 @@ const evidenceFiles = [];
 const copiedFiles = new Map();
 const controller = new AbortController();
 let listening = false;
+let cancellationPoll = null;
 const feature = path.basename(process.argv[1] || '').replace(/^prove-/, '').replace(/\.mjs$/, '');
 
 export function git(cwd, args) {
@@ -70,10 +71,22 @@ export function writeTracked(ws, rel, body) {
 export function initWorkspace() {
   if (!listening) {
     listening = true;
+    const cancel = () => { lifecycle.outcome = 'cancelled'; controller.abort(); };
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
-      lifecycle.outcome = 'cancelled';
-      controller.abort();
+      cancel();
     });
+    const notice = process.env.HARNESS_RUN_CANCEL_FILE;
+    if (typeof notice === 'string' && path.isAbsolute(notice)) {
+      cancellationPoll = setInterval(() => {
+        try {
+          const stat = fs.lstatSync(notice);
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 256) return;
+          const message = JSON.parse(fs.readFileSync(notice, 'utf8'));
+          if (message.version === 1 && message.pid === process.pid) cancel();
+        } catch { /* the owned cancellation notice appears only on interruption */ }
+      }, 25);
+      cancellationPoll.unref();
+    }
   }
   const doctor = spawnSync(process.execPath, [path.join(here, 'doctor.mjs')], { encoding: 'utf8', timeout: 30_000 });
   lifecycle.doctor = { exitCode: doctor.status, stdout: doctor.stdout, stderr: doctor.stderr };
@@ -118,8 +131,9 @@ export async function runHarness(args, { ws, home, copilotHome, env = {} }) {
   const result = { status: execution.exitCode, stdout: execution.stdout, stderr: execution.stderr };
   lifecycle.commands.push({ argv: [process.execPath, binPath, ...full], cwd: packageRoot, workspace: ws, exitCode: result.status, stdout: result.stdout, stderr: result.stderr });
   if (process.env.HARNESS_DRIVE_PAUSE_AFTER && lifecycle.commands.length === Number(process.env.HARNESS_DRIVE_PAUSE_AFTER)) {
-    const paused = await runProcess({ argv: [process.execPath, '-e', "console.log('verification-ready'); setTimeout(() => {}, 60000)"], cwd: packageRoot,
-      timeoutMs: 30_000, signal: controller.signal, onStdout: chunk => process.stdout.write(chunk) });
+    const paused = await runProcess({ argv: [process.execPath, '-e', "console.log('verification-ready:' + process.pid); setTimeout(() => {}, 60000)"], cwd: packageRoot,
+      timeoutMs: 30_000, signal: controller.signal, onStdout: chunk => process.stdout.write(chunk), onSpawn: () => {} });
+    lifecycle.commands.push({ command: 'owned cancellation probe', status: paused.status, pid: paused.pid, groupReaped: paused.groupReaped, treeTermination: paused.treeTermination });
     assertEqual(paused.status, 'ok', 'drive pause completed');
   }
   if (process.env.HARNESS_DRIVE_FAIL_AFTER && lifecycle.commands.length >= Number(process.env.HARNESS_DRIVE_FAIL_AFTER)) {
@@ -159,6 +173,7 @@ export function assertMatch(actual, re, label) {
 }
 
 export function cleanup(dirs) {
+  if (cancellationPoll) clearInterval(cancellationPoll);
   for (const dir of new Set([...lifecycle.resources, ...dirs])) {
     fs.rmSync(dir, { recursive: true, force: true });
   }

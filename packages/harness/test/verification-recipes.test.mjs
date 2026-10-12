@@ -7,6 +7,8 @@ import { test } from 'node:test';
 import YAML from 'yaml';
 import { tempDir } from './helpers/temp.mjs';
 import { packageRoot } from './helpers/cli.mjs';
+import { runNamedCheck } from '../lib/checks.mjs';
+import { approveProject } from '../lib/trust.mjs';
 
 const root = path.resolve(packageRoot, '../..');
 const recipes = ['intent-lock', 'prepare', 'issue-worktree'];
@@ -59,7 +61,8 @@ test('an interrupted drive cancels its child and preserves cleanup evidence', as
   t.after(() => fs.rmSync(evidenceRoot, { recursive: true, force: true }));
   const child = spawn(process.execPath, ['.cursor/skills/verify-harness/scripts/prove-prepare.mjs'], {
     cwd: root,
-    env: { ...process.env, HARNESS_DRIVE_EVIDENCE_ROOT: evidenceRoot, HARNESS_DRIVE_PAUSE_AFTER: '1' },
+    env: { ...process.env, HARNESS_DRIVE_EVIDENCE_ROOT: evidenceRoot, HARNESS_DRIVE_PAUSE_AFTER: '1',
+      ...(process.platform === 'win32' ? { HARNESS_RUN_CANCEL_FILE: path.join(evidenceRoot, 'cancel.json') } : {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(() => child.kill('SIGKILL'));
@@ -72,11 +75,56 @@ test('an interrupted drive cancels its child and preserves cleanup evidence', as
     });
     child.once('close', () => reject(new Error('drive exited before its cancellable child started')));
   });
-  child.kill('SIGTERM');
+  if (process.platform === 'win32') fs.writeFileSync(path.join(evidenceRoot, 'cancel.json'), JSON.stringify({ version: 1, pid: child.pid }));
+  else child.kill('SIGTERM');
   await closed;
   const dir = path.join(evidenceRoot, 'prepare');
   const receipt = JSON.parse(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0]), 'utf8'));
   assert.equal(receipt.lifecycle.outcome, 'cancelled');
   assert.equal(receipt.lifecycle.cleaned, true);
   for (const resource of receipt.lifecycle.resources) assert.equal(fs.existsSync(resource), false);
+  const probe = receipt.lifecycle.commands.find(command => command.command === 'owned cancellation probe');
+  assert.equal(probe.status, 'cancelled');
+  assert.equal(probe.groupReaped, true);
+  assert.throws(() => process.kill(probe.pid, 0), { code: 'ESRCH' });
+});
+
+test('a real named-check parent cancellation lets the drive retain child and cleanup receipts', async t => {
+  const evidenceRoot = tempDir('recipe-parent-cancel-');
+  const home = tempDir('recipe-parent-home-');
+  const copilotHome = tempDir('recipe-parent-copilot-');
+  t.after(() => { for (const dir of [evidenceRoot, home, copilotHome]) fs.rmSync(dir, { recursive: true, force: true }); });
+  approveProject({ workspace: root, copilotHome, home });
+  const previous = process.env.HARNESS_DRIVE_PAUSE_AFTER;
+  process.env.HARNESS_DRIVE_PAUSE_AFTER = '1';
+  t.after(() => { if (previous === undefined) delete process.env.HARNESS_DRIVE_PAUSE_AFTER; else process.env.HARNESS_DRIVE_PAUSE_AFTER = previous; });
+  const controller = new AbortController();
+  let ready;
+  const readiness = new Promise(resolve => { ready = resolve; });
+  let probePid;
+  const pending = runNamedCheck(root, 'verify-prepare', {
+    command: [process.execPath, '.cursor/skills/verify-harness/scripts/prove-prepare.mjs'], artifacts: ['prepare/drive.json'], timeout_seconds: 20,
+  }, { home, copilotHome, signal: controller.signal, recordRoot: evidenceRoot, onStdout: chunk => {
+    const match = String(chunk).match(/verification-ready:(\d+)/);
+    if (match) { probePid = Number(match[1]); ready(); }
+  } });
+  const watchdog = setTimeout(() => controller.abort(), 15000);
+  t.after(() => clearTimeout(watchdog));
+  await Promise.race([readiness, pending.then(result => { throw new Error(`drive ended before cancellation probe: ${JSON.stringify(result)}`); })]);
+  controller.abort();
+  const result = await pending;
+  assert.equal(result.cancelled, true, JSON.stringify(result));
+  assert.equal(result.artifactError, undefined, JSON.stringify(result));
+  const receipt = JSON.parse(fs.readFileSync(path.join(evidenceRoot, result.artifactRoot, 'prepare/drive.json'), 'utf8'));
+  assert.equal(receipt.lifecycle.outcome, 'cancelled');
+  assert.equal(receipt.lifecycle.cleaned, true);
+  for (const resource of receipt.lifecycle.resources) assert.equal(fs.existsSync(resource), false);
+  const probe = receipt.lifecycle.commands.find(command => command.command === 'owned cancellation probe');
+  assert.equal(probe.pid, probePid);
+  assert.equal(probe.groupReaped, true);
+  assert.throws(() => process.kill(probePid, 0), { code: 'ESRCH' });
+  if (process.platform === 'win32') {
+    assert.equal(result.execution.cancellationNotice.requested, true);
+    assert.equal(result.execution.groupReaped, null, 'cooperative outer close must not claim an unmeasured tree reap');
+  }
 });

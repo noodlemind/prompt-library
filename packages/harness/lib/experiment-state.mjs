@@ -3,8 +3,9 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { projectStoreDir } from './project-layout.mjs';
+import { harnessGlobalHome } from './paths.mjs';
 import { withPlanUpdateLock } from './plan-update.mjs';
-import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, canonicalPath, readFileNoFollow } from './fs-safe.mjs';
 import { gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 import { createExperimentSnapshot, publishExperimentSnapshot, readExperimentCandidate, restoreExperimentSnapshot, verifyExperimentSnapshot } from './experiment-snapshots.mjs';
 
@@ -23,22 +24,31 @@ function git(workspace, args) {
 
 function directoryIdentity(full) {
   const stat = fs.lstatSync(full, { bigint: true });
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(full) !== full) throw fail('workspace identity requires canonical physical directories');
+  if (!stat.isDirectory() || stat.isSymbolicLink() || canonicalPath(full) !== full) throw fail('workspace identity requires canonical physical directories');
   const value = Object.fromEntries(['dev', 'ino', 'birthtimeNs'].map(key => [key, stat[key]?.toString()]));
   if (Object.values(value).some(item => !/^[1-9][0-9]{0,19}$/.test(item || ''))) throw fail('stable workspace filesystem identity is unavailable');
   return value;
 }
 
+function physicalPath(full) {
+  const resolved = path.resolve(full);
+  if (!assertNoSymlinkAncestors(path.parse(resolved).root, path.relative(path.parse(resolved).root, resolved))) throw fail('workspace identity path contains a symlink');
+  return canonicalPath(resolved);
+}
+
 function bindingOf(workspace) {
-  const root = fs.realpathSync(workspace);
-  if (git(root, ['rev-parse', '--show-toplevel']) !== root) throw fail('experiment requires exact repository root');
-  const gitDir = fs.realpathSync(git(root, ['rev-parse', '--absolute-git-dir']));
-  const commonDir = fs.realpathSync(path.resolve(root, git(root, ['rev-parse', '--git-common-dir'])));
+  const root = physicalPath(workspace);
+  if (physicalPath(git(root, ['rev-parse', '--show-toplevel'])) !== root) throw fail('experiment requires exact repository root');
+  const gitDir = physicalPath(git(root, ['rev-parse', '--absolute-git-dir']));
+  const commonDir = physicalPath(path.resolve(root, git(root, ['rev-parse', '--git-common-dir'])));
   const registered = path.relative(path.join(commonDir, 'worktrees'), gitDir);
   const dotGit = readFileNoFollow(path.join(root, '.git'), { root, maxBytes: 4096 });
   const backlink = readFileNoFollow(path.join(gitDir, 'gitdir'), { root: gitDir, maxBytes: 4096 });
   const listed = git(root, ['worktree', 'list', '--porcelain', '-z']);
-  if (root === commonDir || gitDir === commonDir || !registered || registered.includes(path.sep) || registered.startsWith('.') || !dotGit?.startsWith('gitdir: ') || path.resolve(root, dotGit.slice(8).trim()) !== gitDir || !backlink || path.resolve(gitDir, backlink.trim()) !== path.join(root, '.git') || !listed.split('\0').includes(`worktree ${root}`)) throw fail('experiment requires a registered linked issue worktree and its backlink');
+  const listedRoot = listed.split('\0').filter(value => value.startsWith('worktree ')).some(value => {
+    try { return physicalPath(value.slice(9)) === root; } catch { return false; }
+  });
+  if (root === commonDir || gitDir === commonDir || !registered || registered.includes(path.sep) || registered.startsWith('.') || !dotGit?.startsWith('gitdir: ') || physicalPath(path.resolve(root, dotGit.slice(8).trim())) !== gitDir || !backlink || physicalPath(path.resolve(gitDir, backlink.trim())) !== physicalPath(path.join(root, '.git')) || !listedRoot) throw fail('experiment requires a registered linked issue worktree and its backlink');
   const head = git(root, ['rev-parse', 'HEAD']);
   const headRef = readFileNoFollow(path.join(gitDir, 'HEAD'), { root: gitDir, maxBytes: 4096 })?.trim();
   if (!/^[a-f0-9]{40,64}$/.test(head) || !headRef || !/^(?:ref: refs\/heads\/[a-zA-Z0-9._/-]+|[a-f0-9]{40,64})$/.test(headRef)) throw fail('accepted workspace HEAD identity is unavailable');
@@ -47,11 +57,14 @@ function bindingOf(workspace) {
 
 function context({ workspace, plan, home }) {
   if (!UUID.test(plan?.fm?.plan_id || '') || !plan?.fullPath || !path.isAbsolute(plan.fullPath) || !plan.fm.experiment) throw fail('accepted experiment plan identity is required');
-  const store = path.resolve(projectStoreDir(workspace, { home }));
+  const canonicalWorkspace = physicalPath(workspace);
+  const requestedHome = home || harnessGlobalHome();
+  const selectedHome = fs.existsSync(requestedHome) ? physicalPath(requestedHome) : path.resolve(requestedHome);
+  const store = path.resolve(projectStoreDir(canonicalWorkspace, { home: selectedHome }));
   const root = path.join(store, 'experiments', plan.fm.plan_id);
-  const homeIdentity = path.resolve(home || path.resolve(store, '../..'));
+  const homeIdentity = path.resolve(selectedHome || path.resolve(store, '../..'));
   if (!assertNoSymlinkAncestors(path.parse(root).root, path.relative(path.parse(root).root, root))) throw fail('experiment authority contains a symlink');
-  return { workspace: fs.realpathSync(workspace), plan, planId: plan.fm.plan_id, store, root, home: fs.existsSync(homeIdentity) ? fs.realpathSync(homeIdentity) : homeIdentity };
+  return { workspace: canonicalWorkspace, plan, planId: plan.fm.plan_id, store, root, home: fs.existsSync(homeIdentity) ? physicalPath(homeIdentity) : homeIdentity };
 }
 
 function readRecord(root, rel, absent = false) {
@@ -307,8 +320,19 @@ export function reserveExperimentAttempt(options) {
 
 function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid < 1) return null;
-  const result = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
-  return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : null;
+  try { process.kill(pid, 0); }
+  catch (error) {
+    if (error.code === 'ESRCH') return null;
+    throw fail('process identity is unavailable; absence is not proven');
+  }
+  const result = process.platform === 'win32'
+    ? spawnSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `[Console]::Write([System.Diagnostics.Process]::GetProcessById(${pid}).StartTime.ToUniversalTime().Ticks)`], { encoding: 'utf8', timeout: 4000, maxBuffer: 4096, windowsHide: true })
+    : spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
+  const identity = result.status === 0 && !result.error ? result.stdout.trim() : '';
+  if (identity && (process.platform !== 'win32' || /^[1-9][0-9]{0,19}$/.test(identity))) return process.platform === 'win32' ? `windows:${pid}:${identity}` : identity;
+  try { process.kill(pid, 0); }
+  catch (error) { if (error.code === 'ESRCH') return null; }
+  throw fail('process identity is unavailable; absence is not proven');
 }
 
 function copies(ctx, attempt, candidate) {
@@ -495,6 +519,7 @@ export function recoverExperimentAttempt(options) {
     if (child.beforeSpawn || !child.startIdentity || !child.pid) throw fail('spawn crash window leaves owned group provenance unknown');
     const currentIdentity = processIdentity(child.pid);
     if (currentIdentity !== null) throw fail('owned process group is not proven reaped; recovery will not kill a recycled PID');
+    if (process.platform === 'win32') throw fail('owned process-group absence is unavailable on this host; recovery remains blocked');
     try { process.kill(-child.groupId, 0); throw fail('owned process group remains live'); }
     catch (error) { if (error.code !== 'ESRCH') throw error; }
   }

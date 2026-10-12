@@ -27,7 +27,7 @@ function git(root, args) {
 }
 
 function fixture(t) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-delivery-')));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-delivery-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const home = path.join(dir, 'home');
   const copilotHome = path.join(dir, 'copilot');

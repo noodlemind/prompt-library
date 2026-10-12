@@ -15,7 +15,7 @@ function git(root, args) {
 }
 
 function fixture(t) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-binding-')));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-binding-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const home = path.join(dir, 'harness');
   const root = path.join(dir, 'product');
@@ -69,6 +69,17 @@ test('accepted domain authority binds logical membership, canonical identity and
   assert.equal(sharedIntentCheck(f.root, f.plan, { home: f.home }).pass, true);
   assert.equal(sharedIntentCheck(f.root, { fm: {} }, { home: f.home }).pass, true);
   assert.equal(fs.existsSync(path.join(f.root, '.harness')), false);
+});
+
+test('a symlinked child workspace cannot inherit the accepted physical binding', t => {
+  const f = fixture(t);
+  f.plan.fm.domain_child = { name: f.config.name, repoId: 'product' };
+  const alias = path.join(f.dir, 'symlink-product');
+  fs.symlinkSync(f.root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const result = f.current(alias);
+  assert.equal(result.pass, false);
+  assert.match(result.diagnostics.join(' '), /workspace.*differs|unsafe|symlink/);
+  assert.equal(f.current().pass, true);
 });
 
 test('edited or removed shared bytes fail against the accepted snapshot', t => {

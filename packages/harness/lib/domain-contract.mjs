@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { harnessGlobalHome } from './paths.mjs';
-import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, canonicalPath, readFileNoFollow } from './fs-safe.mjs';
 import { readGitArgs } from '../corpus/hooks/lib/product-diff.mjs';
 
 const DOMAIN_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
@@ -151,7 +151,8 @@ function validateV2(config, name) {
 
 export function readDomain(name, { home = harnessGlobalHome() } = {}) {
   if (!validName(name)) throw failure('name must be a lowercase hyphenated name of at most 64 characters');
-  const selectedHome = safeAbsolute(path.resolve(home), 'Harness home');
+  const requestedHome = safeAbsolute(path.resolve(home), 'Harness home');
+  const selectedHome = fs.existsSync(requestedHome) ? canonicalPath(requestedHome) : requestedHome;
   const configPath = safeAbsolute(path.join(selectedHome, 'domains', `${name}.yaml`), 'domain config path');
   const source = readFileNoFollow(configPath, { root: selectedHome, maxBytes: MAX_CONFIG_BYTES });
   if (source === null) throw failure('config is missing, unreadable, oversized or not a regular file');
@@ -211,11 +212,11 @@ function inspectRepo(repo, { normalizeIdentity = false } = {}) {
   const lines = identity.output.trimEnd().split('\n');
   if (lines.length !== 3 || lines.some(value => !boundedText(value, 4096))) { warnings.push('Git checkout metadata is malformed.'); return result; }
   try {
-    observed.root = fs.realpathSync(safeAbsolute(lines[0], 'observed checkout root'));
-    observed.gitDir = fs.realpathSync(safeAbsolute(path.resolve(repo.root, lines[1]), 'observed Git directory'));
-    observed.commonDir = fs.realpathSync(safeAbsolute(path.resolve(repo.root, lines[2]), 'observed common Git directory'));
+    observed.root = canonicalPath(safeAbsolute(lines[0], 'observed checkout root'));
+    observed.gitDir = canonicalPath(safeAbsolute(path.resolve(repo.root, lines[1]), 'observed Git directory'));
+    observed.commonDir = canonicalPath(safeAbsolute(path.resolve(repo.root, lines[2]), 'observed common Git directory'));
   } catch { warnings.push('Git checkout identity paths are unavailable.'); return result; }
-  if (observed.root !== fs.realpathSync(repo.root)) { warnings.push('Configured local root differs from the actual checkout root.'); return result; }
+  if (observed.root !== canonicalPath(repo.root)) { warnings.push('Configured local root differs from the actual checkout root.'); return result; }
   observed.isLinkedWorktree = observed.gitDir !== observed.commonDir;
   const head = gitObservation(repo.root, prefix, ['rev-parse', '--verify', 'HEAD']);
   if (head?.status === 0 && /^[a-f0-9]{40}(?:[a-f0-9]{24})?\n?$/.test(head.output)) observed.head = head.output.trim();

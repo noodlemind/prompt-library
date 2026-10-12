@@ -431,7 +431,7 @@ const planAuthority = callProofAuthority(normalized.workspace, ['--contract-dige
 const planDigest = planAuthority?.digest || null;
 if (planAuthority?.experiment && !planAuthority.experiment.pass) deny('unreserved-experiment-candidate', planAuthority.experiment.message || 'Keep the baseline and reserve a candidate before editing', 'invalid');
 if (planAuthority?.experiment && (session.gatedPhase !== 'implement' || lastGateAt > Date.now())) deny('invalid-experiment-gate', 'Experiment edits require a current implement gate and reserved candidate', 'invalid');
-if (!planDigest) deny('unreadable-plan-authority', 'Installed Harness could not establish the current plan contract; restore required helpers and rerun the gate', 'invalid');
+if (!planDigest) deny('unreadable-plan-authority', planAuthority?.message || 'Installed Harness could not establish the current plan contract; restore required helpers and rerun the gate', 'invalid');
 if (!session.gatedPlanDigest || session.gatedPlanDigest !== planDigest) {
   deny('changed-implement-plan', 'Plan changed after the implement gate; rerun the gate', 'invalid');
 }

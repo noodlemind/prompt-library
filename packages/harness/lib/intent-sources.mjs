@@ -64,7 +64,7 @@ function preferredBasename(item) {
 
 function catalog(workspace) {
   if (!workspace) return [];
-  const listed = spawnSync('git', ['-C', workspace, '-c', 'core.fsmonitor=false', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+  const listed = spawnSync('git', ['-C', workspace, '-c', 'core.fsmonitor=false', '-c', 'core.longpaths=true', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     encoding: 'buffer',
     timeout: 10_000,
     maxBuffer: 1024 * 1024,

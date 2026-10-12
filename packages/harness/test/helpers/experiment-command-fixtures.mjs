@@ -21,7 +21,7 @@ export function creationDecision(overrides = {}) {
 }
 
 export function experimentFixture(t, { linked = true, candidate = [0, 0], contract = experimentContract(), workloadData = workload } = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'experiment-cli-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'experiment-cli-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), copilotHome = path.join(root, 'copilot');
   const primary = path.join(root, 'primary'), issue = path.join(root, 'issue');

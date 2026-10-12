@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { runInventory } from '../lib/inventory.mjs';
 import { inventoryResultOf } from '../lib/inventory-cmd.mjs';
@@ -94,9 +93,9 @@ test('publication failure preserves existing cache and redaction precedes persis
 
 test('concurrent different editor refreshes preserve both observations', async t => {
   const f = fixture(t);
-  const modulePath = fileURLToPath(new URL('../lib/inventory.mjs', import.meta.url));
+  const moduleUrl = new URL('../lib/inventory.mjs', import.meta.url).href;
   const worker = editor => new Promise((resolve, reject) => {
-    const script = `import {runInventory} from ${JSON.stringify(modulePath)}; const result=runInventory(${JSON.stringify({ ...f.base, verb: 'refresh', editor })}); if(result.status!=='ok') throw new Error(result.reason);`;
+    const script = `import {runInventory} from ${JSON.stringify(moduleUrl)}; const result=runInventory(${JSON.stringify({ ...f.base, verb: 'refresh', editor })}); if(result.status!=='ok') throw new Error(result.reason);`;
     const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
     let error = '';
     child.stderr.on('data', chunk => { error += chunk; });

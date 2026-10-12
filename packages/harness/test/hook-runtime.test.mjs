@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import YAML from 'yaml';
 import { planContractText } from '../lib/evidence.mjs';
 import { externalPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
+import { callProofAuthority } from '../corpus/hooks/lib/proof-authority.mjs';
 import {
   activatedSkillFromPayload,
   analyzeShellMutation,
@@ -21,6 +22,21 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const hooksRoot = path.join(repoRoot, 'packages', 'harness', 'corpus', 'hooks');
 const binPath = path.join(repoRoot, 'packages', 'harness', 'bin', 'harness.mjs');
+
+test('proof authority retains bounded failure cause without command output or credentials', () => {
+  const timedOut = callProofAuthority(repoRoot, [], { spawnFn: () => ({ status: null, signal: 'SIGTERM', error: { code: 'ETIMEDOUT' }, stderr: 'token=private-value' }), timeout: 2500 });
+  assert.equal(timedOut.pass, false);
+  assert.equal(timedOut.authority.reason, 'timeout');
+  assert.equal(timedOut.authority.timeoutMs, 2500);
+  assert.equal(timedOut.authority.errorCode, 'ETIMEDOUT');
+  assert.equal(timedOut.authority.signalName, 'SIGTERM');
+  const failed = callProofAuthority(repoRoot, [], { spawnFn: () => ({ status: 3, signal: null, stdout: '', stderr: 'token=private-value' }) });
+  assert.equal(failed.authority.reason, 'exit-error');
+  assert.equal(failed.authority.exitCode, 3);
+  assert.match(failed.message, /exit=3/);
+  assert.ok(!JSON.stringify([timedOut, failed]).includes('private-value'));
+  assert.ok(Buffer.byteLength(JSON.stringify([timedOut, failed])) < 2048);
+});
 
 function tempWorkspace() {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-hook-fixture-'));
@@ -212,6 +228,24 @@ function outputJson(result) {
   const line = result.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
   return line ? JSON.parse(line) : {};
 }
+
+test('unreadable plan authority denies mutation with the exact safe process failure', t => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const plan = writePlan(workspace);
+  writePassedGate(workspace, plan);
+  const failingBin = path.join(workspace, '.harness', 'failed-authority.mjs');
+  fs.writeFileSync(failingBin, "process.stderr.write('token=private-authority-value'); process.exit(3);\n");
+  const result = spawnSync(process.execPath, [path.join(hooksRoot, 'require-plan-gate.mjs')], {
+    cwd: workspace, input: JSON.stringify({ cwd: workspace, tool_name: 'replace_string_in_file', tool_input: { filePath: 'src/schema.json' } }),
+    encoding: 'utf8', env: { ...process.env, HARNESS_BIN: failingBin, HARNESS_ENFORCEMENT: 'enforce' },
+  });
+  const output = outputJson(result);
+  assert.equal(output.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(output.hookSpecificOutput.permissionDecisionReason, /unreadable-plan-authority/);
+  assert.match(output.hookSpecificOutput.permissionDecisionReason, /reason=exit-error, exit=3/);
+  assert.ok(!JSON.stringify(output).includes('private-authority-value'));
+});
 
 test('normalizes observed VS Code and compatible mutation payloads', () => {
   const cases = [

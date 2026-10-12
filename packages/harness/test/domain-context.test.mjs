@@ -16,6 +16,11 @@ import { readDomain } from '../lib/domain-contract.mjs';
 import { snapshotDomain } from '../lib/domain-bindings.mjs';
 import { publishGateSession } from '../lib/gate.mjs';
 import { experimentFixture as experimentCliFixture } from './helpers/experiment-command-fixtures.mjs';
+import { runGate } from '../lib/gate.mjs';
+import { preparationIsCurrent } from '../lib/review-preparation.mjs';
+import { runIndexKnowledge } from '../lib/index-knowledge.mjs';
+import { runInsightCompound } from '../lib/compound.mjs';
+import { resolveIndexDir } from '../lib/recall-config.mjs';
 
 test('a valid experiment contract stays current before candidate edit permission exists', t => {
   const f = experimentCliFixture(t); f.create(); f.start();
@@ -26,14 +31,8 @@ test('a valid experiment contract stays current before candidate edit permission
   assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(denied.hookSpecificOutput.permissionDecisionReason, /baseline|reservation/i);
 });
-import { runGate } from '../lib/gate.mjs';
-import { preparationIsCurrent } from '../lib/review-preparation.mjs';
-import { runIndexKnowledge } from '../lib/index-knowledge.mjs';
-import { runInsightCompound } from '../lib/compound.mjs';
-import { resolveIndexDir } from '../lib/recall-config.mjs';
-
 function fixture(t) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-domain-context-')));
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-domain-context-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const workspace = path.join(base, 'coordinator'), home = path.join(base, 'home');
   fs.mkdirSync(workspace); fs.mkdirSync(path.join(home, 'domains'), { recursive: true });

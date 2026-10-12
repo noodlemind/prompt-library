@@ -107,7 +107,7 @@ test('global Git Trace2 targets cannot write during domain inspection', t => {
   fs.mkdirSync(path.dirname(config), { recursive: true });
   fs.writeFileSync(config, YAML.stringify({ domain_version: 1, name: 'catalogue', repos: [{ id: 'product', origin, root: f.workspace }] }));
   const fakeHome = path.join(f.root, 'git-home'), trace = path.join(f.workspace, 'trace-events.json');
-  fs.mkdirSync(fakeHome); fs.writeFileSync(path.join(fakeHome, '.gitconfig'), `[trace2]\n eventTarget = ${trace}\n`);
+  fs.mkdirSync(fakeHome); fs.writeFileSync(path.join(fakeHome, '.gitconfig'), `[trace2]\n eventTarget = ${JSON.stringify(trace)}\n`);
   const env = { ...process.env, HOME: fakeHome }; delete env.GIT_CONFIG_GLOBAL; delete env.HARNESS_NO_EVENTS;
   const result = spawnSync(process.execPath, [bin, 'domain', 'show', '--name', 'catalogue', '--workspace', f.workspace, '--harness-home', f.home, '--json'], { cwd: f.workspace, env, encoding: 'utf8', timeout: 10_000 });
   assert.equal(result.status, 0, result.stderr);

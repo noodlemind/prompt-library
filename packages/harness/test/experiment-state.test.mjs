@@ -174,6 +174,38 @@ test('dead controllers with no started child recover as interrupted; unknown spa
   assert.equal(experimentStatus(unsafe).spent, 2);
 });
 
+test('unavailable process observation cannot turn a live controller into an interrupted attempt', t => {
+  const f = experimentFixture(t);
+  const attempt = reserve(f, 'begin');
+  markExperimentRunning({ ...f, reservation: attempt });
+  const tools = path.join(f.dir, 'tools');
+  fs.mkdirSync(tools);
+  fs.writeFileSync(path.join(tools, 'ps'), '#!/bin/sh\nexit 2\n', { mode: 0o700 });
+  const original = process.env.PATH, originalSystemRoot = process.env.SystemRoot;
+  try {
+    process.env.PATH = `${tools}${path.delimiter}${original || ''}`;
+    if (process.platform === 'win32') process.env.SystemRoot = tools;
+    assert.throws(() => recoverExperimentAttempt({ ...f, invocation: attempt.id }), /process identity.*unavailable|controller.*live/);
+  } finally {
+    if (original === undefined) delete process.env.PATH;
+    else process.env.PATH = original;
+    if (originalSystemRoot === undefined) delete process.env.SystemRoot;
+    else process.env.SystemRoot = originalSystemRoot;
+  }
+  assert.equal(experimentStatus(f).active.state, 'running');
+});
+
+test('recovery refuses a live child PID even when its recorded creation identity is stale', t => {
+  const f = experimentFixture(t), attempt = reserve(f, 'begin');
+  const module = new URL('../lib/experiment-state.mjs', import.meta.url).href;
+  const code = `import {markExperimentRunning,markExperimentChildStarted,recordExperimentChildSpawn} from ${JSON.stringify(module)}; const options=JSON.parse(process.argv[1]); const reservation=markExperimentRunning(options); markExperimentChildStarted({...options,reservation,token:reservation.token,mode:'score'}); recordExperimentChildSpawn({...options,reservation,token:reservation.token,mode:'score',pid:options.childPid,groupId:options.childPid,startIdentity:'stale-creation-identity'});`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code, JSON.stringify({ workspace: f.workspace, plan: f.plan, home: f.home, reservation: attempt, childPid: process.pid })], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(child.status, 0, child.stderr);
+  assert.throws(() => recoverExperimentAttempt({ ...f, invocation: attempt.id }), /group.*not proven.*recycled PID/);
+  assert.equal(experimentStatus(f).active.state, 'running');
+  assert.doesNotThrow(() => process.kill(process.pid, 0));
+});
+
 test('simultaneous reservations publish one committed pair', async t => {
   const f = experimentFixture(t);
   const module = new URL('../lib/experiment-state.mjs', import.meta.url).href;
