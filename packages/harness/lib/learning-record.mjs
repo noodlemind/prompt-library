@@ -1,13 +1,15 @@
+import { planRecordRoot } from './domain-context.mjs';
 import { readReviewRecord, recordHash } from './review.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 import path from 'node:path';
 import { solutionsWriteTarget } from './project-layout.mjs';
 
-export function publicationTarget({ workspace, copilotHome, home, scope = 'private' }) {
+export function publicationTarget({ workspace, copilotHome, home, scope = 'private', plan = null }) {
   if (scope === 'global') {
     if (!copilotHome) throw new Error('Global publication requires a Copilot home');
     return { base: path.join(copilotHome, 'knowledge'), dirRel: 'solutions' };
   }
+  if (plan?.fm?.domain_parent && scope === 'private') return { base: planRecordRoot(workspace, plan), dirRel: 'docs/solutions', kind: 'domain' };
   if (scope === 'ship-set-proposal') return { base: workspace, dirRel: '.harness/proposals/learning/solutions' };
   return solutionsWriteTarget(workspace, { home });
 }

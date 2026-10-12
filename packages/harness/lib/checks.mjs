@@ -1,4 +1,5 @@
-import { readFileNoFollow } from './fs-safe.mjs';
+import { planRecordRoot } from './domain-context.mjs';
+import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
@@ -114,8 +115,16 @@ function observeCheckOutput(onChunk, redactText, overlap) {
   };
 }
 
-export async function runNamedCheck(workspace, name, config, { signal, onStdout, onStderr, copilotHome = null, events = null } = {}) {
+export async function runNamedCheck(workspace, name, config, { signal, onStdout, onStderr, copilotHome = null, events = null, recordRoot = workspace, controllerEnv = null, controllerPlan = null, controllerWorkspace = workspace, home: harnessHome } = {}) {
   const proof = declaredProof(config);
+  let extraEnv = {};
+  if (controllerEnv) {
+    const authorized = controllerPlan && planRecordRoot(controllerWorkspace, controllerPlan);
+    const manifest = controllerEnv.HARNESS_DOMAIN_REVISION_MANIFEST;
+    const rel = typeof manifest === 'string' ? path.relative(recordRoot, manifest).replace(/\\/g, '/') : '..';
+    if (authorized !== path.resolve(recordRoot) || Object.keys(controllerEnv).length !== 1 || !path.isAbsolute(manifest || '') || !rel.startsWith('.harness/domain/') || !assertNoSymlinkAncestors(recordRoot, rel) || readFileNoFollow(manifest, { root: recordRoot, maxBytes: 1024 * 1024 }) === null) return { id: name, status: 'unavailable', message: 'Joint check manifest lacks controller authority or is unsafe' };
+    extraEnv = { HARNESS_DOMAIN_REVISION_MANIFEST: manifest };
+  }
   const finish = (result) => (proof == null ? result : { ...result, proof });
   const invalid = validateCommand(name, config);
   if (invalid) return finish(resultCheck(name, 'unavailable', invalid));
@@ -123,7 +132,7 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   const timeoutSeconds = config.timeout_seconds ?? CHECK_TIMEOUT_DEFAULT_SECONDS;
 
     const home = copilotHome ?? resolveCopilotHome(null);
-  const cfg = resolveConfig({ copilotHome: home, workspace, projectTrusted: isProjectTrusted({ workspace, copilotHome: home }) });
+  const cfg = resolveConfig({ copilotHome: home, workspace, projectTrusted: isProjectTrusted({ workspace, copilotHome: home, home: harnessHome }) });
     if (cfg.errors.length) {
     return finish({
       status: 'unavailable',
@@ -144,12 +153,12 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   const stdout = observeCheckOutput(onStdout, redactText, overlap);
   const stderr = observeCheckOutput(onStderr, redactText, overlap);
   let artifactRoot = null;
-  try { if (config.artifacts) artifactRoot = allocateCheckArtifacts(workspace, name); }
+  try { if (config.artifacts) artifactRoot = allocateCheckArtifacts(recordRoot, name); }
   catch (error) { return finish(resultCheck(name, 'unavailable', error.message)); }
   const execution = await runProcess({
     argv: [...networkWrapper, ...config.command],
     cwd: workspace,
-    ...(artifactRoot || envReport ? { env: { ...(envReport ? envReport.env : process.env), ...(artifactRoot ? { HARNESS_CHECK_ARTIFACT_DIR: path.join(workspace, artifactRoot) } : {}) } } : {}),
+    ...(artifactRoot || envReport || controllerEnv ? { env: { ...(envReport ? envReport.env : process.env), ...(artifactRoot ? { HARNESS_CHECK_ARTIFACT_DIR: path.join(recordRoot, artifactRoot) } : {}), ...extraEnv } } : {}),
     timeoutMs: timeoutSeconds * 1000,
     signal,
     onStdout: chunk => stdout.push(chunk),
@@ -190,9 +199,9 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   };
 
   if (artifactRoot) {
-    try { output.artifacts = captureCheckArtifacts(workspace, artifactRoot, config.artifacts, redactValue); }
+    try { output.artifacts = captureCheckArtifacts(recordRoot, artifactRoot, config.artifacts, redactValue); }
     catch (error) {
-      discardCheckArtifacts(workspace, artifactRoot);
+      discardCheckArtifacts(recordRoot, artifactRoot);
       if (execution.status === 'ok') return finish(resultCheck(name, 'failed', error.message, { ...output, exitCode: execution.exitCode }));
       output.artifactError = error.message;
     }

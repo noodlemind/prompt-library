@@ -5,9 +5,11 @@ import { pathToFileURL } from 'node:url';
 import { authorityBin } from './authority-bin.mjs';
 
 let layout = null;
+let planLoader = null;
 for (const bin of new Set([authorityBin(), authorityBin({ includeOverride: false })].filter(Boolean))) {
   try {
     layout = await import(pathToFileURL(path.resolve(path.dirname(bin), '../lib/project-layout.mjs')).href);
+    planLoader = await import(pathToFileURL(path.resolve(path.dirname(bin), '../lib/plan-parse.mjs')).href);
     break;
   } catch { /* a diagnostic CLI override may have no runtime modules */ }
 }
@@ -53,22 +55,5 @@ export function planDisplayPath(workspace, target) {
 
 /** Real path of a plan that lives in a legacy dir or the external project store. */
 export function resolveAcceptedPlan(workspace, planPath) {
-  let candidate;
-  try {
-    candidate = fs.realpathSync.native(path.resolve(workspace, planPath));
-  } catch {
-    return null;
-  }
-  for (const root of planRoots(workspace)) {
-    let plansRoot;
-    try {
-      plansRoot = fs.realpathSync.native(root);
-    } catch {
-      continue;
-    }
-    const relative = path.relative(plansRoot, candidate);
-    if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) continue;
-    return candidate;
-  }
-  return null;
+  return planLoader?.loadPlan(workspace, planPath)?.fullPath || null;
 }

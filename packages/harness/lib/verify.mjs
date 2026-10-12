@@ -1,3 +1,6 @@
+import { planRecordRoot, planHome, planTrustHome, validateDomainContext } from './domain-context.mjs';
+import { reloadPlan } from './plan-parse.mjs';
+import { domainPrerequisites, runDomainJointChecks, domainLinkCheck } from './domain-delivery.mjs';
 import { readProductDiff } from '../corpus/hooks/lib/product-diff.mjs';
 import fs from 'node:fs';
 import { validateReview } from './review.mjs';
@@ -7,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import YAML from 'yaml';
 import { repeatEvidenceFromServed } from './repeat-mistake.mjs';
 import { readSession } from './session.mjs';
-import { selectPlan, loadPlan } from './plan-parse.mjs';
+import { selectPlan } from './plan-parse.mjs';
 import { extractAcceptanceCriteria, validatePlanSchema } from './plan-schema.mjs';
 import { validatePlanScope } from './plan-scope.mjs';
 import { createEvidenceBinding, writeEvidence, planDigest } from './evidence.mjs';
@@ -319,8 +322,8 @@ export function behavioralProof(checks) {
   return 'behavior';
 }
 
-function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
-  const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) });
+function finalize(workspace, flags, partial, { skipEvidence = false, plan = null } = {}) {
+  const policy = loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome), home: planTrustHome(workspace, plan) });
   const severities = applyCheckSeverities(partial.checks, policy, partial.planGatedChecks || new Set());
     const checks = severities.checks.map(sanitizeCheckPayload);
   let resolved = partial.outcome || resolveOutcome(checks);
@@ -351,18 +354,20 @@ function finalize(workspace, flags, partial, { skipEvidence = false } = {}) {
     binding: partial.binding || null,
     evidencePath: null,
   };
-  result.evidencePath = skipEvidence ? null : writeEvidence(workspace, result, flags.dryRun);
+  result.evidencePath = skipEvidence ? null : writeEvidence(planRecordRoot(workspace, plan), result, flags.dryRun);
   // Kept off the evidence file. The edit gate compares this string later.
   if (result.evidencePath) result.diffFingerprint = readProductDiff(workspace, { base: flags.base || 'HEAD', planPath: result.plan, timeout: 30000 }) || '';
   return result;
 }
 
-export async function runVerify({ workspace, flags, signal, onEvent, events = null }) {
-  const session = readSession(workspace);
+export async function runVerify({ workspace, flags, signal, onEvent, events = null, domainContext = null }) {
+  const session = readSession(domainContext ? validateDomainContext(domainContext, workspace).root : workspace);
   const selected = selectPlan(workspace, {
     planPath: flags.plan,
     session,
     requireUnique: true,
+    home: flags.harnessHome,
+    domainContext,
   });
   if (!selected.plan) {
     return finalize(workspace, flags, {
@@ -372,7 +377,13 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
   }
 
   const plan = selected.plan;
+  const recordRoot = planRecordRoot(workspace, plan);
+  const finish = (partial, options = {}) => finalize(workspace, flags, partial, { ...options, plan });
   const checks = [];
+  if (plan.fm.domain_parent) {
+    const coordinator = domainLinkCheck({ workspace, plan, copilotHome: resolveCopilotHome(flags.copilotHome), home: planHome(workspace, plan) });
+    if (!coordinator.pass) return finish({ plan: plan.path, checks: [resultCheck('domain-coordinator', 'failed', coordinator.message)] }, { skipEvidence: true });
+  }
   const schema = validatePlanSchema(plan);
   checks.push(
     resultCheck(
@@ -382,11 +393,11 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
       { details: schema.checks }
     )
   );
-  if (!schema.pass) return finalize(workspace, flags, { plan: plan.path, checks });
+  if (!schema.pass) return finish( { plan: plan.path, checks });
   try { planDigest(plan.text); }
   catch (error) {
     checks.push(resultCheck('plan-schema', 'failed', error.message));
-    return finalize(workspace, flags, { plan: plan.path, checks });
+    return finish( { plan: plan.path, checks });
   }
 
   const readiness = validatePlanReadiness(workspace, plan, { copilotHome: resolveCopilotHome(flags.copilotHome) });
@@ -422,7 +433,7 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
   const named = loadNamedChecks(workspace);
   const required = Array.isArray(plan.fm.verification?.required) ? plan.fm.verification.required : [];
     const streamRedactor = onEvent ? createRedactor() : null;
-    const namedChecksTrusted = isProjectTrusted({ workspace, copilotHome: resolveCopilotHome(flags.copilotHome) });
+    const namedChecksTrusted = isProjectTrusted({ workspace, copilotHome: resolveCopilotHome(flags.copilotHome), home: planTrustHome(workspace, plan) });
   const namedResults = [];
   for (const name of required) {
     if (!readiness.pass) {
@@ -455,6 +466,8 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
       onStderr: streamer?.onStderr,
       copilotHome: resolveCopilotHome(flags.copilotHome),
       events,
+      recordRoot,
+      home: planTrustHome(workspace, plan),
     });
     streamer?.flush();
     onEvent?.('row', { check: name, status: outcome.status, unifiedStatus: unifiedStatusForCheck(outcome), message: outcome.message });
@@ -462,11 +475,14 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     if (signal?.aborted) break; // stop running further checks once cancelled
   }
   checks.push(...namedResults);
+  if (plan.fm.domain_parent) {
+    const prerequisites = domainPrerequisites({ workspace, plan, copilotHome: resolveCopilotHome(flags.copilotHome), home: planHome(workspace, plan) });
+    checks.push(resultCheck('domain-children', prerequisites.pass ? 'passed' : 'failed', prerequisites.message));
+    if (prerequisites.pass && readiness.pass) checks.push(...(await runDomainJointChecks({ workspace, plan, copilotHome: resolveCopilotHome(flags.copilotHome), flags, signal, onEvent, recordRoot })).checks);
+  }
 
     if (signal?.aborted) {
-    return finalize(
-      workspace,
-      flags,
+    return finish(
       {
         outcome: 'cancelled',
         plan: plan.path,
@@ -526,13 +542,13 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
   const requiredReviews = review.missing;
   checks.push(resultCheck('required-reviews', review.pass ? 'passed' : 'failed', review.message, { record: review.record?.id || null }));
 
-  const hardGaps = openHardGaps(plan, loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) }));
+  const hardGaps = openHardGaps(plan, loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome), home: planTrustHome(workspace, plan) }));
   checks.push(resultCheck('hard-gaps', hardGaps.length ? 'failed' : 'passed', hardGaps.length ? `${hardGaps.length} hard capability gaps remain open or lack scoped authorization` : 'No open hard capability gaps'));
 
   const criticalOpen = [...(plan.fm.reviews?.critical_open || []), ...review.critical];
   checks.push(resultCheck('critical-findings', criticalOpen.length ? 'failed' : 'passed', criticalOpen.length ? `${criticalOpen.length} critical findings remain open` : 'No open critical review findings'));
 
-  const currentPlan = loadPlan(workspace, plan.path);
+  const currentPlan = reloadPlan(workspace, plan);
   const binding = createEvidenceBinding({
     workspace,
     plan: currentPlan || plan,
@@ -547,6 +563,9 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     preBinding.policyDigest === binding.policyDigest &&
     preBinding.executionPhase === binding.executionPhase &&
     JSON.stringify(preBinding.intentSources) === JSON.stringify(binding.intentSources) &&
+    JSON.stringify(preBinding.domainAuthority) === JSON.stringify(binding.domainAuthority) &&
+    (!binding.domainAuthority || binding.domainAuthority.pass) &&
+    JSON.stringify(preBinding.domainExecution) === JSON.stringify(binding.domainExecution) &&
     ((currentPlan || plan).fm?.intent_source_policy === undefined || intentSourcesCheck(currentPlan || plan, workspace).pass) &&
     Boolean(currentPlan) &&
     !headMoved;
@@ -562,7 +581,7 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     )
   );
 
-  return finalize(workspace, flags, {
+  return finish( {
     plan: plan.path,
     checks,
     planGatedChecks: planGatedCheckIds(plan),

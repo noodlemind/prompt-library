@@ -8,9 +8,20 @@ import { test } from 'node:test';
 import YAML from 'yaml';
 import { initGit, writeVersionedPlan, writeChecks } from './helpers/cli-fixtures.mjs';
 import { approveProject } from '../lib/trust.mjs';
+import { planDigest } from '../lib/evidence.mjs';
 
 const bin = path.resolve(import.meta.dirname, '../bin/harness.mjs');
 const hash = value => createHash('sha256').update(value).digest('hex');
+
+test('accepted checkbox progress preserves exact section whitespace and the semantic contract', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.full, f.text().replace('status: planned', 'status: in-progress').replace('## Acceptance Criteria\n', '## Acceptance Criteria\n\n\n').replace('## Plan\n', '## Plan\n\n\n'));
+  const before = planDigest(f.text());
+  assert.equal(f.op(f.decision('progress', { progress: { criteria: ['AC1'], tasks: ['T1'] } })).status, 0);
+  assert.equal(planDigest(f.text()), before);
+  assert.match(f.text(), /## Acceptance Criteria\n\n\n/);
+  assert.match(f.text(), /## Plan\n\n\n/);
+});
 for (const status of ['open', 'needs-info']) test(`resolved ${status} full drafts start with the initial execution phase`, t => {
   const f = fixture(t), file = path.join(f.ws, '.harness/draft.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });

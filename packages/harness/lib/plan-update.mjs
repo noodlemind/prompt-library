@@ -1,16 +1,19 @@
+import { planRecordRoot, planHome, domainPlanPath, validateDomainContext } from './domain-context.mjs';
+import { planWithText } from './plan-parse.mjs';
+import { sharedIntentCheck } from './domain-bindings.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { randomUUID } from 'node:crypto';
 import { createStyle, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
-import { externalPlansDir, planReadDirs } from './project-layout.mjs';
+import { externalPlansDir, planReadDirs, projectStoreDir, conversionPointerRel } from './project-layout.mjs';
 import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { parseFlags } from './flags.mjs';
 import { loadPlan, parsePlanFrontmatter, planFromText } from './plan-parse.mjs';
-import { completeWork, completionPrerequisites } from './completion.mjs';
+import { completeWork, completionPrerequisites, validateCompletion } from './completion.mjs';
 import { bindLockedIntentSources, lockIntentSources, sourcePath, hashIntentFile, intentSourcesCheck } from './intent-sources.mjs';
-import { readFileNoFollow } from './fs-safe.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors, writeFileContainedExclusive } from './fs-safe.mjs';
 import { applyPlanDecision, validatePlanDecision, planRevision, planState } from './plan-decisions.mjs';
 import { runGate, publishGateSession } from './gate.mjs';
 import { loadPolicy } from './policy.mjs';
@@ -20,6 +23,9 @@ import { validatePlanScope } from './plan-scope.mjs';
 import { readReviewRecord, publishReviewRecord, recordHash } from './review.mjs';
 import { reviewHash } from './review-preparation.mjs';
 import { readEvidence, planDigest } from './evidence.mjs';
+import { readPlanRecord } from './plan-record.mjs';
+import { authorizeProjectPlan } from './domain-context.mjs';
+import { domainLinkCheck, domainCoordinatorCheck, snapshotDomainCoordinator, validateCoordinatorBinding } from './domain-delivery.mjs';
 
 const PLAN_STATUSES = ['open', 'planned', 'in-progress', 'review', 'done', 'blocked-capability', 'needs-info'];
 const REVIEW_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -47,7 +53,8 @@ function realDirectory(dir) {
 }
 
 /** Directories a plan-update may write. The external store, plus legacy in-repo plans. */
-export function planUpdateRoots(workspace, { home } = {}) {
+export function planUpdateRoots(workspace, { home, domainContext } = {}) {
+  if (domainContext) return [validateDomainContext(domainContext, workspace).plansDir];
   return [
     externalPlansDir(workspace, { home }),
     ...LEGACY_PLAN_RELS.map((rel) => path.join(workspace, rel)),
@@ -107,9 +114,15 @@ export function withPlanUpdateLock(full, fn) {
  * A bare name may match one plan. An explicit path is used as given.
  * Symlinks are refused before any path is resolved through them.
  */
-export function resolvePlanUpdateFile(workspace, planArg, { home } = {}) {
+export function resolvePlanUpdateFile(workspace, planArg, { home, domainContext } = {}) {
   if (typeof planArg !== 'string' || !planArg.trim()) throw usage('plan-update: --plan is required');
   const raw = planArg.trim();
+  if (domainContext) {
+    validateDomainContext(domainContext, workspace);
+    const full = domainPlanPath(domainContext, raw);
+    if (!loadPlan(workspace, full, { home, domainContext })) throw usage('domain parent is unreadable or outside its authorized plan store');
+    return full;
+  }
   const bare = !raw.includes('/') && !raw.includes('\\');
   let listedPath;
   if (bare) {
@@ -130,7 +143,7 @@ export function resolvePlanUpdateFile(workspace, planArg, { home } = {}) {
   if (!listed.isFile() || listed.isSymbolicLink()) throw usage('plan-update: path is outside the plan store');
   const real = fs.realpathSync(listedPath);
   const base = path.basename(real);
-  if (!real.endsWith('.md') || base === 'README.md' || base.startsWith('_')) {
+  if (!/\.(?:md|hplan)$/.test(real) || base === 'README.md' || base.startsWith('_')) {
     throw usage('plan-update: path is outside the plan store');
   }
   const roots = planUpdateRoots(workspace, { home }).map(realDirectory).filter(Boolean);
@@ -330,24 +343,50 @@ function publishPlanFile(full, text) {
   }
 }
 
-function structuredPlanUpdate({ workspace, full, input, flags, dryRun }) {
+export function planUpdateActorCheck({ workspace, plan, input }) {
+  if (!plan?.fm?.domain_parent) return { pass: true, message: 'No domain coordinator mutation authority' };
+  const next = input?.action === 'amend' && input.authority?.scope === 'domain-intent' ? input.changes?.domainParent?.coordinator : null;
+  if (!next) return domainCoordinatorCheck({ workspace, plan });
+  try {
+    const current = snapshotDomainCoordinator(workspace), accepted = plan.fm.domain_parent.coordinator;
+    if (reviewHash({ ...current, initial_head: null }) !== reviewHash({ ...accepted, initial_head: null })) return { pass: false, message: 'A coordinator refresh must be accepted by the original coordinator physical identity' };
+    return validateCoordinatorBinding(next.root, next);
+  } catch (error) { return { pass: false, message: error.message }; }
+}
+
+function proposedDomainLink({ workspace, original, proposed, input, copilotHome }) {
+  if (original.fm.domain_parent && input.action === 'amend' && input.authority?.scope === 'domain-intent' && input.changes?.domainParent?.coordinator) {
+    return validateCoordinatorBinding(proposed.fm.domain_parent.coordinator.root, proposed.fm.domain_parent.coordinator);
+  }
+  return domainLinkCheck({ workspace, plan: proposed, copilotHome, home: planHome(workspace, proposed) });
+}
+
+function structuredPlanUpdate({ workspace, full, input, flags, dryRun, domainContext = null, home }) {
   validatePlanDecision(input);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const preview = loadPlan(workspace, full, { home, domainContext });
+  if (!preview) throw usage('plan is unreadable');
+  const actor = planUpdateActorCheck({ workspace, plan: preview, input });
+  if (!actor.pass) throw usage(actor.message);
   return withPlanUpdateLock(full, () => {
-    const plan = loadPlan(workspace, full);
+    const plan = loadPlan(workspace, full, { home, domainContext });
     if (!plan) throw usage('plan is unreadable');
+    const actor = planUpdateActorCheck({ workspace, plan, input });
+    if (!actor.pass) throw usage(actor.message);
+    const recordRoot = planRecordRoot(workspace, plan);
+    const shared = () => sharedIntentCheck(workspace, plan, { home: planHome(workspace, plan) });
     const rel = `.harness/operations/plans/${reviewHash({ plan: plan.path, operation: input.id })}.json`;
     const inputDigest = reviewHash(input);
-    const existing = readReviewRecord(workspace, rel);
+    const existing = readReviewRecord(recordRoot, rel);
     const operation = reviewHash({ plan: plan.path, inputDigest });
     if (existing && (existing.version !== 1 || existing.operation !== operation || existing.inputDigest !== inputDigest || existing.plan !== plan.path || existing.value?.plan !== plan.path || existing.value?.before !== input.expect || existing.value?.action !== input.action || typeof existing.value?.text !== 'string' || planRevision(existing.value.text) !== existing.value.after || reviewHash(existing.value) !== existing.integrity)) throw usage('operation identity has different or corrupt payload');
-    if (existing?.state === 'completed') return { ...existing.result, replayed: true, currentRevision: planRevision(plan.text), current: planRevision(plan.text) === existing.value.after && intentSourcesCheck(plan, workspace).pass && gapEvidenceCheck(workspace, plan).pass && validatePlanSchema(plan).pass, allowedNextActions: ['Inspect current state; a replay does not renew an expired gate'] };
+    if (existing?.state === 'completed') return { ...existing.result, replayed: true, currentRevision: planRevision(plan.text), current: planRevision(plan.text) === existing.value.after && intentSourcesCheck(plan, workspace).pass && gapEvidenceCheck(workspace, plan).pass && validatePlanSchema(plan).pass && shared().pass && domainLinkCheck({ workspace, plan, copilotHome, home: planHome(workspace, plan) }).pass && (input.action !== 'complete' || validateCompletion({ workspace, plan, copilotHome }).pass), allowedNextActions: ['Inspect current state; a replay does not renew an expired gate'] };
     if (existing && existing.state !== 'pending') throw usage('operation state is invalid');
     const current = planRevision(plan.text);
     if (existing ? ![existing.value.before, existing.value.after].includes(current) : input.expect !== current) throw usage('stale plan revision; reread before accepting a new decision');
     const recordedAt = existing?.value.recordedAt || new Date().toISOString();
     const decision = existing ? { text: existing.value.text, amendments: existing.value.amendments, authority: existing.value.authority } : applyPlanDecision(workspace, plan, input, { applyUpdate: applyPlanUpdate, recordedAt, copilotHome });
-    const proposed = planFromText(decision.text, { path: plan.path, fullPath: full });
+    const proposed = planWithText(plan, decision.text);
     const schema = validatePlanSchema(proposed);
     const missing = schema.checks.filter(check => !check.pass).map(check => check.message);
     let gate = null;
@@ -359,6 +398,11 @@ function structuredPlanUpdate({ workspace, full, input, flags, dryRun }) {
       if (scope.status !== 'passed') missing.push(scope.message);
     }
     if (input.changes?.criteria) missing.push(...validatePlanReadiness(workspace, proposed, { copilotHome }).checks.filter(check => !check.pass).map(check => check.message));
+    if (plan.fm.domain_binding || proposed.fm.domain_binding) {
+      if (!sharedIntentCheck(workspace, proposed, { home: planHome(workspace, proposed) }).pass) missing.push('Accepted domain shared authority changed; explicitly amend it before publication');
+      const link = proposedDomainLink({ workspace, original: plan, proposed, input, copilotHome });
+      if (!link.pass) missing.push(link.message);
+    }
     if (input.action === 'complete') {
       const prerequisites = completionPrerequisites({ workspace, plan: proposed, copilotHome });
       if (!prerequisites.pass) missing.push(prerequisites.message);
@@ -369,20 +413,93 @@ function structuredPlanUpdate({ workspace, full, input, flags, dryRun }) {
     if (gate && !intentSourcesCheck(proposed, workspace).pass) throw usage('selected intent source changed before start publication');
     const completion = input.action === 'complete' ? completeWork({ workspace, plan: proposed, copilotHome, dryRun }) : null;
     const affectedEvidence = planDigest(plan.text) === planDigest(proposed.text) ? null : {
-      verification: readEvidence(workspace, plan.path)?.evidencePath || null,
-      review: readReviewRecord(workspace, `.harness/reviews/latest/${recordHash(plan.path)}.json`)?.id || null,
-      completion: readReviewRecord(workspace, `.harness/completions/${recordHash(plan.path)}.json`)?.id || null,
+      verification: readEvidence(recordRoot, plan.path)?.evidencePath || null,
+      review: readReviewRecord(recordRoot, `.harness/reviews/latest/${recordHash(plan.path)}.json`)?.id || null,
+      completion: readReviewRecord(recordRoot, `.harness/completions/${recordHash(plan.path)}.json`)?.id || null,
     };
     const value = existing?.value || { plan: plan.path, action: input.action, recordedAt, before: current, after: planRevision(decision.text), text: decision.text, amendments: decision.amendments, authority: decision.authority, affectedEvidence };
     const result = { version: 1, status: 'ok', path: full, operation, operationPath: rel, action: input.action, revision: value.after, planState: planState(proposed), amendments: value.amendments, authority: value.authority, affectedEvidence: value.affectedEvidence, completion: completion?.id || null, missing: [], allowedNextActions: input.action === 'start' ? ['Edit within the accepted scope', 'Run required review and verification'] : ['Inspect the updated contract', 'Start or refresh the implement gate before edits'], dryRun, updated: !dryRun && current !== value.after };
     const record = { version: 1, state: 'pending', plan: plan.path, inputDigest, operation, integrity: reviewHash(value), value, result };
     if (!dryRun) {
-      publishReviewRecord(workspace, rel, record);
+      publishReviewRecord(recordRoot, rel, record);
+      planRecordRoot(workspace, proposed);
+      const actor = planUpdateActorCheck({ workspace, plan, input });
+      if (!actor.pass) throw usage(actor.message);
+      const link = proposedDomainLink({ workspace, original: plan, proposed, input, copilotHome });
+      if (!link.pass) throw usage(link.message);
+      if (proposed.fm.domain_binding && !sharedIntentCheck(workspace, proposed, { home: planHome(workspace, proposed) }).pass) throw usage('Domain shared authority changed before publication');
       if (readFileNoFollow(full) !== plan.text) throw usage('plan changed during the operation; reread before retry');
       if (current !== value.after) publishPlanFile(full, value.text);
-      if (gate) publishGateSession({ workspace, result: gate, policy: loadPolicy(workspace, flags.enforcement, { copilotHome }) });
-      publishReviewRecord(workspace, rel, { ...record, state: 'completed' });
+      if (gate) publishGateSession({ workspace, plan: proposed, result: gate, policy: loadPolicy(workspace, flags.enforcement, { copilotHome, home: planHome(workspace, proposed) }) });
+      publishReviewRecord(recordRoot, rel, { ...record, state: 'completed' });
     }
+    return result;
+  });
+}
+
+export function updatePlanDecision({ workspace, home, domainContext = null, planPath, input, copilotHome, dryRun = false, flags = {} }) {
+  if (input?.action === 'convert') return convertFullPlan({ workspace, home, domainContext, planPath, input, copilotHome, dryRun });
+  const full = resolvePlanUpdateFile(workspace, planPath, { home, domainContext });
+  return structuredPlanUpdate({ workspace, full, input, flags: { ...flags, copilotHome }, dryRun, domainContext, home });
+}
+
+export function convertFullPlan({ workspace, home = harnessGlobalHome(), domainContext = null, planPath, input, copilotHome, dryRun = false }) {
+  const fields = ['version', 'id', 'action', 'expect', 'rationale', 'authority', 'changes'];
+  if (domainContext || input?.changes?.domain_parent) throw usage('Parent plans require fresh domain creation; project history cannot be moved into a parent');
+  if (!input || Object.keys(input).some(key => !fields.includes(key)) || input.version !== 1 || input.action !== 'convert' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.id || '') || !/^[a-f0-9]{64}$/.test(input.expect || '') || typeof input.rationale !== 'string' || !input.rationale.trim() || input.authority?.scope !== 'domain-intent' || typeof input.authority.basis !== 'string' || !input.authority.basis.trim() || Object.keys(input.authority).some(key => !['scope', 'basis'].includes(key)) || !input.changes || Object.keys(input.changes).length !== 2 || !input.changes.domain_child || !input.changes.domain_binding) throw usage('Conversion requires a revision-bound authored child domain decision and domain-intent authority');
+  const raw = typeof planPath === 'string' && planPath;
+  if (!raw || !raw.endsWith('.md')) throw usage('Conversion requires an ordinary full .md plan');
+  const full = path.isAbsolute(raw) ? path.resolve(raw) : raw.includes('/') ? path.resolve(workspace, raw) : path.join(externalPlansDir(workspace, { home }), raw);
+  const roots = planUpdateRoots(workspace, { home }).map(realDirectory).filter(Boolean);
+  const root = roots.find(candidate => contained(candidate, full));
+  if (!root || !assertNoSymlinkAncestors(root, path.relative(root, full))) throw usage('Conversion path is outside the safe project plan store');
+  return withPlanUpdateLock(full, () => {
+    const recordRoot = projectStoreDir(workspace, { home });
+    const rel = `.harness/operations/plans/${reviewHash({ plan: full, operation: input.id })}.json`;
+    const prior = readReviewRecord(recordRoot, rel), inputDigest = reviewHash(input);
+    if (!prior && fs.lstatSync(path.join(recordRoot, rel), { throwIfNoEntry: false })) throw usage('Conversion operation identity has a corrupt journal');
+    const pointerPath = path.join(recordRoot, conversionPointerRel(full));
+    if (fs.lstatSync(pointerPath, { throwIfNoEntry: false })) {
+      let pointer;
+      try { pointer = JSON.parse(readFileNoFollow(pointerPath, { root: recordRoot, maxBytes: 4096 })); } catch { throw usage('Conversion operation identity has a corrupt pointer'); }
+      if (pointer?.version !== 1 || pointer.record !== rel || pointer.inputDigest !== inputDigest) throw usage('Conversion operation identity is reserved by another conversion or has a corrupt pointer');
+    }
+    const nextPath = full.replace(/\.md$/, '.hplan');
+    if (prior && (prior.kind !== 'conversion' || prior.inputDigest !== inputDigest || prior.id !== recordHash(prior.value) || prior.value.oldPath !== full || prior.value.newPath !== nextPath || typeof prior.value.original !== 'string' || planRevision(prior.value.original) !== input.expect || prior.value.oldRevision !== input.expect || typeof prior.value.text !== 'string' || planRevision(prior.value.text) !== prior.value.newRevision)) throw usage('Conversion operation identity has different or corrupt payload');
+    if (prior?.state === 'completed') {
+      const current = loadPlan(workspace, nextPath, { home });
+      return { ...prior.result, replayed: true, current: Boolean(current && current.fm.plan_id === prior.value.planId && !fs.lstatSync(full, { throwIfNoEntry: false }) && sharedIntentCheck(workspace, current, { home }).pass && domainLinkCheck({ workspace, plan: current, copilotHome, home }).pass) };
+    }
+    if (prior && prior.state !== 'pending') throw usage('Conversion journal state is invalid');
+    const source = readFileNoFollow(full, { root, maxBytes: 1024 * 1024 });
+    if (source === null && fs.lstatSync(full, { throwIfNoEntry: false })) throw usage('Conversion original plan is unsafe or unreadable');
+    const original = prior?.value.original ?? source;
+    if (original === null || planRevision(original) !== input.expect || (source !== null && source !== original)) throw usage('Stale plan revision; conversion cannot replace changed or missing original bytes');
+    const plan = authorizeProjectPlan(planFromText(original, { path: full, fullPath: full }), home);
+    if (Number(plan.fm.plan_schema) !== 2 || readPlanRecord(original) || plan.fm.domain_parent || plan.fm.domain_child || plan.fm.domain_binding || !plan.fm.plan_id) throw usage('Only ordinary schema 2 full plans with an existing UUID can convert to a domain child');
+    const fm = { ...plan.fm, plan_schema: 3, domain_child: input.changes.domain_child, domain_binding: input.changes.domain_binding };
+    const text = original.replace(/^---\r?\n[\s\S]*?\r?\n---/, `---\n${YAML.stringify(fm, { lineWidth: 0 })}---`);
+    const proposed = authorizeProjectPlan(planFromText(text, { path: nextPath, fullPath: nextPath }), home);
+    const schema = validatePlanSchema(proposed), shared = sharedIntentCheck(workspace, proposed, { home }), link = domainLinkCheck({ workspace, plan: proposed, copilotHome, home });
+    if (!schema.pass || !shared.pass || !link.pass) throw usage(`Conversion contract is invalid: ${[...schema.checks.filter(check => !check.pass).map(check => check.message), !shared.pass && shared.message, !link.pass && link.message].filter(Boolean).join('; ')}`);
+    const value = { oldPath: full, newPath: nextPath, oldRevision: input.expect, newRevision: planRevision(text), original, text, planId: plan.fm.plan_id };
+    if (prior && recordHash(value) !== prior.id) throw usage('Conversion accepted contract changed while recovering');
+    const destination = readFileNoFollow(nextPath, { root, maxBytes: 1024 * 1024 });
+    if (destination === null && fs.lstatSync(nextPath, { throwIfNoEntry: false })) throw usage('Conversion destination is unsafe or unreadable');
+    if (destination !== null && destination !== text) throw usage('Conversion destination already contains another plan');
+    const result = { version: 1, status: 'ok', action: 'convert', path: nextPath, previousPath: full, revision: value.newRevision, planState: planState(proposed), updated: !dryRun, dryRun, invalidatedProof: true, ...(prior ? { replayed: true } : {}) };
+    if (dryRun) return result;
+    const record = prior || { version: 1, kind: 'conversion', state: 'pending', inputDigest, id: recordHash(value), value, result };
+    publishReviewRecord(recordRoot, conversionPointerRel(full), { version: 1, record: rel, inputDigest });
+    publishReviewRecord(recordRoot, rel, record);
+    if (!sharedIntentCheck(workspace, proposed, { home }).pass || !domainLinkCheck({ workspace, plan: proposed, copilotHome, home }).pass || readFileNoFollow(full, { root, maxBytes: 1024 * 1024 }) !== source) throw usage('Authority or original plan changed before conversion retirement');
+    if (source !== null) fs.unlinkSync(full);
+    if (fs.lstatSync(full, { throwIfNoEntry: false }) || !sharedIntentCheck(workspace, proposed, { home }).pass || !domainLinkCheck({ workspace, plan: proposed, copilotHome, home }).pass) throw usage('Authority or original plan changed before conversion publication');
+    const currentNext = readFileNoFollow(nextPath, { root, maxBytes: 1024 * 1024 });
+    if (currentNext !== null && currentNext !== text) throw usage('Conversion destination changed before publication');
+    if (currentNext === null && !writeFileContainedExclusive(root, path.relative(root, nextPath), text)) throw usage('Conversion destination exists or is unsafe');
+    if (fs.lstatSync(full, { throwIfNoEntry: false }) || readFileNoFollow(nextPath, { root, maxBytes: 1024 * 1024 }) !== text) throw usage('Conversion paths changed before completion publication');
+    publishReviewRecord(recordRoot, rel, { ...record, state: 'completed' });
     return result;
   });
 }
@@ -483,18 +600,19 @@ export async function cmdPlanUpdate(argv) {
     || change.next !== undefined;
   if (!hasChange && !fileArg) throw usage('plan-update: provide a structured decision or a status, activity, review, or body change');
 
-  const home = harnessGlobalHome();
-  const full = resolvePlanUpdateFile(workspace, planArg, { home });
+  const flags = parseFlags(argv);
+  const home = flags.harnessHome || harnessGlobalHome();
   if (fileArg) {
     if (hasChange) throw usage('--file cannot be combined with legacy mutation flags');
     const content = readFileNoFollow(path.resolve(workspace, fileArg), { maxBytes: 1024 * 1024 });
     if (content === null) throw usage('decision file is missing, unsafe or over 1 MiB');
     let input;
     try { input = JSON.parse(content); } catch { throw usage('decision file must contain JSON'); }
-    const result = structuredPlanUpdate({ workspace, full, input, flags: parseFlags(argv), dryRun });
+    const result = updatePlanDecision({ workspace, home, planPath: planArg, input, flags, copilotHome: flags.copilotHome, dryRun });
     console.log(redactedJson(result));
     return result.status === 'blocked' ? 1 : 0;
   }
+  const full = resolvePlanUpdateFile(workspace, planArg, { home });
   const lockDir = acquirePlanLock(full);
   let written;
   let original = '';
@@ -503,6 +621,8 @@ export async function cmdPlanUpdate(argv) {
   try {
     original = fs.readFileSync(full, 'utf8');
     const currentPlan = loadPlan(workspace, full);
+    if (!currentPlan) throw usage('Plan is unreadable or has a pending conversion; recover the authored operation before changing it');
+    if (Number(currentPlan?.fm.plan_schema) >= 3) throw usage('Extended plans require an authored --file decision');
     if (currentPlan?.fm.intent_source_policy === 'content-v1' && currentPlan.plan_lock) {
       if (change.intentSources.length) throw usage('selected sources are frozen; use an explicit amendment');
       if (change.lock && !intentSourcesCheck(currentPlan, workspace).pass) throw usage('selected intent source changed; use an explicit amendment instead of rehashing --lock');
@@ -517,7 +637,7 @@ export async function cmdPlanUpdate(argv) {
     if (change.status === 'done') {
       const plan = loadPlan(workspace, full);
       const fm = parsePlanFrontmatter(next);
-      completion = completeWork({ workspace, plan: { ...plan, text: next, fm, status: fm.status }, copilotHome: resolveCopilotHome(parseFlags(argv).copilotHome), dryRun });
+      completion = completeWork({ workspace, plan: planWithText(plan, next), copilotHome: resolveCopilotHome(parseFlags(argv).copilotHome), dryRun });
     }
     if (!dryRun && next !== original) {
       publishPlanFile(full, next);

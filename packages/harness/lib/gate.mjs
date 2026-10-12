@@ -1,4 +1,6 @@
 import fs from 'fs';
+import { domainLinkCheck } from './domain-delivery.mjs';
+import { planRecordRoot, planHome, planTrustHome, validateDomainContext } from './domain-context.mjs';
 import path from 'path';
 import { readSession, writeSession } from './session.mjs';
 import { loadPlan, pickActivePlan, listPlanRels, parsePlanFrontmatter } from './plan-parse.mjs';
@@ -15,8 +17,9 @@ import { validatePlanSchema } from './plan-schema.mjs';
 import { intentSourcesCheck } from './intent-sources.mjs';
 import { inspectIsolation, worktreeGateMessage } from './worktree.mjs';
 
-export function runGate({ workspace, flags, query = '', planOverride = null }) {
-  const session = readSession(workspace);
+export function runGate({ workspace, flags, query = '', planOverride = null, domainContext = null }) {
+  const sessionRoot = domainContext ? validateDomainContext(domainContext, workspace).root : planOverride ? planRecordRoot(workspace, planOverride) : workspace;
+  const session = readSession(sessionRoot);
   const phase = flags.phase || 'implement';
   const checks = [];
   let pass = true;
@@ -26,7 +29,7 @@ export function runGate({ workspace, flags, query = '', planOverride = null }) {
   const planPaths = listPlanRels(workspace);
   const matches = query ? findMatchingPlans(workspace, query, 5) : [];
   const plan = planOverride || (flags.plan
-    ? loadPlan(workspace, flags.plan)
+    ? loadPlan(workspace, flags.plan, { home: flags.harnessHome, domainContext })
     : pickActivePlan(workspace, session, matches, planPaths));
 
   if (!plan && planPaths.length === 0) {
@@ -41,7 +44,7 @@ export function runGate({ workspace, flags, query = '', planOverride = null }) {
     checks.push({
       id: 'C1',
       pass: false,
-      message: `Plans exist (${planPaths.length}) but no active plan — run harness orient or set session.activePlan`,
+      message: flags.plan ? 'Selected plan is unreadable, outside its authorized store, or has an unsupported schema/extension' : `Plans exist (${planPaths.length}) but no active plan — run harness orient or set session.activePlan`,
       severity: 'fail',
     });
     pass = false;
@@ -184,14 +187,14 @@ export function runGate({ workspace, flags, query = '', planOverride = null }) {
         }
       }
 
-      const isolation = inspectIsolation({
+      const isolation = plan.fm.domain_parent ? { blocked: false } : inspectIsolation({
         workspace,
         allowInplace: Boolean(flags.allowInplace),
       });
       checks.push({
         id: 'C-worktree',
         pass: !isolation.blocked,
-        message: worktreeGateMessage(isolation),
+        message: plan.fm.domain_parent ? 'Domain coordinator gate grants no product edit authority' : worktreeGateMessage(isolation),
         severity: isolation.blocked ? 'fail' : 'ok',
       });
       if (isolation.blocked) pass = false;
@@ -202,13 +205,13 @@ export function runGate({ workspace, flags, query = '', planOverride = null }) {
     }
 
     if (phase === 'verify') {
-      const evidence = readEvidence(workspace, plan.path);
+      const evidence = readEvidence(planRecordRoot(workspace, plan), plan.path);
       const freshness = validateEvidence({
         workspace,
         plan,
         evidence,
         copilotHome: resolveCopilotHome(flags.copilotHome),
-        maxAgeHours: loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) }).evidenceTtlHours,
+        maxAgeHours: loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome), home: planTrustHome(workspace, plan) }).evidenceTtlHours,
       });
       if (!freshness.pass) {
         pass = false;
@@ -272,12 +275,17 @@ export function runGate({ workspace, flags, query = '', planOverride = null }) {
   return result;
 }
 
-export function publishGateSession({ workspace, result, policy, dryRun = false }) {
-  const previous = readSession(workspace) || {};
+export function publishGateSession({ workspace, plan = null, result, policy, dryRun = false }) {
+  const recordRoot = planRecordRoot(workspace, plan);
+  if (plan?.fm?.domain_parent) {
+    const actor = domainLinkCheck({ workspace, plan, home: planHome(workspace, plan) });
+    if (!actor.pass) throw Object.assign(new Error(actor.message), { code: 'E_DOMAIN', exit: 1 });
+  }
+  const previous = readSession(recordRoot) || {};
   const passed = result.pass && result.exitCode === 0;
   const snapshot = passed ? configuredCheckSnapshot(workspace) : null;
   if (passed && snapshot.error) throw new Error(snapshot.error);
-  const written = writeSession(workspace, {
+  const written = writeSession(recordRoot, {
     ...previous,
     activePlan: result.plan?.path || previous.activePlan || null,
     gatedPlan: result.plan?.path || null,

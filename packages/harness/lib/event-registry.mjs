@@ -110,9 +110,9 @@ export function createEventRegistry({
   return { emit, withCommand };
 }
 
-export function createProcessEventRegistry(rawArgs, run) {
+export function createProcessEventRegistry(rawArgs, run, { recordWorkspace = null } = {}) {
   const flags = parseFlags(rawArgs);
-  const workspace = path.resolve(flags.workspace);
+  const workspace = path.resolve(recordWorkspace || flags.workspace);
   return createEventRegistry({
     run,
     writeEvent: (payload) => writeHarnessEvent(workspace, flags, payload),

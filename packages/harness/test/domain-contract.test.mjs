@@ -75,7 +75,7 @@ test('show flags and explicit Harness home work outside any product workspace', 
   const result = domainResultOf(['show', '--name', 'catalog', '--harness-home', f.home, '--workspace', path.join(f.dir, 'does-not-exist'), '--json'], { harnessHome: path.join(f.dir, 'wrong-home') });
   assert.equal(result.name, 'catalog');
   assert.equal(result.configPath, f.file);
-  assert.deepEqual(DOMAIN_VERBS, ['show']);
+  assert.deepEqual(DOMAIN_VERBS, ['show', 'status', 'get', 'plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound']);
   assert.equal(domainResultOf(['show', '--name=catalog'], { harnessHome: f.home }).configPath, f.file);
 });
 
@@ -294,4 +294,52 @@ test('only explicit supported show syntax is accepted', t => {
   for (const args of [['show'], ['create', '--name', 'catalog'], ['show', '--name', 'catalog', '--name', 'catalog'], ['show', '--name', '--json'], ['show', 'catalog'], ['show', '--name', 'catalog', 'extra']]) {
     assert.throws(() => domainResultOf(args, { harnessHome: f.home }), /name|usage|verb|argument|show/i);
   }
+});
+
+test('version 2 separates logical descriptors from safe local root bindings', t => {
+  const f = fixture(t);
+  const v2 = { domain_version: 2, name: 'catalog', repos: [{ id: 'product', origin: f.config.repos[0].origin }], sources: [{ id: 'specs', origin: f.config.repos[0].origin }], bindings: { repos: { product: f.root }, sources: { specs: f.root } }, shared_specs: [{ source: 'specs', path: 'spec.md' }], shared_conventions: [{ source: 'specs', path: 'spec.md', authority: 'advisory' }] };
+  f.write(v2);
+  const read = readDomain('catalog', { home: f.home });
+  assert.deepEqual(read.config, { ...v2, repos: [{ id: 'product', origin: 'https://example.invalid/team/product' }], sources: [{ id: 'specs', origin: 'https://example.invalid/team/product' }] });
+  const view = inspectDomain(read);
+  assert.equal(view.domainVersion, 2);
+  assert.equal(view.repos[0].observed.root, f.root);
+  assert.doesNotMatch(view.repos[0].warnings.join(' '), /origin.*differs/i);
+  assert.equal(view.executionSupported, true);
+  assert.equal(fs.existsSync(path.join(f.root, '.harness')), false);
+});
+
+test('version 2 rejects credentials and ambiguous identity or binding shapes', async t => {
+  const cases = [
+    v => { v.repos[0].origin = 'https://reader:private-password@example.invalid/product.git'; },
+    v => { v.repos[0].origin = '//reader:private-password@example.invalid/product.git'; },
+    v => { v.repos[0].origin = 'https://example.invalid/product.git?token=private-password'; },
+    v => { v.repos[0].origin = 'reader:private-password@example.invalid:product.git'; },
+    v => { v.repos[0].local_identity = { id: 'local-product', approved: true }; },
+    v => { delete v.repos[0].origin; v.repos[0].local_identity = { id: 'local-product', approved: false }; },
+    v => { v.bindings.repos.unknown = v.bindings.repos.product; },
+    v => { delete v.bindings.sources.specs; },
+    v => { v.sources.push({ ...v.sources[0] }); },
+    v => { v.shared_specs[0].repo = 'product'; },
+    v => { v.shared_specs[0].path = '../spec.md'; },
+    v => { v.shared_conventions = [{ source: 'specs', path: 'spec.md', authority: 'unsupported' }]; },
+  ];
+  for (let i = 0; i < cases.length; i++) await t.test(`invalid executable config ${i + 1}`, child => {
+    const f = fixture(child);
+    const v2 = { domain_version: 2, name: 'catalog', repos: [{ id: 'product', origin: f.config.repos[0].origin }], sources: [{ id: 'specs', origin: f.config.repos[0].origin }], bindings: { repos: { product: f.root }, sources: { specs: f.root } }, shared_specs: [{ source: 'specs', path: 'spec.md' }] };
+    cases[i](v2);
+    f.write(v2);
+    assert.throws(() => readDomain('catalog', { home: f.home }), /domain|identity|binding|credential|origin|authority|source|reference/i);
+  });
+});
+
+test('executable SSH identities normalize transport usernames without persisting them', t => {
+  const f = fixture(t);
+  const v2 = { domain_version: 2, name: 'catalog', repos: [{ id: 'product', origin: 'ssh://git@example.invalid/team/product.git' }], sources: [], bindings: { repos: { product: f.root }, sources: {} } };
+  f.write(v2);
+  assert.equal(readDomain('catalog', { home: f.home }).config.repos[0].origin, 'ssh://example.invalid/team/product');
+  v2.repos[0].origin = 'ssh://reader:private-password@example.invalid/team/product.git';
+  f.write(v2);
+  assert.throws(() => readDomain('catalog', { home: f.home }), /credential/i);
 });

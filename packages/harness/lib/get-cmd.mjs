@@ -6,6 +6,7 @@ import { safeResolveUnderRoot } from './path-safe.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 import { getCorpusRoot } from './assets.mjs';
 import { externalPlansDir } from './project-layout.mjs';
+import { domainContextOf, planRecordRoot } from './domain-context.mjs';
 
 const PACKAGED_REL = /^(skills|agents|instructions)\//;
 
@@ -31,7 +32,7 @@ function resolveReadPointer(fullPath, workspace, copilotHome, home) {
   const roots = [{ root: workspace, allow: () => true },
     { root: copilotHome, allow: rel => PACKAGED_REL.test(rel) },
     { root: getCorpusRoot(), allow: rel => PACKAGED_REL.test(rel) },
-    { root: externalPlansDir(workspace, { home }), allow: rel => !rel.includes('/') && rel.endsWith('.md') }];
+    { root: externalPlansDir(workspace, { home }), allow: rel => !rel.includes('/') && /\.(?:md|hplan)$/.test(rel) }];
   for (const { root, allow } of roots) {
     if (!root) continue;
     const rel = path.relative(root, fullPath).replace(/\\/g, '/');
@@ -58,7 +59,7 @@ function truncateUtf8(text, maxBytes) {
   return `${excerpt}\n…(truncated)`;
 }
 
-export function runGet({ workspace, copilotHome, flags, home }) {
+export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = null }) {
   const docid = flags.docid;
   const relPath = flags.path;
   const maxLines = flags.lines || GET_DEFAULT_LINES;
@@ -79,7 +80,11 @@ export function runGet({ workspace, copilotHome, flags, home }) {
     fullPath = resolved?.full ?? null;
     readRoot = resolved?.root ?? null;
   } else if (relPath) {
-    const packaged = resolveReadPointer(relPath, workspaceResolved, copilotHome, home || flags.home) || resolvePackagedRel(relPath, copilotHome);
+    let authorized = null;
+    if (authorizedPlan && domainContextOf(authorizedPlan) && path.resolve(relPath) === authorizedPlan.fullPath) {
+      authorized = { fullPath: authorizedPlan.fullPath, readRoot: planRecordRoot(workspaceResolved, authorizedPlan) };
+    }
+    const packaged = authorized || resolveReadPointer(relPath, workspaceResolved, copilotHome, home || flags.home) || resolvePackagedRel(relPath, copilotHome);
     if (packaged) {
       fullPath = packaged.fullPath;
       readRoot = packaged.readRoot;

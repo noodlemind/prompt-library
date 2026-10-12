@@ -19,8 +19,11 @@ import { emptySnapshot, routeWorkspace } from './route.mjs';
 import { shortPlanDocument } from './plan-record.mjs';
 import { bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
 import { planRevision, scopePaths, applyPlanNotes, renderPlanPhases, planState } from './plan-decisions.mjs';
-import { readFileNoFollow } from './fs-safe.mjs';
+import { readFileNoFollow, writeFileContainedExclusive } from './fs-safe.mjs';
 import { locateVerification } from './verification-location.mjs';
+import { authorizeDomainPlan, authorizeProjectPlan, validateDomainContext, domainPlanPath } from './domain-context.mjs';
+import { domainLinkCheck } from './domain-delivery.mjs';
+import { validatePlanSchema } from './plan-schema.mjs';
 
 const TYPES = ['feat', 'fix', 'docs', 'refactor', 'chore'];
 const RISKS = ['green', 'amber', 'red'];
@@ -96,6 +99,11 @@ export function buildPlanSkeleton({
   skillsUsed = [],
   verificationRecipe = null,
   copilotHome = null,
+  planId = null,
+  planSchema = 2,
+  domainParent = null,
+  domainChild = null,
+  domainBinding = null,
 } = {}) {
   const draft = ['open', 'needs-info'].includes(status);
   assertNoPersonalWrite([...(impacted || []), gap?.primitive]);
@@ -117,7 +125,7 @@ export function buildPlanSkeleton({
     scalar(gap.primitive, 'gap', { required: true });
   }
 
-  const fileName = `${date}-${type}-${slug}-plan.md`;
+  const fileName = `${date}-${type}-${slug}-plan.${planSchema >= 3 ? 'hplan' : 'md'}`;
   const rel = plansBase ? path.join(plansBase, plansRel, fileName) : `${plansRel}/${fileName}`;
   const impactedList = impacted.length ? impacted.slice() : gap?.primitive ? [gap.primitive] : [];
   const primitive = impactedList.some(isPrimitivePath) || isPrimitivePath(gap?.primitive);
@@ -127,8 +135,11 @@ export function buildPlanSkeleton({
   const heading = title || slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
   const frontmatter = {
-    plan_schema: 2,
-    plan_id: randomUUID(),
+    plan_schema: planSchema,
+    plan_id: planId || randomUUID(),
+    ...(domainParent ? { domain_parent: domainParent } : {}),
+    ...(domainChild ? { domain_child: domainChild } : {}),
+    ...(domainBinding ? { domain_binding: domainBinding } : {}),
     intent_source_policy: 'content-v1',
     title: heading,
     type,
@@ -149,7 +160,7 @@ export function buildPlanSkeleton({
     ...(routing ? { routing } : {}),
     ...(domains?.length ? { domains } : {}),
     ...(playbook ? { playbook, playbook_binding: bindPlaybook(playbook, { copilotHome }) } : {}),
-    ...(intentSources?.length ? { intent_sources: intentSources } : {}),
+    ...(planSchema >= 3 || intentSources?.length ? { intent_sources: intentSources } : {}),
     capability_gaps: gap
       ? [{ id: gap.id, class: 'hard', fulfillment: 'proposed', primitive: gap.primitive }]
       : [],
@@ -159,7 +170,7 @@ export function buildPlanSkeleton({
     ? `\n## Primitive Governance\n\n- Primitive classification: ${classify(impactedList.find(isPrimitivePath) || gap?.primitive || '')}\n- Existing-capability overlap analysis: reviewed existing primitives; none cover this need (refine with specifics).\n- Intended artifact structure: \`${impactedList.find(isPrimitivePath) || gap?.primitive}\` with frontmatter and body per the template.\n- Trigger and negative-trigger implications: triggers on this workflow; does not trigger for unrelated edits (refine).\n- Verification expectations: ${check} confirms the artifact is well-formed.\n- Registry and documentation impact: update the inventory; no registry entry needed unless externally shared (refine).\n`
     : '';
 
-  const impactedLines = impactedList.length ? impactedList.map((f) => `- \`${f}\``).join('\n') : '- `TODO: add the files this plan will change`';
+  const impactedLines = domainParent ? 'The coordinator grants no product file edits.' : impactedList.length ? impactedList.map((f) => `- \`${f}\``).join('\n') : '- `TODO: add the files this plan will change`';
   const acLines = acs.map((ac) => `- [ ] **${ac.id}** ${ac.text}`).join('\n');
 
   let content = `---
@@ -227,6 +238,39 @@ Implementation has not started.
   content = applyPlanNotes(content, notes);
 
   return { path: rel, content };
+}
+
+export function createFullPlan({ workspace, home = harnessGlobalHome(), domainContext = null, decision, planId = null, copilotHome = null, dryRun = false }) {
+  if (!decision || decision.format !== 'full' || decision.version !== 1 || !Array.isArray(decision.acceptance) || !decision.acceptance.length) throw new Error('plan-new: full authored creation decision required');
+  const parent = decision.domain_parent, child = decision.domain_child;
+  const extended = Boolean(parent || child || decision.domain_binding);
+  if (parent && decision.status !== undefined && decision.status !== 'planned') throw new Error('plan-new: accepted domain parents are created locked in planned state');
+  if (extended && (Boolean(parent) === Boolean(child) || !decision.domain_binding || !planId)) throw new Error('plan-new: domain plans require one authority, a binding and reserved UUID');
+  const target = parent ? { base: validateDomainContext(domainContext, workspace).root, dirRel: 'plans' } : plansWriteTarget(workspace, { home });
+  const generated = buildPlanSkeleton({
+    type: decision.type || 'feat', slug: decision.slug || shortSlug(decision.goal), title: decision.title, intent: decision.goal,
+    date: decision.date || new Date().toISOString().slice(0, 10), impacted: decision.scope || [], criteria: decision.acceptance,
+    risk: decision.risk || 'green', status: decision.status || (parent ? 'planned' : 'open'), check: decision.check, constraints: decision.constraints || [],
+    notes: decision.notes || {}, phases: decision.phases, outputs: decision.outputs, skillsUsed: decision.skillsUsed || [],
+    playbook: decision.playbook, verificationRecipe: decision.verificationRecipe, copilotHome,
+    plansBase: target.base, plansRel: target.dirRel, planId, planSchema: extended ? 3 : 2,
+    domainParent: parent, domainChild: child, domainBinding: decision.domain_binding,
+    intentSources: bindLockedIntentSources(workspace, decision.intentSources || [], { query: decision.goal }),
+  });
+  let plan = planFromText(generated.content, { path: generated.path, fullPath: generated.path });
+  if (parent) { domainPlanPath(domainContext, generated.path); plan = authorizeDomainPlan(domainContext, plan); }
+  else plan = authorizeProjectPlan(plan, home);
+  const schema = validatePlanSchema(plan);
+  if (!schema.pass) throw new Error(`plan-new: ${schema.checks.filter(check => !check.pass).map(check => check.message).join('; ')}`);
+  if (parent) {
+    const coordinator = domainLinkCheck({ workspace, plan, copilotHome, home });
+    if (!coordinator.pass) throw new Error(`plan-new: ${coordinator.message}`);
+  }
+  if (!dryRun) {
+    fs.mkdirSync(target.base, { recursive: true });
+    if (!writeFileContainedExclusive(target.base, path.relative(target.base, generated.path), generated.content)) throw new Error('plan-new: destination exists or is unsafe');
+  }
+  return { plan, path: generated.path, revision: planRevision(generated.content), created: !dryRun };
 }
 
 /** CLI: parse the plan-new flags, write the skeleton, print the path. */
@@ -463,6 +507,7 @@ async function relockPlan({ workspace, from, dryRun, toStdout, json, classificat
   const plan = loadPlan(workspace, from);
   if (!plan) throw new Error('plan-new: --from plan was not found');
   if (plan.fm.__parseError) throw new Error(`plan-new: --from plan frontmatter is invalid (${plan.fm.__parseError})`);
+  if (Number(plan.fm.plan_schema) >= 3) throw new Error('plan-new: extended plans require an authored plan-update --file decision; legacy --from cannot relock them');
   if (plan.plan_lock) throw new Error('plan-new: --from requires an unlocked plan');
   const original = fs.readFileSync(plan.fullPath, 'utf8');
   const prepared = prepareRouting({

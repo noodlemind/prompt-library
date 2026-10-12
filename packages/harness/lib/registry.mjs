@@ -75,7 +75,7 @@ import { EVENT_TYPE, summarizeArgFlags } from './event-registry.mjs';
 import { createRedactor, redactedJson } from './redact.mjs';
 import { cmdModel, modelResultOf, MODEL_VERBS } from './model-cmd.mjs';
 import { cmdInspect, inspectResultOf, inspectExitFor, INSPECT_VERBS } from './inspect-cmd.mjs';
-import { cmdDomain, domainResultOf, DOMAIN_VERBS } from './domain-cmd.mjs';
+import { cmdDomain, domainResultOf, parseDomainArguments, DOMAIN_VERBS } from './domain-cmd.mjs';
 import { cmdInventory, inventoryResultOf, INVENTORY_VERBS } from './inventory-cmd.mjs';
 
 const REGISTRY = new Map();
@@ -338,7 +338,7 @@ export async function dispatch(argv, ctx = {}) {
     if (message) throw usageError(message);
   }
     ctx.onRunStart?.();
-    const instrumented = entry.instrument !== false;
+    const instrumented = typeof entry.instrument === 'function' ? entry.instrument(rest) : entry.instrument !== false;
   const events = instrumented && ctx.events && typeof ctx.events.withCommand === 'function' ? ctx.events.withCommand(entry.name) : null;
     if (lane === 'json' || lane === 'agent') {
     return dispatchLane(entry, rest, ctx, lane, events);
@@ -1179,19 +1179,44 @@ registerCommand({
 
 registerCommand({
   name: 'domain',
-  summary: 'observe existing local domain membership and checkout drift',
+  summary: 'observe domains and coordinate accepted work through the existing lifecycle',
   group: 'engineer loop',
-  sideEffect: 'read',
-  instrument: false,
+  sideEffect: 'execute',
+  instrument: argv => parseDomainArguments(argv).verb !== 'show',
   workspaceJournal: false,
   capabilities: [],
   outputModes: ['ledger', 'json'],
   surfaces: ['cli', 'tui', 'agent'],
-  usage: '<show> --name <name>',
-  verbs: [{ verb: 'show', summary: 'read version 1 membership without creating execution authority' }],
+  usage: '<show|status|get|plan-new|plan-update|gate|review|verify|compound> --name <name> [--plan <path>]',
+  verbs: [
+    { verb: 'show', summary: 'observe existing membership without creating execution authority', sideEffect: 'read' },
+    { verb: 'status', summary: 'read current child and joint proof status', sideEffect: 'read' },
+    { verb: 'get', summary: 'read a bounded parent plan through its explicit domain context', sideEffect: 'read' },
+    { verb: 'plan-new', summary: 'accept one parent and reserved per-repository plans', sideEffect: 'mutate' },
+    { verb: 'plan-update', summary: 'apply a revision-bound authored parent decision', sideEffect: 'mutate' },
+    { verb: 'gate', summary: 'publish coordination-only gate authority', sideEffect: 'mutate' },
+    { verb: 'review', summary: 'prepare or assemble existing bound review records', sideEffect: 'mutate' },
+    { verb: 'verify', summary: 'verify current children and the actual revision-set contract', sideEffect: 'execute' },
+    { verb: 'compound', summary: 'record the parent learning decision through passed evidence', sideEffect: 'mutate' },
+  ],
   args: {
-    positionals: [{ name: 'verb', description: DOMAIN_VERBS.join('|'), required: true }],
-    flags: [{ name: '--name', type: 'string', valueName: 'name', description: 'existing local domain name', required: true, tui: 'prompt' }],
+    positionals: [{ name: 'verb', description: DOMAIN_VERBS.join('|'), required: true }, { name: 'review-verb', description: 'prepare|assemble for review', required: false }],
+    flags: [
+      { name: '--name', type: 'string', valueName: 'name', description: 'existing local domain name', required: true, tui: 'prompt' },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'parent plan in the selected domain store', tui: 'prompt' },
+      { name: '--file', type: 'string', valueName: 'path', description: 'authored JSON decision, review input or selected review source', repeatable: true, tui: 'prompt' },
+      { name: '--base', type: 'string', valueName: 'ref', description: 'captured comparison revision', tui: 'prompt' },
+      { name: '--phase', type: 'string', valueName: 'name', description: 'implement|verify coordination gate', tui: 'prompt' },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe|warn|enforce', tui: 'prompt' },
+      { name: '--domain', type: 'string', valueName: 'kind', description: 'code|document review criteria', tui: 'prompt' },
+      { name: '--reviewer', type: 'string', valueName: 'id', description: 'additional review perspective', repeatable: true, tui: 'prompt' },
+      { name: '--max-bytes', type: 'string', valueName: 'bytes', description: 'bounded review excerpt budget', tui: 'prompt' },
+      { name: '--offset', type: 'string', valueName: 'line', description: 'first parent-plan line to read', tui: 'prompt' },
+      { name: '--lines', type: 'string', valueName: 'count', description: 'bounded parent-plan line count', tui: 'prompt' },
+      { name: '--packet', type: 'string', valueName: 'id', description: 'prepared review packet identity', tui: 'prompt' },
+      { name: '--learning-decision', type: 'string', valueName: 'path', description: 'verified learning or no-learning JSON decision', tui: 'prompt' },
+      { name: '--validate-completion', type: 'boolean', description: 'validate the current bound parent completion receipt', appliesToVerbs: ['status'], tui: 'cli-only' },
+    ],
   },
   handler: cmdDomain,
   resultOf: domainResultOf,

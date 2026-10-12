@@ -1,8 +1,39 @@
 import fs from 'node:fs';
+import { gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from './paths.mjs';
 import { workspaceStorageId } from './knowledge/store.mjs';
+import { createHash } from 'node:crypto';
+import { readFileNoFollow } from './fs-safe.mjs';
+
+const objectHash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const textHash = value => createHash('sha256').update(value).digest('hex');
+export const conversionPointerRel = full => `.harness/operations/plans/conversions/${objectHash(path.resolve(full))}.json`;
+
+function planConversionRecord(workspace, full, { home } = {}) {
+  try {
+    const root = projectStoreDir(workspace, { home });
+    const old = fs.existsSync(full) ? fs.realpathSync(full) : path.resolve(full);
+    const pointerPath = path.join(root, conversionPointerRel(old));
+    if (!fs.lstatSync(pointerPath, { throwIfNoEntry: false })) return null;
+    const pointer = JSON.parse(readFileNoFollow(pointerPath, { root, maxBytes: 4096 }) || 'null');
+    if (!pointer || pointer.version !== 1 || !/^[a-f0-9]{64}$/.test(pointer.inputDigest || '') || !/^\.harness\/operations\/plans\/[a-f0-9]{64}\.json$/.test(pointer.record || '')) return { state: 'invalid' };
+    const record = JSON.parse(readFileNoFollow(path.join(root, pointer.record), { root, maxBytes: 1024 * 1024 }) || 'null');
+    if (record?.kind !== 'conversion' || record.inputDigest !== pointer.inputDigest || !['pending', 'completed'].includes(record.state) || record.id !== objectHash(record.value) || record.value.oldPath !== old || record.value.newPath !== old.replace(/\.md$/, '.hplan') || typeof record.value.original !== 'string' || textHash(record.value.original) !== record.value.oldRevision || typeof record.value.text !== 'string' || textHash(record.value.text) !== record.value.newRevision) return { state: 'invalid' };
+    return record;
+  } catch { return { state: 'invalid' }; }
+}
+
+export function planConversionPublished(workspace, full, options = {}) {
+  return Boolean(planConversionRecord(workspace, full, options));
+}
+
+export function planConversionPending(workspace, full, options = {}) {
+  if (!full.endsWith('.hplan')) return false;
+  const record = planConversionRecord(workspace, full.replace(/\.hplan$/, '.md'), options);
+  return Boolean(record && record.state !== 'completed');
+}
 
 /** Committed change-contract location (this library, teams that check plans in). */
 export const WORKSPACE_PLANS_REL = 'docs/plans';
@@ -14,7 +45,7 @@ export const SESSION_MAP_REL = '.harness/codebase-map.md';
 export const WORKSPACE_AGENT_CTX_REL = 'docs/agent-context.md';
 export const SESSION_AGENT_CTX_REL = '.harness/agent-context.md';
 
-const PLAN_FILE = /^\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.md$/;
+const PLAN_FILE = /^\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.(?:md|hplan)$/;
 
 export function projectStoreDir(workspace, { home } = {}) {
   return path.join(home || harnessGlobalHome(), 'projects', workspaceStorageId(workspace, { home }));
@@ -47,7 +78,7 @@ function workspaceHasGitDir(workspace) {
 
 function gitSpawn(workspace, args) {
   try {
-    return spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout: 10_000 });
+    return spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout: 10_000, env: gitMetadataEnvironment() });
   } catch (err) {
     return { status: 1, stdout: '', stderr: String(err?.message || err || ''), error: err };
   }
@@ -167,19 +198,20 @@ export function normalizePlanRel(workspace, planPath, { home } = {}) {
     try {
       const full = fs.realpathSync(resolved);
       const root = fs.existsSync(external) ? fs.realpathSync(external) : path.resolve(external);
-      if (contained(root, full) && full.endsWith('.md')) return full;
+      if (contained(root, full) && /\.(?:md|hplan)$/.test(full)) return full;
     } catch {
-      if (contained(path.resolve(external), resolved) && resolved.endsWith('.md')) return resolved;
+      if (contained(path.resolve(external), resolved) && /\.(?:md|hplan)$/.test(resolved)) return resolved;
     }
   }
-  const root = path.resolve(workspace);
+  const root = fs.existsSync(workspace) ? fs.realpathSync(workspace) : path.resolve(workspace);
   const full = path.resolve(root, planPath);
   const rel = path.relative(root, full).replace(/\\/g, '/');
-  if (!rel.startsWith('..') && !path.isAbsolute(rel) && rel.endsWith('.md') && isPlanRel(rel) && !rel.startsWith(`${EXTERNAL_PLANS_REL}/`)) {
+  if (!rel.startsWith('..') && !path.isAbsolute(rel) && /\.(?:md|hplan)$/.test(rel) && isPlanRel(rel) && !rel.startsWith(`${EXTERNAL_PLANS_REL}/`)) {
     if (fileExists(workspace, rel)) return rel;
   }
-  const base = path.posix.basename((rel.endsWith('.md') ? rel : `${path.posix.basename(planPath)}.md`).replace(/\\/g, '/'));
-  if (!base.endsWith('.md')) return null;
+  if (path.isAbsolute(planPath)) return null;
+  const base = path.posix.basename((/\.(?:md|hplan)$/.test(rel) ? rel : `${path.posix.basename(planPath)}.md`).replace(/\\/g, '/'));
+  if (!/\.(?:md|hplan)$/.test(base)) return null;
   for (const dirRel of plansReadRels(workspace)) {
     const candidate = `${dirRel}/${base}`;
     if (fileExists(workspace, candidate)) return candidate;
@@ -195,7 +227,8 @@ export function listPlanRels(workspace, { home } = {}) {
   const take = (dir, nameFor) => {
     if (!fs.existsSync(dir)) return;
     for (const f of fs.readdirSync(dir)) {
-      if (!f.endsWith('.md') || f.startsWith('_') || f === 'README.md') continue;
+      if (!/\.(?:md|hplan)$/.test(f) || f.startsWith('_') || f === 'README.md') continue;
+      if (f.endsWith('.md') && planConversionPublished(workspace, path.join(dir, f), { home })) continue;
       if (seen.has(f)) continue;
       seen.add(f);
       out.push(nameFor(f));

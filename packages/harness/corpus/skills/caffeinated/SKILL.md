@@ -31,3 +31,5 @@ Read the accepted plan, its bound playbook bytes, current prerequisites, and sel
 
 ## Boundaries and recovery
 Do not prepare specs, classify intake again, choose or invent a playbook, lock independently, widen scope, or create another planner. Follow existing authorization and [error-handling-patterns.md](../references/error-handling-patterns.md). In non-interactive use, return the prerequisite or uncertainty to the Engineer; do not guess a gated decision.
+
+For a domain child, keep its accepted parent link and shared binding current. Use ordinary project lifecycle commands in the returned child workspace. The Engineer coordinates the parent through explicit `domain` commands after child completion; this procedure does not grant parent authority or replace joint proof.

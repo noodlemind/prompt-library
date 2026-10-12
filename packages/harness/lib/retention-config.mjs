@@ -6,10 +6,11 @@ import { DEFAULT_RETENTION_DAYS } from './retention.mjs';
 export function retentionDaysFor(workspace, flags = {}) {
   try {
     const copilotHome = resolveCopilotHome(flags.copilotHome);
+    const policyWorkspace = flags.workspace || workspace;
     const config = resolveConfig({
       copilotHome,
-      workspace,
-      projectTrusted: isProjectTrusted({ workspace, copilotHome }),
+      workspace: policyWorkspace,
+      projectTrusted: isProjectTrusted({ workspace: policyWorkspace, copilotHome, home: flags.harnessHome }),
     });
     const days = config.values['runs.retention_days'];
     return Number.isInteger(days) && days > 0 ? days : DEFAULT_RETENTION_DAYS;

@@ -79,6 +79,76 @@ function validateV1(config, name) {
   };
 }
 
+export function normalizeDomainOrigin(value) {
+  if (!boundedText(value, 2048) || value.includes('\\')) throw failure('origin must be a bounded supported repository identity');
+  let parsed;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    try { parsed = new URL(value); } catch { throw failure('origin must be a supported repository identity'); }
+    if (parsed.password || (parsed.username && parsed.protocol !== 'ssh:')) throw failure('credential-bearing domain origins are unsupported; use a credential-free repository identity');
+    if (!['http:', 'https:', 'ssh:', 'git:'].includes(parsed.protocol) || !parsed.hostname || parsed.search || parsed.hash) throw failure('origin must not contain query credentials, fragments or unsupported schemes');
+  } else {
+    const scp = value.match(/^(?:[^@/:\s]+@)?([^@/:\s]+):([^?#\s]+)$/);
+    if (!scp || !scp[2] || scp[2].startsWith('/') || scp[2].includes('@')) throw failure('origin must be a supported repository identity without credentials');
+    try { parsed = new URL(`ssh://${scp[1]}/${scp[2]}`); } catch { throw failure('origin must be a supported repository identity'); }
+  }
+  const pathname = parsed.pathname.replace(/\/+$/, '').replace(/\.git$/, '');
+  if (!pathname || pathname === '/') throw failure('origin must identify a repository path');
+  return `${parsed.protocol}//${parsed.host}${pathname}`;
+}
+
+function descriptors(entries, label, { allowEmpty = false } = {}) {
+  if (!Array.isArray(entries) || entries.length < (allowEmpty ? 0 : 1) || entries.length > MAX_REPOS) throw failure(`${label} must contain ${allowEmpty ? '0' : '1'}-${MAX_REPOS} members`);
+  const ids = new Set();
+  return entries.map(entry => {
+    objectWithKeys(entry, ['id', 'origin', 'local_identity'], `${label} member`);
+    if (!validName(entry.id) || ids.has(entry.id)) throw failure(`${label} IDs must be unique lowercase names`);
+    ids.add(entry.id);
+    if ((entry.origin !== undefined) === (entry.local_identity !== undefined)) throw failure(`${label} member must specify exactly one origin or explicitly approved local identity`);
+    if (entry.origin !== undefined) return { id: entry.id, origin: normalizeDomainOrigin(entry.origin) };
+    objectWithKeys(entry.local_identity, ['id', 'approved'], 'local identity');
+    if (!validName(entry.local_identity.id) || entry.local_identity.approved !== true) throw failure('local identity must have a bounded ID and explicit approved: true');
+    return { id: entry.id, local_identity: { id: entry.local_identity.id, approved: true } };
+  }).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function sourceReferences(refs, sourceIds, label, convention = false) {
+  if (refs === undefined) return [];
+  if (!Array.isArray(refs) || refs.length > MAX_REFERENCES) throw failure(`${label} must contain at most ${MAX_REFERENCES} references`);
+  const seen = new Set();
+  return refs.map(ref => {
+    objectWithKeys(ref, convention ? ['source', 'path', 'authority'] : ['source', 'path'], `${label} reference`);
+    if (!sourceIds.has(ref.source)) throw failure(`${label} reference names an unknown source`);
+    if (!boundedText(ref.path, 1024) || path.isAbsolute(ref.path) || ref.path.includes('\\') || ref.path.includes(':') || ref.path.split('/').some(part => !part || part === '.' || part === '..')) throw failure(`${label} reference must use a safe relative path`);
+    if (convention && !['authoritative', 'advisory'].includes(ref.authority)) throw failure('shared convention authority must be authoritative or advisory');
+    const key = `${ref.source}\0${ref.path}`;
+    if (seen.has(key)) throw failure(`${label} contains a duplicate reference`);
+    seen.add(key);
+    return { source: ref.source, path: ref.path, ...(convention ? { authority: ref.authority } : {}) };
+  }).sort((a, b) => a.source.localeCompare(b.source) || a.path.localeCompare(b.path));
+}
+
+export function logicalDomainContract(config) {
+  objectWithKeys(config, ['domain_version', 'name', 'repos', 'sources', 'bindings', 'shared_specs', 'shared_conventions'], 'domain config');
+  if (config.domain_version !== 2 || !validName(config.name)) throw failure('executable domain authority requires domain_version 2 and a valid name');
+  const repos = descriptors(config.repos, 'repos');
+  const sources = descriptors(config.sources, 'sources', { allowEmpty: true });
+  const sourceIds = new Set(sources.map(source => source.id));
+  return { domain_version: 2, name: config.name, repos, sources, shared_specs: sourceReferences(config.shared_specs, sourceIds, 'shared_specs'), shared_conventions: sourceReferences(config.shared_conventions, sourceIds, 'shared_conventions', true) };
+}
+
+function validateV2(config, name) {
+  const logical = logicalDomainContract(config);
+  if (logical.name !== name) throw failure('config name does not match the selected domain name');
+  objectWithKeys(config.bindings, ['repos', 'sources'], 'domain bindings');
+  const bindings = {};
+  for (const kind of ['repos', 'sources']) {
+    const members = logical[kind];
+    objectWithKeys(config.bindings[kind], members.map(member => member.id), `${kind} bindings`);
+    bindings[kind] = Object.fromEntries(members.map(member => [member.id, safeAbsolute(config.bindings[kind][member.id], `${kind} ${member.id} binding`)]));
+  }
+  return { ...logical, bindings };
+}
+
 export function readDomain(name, { home = harnessGlobalHome() } = {}) {
   if (!validName(name)) throw failure('name must be a lowercase hyphenated name of at most 64 characters');
   const selectedHome = safeAbsolute(path.resolve(home), 'Harness home');
@@ -95,7 +165,8 @@ export function readDomain(name, { home = harnessGlobalHome() } = {}) {
     if (error?.code === 'E_DOMAIN') throw error;
     throw failure('config contains malformed YAML');
   }
-  return { config: validateV1(config, name), configPath, home: selectedHome };
+  if (![1, 2].includes(config?.domain_version)) throw failure('unsupported domain_version; supported versions are 1 and 2');
+  return { config: config.domain_version === 1 ? validateV1(config, name) : validateV2(config, name), configPath, home: selectedHome };
 }
 
 function gitEnvironment() {
@@ -123,10 +194,10 @@ function checksObservation(root) {
   return { path: full, present: Boolean(stat?.isFile()), status: stat ? (stat.isFile() ? 'present' : 'nonregular') : 'missing' };
 }
 
-function inspectRepo(repo) {
+function inspectRepo(repo, { normalizeIdentity = false } = {}) {
   const warnings = [];
   const observed = emptyObserved();
-  const result = { id: repo.id, status: 'unavailable', expected: { origin: repo.origin, root: repo.root }, observed, checks: { path: path.join(repo.root, '.github/harness/checks.yaml'), present: false, status: 'unavailable' }, warnings };
+  const result = { id: repo.id, status: 'unavailable', expected: { origin: repo.origin ?? null, root: repo.root, ...(repo.local_identity ? { local_identity: repo.local_identity } : {}) }, observed, checks: { path: path.join(repo.root, '.github/harness/checks.yaml'), present: false, status: 'unavailable' }, warnings };
   const stat = fs.lstatSync(repo.root, { throwIfNoEntry: false });
   if (!stat) { warnings.push('Local root is missing; repository observation is unavailable.'); return result; }
   if (!stat.isDirectory()) throw failure(`repo ${repo.id} root is not a directory`);
@@ -140,9 +211,9 @@ function inspectRepo(repo) {
   const lines = identity.output.trimEnd().split('\n');
   if (lines.length !== 3 || lines.some(value => !boundedText(value, 4096))) { warnings.push('Git checkout metadata is malformed.'); return result; }
   try {
-    observed.root = fs.realpathSync(lines[0]);
-    observed.gitDir = fs.realpathSync(path.resolve(repo.root, lines[1]));
-    observed.commonDir = fs.realpathSync(path.resolve(repo.root, lines[2]));
+    observed.root = fs.realpathSync(safeAbsolute(lines[0], 'observed checkout root'));
+    observed.gitDir = fs.realpathSync(safeAbsolute(path.resolve(repo.root, lines[1]), 'observed Git directory'));
+    observed.commonDir = fs.realpathSync(safeAbsolute(path.resolve(repo.root, lines[2]), 'observed common Git directory'));
   } catch { warnings.push('Git checkout identity paths are unavailable.'); return result; }
   if (observed.root !== fs.realpathSync(repo.root)) { warnings.push('Configured local root differs from the actual checkout root.'); return result; }
   observed.isLinkedWorktree = observed.gitDir !== observed.commonDir;
@@ -157,8 +228,14 @@ function inspectRepo(repo) {
     const urls = origin.output.slice(0, -1).split('\0');
     if (urls.length === 1 && boundedText(urls[0], 2048)) observed.origin = urls[0];
   }
-  if (observed.origin === null) warnings.push('A single observed origin is unavailable.');
-  else if (observed.origin !== repo.origin) warnings.push('Observed origin differs from expected origin.');
+  if (repo.origin) {
+    let originIdentity = observed.origin;
+    if (normalizeIdentity && originIdentity !== null) {
+      try { originIdentity = normalizeDomainOrigin(originIdentity); } catch { originIdentity = null; }
+    }
+    if (originIdentity === null) warnings.push(normalizeIdentity ? 'A single valid observed origin is unavailable.' : 'A single observed origin is unavailable.');
+    else if (originIdentity !== repo.origin) warnings.push('Observed origin differs from expected origin.');
+  }
   const status = gitObservation(repo.root, prefix, ['status', '--porcelain=v1', '-z', '--untracked-files=normal']);
   if (status?.status === 0 && (!status.output || status.output.endsWith('\0'))) {
     observed.dirty = status.output.length > 0;
@@ -170,14 +247,20 @@ function inspectRepo(repo) {
 
 export function inspectDomain(record) {
   const { config, configPath, home } = record;
-  const repos = config.repos.map(inspectRepo);
+  const executable = config.domain_version === 2;
+  const repos = config.repos.map(repo => inspectRepo(executable ? { ...repo, root: config.bindings.repos[repo.id] } : repo, { normalizeIdentity: executable }));
   return {
     schema: 1, mode: 'domain', verb: 'show', status: 'ok', exitCode: 0,
     name: config.name, domainVersion: config.domain_version, configPath, home,
-    executionSupported: false,
+    executionSupported: executable,
     repos,
-    sharedSpecs: config.shared_specs.map(ref => ({ ...ref, authority: 'advisory' })),
-    sharedConventions: config.shared_conventions.map(ref => ({ ...ref, authority: 'advisory' })),
-    warnings: ['Version 1 membership and shared references are advisory; executable domain delivery is unavailable.'],
+    ...(executable ? { sources: config.sources.map(source => inspectRepo({ ...source, root: config.bindings.sources[source.id] }, { normalizeIdentity: true })) } : {}),
+    sharedSpecs: config.shared_specs.map(ref => ({ ...ref, authority: executable ? 'spec' : 'advisory' })),
+    sharedConventions: config.shared_conventions.map(ref => ({ ...ref, authority: executable ? ref.authority : 'advisory' })),
+    warnings: [executable ? 'Version 2 supports explicit accepted domain plans; these observations alone confer no execution authority.' : 'Version 1 membership and shared references are advisory; executable domain delivery is unavailable.'],
   };
+}
+
+export function observeDomainRepository(root, descriptor) {
+  return inspectRepo({ ...descriptor, root: safeAbsolute(root, `${descriptor.id} checkout root`) }, { normalizeIdentity: true });
 }

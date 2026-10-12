@@ -1,3 +1,5 @@
+import { planRecordRoot, planHome, planTrustHome } from './domain-context.mjs';
+import { domainPrerequisites } from './domain-delivery.mjs';
 import { readEvidence, validateEvidence } from './evidence.mjs';
 import { loadPolicy } from './policy.mjs';
 import { validateReview, recordHash, readReviewRecord, publishReviewRecord } from './review.mjs';
@@ -12,8 +14,11 @@ export function openHardGaps(plan, policy) {
 }
 
 export function proofPrerequisites({ workspace, plan, copilotHome }) {
-  const policy = loadPolicy(workspace, null, { copilotHome });
-  const evidence = readEvidence(workspace, plan.path);
+  const recordRoot = planRecordRoot(workspace, plan);
+  const domain = domainPrerequisites({ workspace, plan, copilotHome, home: planHome(workspace, plan) });
+  if (!domain.pass) return domain;
+  const policy = loadPolicy(workspace, null, { copilotHome, home: planTrustHome(workspace, plan) });
+  const evidence = readEvidence(recordRoot, plan.path);
   const proof = validateEvidence({ workspace, plan, evidence, maxAgeHours: policy.evidenceTtlHours, copilotHome });
   if (!proof.pass) return { pass: false, message: proof.message };
   const review = validateReview({ workspace, plan, copilotHome });
@@ -32,7 +37,7 @@ export function completionPrerequisites(options) {
   if (!proof.pass) return proof;
   const openTasks = [...(options.plan.sections.plan || '').matchAll(/^-\s*\[ \]\s+(.+)$/gm)];
   if (openTasks.length) return { pass: false, message: `${openTasks.length} plan tasks remain open across the full plan; record accepted progress before completion` };
-  const learning = validateLearningDecision(options.workspace, proof.value, { copilotHome: options.copilotHome, home: process.env.HARNESS_HOME });
+  const learning = validateLearningDecision(planRecordRoot(options.workspace, options.plan), proof.value, { workspace: options.workspace, plan: options.plan, copilotHome: options.copilotHome, home: planHome(options.workspace, options.plan) });
   if (!learning.pass) return learning;
   const value = { ...proof.value, version: 2, learning: learning.reference };
   return { pass: true, value, id: recordHash(value), message: 'Current proof, review and completed learning decision are bound' };
@@ -41,24 +46,26 @@ export function completionPrerequisites(options) {
 const completionRel = plan => `.harness/completions/${recordHash(plan.path)}.json`;
 
 export function completeWork({ workspace, plan, copilotHome, dryRun = false }) {
+  const recordRoot = planRecordRoot(workspace, plan);
   const checked = completionPrerequisites({ workspace, plan, copilotHome });
   if (!checked.pass) throw Object.assign(new Error(`Completion blocked: ${checked.message}`), { code: 'E_TARGET', exit: 1 });
   const rel = completionRel(plan);
-  const existing = readReviewRecord(workspace, rel);
+  const existing = readReviewRecord(recordRoot, rel);
   if (existing?.id === checked.id && recordHash(existing.value) === checked.id) return existing;
   const record = { version: 2, id: checked.id, value: checked.value, completedAt: new Date().toISOString(), path: rel };
   if (!dryRun) {
     const fresh = completionPrerequisites({ workspace, plan, copilotHome });
     if (!fresh.pass || fresh.id !== record.id) throw new Error('Work changed before completion publication');
-    publishReviewRecord(workspace, rel, record);
+    publishReviewRecord(recordRoot, rel, record);
   }
   return record;
 }
 
 export function validateCompletion({ workspace, plan, copilotHome }) {
+  const recordRoot = planRecordRoot(workspace, plan);
   const checked = completionPrerequisites({ workspace, plan, copilotHome });
   if (!checked.pass) return checked;
-  const record = readReviewRecord(workspace, completionRel(plan));
+  const record = readReviewRecord(recordRoot, completionRel(plan));
   if (!record || record.version !== 2 || record.id !== checked.id || recordHash(record.value) !== record.id) return { pass: false, message: 'No current bound completion record; record a learning decision and submit harness plan-update --file <complete-decision.json> after review and verify' };
   if (plan.status !== 'done') return { pass: false, message: 'Completion transaction is pending; retry the same harness plan-update --file <complete-decision.json>' };
   return { pass: true, record: record.id, message: 'Current bound completion record validated' };

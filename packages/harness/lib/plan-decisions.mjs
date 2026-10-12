@@ -71,7 +71,7 @@ function markProgress(body, heading, ids, { tasks = false } = {}) {
     return `${prefix}x${suffix}${task}`;
   });
   if (ids.some(id => !found.has(id))) fail(`unknown progress IDs in ${heading}`);
-  return section(body, heading, changed.trim());
+  return body.replace(pattern, (full, captured) => full.slice(0, full.length - captured.length) + changed);
 }
 export function scopePaths(values) {
   if (!Array.isArray(values) || !values.length) fail('scope must be a nonempty list');
@@ -117,7 +117,7 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     fm.intent_sources = plan.plan_lock && fm.intent_sources?.length ? lockIntentSources(workspace, fm.intent_sources, { rehash: true }) : bindLockedIntentSources(workspace, fm.intent_sources || [], { query: fm.intent || readPlanRecord(plan.text)?.goal || '' });
     amendments.push(...fm.intent_sources.map(source => ({ path: source.path, oldHash: sourceHash(plan.fm.intent_sources?.find(entry => sourcePath(entry) === source.path)), newHash: source.sha256 })));
     fm.intent_source_policy = 'content-v1';
-    if (readPlanRecord(plan.text)) fm.plan_format = 'short-v2'; else fm.plan_schema = 2;
+    if (readPlanRecord(plan.text)) fm.plan_format = 'short-v2'; else fm.plan_schema = Math.max(2, Number(fm.plan_schema) || 2);
   } else if (input.action === 'start' && !plan.plan_lock) {
     fm.intent_sources = fm.intent_sources?.length ? lockIntentSources(workspace, fm.intent_sources, { rehash: false }) : bindLockedIntentSources(workspace, fm.intent_sources || [], { query: fm.intent || readPlanRecord(plan.text)?.goal || '' });
   }
@@ -152,8 +152,28 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     }
   }
   if (input.changes !== undefined) {
-    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe', 'playbook', 'workflowNotApplicable', 'skillsUsed'], 'changes');
+    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe', 'playbook', 'workflowNotApplicable', 'skillsUsed', 'domainBinding', 'domainParent', 'domainChild'], 'changes');
     const changes = input.changes, record = readPlanRecord(plan.text);
+    const domainChanges = ['domainBinding', 'domainParent', 'domainChild'].filter(key => changes[key] !== undefined);
+    if (domainChanges.length) {
+      if (record || Number(fm.plan_schema) < 3 || input.authority?.scope !== 'domain-intent') fail('Domain amendments require a full extended plan and explicit domain-intent authority');
+      const oldMembers = fm.domain_binding?.logical?.repos?.map(repo => repo.id).sort();
+      if (changes.domainBinding !== undefined) {
+        const nextMembers = changes.domainBinding?.logical?.repos?.map(repo => repo.id).sort();
+        if (JSON.stringify(oldMembers) !== JSON.stringify(nextMembers)) fail('Membership changes require a fresh domain parent; existing child obligations cannot be removed or silently created');
+        fm.domain_binding = changes.domainBinding;
+      }
+      if (changes.domainParent !== undefined) {
+        if (!fm.domain_parent || changes.domainChild !== undefined) fail('Only a parent can amend its parent obligations');
+        const identity = repos => repos?.map(repo => [repo.id, repo.child_plan_id, repo.child_plan_path]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+        if (JSON.stringify(identity(fm.domain_parent.repos)) !== JSON.stringify(identity(changes.domainParent.repos))) fail('An amendment must preserve every reserved child obligation and identity');
+        fm.domain_parent = changes.domainParent;
+      }
+      if (changes.domainChild !== undefined) {
+        if (!fm.domain_child || changes.domainParent !== undefined || changes.domainChild.repoId !== fm.domain_child.repoId || changes.domainChild.parent_plan_id !== fm.domain_child.parent_plan_id || changes.domainChild.parent_plan_path !== fm.domain_child.parent_plan_path) fail('A child amendment cannot change its reserved parent or repository identity');
+        fm.domain_child = changes.domainChild;
+      }
+    }
     let criterionIds = extractAcceptanceCriteria(plan);
     if (changes.skillsUsed !== undefined) {
       if (record || !Array.isArray(changes.skillsUsed) || !changes.skillsUsed.length || changes.skillsUsed.length > 32 || changes.skillsUsed.some(name => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))) fail('skillsUsed requires bounded skill names on a full plan');

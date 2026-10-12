@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { validateDomainParent } from './domain-delivery.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
@@ -41,11 +42,15 @@ export function validatePlanSchema(plan) {
     };
   }
 
+  const extended = Number(plan.fm.plan_schema) >= 3;
+  const hasExtension = Boolean(plan.fm.domain_parent || plan.fm.domain_child || plan.fm.domain_binding || plan.fm.experiment);
+  const extensionPass = typeof plan.fullPath === 'string' && (extended ? plan.fullPath.endsWith('.hplan') && !plan.fm.plan_format : plan.fullPath.endsWith('.md') && !hasExtension);
+  checks.push({ id: 'schema-extension', pass: extensionPass, message: 'Extended full plans require .hplan; ordinary and short plans require .md' });
   const record = readPlanRecord(plan.text);
   if (record) {
     const criteria = extractAcceptanceCriteria(plan);
     const required = plan.fm.verification?.required;
-    const valid = ['short-v1', 'short-v2'].includes(plan.fm.plan_format)
+    const valid = extensionPass && !plan.fm.domain_parent && !plan.fm.domain_child && !plan.fm.domain_binding && !plan.fm.experiment && ['short-v1', 'short-v2'].includes(plan.fm.plan_format)
       && (plan.fm.plan_format !== 'short-v2' || plan.fm.intent_source_policy === 'content-v1')
       && criteria.length === record.acceptance.length
       && criteria.length > 0
@@ -70,6 +75,19 @@ export function validatePlanSchema(plan) {
     };
   }
 
+  if (version === 3) {
+    const authority = Boolean(plan.fm.domain_parent) !== Boolean(plan.fm.domain_child);
+    let supported = authority && plan.fm.domain_binding?.version === 1 && !plan.fm.experiment;
+    try {
+      if (plan.fm.domain_parent) validateDomainParent(plan.fm.domain_parent, plan.fm.domain_binding);
+      if (plan.fm.domain_child) {
+        const child = plan.fm.domain_child;
+        const keys = ['version', 'name', 'parent_plan_id', 'parent_plan_path', 'parent_contract_digest', 'repoId'];
+        supported &&= Object.keys(child).length === keys.length && Object.keys(child).every(key => keys.includes(key)) && child.version === 1 && child.name === plan.fm.domain_binding.name && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(child.parent_plan_id || '') && /^\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.hplan$/.test(child.parent_plan_path || '') && /^[a-f0-9]{64}$/.test(child.parent_contract_digest || '') && typeof child.repoId === 'string' && plan.fm.domain_binding.logical?.repos?.some(repo => repo.id === child.repoId);
+      }
+    } catch { supported = false; }
+    checks.push({ id: 'domain-contract', pass: supported, message: 'Schema 3 requires exactly one strict parent or child domain contract and accepted domain binding' });
+  }
   for (const field of schema.required_frontmatter) {
     const emptyArrayAllowed = !plan.plan_lock || field === 'capability_gaps';
     const pass = hasValue(plan.fm[field]) || (emptyArrayAllowed && Array.isArray(plan.fm[field]) && plan.fm[field].length === 0);

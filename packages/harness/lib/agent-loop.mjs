@@ -292,7 +292,7 @@ export const DELIVER_AGENT_TOOLS = Object.freeze([
   ...AGENT_TOOLS,
   Object.freeze({
     name: 'harness',
-    description: 'Deliver lifecycle command. argv starts with orient, plan-new, plan-update, gate, review, verify, compound, report, status or trust status. Optional decision stages JSON for --file (compound uses --learning-decision). Workspace and homes stay bound to this run.',
+    description: 'Deliver lifecycle command. argv starts with orient, plan-new, plan-update, gate, review, verify, compound, domain, report, status or trust status. Optional decision stages JSON for --file (compound and domain compound use --learning-decision). Domain commands require an explicit name and retain their own authority checks. Workspace and homes stay bound to this run.',
     schema: { type: 'object', properties: { argv: { type: 'array', items: { type: 'string' } }, decision: { type: 'object' } }, required: ['argv'] },
   }),
 ]);
@@ -567,6 +567,7 @@ export async function dispatchToolCall(call, {
   profile = null,
   harnessHome = null,
   sessionId = null,
+  deliveryState = null,
 } = {}) {
   if (!TOOL_NAMES.has(call.name)) {
     return { dispatched: false, reason: `unknown tool: ${call.name}`, fatal: false };
@@ -580,7 +581,7 @@ export async function dispatchToolCall(call, {
   const input = call.input && typeof call.input === 'object' ? call.input : {};
   const delivery = profile?.id === 'deliver';
   const runHarnessHome = harnessHome || ctx.harnessHome || process.env.HARNESS_HOME || null;
-  const deliveryOptions = { workspace, copilotHome, harnessHome: runHarnessHome, remainingSeconds, sessionId };
+  const deliveryOptions = { workspace, copilotHome, harnessHome: runHarnessHome, remainingSeconds, sessionId, deliveryState };
   if (call.name === 'harness' && !delivery) return { dispatched: false, reason: 'harness lifecycle tool requires the deliver profile', fatal: false };
   if (delivery) {
     const permission = beforeDeliveryTool(call, deliveryOptions);
@@ -600,7 +601,8 @@ export async function dispatchToolCall(call, {
     run = (_argv, runCtx) => runDeliveryCommand(input, command => execResultOf([
       ...base, ...(timeout === null ? [] : ['--timeout', String(timeout)]), '--', process.execPath, DELIVERY_BIN, ...command,
       '--workspace', workspace, ...(copilotHome ? ['--copilot-home', copilotHome] : []),
-      ...(runHarnessHome ? ['--harness-home', runHarnessHome] : []), '--json', '--no-events',
+      ...(runHarnessHome ? ['--harness-home', runHarnessHome] : []),
+      ...(command.includes('--json') ? [] : ['--json']), ...(command.includes('--no-events') ? [] : ['--no-events']),
       ...(command[0] === 'todo' ? ['--verbose'] : []),
     ], runCtx));
     fatalOnThrow = false;
@@ -883,6 +885,7 @@ export async function runAgentLoop({
   });
   let messages = [{ role: 'user', text: task }];
   const turns = [];
+  const deliveryState = { domainPlan: null };
 
   const provider = startProviderFn();
   let stop = null;
@@ -1005,7 +1008,7 @@ export async function runAgentLoop({
           stop = 'verifier-missing';
           detail = 'pass --verify-cmd <argv...> for verifier-shaped success';
         } else if (resolvedProfile.id === 'deliver') {
-          const completed = deliveryCompletion({ workspace, copilotHome, harnessHome: runHarnessHome, remainingSeconds: (deadline - now()) / 1000 });
+          const completed = deliveryCompletion({ workspace, copilotHome, harnessHome: runHarnessHome, remainingSeconds: (deadline - now()) / 1000, domainPlan: deliveryState.domainPlan });
           if (completed.pass) stop = 'done';
           else if (turns.length >= maxTurns || completionBlocked) {
             stop = 'delivery-incomplete';
@@ -1050,6 +1053,7 @@ export async function runAgentLoop({
         profile: resolvedProfile,
         harnessHome: runHarnessHome,
         sessionId: session?.sessionId || null,
+        deliveryState,
       });
 
       const toolResults = [];

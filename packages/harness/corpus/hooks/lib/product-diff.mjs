@@ -1,6 +1,11 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+export function gitMetadataEnvironment(source = process.env) {
+  const env = Object.fromEntries(Object.entries(source).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
+  return { ...env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_TRACE2: '0', GIT_TRACE2_EVENT: '0', GIT_TRACE2_PERF: '0' };
+}
+
 export function readGitArgs(workspace, { timeout = 4000, env = process.env } = {}) {
   const args = ['-c', 'core.fsmonitor=false'];
   const config = spawnSync('git', ['--no-pager', ...args, 'config', '--includes', '--null', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'], {
@@ -27,14 +32,15 @@ export function readGitArgs(workspace, { timeout = 4000, env = process.env } = {
 
 export function readProductDiff(workspace, { base = 'HEAD', planPath, timeout = 4000 } = {}) {
   if (typeof base !== 'string' || !base || base.startsWith('-') || /[\0\r\n]/.test(base)) return null;
-  const prefix = readGitArgs(workspace, { timeout });
+  const env = gitMetadataEnvironment();
+  const prefix = readGitArgs(workspace, { timeout, env });
   if (!prefix) return null;
   const args = [...prefix, 'diff', '--no-ext-diff', '--no-textconv', base, '--', '.', ':(exclude).harness/**'];
   if (planPath) {
     const rel = path.relative(workspace, path.resolve(workspace, planPath)).replace(/\\/g, '/');
     if (rel && !rel.startsWith('../') && !path.isAbsolute(rel)) args.push(`:(literal,exclude)${rel}`);
   }
-  const diff = spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout });
+  const diff = spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout, env });
   if (diff.error || diff.status !== 0) return null;
   return String(diff.stdout || '').split(/\r?\n/).filter(line => !/^index [0-9a-f]+\.\.[0-9a-f]+(?:\s|$)/.test(line)).join('\n');
 }

@@ -25,6 +25,8 @@ export const NON_ADVISORY_CHECK_IDS = new Set([
   'hard-gaps',
   'critical-findings',
   'workspace-stability',
+  'domain-coordinator',
+  'domain-children',
 ]);
 
 function parseCheckSeverities(policy, policyPath) {
@@ -53,10 +55,10 @@ function parseCheckSeverities(policy, policyPath) {
   return severities;
 }
 
-export function loadPolicy(workspace, override = null, { copilotHome = null } = {}) {
+export function loadPolicy(workspace, override = null, { copilotHome = null, home } = {}) {
   const policyPath = path.join(workspace, '.github', 'harness', 'policy.yaml');
   const onDisk = fs.existsSync(policyPath);
-  const trusted = copilotHome === null || isProjectTrusted({ workspace, copilotHome });
+  const trusted = copilotHome === null || isProjectTrusted({ workspace, copilotHome, home });
     let parsed = {};
   let policyError = null;
   const invalid = (message) => {

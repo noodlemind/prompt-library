@@ -575,7 +575,43 @@ export function harnessControlCommand(tokens, workspace) {
   } else return null;
   if (!args.length) return 'help';
   if (HARNESS_CONTROL.has(args[0])) return args[0];
-  if (['inventory', 'domain'].includes(args[0])) {
+  if (args[0] === 'domain') {
+    const verb = args[1], reviewVerb = verb === 'review' ? args[2] : null;
+    const options = {
+      show: [], status: ['--plan'], get: ['--plan', '--offset', '--lines', '--max-bytes'], 'plan-new': ['--file'], 'plan-update': ['--plan', '--file'],
+      gate: ['--plan', '--phase', '--enforcement'],
+      review: ['--plan', '--base', '--domain', '--reviewer', '--file', '--max-bytes', '--packet'],
+      verify: ['--plan', '--base', '--enforcement'], compound: ['--plan', '--learning-decision', '--enforcement'],
+    };
+    if (!Object.hasOwn(options, verb) || (verb === 'review' && !['prepare', 'assemble'].includes(reviewVerb))) return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v', ...(verb === 'status' ? ['--validate-completion'] : [])]);
+    const valued = new Set(['--workspace', '--harness-home', '--copilot-home', '--name', ...options[verb]]);
+    const values = new Map(), seen = new Set();
+    for (let index = verb === 'review' ? 3 : 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('=');
+      const name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      const repeatable = verb === 'review' && reviewVerb === 'prepare' && ['--file', '--reviewer'].includes(name);
+      if (seen.has(key) && !repeatable) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || /[\u0000-\u001f\u007f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    const name = values.get('--name');
+    if (!name || name.length > 64 || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) return null;
+    if (!['show', 'plan-new'].includes(verb) && !values.has('--plan')) return null;
+    if (['plan-new', 'plan-update'].includes(verb) && !values.has('--file')) return null;
+    if (verb === 'review' && reviewVerb === 'assemble' && (!values.has('--packet') || !values.has('--file'))) return null;
+    if (verb === 'compound' && !values.has('--learning-decision')) return null;
+    if (values.has('--phase') && !['implement', 'verify'].includes(values.get('--phase'))) return null;
+    if (values.has('--enforcement') && !['observe', 'warn', 'enforce'].includes(values.get('--enforcement'))) return null;
+    if (values.has('--domain') && !['code', 'document'].includes(values.get('--domain'))) return null;
+    if (values.has('--max-bytes') && !/^\d+$/.test(values.get('--max-bytes'))) return null;
+    return 'domain';
+  }
+  if (args[0] === 'inventory') {
     const inventory = args[0] === 'inventory', verb = args[1];
     if (!(inventory ? ['show', 'refresh'].includes(verb) : verb === 'show')) return null;
     const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);

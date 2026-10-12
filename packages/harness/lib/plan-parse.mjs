@@ -1,7 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import YAML from 'yaml';
-import { externalPlansDir, isPlanRel, listPlanRels as listLayoutPlanRels, normalizePlanRel as normalizeLayoutPlanRel } from './project-layout.mjs';
+import { externalPlansDir, isPlanRel, planConversionPublished, planConversionPending, listPlanRels as listLayoutPlanRels, normalizePlanRel as normalizeLayoutPlanRel } from './project-layout.mjs';
+
+import { authorizeDomainPlan, authorizeProjectPlan, domainPlanPath, domainContextOf, withPlanAuthority, validateDomainContext, planHome } from './domain-context.mjs';
+import { assertNoSymlinkAncestors, readFileNoFollow } from './fs-safe.mjs';
 
 const ACTIVE_STATUSES = new Set(['planned', 'in-progress', 'review']);
 
@@ -10,12 +13,12 @@ function isWithin(root, candidate) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function canonicalPlanPath(workspace, normalized) {
+function canonicalPlanPath(workspace, normalized, { home } = {}) {
   if (path.isAbsolute(normalized)) {
     try {
-      const root = fs.realpathSync(externalPlansDir(workspace));
+      const root = fs.realpathSync(externalPlansDir(workspace, { home }));
       const full = fs.realpathSync(normalized);
-      return isWithin(root, full) && full.endsWith('.md') ? full : null;
+      return isWithin(root, full) && /\.(?:md|hplan)$/.test(full) ? full : null;
     } catch {
       return null;
     }
@@ -38,8 +41,8 @@ function isActivePlan(plan) {
   return Boolean(plan?.plan_lock && ACTIVE_STATUSES.has(plan.status));
 }
 
-export function listPlanRels(workspace) {
-  return listLayoutPlanRels(workspace);
+export function listPlanRels(workspace, options = {}) {
+  return listLayoutPlanRels(workspace, options);
 }
 
 export function parsePlanFrontmatter(text) {
@@ -49,13 +52,42 @@ export function parsePlanFrontmatter(text) {
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
 
-export function loadPlan(workspace, relPath) {
-  const normalized = normalizePlanRel(workspace, relPath);
-  if (!normalized) return null;
-  const full = canonicalPlanPath(workspace, normalized);
-  if (!full || !fs.statSync(full).isFile()) return null;
-  const text = fs.readFileSync(full, 'utf8');
-  return planFromText(text, { path: normalized, fullPath: full });
+export function loadPlan(workspace, relPath, { home, domainContext } = {}) {
+  try {
+    if (domainContext) {
+      validateDomainContext(domainContext, workspace);
+      const full = domainPlanPath(domainContext, relPath);
+      const text = readFileNoFollow(full, { root: domainContext.root, maxBytes: 1024 * 1024 });
+      if (text === null) return null;
+      const plan = planFromText(text, { path: full, fullPath: full });
+      if (!validExtension(plan)) return null;
+      return authorizeDomainPlan(domainContext, plan);
+    }
+    const normalized = normalizePlanRel(workspace, relPath, { home });
+    if (!normalized) return null;
+    const full = canonicalPlanPath(workspace, normalized, { home });
+    if (!full || !assertNoSymlinkAncestors(path.parse(full).root, path.relative(path.parse(full).root, full))) return null;
+    if (full.endsWith('.md') && planConversionPublished(workspace, full, { home })) return null;
+    if (planConversionPending(workspace, full, { home })) return null;
+    const text = readFileNoFollow(full, { maxBytes: 1024 * 1024 });
+    if (text === null) return null;
+    const plan = planFromText(text, { path: normalized, fullPath: full });
+    return validExtension(plan) && !plan.fm.domain_parent ? authorizeProjectPlan(plan, home) : null;
+  } catch { return null; }
+}
+
+function validExtension(plan) {
+  const extended = Number(plan.fm.plan_schema) >= 3;
+  return extended ? plan.fullPath.endsWith('.hplan') && !plan.fm.plan_format : plan.fullPath.endsWith('.md') && !plan.fm.domain_parent && !plan.fm.domain_child && !plan.fm.domain_binding && !plan.fm.experiment;
+}
+
+export function planWithText(plan, text) {
+  return withPlanAuthority(plan, planFromText(text, { path: plan.path, fullPath: plan.fullPath }));
+}
+
+export function reloadPlan(workspace, plan, { home } = {}) {
+  const loaded = loadPlan(workspace, plan.path, { home: home || planHome(workspace, plan), domainContext: domainContextOf(plan) });
+  return loaded ? withPlanAuthority(plan, loaded) : null;
 }
 
 export function planFromText(text, { path: planPath, fullPath }) {
@@ -91,25 +123,25 @@ export function planFromText(text, { path: planPath, fullPath }) {
   };
 }
 
-export function normalizePlanRel(workspace, planPath) {
-  return normalizeLayoutPlanRel(workspace, planPath);
+export function normalizePlanRel(workspace, planPath, options = {}) {
+  return normalizeLayoutPlanRel(workspace, planPath, options);
 }
 
-export function selectPlan(workspace, { planPath = null, session = null, requireUnique = false } = {}) {
+export function selectPlan(workspace, { planPath = null, session = null, requireUnique = false, home, domainContext } = {}) {
   if (planPath) {
-    const plan = loadPlan(workspace, planPath);
+    const plan = loadPlan(workspace, planPath, { home, domainContext });
     return plan
       ? { plan, error: null }
       : { plan: null, error: `Plan not found under the project store, docs/plans/, or .harness/plans/: ${planPath}` };
   }
 
   if (session?.activePlan) {
-    const plan = loadPlan(workspace, session.activePlan);
+    const plan = loadPlan(workspace, session.activePlan, { home, domainContext });
     if (isActivePlan(plan)) return { plan, error: null };
   }
 
-  const candidates = listPlanRels(workspace)
-    .map((rel) => loadPlan(workspace, rel))
+  const candidates = listPlanRels(workspace, { home })
+    .map((rel) => loadPlan(workspace, rel, { home, domainContext }))
     .filter(isActivePlan);
 
   if (candidates.length === 1) return { plan: candidates[0], error: null };
