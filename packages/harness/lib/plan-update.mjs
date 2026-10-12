@@ -7,13 +7,13 @@ import YAML from 'yaml';
 import { randomUUID } from 'node:crypto';
 import { createStyle, EXIT } from './style.mjs';
 import { redactedJson } from './redact.mjs';
-import { externalPlansDir, planReadDirs, projectStoreDir, conversionPointerRel } from './project-layout.mjs';
+import { externalPlansDir, planReadDirs, projectStoreDir, conversionPointerRel, canonicalPlanFilePath, readPlanConversionGuard } from './project-layout.mjs';
 import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { parseFlags } from './flags.mjs';
 import { loadPlan, parsePlanFrontmatter, planFromText } from './plan-parse.mjs';
 import { completeWork, completionPrerequisites, validateCompletion } from './completion.mjs';
 import { bindLockedIntentSources, lockIntentSources, sourcePath, hashIntentFile, intentSourcesCheck } from './intent-sources.mjs';
-import { readFileNoFollow, assertNoSymlinkAncestors, writeFileContainedExclusive } from './fs-safe.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors, writeFileContainedExclusive, canonicalPath } from './fs-safe.mjs';
 import { applyPlanDecision, validatePlanDecision, planRevision, planState } from './plan-decisions.mjs';
 import { runGate, publishGateSession } from './gate.mjs';
 import { loadPolicy } from './policy.mjs';
@@ -46,7 +46,7 @@ function realDirectory(dir) {
   try {
     const stat = fs.lstatSync(dir);
     if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
-    return fs.realpathSync(dir);
+    return canonicalPath(dir);
   } catch {
     return null;
   }
@@ -141,7 +141,7 @@ export function resolvePlanUpdateFile(workspace, planArg, { home, domainContext 
     throw usage('plan-update: path is outside the plan store');
   }
   if (!listed.isFile() || listed.isSymbolicLink()) throw usage('plan-update: path is outside the plan store');
-  const real = fs.realpathSync(listedPath);
+  const real = canonicalPath(listedPath);
   const base = path.basename(real);
   if (!/\.(?:md|hplan)$/.test(real) || base === 'README.md' || base.startsWith('_')) {
     throw usage('plan-update: path is outside the plan store');
@@ -451,11 +451,24 @@ export function convertFullPlan({ workspace, home = harnessGlobalHome(), domainC
   if (!input || Object.keys(input).some(key => !fields.includes(key)) || input.version !== 1 || input.action !== 'convert' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.id || '') || !/^[a-f0-9]{64}$/.test(input.expect || '') || typeof input.rationale !== 'string' || !input.rationale.trim() || input.authority?.scope !== (experiment ? 'experiment-intent' : 'domain-intent') || typeof input.authority.basis !== 'string' || !input.authority.basis.trim() || Object.keys(input.authority).some(key => !['scope', 'basis'].includes(key)) || !validChanges) throw usage('Conversion requires a revision-bound authored child domain or experiment decision with matching authority');
   const raw = typeof planPath === 'string' && planPath;
   if (!raw || !raw.endsWith('.md')) throw usage('Conversion requires an ordinary full .md plan');
-  const full = path.isAbsolute(raw) ? path.resolve(raw) : raw.includes('/') ? path.resolve(workspace, raw) : path.join(externalPlansDir(workspace, { home }), raw);
-  const roots = planUpdateRoots(workspace, { home }).map(realDirectory).filter(Boolean);
-  const root = roots.find(candidate => contained(candidate, full));
+  const requested = path.isAbsolute(raw) ? path.resolve(raw) : raw.includes('/') ? path.resolve(workspace, raw) : path.join(externalPlansDir(workspace, { home }), raw);
+  const declaredRoots = planUpdateRoots(workspace, { home });
+  const rawRoot = declaredRoots.find(candidate => contained(path.resolve(candidate), requested)) || path.parse(requested).root;
+  if (!assertNoSymlinkAncestors(rawRoot, path.relative(rawRoot, requested))) throw usage('Conversion path is outside the safe project plan store');
+  let full = canonicalPlanFilePath(requested);
+  const roots = declaredRoots.map(realDirectory).filter(Boolean);
+  let root = roots.find(candidate => contained(candidate, full));
   if (!root || !assertNoSymlinkAncestors(root, path.relative(root, full))) throw usage('Conversion path is outside the safe project plan store');
+  const existingGuard = readPlanConversionGuard(workspace, full, { home });
+  if (existingGuard?.legacy || existingGuard?.state === 'invalid') throw usage('Conversion has a legacy, ambiguous or corrupt guard; preserve the existing journal and repair its authority explicitly');
+  if (existingGuard?.value) {
+    full = canonicalPlanFilePath(existingGuard.value.oldPath);
+    root = roots.find(candidate => contained(candidate, full));
+    if (!root || !assertNoSymlinkAncestors(root, path.relative(root, full))) throw usage('Conversion path is outside the safe project plan store');
+  }
   return withPlanUpdateLock(full, () => {
+    const guard = readPlanConversionGuard(workspace, full, { home });
+    if (guard?.legacy || guard?.state === 'invalid') throw usage('Conversion has a legacy, ambiguous or corrupt guard; preserve the existing journal and repair its authority explicitly');
     const recordRoot = projectStoreDir(workspace, { home });
     const rel = `.harness/operations/plans/${reviewHash({ plan: full, operation: input.id })}.json`;
     const prior = readReviewRecord(recordRoot, rel), inputDigest = reviewHash(input);

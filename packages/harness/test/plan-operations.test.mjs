@@ -9,9 +9,238 @@ import YAML from 'yaml';
 import { initGit, writeVersionedPlan, writeChecks } from './helpers/cli-fixtures.mjs';
 import { approveProject } from '../lib/trust.mjs';
 import { planDigest } from '../lib/evidence.mjs';
+import { resolvePlanUpdateFile, convertFullPlan } from '../lib/plan-update.mjs';
+import { readPlanConversionGuard, planConversionPublished, planConversionPending, conversionPointerRel, projectStoreDir } from '../lib/project-layout.mjs';
+import { loadPlan, reloadPlan } from '../lib/plan-parse.mjs';
+import { experimentFixture as conversionFixture, experimentContract } from './helpers/experiment-command-fixtures.mjs';
 
 const bin = path.resolve(import.meta.dirname, '../bin/harness.mjs');
 const hash = value => createHash('sha256').update(value).digest('hex');
+
+test('registered sibling checkouts retain shared legacy in-repo conversion guards without owning sibling mutations', t => {
+  const f = conversionFixture(t, { linked: false });
+  f.git(f.primary, 'remote', 'add', 'origin', 'https://example.test/team/shared-plans.git');
+  const created = f.create({ experiment: undefined, status: 'open' });
+  const old = path.join(f.primary, 'docs/plans', path.basename(created.path));
+  fs.mkdirSync(path.dirname(old), { recursive: true });
+  fs.renameSync(created.path, old);
+  const ordinary = f.create({ experiment: undefined, status: 'open', slug: 'unrelated-ordinary' });
+  const sibling = path.join(f.root, 'registered-sibling');
+  f.git(f.primary, 'worktree', 'add', '--detach', sibling, 'HEAD');
+  assert.equal(projectStoreDir(f.primary, { home: f.home }), projectStoreDir(sibling, { home: f.home }));
+  const input = { version: 1, id: 'linked-legacy-conversion', action: 'convert', expect: hash(fs.readFileSync(old)), rationale: 'Accept the finite JSON obligations.', authority: { scope: 'experiment-intent', basis: 'Explicit accepted conversion fixture.' }, changes: { experiment: experimentContract() } };
+  const unlink = fs.unlinkSync;
+  t.mock.method(fs, 'unlinkSync', file => { if (path.resolve(String(file)) === old) throw new Error('owned retirement interruption'); return unlink(file); });
+  assert.throws(() => convertFullPlan({ workspace: f.primary, home: f.home, planPath: old, input }), /owned retirement interruption/);
+  t.mock.restoreAll();
+  const actual = { primaryGuard: readPlanConversionGuard(f.primary, old, { home: f.home }).state,
+    siblingGuard: readPlanConversionGuard(sibling, old, { home: f.home }).state,
+    primaryReadable: Boolean(loadPlan(f.primary, ordinary.path, { home: f.home })), siblingReadable: Boolean(loadPlan(sibling, ordinary.path, { home: f.home })) };
+  t.diagnostic(JSON.stringify(actual));
+  assert.deepEqual(actual, { primaryGuard: 'pending', siblingGuard: 'pending', primaryReadable: true, siblingReadable: true });
+  const root = projectStoreDir(f.primary, { home: f.home }), pointerFile = path.join(root, conversionPointerRel(old));
+  const pointer = JSON.parse(fs.readFileSync(pointerFile)), journal = path.join(root, pointer.record);
+  const saved = [fs.readFileSync(old), fs.readFileSync(pointerFile), fs.readFileSync(journal)];
+  assert.throws(() => convertFullPlan({ workspace: sibling, home: f.home, planPath: old, input }), /outside.*safe.*store/);
+  assert.deepEqual([fs.readFileSync(old), fs.readFileSync(pointerFile), fs.readFileSync(journal)], saved);
+  const hidden = path.join(f.root, '.hidden');
+  f.git(f.primary, 'worktree', 'add', '--detach', hidden, 'HEAD');
+  const hiddenGitDir = f.git(hidden, 'rev-parse', '--absolute-git-dir').trim();
+  const dottedGitDir = path.join(path.dirname(hiddenGitDir), '.hidden');
+  if (hiddenGitDir !== dottedGitDir) {
+    fs.renameSync(hiddenGitDir, dottedGitDir);
+    fs.writeFileSync(path.join(hidden, '.git'), `gitdir: ${dottedGitDir}\n`);
+  }
+  assert.equal(readPlanConversionGuard(hidden, old, { home: f.home }).state, 'pending');
+  assert.ok(loadPlan(hidden, ordinary.path, { home: f.home }));
+  const clone = path.join(f.root, 'same-origin-clone');
+  f.git(f.primary, 'clone', '--quiet', f.primary, clone);
+  f.git(clone, 'remote', 'set-url', 'origin', 'https://example.test/team/shared-plans.git');
+  assert.equal(projectStoreDir(clone, { home: f.home }), root);
+  assert.equal(readPlanConversionGuard(clone, old, { home: f.home }).state, 'invalid');
+  const copied = path.join(f.root, 'unregistered-copy');
+  fs.cpSync(sibling, copied, { recursive: true });
+  assert.equal(readPlanConversionGuard(copied, old, { home: f.home }).state, 'invalid');
+  if (sibling.startsWith('/private/var/')) {
+    const callerAlias = sibling.slice('/private'.length);
+    assert.equal(readPlanConversionGuard(callerAlias, old, { home: f.home }).state, 'pending');
+    assert.ok(loadPlan(callerAlias, ordinary.path, { home: f.home }));
+  }
+  const customParent = path.join(f.root, 'custom-parent');
+  fs.symlinkSync(f.root, customParent, process.platform === 'win32' ? 'junction' : 'dir');
+  const gitDir = f.git(sibling, 'rev-parse', '--absolute-git-dir').trim();
+  const backlink = path.join(gitDir, 'gitdir'), backlinkBytes = fs.readFileSync(backlink);
+  try {
+    fs.writeFileSync(backlink, `${path.join(customParent, 'registered-sibling', '.git')}\n`);
+    assert.equal(readPlanConversionGuard(sibling, old, { home: f.home }).state, 'invalid');
+    assert.equal(loadPlan(sibling, ordinary.path, { home: f.home }), null);
+    assert.deepEqual([fs.readFileSync(old), fs.readFileSync(pointerFile), fs.readFileSync(journal)], saved);
+  } finally { fs.writeFileSync(backlink, backlinkBytes); }
+});
+
+for (const pending of [true, false]) test(`retired conversion case aliases reuse the ${pending ? 'pending' : 'completed'} canonical operation identity`, t => {
+  const f = conversionFixture(t, { linked: false });
+  const created = f.create({ experiment: undefined, status: 'open' }), old = created.path;
+  const alias = path.join(path.dirname(old), path.basename(old).replace('bounded', 'BOUNDED'));
+  assert.notEqual(alias, old);
+  const input = { version: 1, id: 'case-replay-conversion', action: 'convert', expect: hash(fs.readFileSync(old)), rationale: 'Accept the finite JSON obligations.', authority: { scope: 'experiment-intent', basis: 'Explicit accepted conversion fixture.' }, changes: { experiment: experimentContract() } };
+  if (pending) {
+    const unlink = fs.unlinkSync;
+    t.mock.method(fs, 'unlinkSync', file => { const result = unlink(file); if (path.resolve(String(file)) === old) throw new Error('owned post-retirement interruption'); return result; });
+    assert.throws(() => convertFullPlan({ workspace: f.primary, home: f.home, planPath: old, input }), /owned post-retirement interruption/);
+    t.mock.restoreAll();
+  } else convertFullPlan({ workspace: f.primary, home: f.home, planPath: old, input });
+  assert.equal(fs.existsSync(old), false);
+  const root = projectStoreDir(f.primary, { home: f.home }), pointerFile = path.join(root, conversionPointerRel(old));
+  const pointerBytes = fs.readFileSync(pointerFile), pointer = JSON.parse(pointerBytes), journalFile = path.join(root, pointer.record);
+  const before = JSON.parse(fs.readFileSync(journalFile)), files = fs.readdirSync(path.dirname(journalFile)).sort();
+  const relative = path.relative;
+  t.mock.method(path, 'relative', (from, to) => relative(from === alias ? old : from, to === alias ? old : to));
+  assert.equal(readPlanConversionGuard(f.primary, alias, { home: f.home }).legacy, false);
+  const replay = convertFullPlan({ workspace: f.primary, home: f.home, planPath: alias, input });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.path, old.replace(/\.md$/, '.hplan'));
+  assert.equal(replay.previousPath, old);
+  assert.deepEqual(fs.readFileSync(pointerFile), pointerBytes);
+  const after = JSON.parse(fs.readFileSync(journalFile));
+  assert.equal(after.state, 'completed');
+  assert.deepEqual(after.value, before.value);
+  assert.equal(after.id, before.id);
+  assert.deepEqual(fs.readdirSync(path.dirname(journalFile)).sort(), files);
+  assert.equal(loadPlan(f.primary, replay.path, { home: f.home }).fm.plan_id, before.value.planId);
+  assert.throws(() => convertFullPlan({ workspace: f.primary, home: f.home, planPath: alias, input: { ...input, rationale: 'Different authored payload.' } }), /reserved|different|corrupt/);
+  assert.throws(() => convertFullPlan({ workspace: f.primary, home: f.home, planPath: alias, input: { ...input, id: 'another-conversion-operation' } }), /reserved|different|corrupt/);
+  assert.deepEqual(fs.readFileSync(pointerFile), pointerBytes);
+  assert.deepEqual(JSON.parse(fs.readFileSync(journalFile)), after);
+});
+
+test('managed mutator and legacy in-repo reader share native physical plan identity', t => {
+  const f = fixture(t), realpath = fs.realpathSync, native = realpath.native;
+  const canonical = native(f.full);
+  t.mock.method(fs, 'realpathSync', (file, ...args) => path.resolve(String(file)) === path.resolve(f.full)
+    ? path.join(path.parse(canonical).root, 'LEGACY~1', path.basename(canonical))
+    : realpath(file, ...args));
+  fs.realpathSync.native = native;
+  assert.equal(resolvePlanUpdateFile(f.ws, f.full), canonical);
+  const plan = loadPlan(f.ws, f.plan);
+  assert.ok(plan);
+  assert.equal(reloadPlan(f.ws, plan).text, f.text());
+});
+
+function legacyConversionGuardFixture(t) {
+  const f = fixture(t), native = fs.realpathSync.native, old = native(f.full), home = path.join(native(f.ws), '.harness/home');
+  const root = projectStoreDir(f.ws, { home });
+  const dir = path.join(root, '.harness/operations/plans/conversions');
+  fs.mkdirSync(dir, { recursive: true });
+  const aliases = new Map();
+  t.mock.method(fs.realpathSync, 'native', (file, ...args) => aliases.get(path.resolve(String(file))) || native(file, ...args));
+  const input = { version: 1, id: 'legacy-convert', action: 'convert', expect: hash(f.text()), rationale: 'Preserve accepted conversion.', authority: { scope: 'domain-intent', basis: 'Explicit accepted contract.' }, changes: { domain_child: {}, domain_binding: {} } };
+  const create = suffix => {
+    const aliasDir = path.join(native(f.ws), `LEGACY~${suffix}`), alias = path.join(aliasDir, path.basename(old));
+    aliases.set(aliasDir, path.dirname(old));
+    const value = { oldPath: alias, newPath: alias.replace(/\.md$/, '.hplan'), original: f.text(), oldRevision: hash(f.text()), text: f.text().replace('plan_schema: 2', 'plan_schema: 3'), planId: '82f4c438-791a-44d2-ad45-dd56c17b2f9b' };
+    value.newRevision = hash(value.text);
+    const recordRel = `.harness/operations/plans/${hash(`legacy-journal-${suffix}`)}.json`;
+    const record = { version: 1, kind: 'conversion', state: 'pending', inputDigest: hash(JSON.stringify(input)), id: hash(JSON.stringify(value)), value, result: {} };
+    const pointer = path.join(dir, `${hash(JSON.stringify(path.resolve(alias)))}.json`), journal = path.join(root, recordRel);
+    fs.writeFileSync(pointer, JSON.stringify({ version: 1, record: recordRel, inputDigest: record.inputDigest }));
+    fs.writeFileSync(journal, JSON.stringify(record));
+    return { pointer, journal, record };
+  };
+  const files = create('1');
+  return { ...f, home, root, dir, old, input, create, aliases, ...files };
+}
+
+for (const retired of [false, true]) test(`legacy alias conversion guard survives ${retired ? 'source retirement' : 'an existing source'} without key migration`, t => {
+  const f = legacyConversionGuardFixture(t), saved = [fs.readFileSync(f.pointer), fs.readFileSync(f.journal)];
+  if (retired) fs.unlinkSync(f.old);
+  const guard = readPlanConversionGuard(f.ws, f.old, { home: f.home });
+  assert.equal(guard.state, 'pending');
+  assert.equal(guard.legacy, true);
+  assert.equal(planConversionPublished(f.ws, f.old, { home: f.home }), true);
+  assert.equal(planConversionPending(f.ws, f.old.replace(/\.md$/, '.hplan'), { home: f.home }), true);
+  assert.equal(loadPlan(f.ws, f.old, { home: f.home }), null);
+  assert.throws(() => convertFullPlan({ workspace: f.ws, home: f.home, planPath: f.old, input: f.input }), /legacy|repair.*authority/);
+  assert.equal(fs.existsSync(path.join(f.root, conversionPointerRel(f.old))), false);
+  assert.deepEqual([fs.readFileSync(f.pointer), fs.readFileSync(f.journal)], saved);
+});
+
+for (const state of ['pending', 'completed']) test(`a retired short-basename ${state} conversion cannot prove an unrelated filename`, t => {
+  const f = legacyConversionGuardFixture(t);
+  fs.unlinkSync(f.old);
+  const short = path.join(path.dirname(f.old), 'EXISTI~1.md');
+  f.record.state = state;
+  f.record.value.oldPath = short;
+  f.record.value.newPath = short.replace(/\.md$/, '.hplan');
+  f.record.id = hash(JSON.stringify(f.record.value));
+  fs.writeFileSync(f.journal, JSON.stringify(f.record));
+  const pointer = path.join(f.dir, `${hash(JSON.stringify(path.resolve(short)))}.json`);
+  fs.renameSync(f.pointer, pointer);
+  if (state === 'completed') fs.writeFileSync(f.record.value.newPath, f.record.value.text);
+  const saved = [fs.readFileSync(pointer), fs.readFileSync(f.journal)];
+  for (const query of [short, f.old]) {
+    assert.equal(readPlanConversionGuard(f.ws, query, { home: f.home }).state, 'invalid');
+    assert.equal(planConversionPublished(f.ws, query, { home: f.home }), true);
+    assert.equal(planConversionPending(f.ws, query.replace(/\.md$/, '.hplan'), { home: f.home }), true);
+    assert.throws(() => convertFullPlan({ workspace: f.ws, home: f.home, planPath: query, input: f.input }), /legacy|corrupt|repair.*authority/);
+  }
+  assert.deepEqual([fs.readFileSync(pointer), fs.readFileSync(f.journal)], saved);
+});
+
+for (const problem of ['missing-journal', 'corrupt-journal', 'unreadable-journal', 'nonregular-pointer', 'oversized-pointer', 'outside-journal', 'outside-plan-namespace', 'unresolvable-recorded-parent', 'multiple-guards', 'guard-cap']) test(`ambiguous legacy conversion ownership fails closed (${problem})`, t => {
+  const f = legacyConversionGuardFixture(t);
+  if (problem === 'missing-journal') fs.unlinkSync(f.journal);
+  if (problem === 'corrupt-journal') fs.writeFileSync(f.journal, '{');
+  if (problem === 'unreadable-journal') {
+    const open = fs.openSync;
+    t.mock.method(fs, 'openSync', (file, ...args) => { if (path.resolve(String(file)) === f.journal) throw Object.assign(new Error('owned journal unreadable'), { code: 'EACCES' }); return open(file, ...args); });
+  }
+  if (problem === 'nonregular-pointer') { fs.unlinkSync(f.pointer); fs.mkdirSync(f.pointer); }
+  if (problem === 'oversized-pointer') fs.writeFileSync(f.pointer, 'A'.repeat(4097));
+  if (problem === 'outside-journal') fs.writeFileSync(f.pointer, JSON.stringify({ version: 1, record: '../outside.json', inputDigest: f.record.inputDigest }));
+  if (problem === 'outside-plan-namespace') {
+    const outside = path.join(fs.realpathSync.native(f.ws), 'outside-plan.md');
+    fs.writeFileSync(outside, f.text());
+    f.record.value.oldPath = outside;
+    f.record.value.newPath = outside.replace(/\.md$/, '.hplan');
+    f.record.id = hash(JSON.stringify(f.record.value));
+    fs.writeFileSync(f.journal, JSON.stringify(f.record));
+    const pointer = path.join(f.dir, `${hash(JSON.stringify(path.resolve(outside)))}.json`);
+    fs.renameSync(f.pointer, pointer);
+    f.pointer = pointer;
+  }
+  if (problem === 'unresolvable-recorded-parent') f.aliases.clear();
+  if (problem === 'multiple-guards') f.create('2');
+  if (problem === 'guard-cap') for (let i = 0; i < 256; i++) fs.writeFileSync(path.join(f.dir, `${hash(`guard-${i}`)}.json`), '{}');
+  const before = fs.readdirSync(f.dir).map(name => [name, fs.lstatSync(path.join(f.dir, name)).isFile() ? fs.readFileSync(path.join(f.dir, name)) : null]);
+  assert.equal(readPlanConversionGuard(f.ws, f.old, { home: f.home }).state, 'invalid');
+  assert.equal(planConversionPublished(f.ws, f.old, { home: f.home }), true);
+  assert.equal(planConversionPending(f.ws, f.old.replace(/\.md$/, '.hplan'), { home: f.home }), true);
+  assert.throws(() => convertFullPlan({ workspace: f.ws, home: f.home, planPath: f.old, input: f.input }), /legacy|corrupt|repair.*authority/);
+  assert.deepEqual(fs.readdirSync(f.dir).map(name => [name, fs.lstatSync(path.join(f.dir, name)).isFile() ? fs.readFileSync(path.join(f.dir, name)) : null]), before);
+});
+
+test('a canonical reservation cannot hide a later legacy guard with no journal', t => {
+  const f = legacyConversionGuardFixture(t), expected = path.join(f.root, conversionPointerRel(f.old));
+  fs.writeFileSync(expected, JSON.stringify({ version: 1, record: `.harness/operations/plans/${hash('canonical-missing-journal')}.json`, inputDigest: f.record.inputDigest }));
+  fs.unlinkSync(f.journal);
+  const readdir = fs.readdirSync;
+  t.mock.method(fs, 'readdirSync', (dir, ...args) => {
+    const entries = readdir(dir, ...args);
+    return path.resolve(String(dir)) === f.dir ? [path.basename(expected), ...entries.filter(name => name !== path.basename(expected))] : entries;
+  });
+  const before = fs.readFileSync(expected);
+  assert.equal(readPlanConversionGuard(f.ws, f.old, { home: f.home }).state, 'invalid');
+  assert.throws(() => convertFullPlan({ workspace: f.ws, home: f.home, planPath: f.old, input: f.input }), /legacy|corrupt|repair.*authority/);
+  assert.deepEqual(fs.readFileSync(expected), before);
+});
+
+test('an unresolvable retired conversion parent remains unavailable rather than unguarded', t => {
+  const f = legacyConversionGuardFixture(t);
+  fs.rmSync(path.dirname(f.old), { recursive: true });
+  assert.equal(readPlanConversionGuard(f.ws, f.old, { home: f.home }).state, 'invalid');
+  assert.equal(planConversionPublished(f.ws, f.old, { home: f.home }), true);
+});
 
 test('accepted checkbox progress preserves exact section whitespace and the semantic contract', t => {
   const f = fixture(t);

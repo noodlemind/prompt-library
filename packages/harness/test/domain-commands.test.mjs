@@ -94,11 +94,15 @@ function cliFixture(t) {
   }
   fs.mkdirSync(path.join(home, 'domains'), { recursive: true });
   fs.writeFileSync(path.join(home, 'domains/catalogue.yaml'), YAML.stringify({ domain_version: 2, name: 'catalogue', repos: ['producer', 'consumer'].map(id => ({ id, origin: `https://example.invalid/${id}.git` })), sources: [], bindings: { repos: { producer: roots.producer, consumer: roots.consumer }, sources: {} }, shared_specs: [], shared_conventions: [] }));
-  const cli = (command, ...args) => spawnSync(process.execPath, [bin, command, ...args, '--workspace', roots.coordinator, '--harness-home', home, '--copilot-home', copilotHome, '--json'], { encoding: 'utf8', timeout: 30_000 });
+  const cli = (command, ...args) => {
+    const started = Date.now();
+    const result = spawnSync(process.execPath, [bin, command, ...args, '--workspace', roots.coordinator, '--harness-home', home, '--copilot-home', copilotHome, '--json'], { encoding: 'utf8', timeout: 30_000 });
+    return { ...result, diagnostic: { elapsedMs: Date.now() - started, timeoutMs: 30_000, status: result.status, signal: result.signal, errorCode: result.error?.code || null } };
+  };
   const input = path.join(root, 'decision.json');
   const invoke = (...args) => {
     const result = cli('domain', ...args, '--name', 'catalogue');
-    assert.equal(result.status, 0, `${args.join(' ')}: ${result.stdout} ${result.stderr}`);
+    assert.equal(result.status, 0, `${args.join(' ')}: ${JSON.stringify(result.diagnostic)} ${result.stdout} ${result.stderr}`);
     return JSON.parse(result.stdout);
   };
   return { root, roots, home, copilotHome, cli, invoke, input, git };
@@ -158,7 +162,8 @@ test('actual parent CLI routes review, proof, learning, completion and journals 
   assert.equal(plan.startsWith(path.join(domainRoot, 'plans') + path.sep), true);
   const op = (id, action, extra = {}) => {
     fs.writeFileSync(f.input, JSON.stringify({ version: 1, id, action, expect: digest(fs.readFileSync(plan)), ...extra }));
-    return f.invoke('plan-update', '--plan', plan, '--file', f.input);
+    try { return f.invoke('plan-update', '--plan', plan, '--file', f.input); }
+    catch (error) { error.message = `${id}/${action}: ${error.message}`; throw error; }
   };
   await native(['plan-update', '--plan', plan], { version: 1, id: 'cli-start', action: 'start', expect: digest(fs.readFileSync(plan)) });
   assert.equal(f.invoke('gate', '--plan', plan, '--phase', 'implement').pass, true);

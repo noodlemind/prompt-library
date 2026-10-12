@@ -125,7 +125,8 @@ function priorCli(f) {
   fs.mkdirSync(root);
   const artifact = path.join(import.meta.dirname, 'fixtures/prior-harness-0.10.0-af448f3.tgz');
   assert.equal(hash(fs.readFileSync(artifact)), '4fd0e5075a18e53a02c45a59347ccb24a6ce4853808831e46c70f78dd3bd2bb9');
-  const extracted = spawnSync('tar', ['-xzf', path.basename(artifact), '-C', root], { cwd: path.dirname(artifact), encoding: 'utf8', timeout: 15000 });
+  fs.copyFileSync(artifact, path.join(root, path.basename(artifact)));
+  const extracted = spawnSync('tar', ['-xzf', path.basename(artifact)], { cwd: root, encoding: 'utf8', timeout: 15000 });
   assert.equal(extracted.status, 0, JSON.stringify({ status: extracted.status, signal: extracted.signal, error: extracted.error?.code, stderr: extracted.stderr }));
   return (...args) => spawnSync(process.execPath, [path.join(root, 'package/bin/harness.mjs'), ...args, '--workspace', f.workspace, '--json', '--no-events'], { cwd: f.workspace, encoding: 'utf8', timeout: 15000, env: { ...process.env, HARNESS_HOME: f.home, COPILOT_HOME: path.join(root, 'copilot') } });
 }

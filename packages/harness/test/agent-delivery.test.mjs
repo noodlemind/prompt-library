@@ -152,8 +152,14 @@ test('Deliver completion reads a reviewed managed plan from its explicit home', 
   fs.writeFileSync(f.decisionFile, JSON.stringify({ operation: 'worklist-no-learning', decision: 'no-learning', rationale: 'Disposable integration fixture has no durable lesson.' }));
   f.worklistCli('compound', '--plan', f.worklistPlan, '--learning-decision', f.decisionFile);
   decide('worklist-complete', 'complete');
+  const realpath = fs.realpathSync, native = realpath.native;
+  t.mock.method(fs, 'realpathSync', (file, ...args) => path.resolve(String(file)) === path.resolve(f.worklistPlan)
+    ? path.join(path.parse(f.worklistPlan).root, 'LEGACY~1', path.basename(f.worklistPlan))
+    : realpath(file, ...args));
+  fs.realpathSync.native = native;
   const result = deliveryCompletion({ workspace: f.ws, copilotHome: f.home, harnessHome: f.harnessHome });
   assert.equal(result.pass, true, result.message);
+  t.mock.restoreAll();
   const run = await runAgentLoop({ task: 'Report the completed change.', workspace: f.ws, copilotHome: f.home, ctx: { harnessHome: f.harnessHome }, persona, profile: DELIVER_PROFILE, maxTurns: 1, maxSeconds: 30,
     startProviderFn: () => ({ async complete() { return { ...say('Complete.'), blocks: [], usage: {} }; }, close() {} }),
   });

@@ -5,33 +5,148 @@ import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from './paths.mjs';
 import { workspaceStorageId } from './knowledge/store.mjs';
 import { createHash } from 'node:crypto';
-import { readFileNoFollow, canonicalPath } from './fs-safe.mjs';
+import { readFileNoFollow, canonicalPath, assertNoSymlinkAncestors } from './fs-safe.mjs';
 
 const objectHash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const textHash = value => createHash('sha256').update(value).digest('hex');
-export const conversionPointerRel = full => `.harness/operations/plans/conversions/${objectHash(path.resolve(full))}.json`;
+const CONVERSIONS_REL = '.harness/operations/plans/conversions';
+const CONVERSION_GUARD_LIMIT = 256;
+const CONVERSION_GUARD_BYTES = 8 * 1024 * 1024;
+export function canonicalPlanFilePath(full) {
+  const resolved = path.resolve(full);
+  if (fs.existsSync(resolved)) return canonicalPath(resolved);
+  const parent = canonicalPath(path.dirname(resolved));
+  const stat = fs.lstatSync(parent);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Plan parent has no regular canonical directory identity');
+  return path.join(parent, path.basename(resolved));
+}
+export const conversionPointerRel = full => `${CONVERSIONS_REL}/${objectHash(canonicalPlanFilePath(full))}.json`;
 
-function planConversionRecord(workspace, full, { home } = {}) {
+function registeredLegacyPlanNamespaces(workspace, target, state) {
+  const directory = full => {
+    const raw = path.resolve(full), stat = fs.lstatSync(raw);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Registered plan root is unsafe');
+    if (!assertNoSymlinkAncestors(path.parse(raw).root, path.relative(path.parse(raw).root, raw))) throw new Error('Registered plan root has a symlink');
+    const real = canonicalPath(raw);
+    if (!assertNoSymlinkAncestors(path.parse(real).root, path.relative(path.parse(real).root, real))) throw new Error('Registered plan root has a symlink');
+    return real;
+  };
+  const stamp = full => { const s = fs.lstatSync(full, { bigint: true }); return `${s.dev}:${s.ino}:${s.birthtimeNs}`; };
+  const git = (root, args) => {
+    const remaining = state.deadline - Date.now();
+    if (remaining <= 0) throw new Error('Registered plan metadata deadline expired');
+    const result = gitSpawn(root, ['-c', 'core.fsmonitor=false', ...args], { timeout: remaining, maxBuffer: 64 * 1024 });
+    if (result.error || result.status !== 0) throw new Error('Registered plan metadata unavailable');
+    return String(result.stdout || '');
+  };
+  const observe = root => {
+    const values = git(root, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir']).trimEnd().split('\n');
+    if (values.length !== 3) throw new Error('Registered plan metadata is malformed');
+    const [top, gitDir, commonDir] = values.map(value => directory(path.resolve(root, value.trimEnd())));
+    if (path.relative(root, top) !== '') throw new Error('Registered plan metadata has another root');
+    return { root: top, gitDir, commonDir, commonStamp: stamp(commonDir) };
+  };
+  const registered = metadata => {
+    if (!state.roots.includes(metadata.root)) return false;
+    const dotGit = path.join(metadata.root, '.git'), stat = fs.lstatSync(dotGit);
+    if (stat.isSymbolicLink()) return false;
+    if (stat.isDirectory()) return path.relative(canonicalPath(dotGit), metadata.gitDir) === '' && path.relative(metadata.gitDir, metadata.commonDir) === '';
+    const relative = path.relative(path.join(metadata.commonDir, 'worktrees'), metadata.gitDir);
+    const pointer = readFileNoFollow(dotGit, { root: metadata.root, maxBytes: 4096 });
+    const backlink = readFileNoFollow(path.join(metadata.gitDir, 'gitdir'), { root: metadata.gitDir, maxBytes: 4096 });
+    const backPath = backlink && path.resolve(metadata.gitDir, backlink.trim());
+    return stat.isFile() && relative && relative !== '.' && relative !== '..' && !path.isAbsolute(relative) && !relative.includes(path.sep) && pointer?.startsWith('gitdir: ') && backlink &&
+      path.relative(directory(path.resolve(metadata.root, pointer.slice(8).trim())), metadata.gitDir) === '' &&
+      assertNoSymlinkAncestors(path.parse(backPath).root, path.relative(path.parse(backPath).root, backPath)) &&
+      path.relative(canonicalPath(backPath), canonicalPath(dotGit)) === '';
+  };
+  if (!state.owner) {
+    state.deadline = Date.now() + 4000;
+    state.owner = observe(directory(canonicalPath(workspace)));
+    const listed = git(state.owner.root, ['worktree', 'list', '--porcelain', '-z']).split('\0').filter(value => value.startsWith('worktree '));
+    if (!listed.length || listed.length > 128) throw new Error('Registered worktree listing is empty or capped');
+    state.roots = listed.flatMap(value => { try { return [directory(value.slice(9))]; } catch { return []; } });
+    state.accepted = new Map();
+    if (!registered(state.owner)) throw new Error('Invoking checkout is not physically registered');
+  }
+  for (const candidate of state.roots) {
+    const rel = path.relative(candidate, target).replace(/\\/g, '/');
+    if (![WORKSPACE_PLANS_REL, SESSION_PLANS_REL].some(namespace => rel.startsWith(`${namespace}/`))) continue;
+    if (!state.accepted.has(candidate)) {
+      const metadata = observe(candidate);
+      if (path.relative(metadata.commonDir, state.owner.commonDir) !== '' || metadata.commonStamp !== state.owner.commonStamp || !registered(metadata)) throw new Error('Legacy plan checkout has foreign Git authority');
+      state.accepted.set(candidate, [WORKSPACE_PLANS_REL, SESSION_PLANS_REL].flatMap(namespace => {
+        const full = path.join(candidate, namespace), stat = fs.lstatSync(full, { throwIfNoEntry: false });
+        return stat?.isDirectory() && !stat.isSymbolicLink() && assertNoSymlinkAncestors(candidate, namespace) ? [canonicalPath(full)] : [];
+      }));
+    }
+    if (Date.now() >= state.deadline || stamp(state.owner.commonDir) !== state.owner.commonStamp) throw new Error('Registered legacy authority changed or expired');
+    return state.accepted.get(candidate);
+  }
+  return [];
+}
+
+export function readPlanConversionGuard(workspace, full, { home } = {}) {
   try {
     const root = projectStoreDir(workspace, { home });
-    const old = fs.existsSync(full) ? fs.realpathSync(full) : path.resolve(full);
-    const pointerPath = path.join(root, conversionPointerRel(old));
-    if (!fs.lstatSync(pointerPath, { throwIfNoEntry: false })) return null;
-    const pointer = JSON.parse(readFileNoFollow(pointerPath, { root, maxBytes: 4096 }) || 'null');
-    if (!pointer || pointer.version !== 1 || !/^[a-f0-9]{64}$/.test(pointer.inputDigest || '') || !/^\.harness\/operations\/plans\/[a-f0-9]{64}\.json$/.test(pointer.record || '')) return { state: 'invalid' };
-    const record = JSON.parse(readFileNoFollow(path.join(root, pointer.record), { root, maxBytes: 1024 * 1024 }) || 'null');
-    if (record?.kind !== 'conversion' || record.inputDigest !== pointer.inputDigest || !['pending', 'completed'].includes(record.state) || record.id !== objectHash(record.value) || record.value.oldPath !== old || record.value.newPath !== old.replace(/\.md$/, '.hplan') || typeof record.value.original !== 'string' || textHash(record.value.original) !== record.value.oldRevision || typeof record.value.text !== 'string' || textHash(record.value.text) !== record.value.newRevision) return { state: 'invalid' };
-    return record;
+    const old = canonicalPlanFilePath(full), expected = conversionPointerRel(old), dir = path.join(root, CONVERSIONS_REL);
+    if (!assertNoSymlinkAncestors(root, CONVERSIONS_REL)) return { state: 'invalid' };
+    const stat = fs.lstatSync(dir, { throwIfNoEntry: false });
+    if (!stat) return null;
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return { state: 'invalid' };
+    const entries = fs.readdirSync(dir);
+    if (entries.length > CONVERSION_GUARD_LIMIT) return { state: 'invalid' };
+    const namespaces = [[home || harnessGlobalHome(), externalPlansDir(workspace, { home })], [workspace, path.join(workspace, WORKSPACE_PLANS_REL)], [workspace, path.join(workspace, SESSION_PLANS_REL)]]
+      .flatMap(([anchor, candidate]) => {
+        const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
+        return stat?.isDirectory() && !stat.isSymbolicLink() && assertNoSymlinkAncestors(anchor, path.relative(anchor, candidate)) ? [canonicalPath(candidate)] : [];
+      });
+    const matches = [];
+    let reservation = null;
+    const registeredNamespaces = {};
+    let bytes = 0;
+    for (const name of entries) {
+      const pointerRel = `${CONVERSIONS_REL}/${name}`;
+      const invalid = () => ({ state: 'invalid', pointerRel });
+      if (!/^[a-f0-9]{64}\.json$/.test(name)) return invalid();
+      const pointerText = readFileNoFollow(path.join(root, pointerRel), { root, maxBytes: 4096 });
+      bytes += Buffer.byteLength(pointerText || '');
+      const pointer = JSON.parse(pointerText || 'null');
+      if (!pointer || pointer.version !== 1 || !/^[a-f0-9]{64}$/.test(pointer.inputDigest || '') || !/^\.harness\/operations\/plans\/[a-f0-9]{64}\.json$/.test(pointer.record || '')) return invalid();
+      const recordText = readFileNoFollow(path.join(root, pointer.record), { root, maxBytes: 1024 * 1024 });
+      bytes += Buffer.byteLength(recordText || '');
+      if (bytes > CONVERSION_GUARD_BYTES) return invalid();
+      if (recordText === null && !fs.lstatSync(path.join(root, pointer.record), { throwIfNoEntry: false }) && pointerRel === expected) {
+        reservation = { state: 'reserved', pointerRel, legacy: false };
+        continue;
+      }
+      const record = JSON.parse(recordText || 'null');
+      const value = record?.value;
+      if (record?.version !== 1 || record.kind !== 'conversion' || record.inputDigest !== pointer.inputDigest || !['pending', 'completed'].includes(record.state) || record.id !== objectHash(value) || typeof value?.oldPath !== 'string' || !path.isAbsolute(value.oldPath) || !value.oldPath.endsWith('.md') || /[\0\r\n]/.test(value.oldPath) || value.newPath !== value.oldPath.replace(/\.md$/, '.hplan') || typeof value.original !== 'string' || textHash(value.original) !== value.oldRevision || typeof value.text !== 'string' || textHash(value.text) !== value.newRevision) return invalid();
+      const anchor = path.parse(value.oldPath).root;
+      if (!assertNoSymlinkAncestors(anchor, path.relative(anchor, value.oldPath))) return invalid();
+      if (/~[0-9]+\.md$/i.test(path.basename(value.oldPath)) && !fs.lstatSync(value.oldPath, { throwIfNoEntry: false })) return invalid();
+      const recordedOld = canonicalPlanFilePath(value.oldPath);
+      const contains = namespace => {
+        const relative = path.relative(namespace, recordedOld);
+        return relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+      };
+      if (!namespaces.some(contains) && !registeredLegacyPlanNamespaces(workspace, recordedOld, registeredNamespaces).some(contains)) return invalid();
+      const rawKey = `${CONVERSIONS_REL}/${objectHash(path.resolve(value.oldPath))}.json`;
+      if (![rawKey, conversionPointerRel(recordedOld)].includes(pointerRel) || path.relative(path.join(path.dirname(recordedOld), path.basename(recordedOld).replace(/\.md$/, '.hplan')), canonicalPlanFilePath(value.newPath)) !== '') return invalid();
+      if (path.relative(old, recordedOld) === '') matches.push({ ...record, pointerRel, legacy: pointerRel !== conversionPointerRel(recordedOld) });
+    }
+    return matches.length > 1 || reservation && matches.length ? { state: 'invalid' } : matches[0] || reservation;
   } catch { return { state: 'invalid' }; }
 }
 
 export function planConversionPublished(workspace, full, options = {}) {
-  return Boolean(planConversionRecord(workspace, full, options));
+  return Boolean(readPlanConversionGuard(workspace, full, options));
 }
 
 export function planConversionPending(workspace, full, options = {}) {
   if (!full.endsWith('.hplan')) return false;
-  const record = planConversionRecord(workspace, full.replace(/\.hplan$/, '.md'), options);
+  const record = readPlanConversionGuard(workspace, full.replace(/\.hplan$/, '.md'), options);
   return Boolean(record && record.state !== 'completed');
 }
 
@@ -76,9 +191,9 @@ function workspaceHasGitDir(workspace) {
   }
 }
 
-function gitSpawn(workspace, args) {
+function gitSpawn(workspace, args, { timeout = 10_000, maxBuffer } = {}) {
   try {
-    return spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout: 10_000, env: gitMetadataEnvironment() });
+    return spawnSync('git', args, { cwd: workspace, encoding: 'utf8', timeout, ...(maxBuffer ? { maxBuffer } : {}), env: gitMetadataEnvironment() });
   } catch (err) {
     return { status: 1, stdout: '', stderr: String(err?.message || err || ''), error: err };
   }
@@ -203,7 +318,7 @@ export function normalizePlanRel(workspace, planPath, { home } = {}) {
       if (contained(path.resolve(external), resolved) && /\.(?:md|hplan)$/.test(resolved)) return resolved;
     }
   }
-  const root = fs.existsSync(workspace) ? fs.realpathSync(workspace) : path.resolve(workspace);
+  const root = fs.existsSync(workspace) ? canonicalPath(workspace) : path.resolve(workspace);
   const full = path.resolve(root, planPath);
   const rel = path.relative(root, full).replace(/\\/g, '/');
   if (!rel.startsWith('..') && !path.isAbsolute(rel) && /\.(?:md|hplan)$/.test(rel) && isPlanRel(rel) && !rel.startsWith(`${EXTERNAL_PLANS_REL}/`)) {

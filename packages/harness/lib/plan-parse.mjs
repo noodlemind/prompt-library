@@ -24,12 +24,12 @@ function canonicalPlanPath(workspace, normalized, { home } = {}) {
     }
   }
   try {
-    const root = fs.realpathSync(path.resolve(workspace));
-    const full = fs.realpathSync(path.join(workspace, normalized));
+    const root = canonicalPath(path.resolve(workspace));
+    const full = canonicalPath(path.join(workspace, normalized));
     if (!isWithin(root, full)) return null;
     if (!isPlanRel(normalized.replace(/\\/g, '/'))) return null;
     const dirRel = path.posix.dirname(normalized.replace(/\\/g, '/'));
-    const plansRoot = fs.realpathSync(path.join(workspace, dirRel));
+    const plansRoot = canonicalPath(path.join(workspace, dirRel));
     if (!isWithin(root, plansRoot)) return null;
     return isWithin(plansRoot, full) ? full : null;
   } catch {

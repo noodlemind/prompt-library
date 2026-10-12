@@ -132,6 +132,8 @@ jobs:
           packages/harness/test/project-layout.test.mjs
           packages/harness/test/external-plan-review.test.mjs
           packages/harness/test/cli-evidence-verify.test.mjs
+          packages/harness/test/agent-delivery.test.mjs
+          packages/harness/test/plan-operations.test.mjs
           > windows-adaptive-proof.log 2>&1
       - name: Preserve native Windows proof
         if: always()
