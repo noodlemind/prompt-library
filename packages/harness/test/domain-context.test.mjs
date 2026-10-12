@@ -4,9 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { test } from 'node:test';
 import YAML from 'yaml';
-import { resolveDomainContext, planRecordRoot, planHome, authorizeDomainPlan } from '../lib/domain-context.mjs';
+import { resolveDomainContext, domainPlanPath, planRecordRoot, planHome, authorizeDomainPlan } from '../lib/domain-context.mjs';
 import { loadPlan, planFromText, planWithText, reloadPlan } from '../lib/plan-parse.mjs';
 import { validatePlanSchema } from '../lib/plan-schema.mjs';
 import { buildPlanSkeleton } from '../lib/plan-new.mjs';
@@ -59,6 +61,99 @@ test('domain parents require explicit opaque context and preserve it across text
   const forged = planFromText(plan.text, { path: f.full, fullPath: f.full });
   assert.throws(() => planRecordRoot(f.workspace, forged), /explicit domain context|authority/);
   assert.throws(() => authorizeDomainPlan({ ...f.context }, forged), /context|authority/);
+  assert.throws(() => domainPlanPath({ ...f.context }, f.full), /context|authority/);
+});
+
+for (const getter of ['path', 'authorize', 'record-root']) for (const mutation of ['plans-directory', 'domain-root', 'git-root', 'symlink-root']) test(`parent ${getter} rejects ${mutation} changes during path resolution`, t => {
+  const f = fixture(t), plan = loadPlan(f.workspace, f.full, { domainContext: f.context }), original = fs.readFileSync(f.full);
+  assert.ok(plan);
+  const foreign = path.join(path.dirname(f.workspace), 'foreign');
+  if (mutation === 'git-root') {
+    fs.mkdirSync(foreign);
+    assert.equal(spawnSync('git', ['init', '--quiet', foreign]).status, 0);
+  }
+  const native = fs.realpathSync.native;
+  let changed = false;
+  t.mock.method(fs.realpathSync, 'native', (file, ...args) => {
+    const real = native(file, ...args);
+    if (!changed && path.resolve(String(file)) === f.full) {
+      changed = true;
+      const target = mutation === 'plans-directory' ? path.dirname(f.full) : mutation === 'git-root' ? path.join(f.workspace, '.git') : f.context.root;
+      const retired = `${target}-retired`;
+      fs.renameSync(target, retired);
+      if (mutation === 'git-root') fs.writeFileSync(target, `gitdir: ${path.join(foreign, '.git')}\n`, { flag: 'wx' });
+      else if (mutation === 'symlink-root') fs.symlinkSync(retired, target, process.platform === 'win32' ? 'junction' : 'dir');
+      else fs.cpSync(retired, target, { recursive: true });
+    }
+    return real;
+  });
+  const inspect = () => getter === 'path' ? domainPlanPath(f.context, f.full)
+    : getter === 'authorize' ? authorizeDomainPlan(f.context, planFromText(plan.text, { path: f.full, fullPath: f.full }))
+    : planRecordRoot(f.workspace, plan);
+  assert.throws(inspect, /identity changed|directory identity|unsafe|symlink|unavailable/);
+  assert.equal(changed, true, 'the owned authority changes inside path resolution');
+  assert.deepEqual(fs.readFileSync(f.full), original, 'the unchanged plan bytes cannot ratify a replaced authority');
+  assert.throws(() => planHome(f.workspace, plan), /identity changed|directory identity|unsafe|symlink|unavailable/, 'the next getter independently rejects the changed authority');
+});
+
+for (const getter of ['path', 'authorize', 'record-root']) test(`parent ${getter} rejects a leaf symlink installed during coordinator validation`, t => {
+  const f = fixture(t), plan = loadPlan(f.workspace, f.full, { domainContext: f.context }), original = fs.readFileSync(f.full);
+  assert.ok(plan);
+  const referent = path.join(path.dirname(f.full), 'owned-plan-content');
+  fs.writeFileSync(referent, original);
+  const spawn = childProcess.spawnSync;
+  let changed = false;
+  t.mock.method(childProcess, 'spawnSync', function(command, args, options) {
+    const result = spawn.apply(this, arguments);
+    if (!changed && command === 'git' && args.includes('--git-common-dir') && options.cwd === f.workspace) {
+      changed = true;
+      fs.unlinkSync(f.full);
+      fs.symlinkSync(referent, f.full, 'file');
+    }
+    return result;
+  });
+  syncBuiltinESMExports();
+  try {
+    const inspect = () => getter === 'path' ? domainPlanPath(f.context, f.full)
+      : getter === 'authorize' ? authorizeDomainPlan(f.context, planFromText(plan.text, { path: f.full, fullPath: f.full }))
+      : planRecordRoot(f.workspace, plan);
+    assert.throws(inspect, /unsafe|symlink/);
+    assert.equal(changed, true, 'the leaf changes inside the actual coordinator Git probe');
+    assert.deepEqual(fs.readFileSync(referent), original);
+    assert.throws(inspect, /unsafe|symlink/, 'the next invocation rejects the current unsafe leaf');
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+});
+
+for (const getter of ['path', 'authorize', 'record-root']) test(`parent ${getter} rechecks its raw alias after coordinator validation`, t => {
+  const f = fixture(t), plan = loadPlan(f.workspace, f.full, { domainContext: f.context }), original = fs.readFileSync(f.full);
+  assert.ok(plan);
+  const alias = path.join(path.dirname(f.full), 'owned-alias.hplan'), referent = path.join(path.dirname(f.full), 'owned-alias-content');
+  fs.linkSync(f.full, alias);
+  fs.writeFileSync(referent, original);
+  const native = fs.realpathSync.native, spawn = childProcess.spawnSync;
+  t.mock.method(fs.realpathSync, 'native', (file, ...args) => native(path.resolve(String(file)) === alias ? f.full : file, ...args));
+  let changed = false;
+  t.mock.method(childProcess, 'spawnSync', function(command, args, options) {
+    const result = spawn.apply(this, arguments);
+    if (!changed && command === 'git' && args.includes('--git-common-dir') && options.cwd === f.workspace) {
+      changed = true;
+      fs.unlinkSync(alias);
+      fs.symlinkSync(referent, alias, 'file');
+    }
+    return result;
+  });
+  syncBuiltinESMExports();
+  try {
+    const proposed = planFromText(plan.text, { path: alias, fullPath: alias });
+    if (getter === 'record-root') plan.fullPath = alias;
+    const inspect = () => getter === 'path' ? domainPlanPath(f.context, alias)
+      : getter === 'authorize' ? authorizeDomainPlan(f.context, proposed)
+      : planRecordRoot(f.workspace, plan);
+    assert.throws(inspect, /unsafe|symlink/);
+    assert.equal(changed, true);
+    assert.deepEqual(fs.readFileSync(f.full), original, 'the canonical file remains intact when its raw alias is replaced');
+    if (getter === 'authorize') assert.throws(() => planRecordRoot(f.workspace, proposed), /no explicit domain context authority/);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
 });
 
 test('contexts reject mismatched coordinators, wrong domain paths and swapped symlink storage', t => {

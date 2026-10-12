@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import childProcess, { spawnSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { test } from 'node:test';
 import YAML from 'yaml';
 import { readDomain, inspectDomain } from '../lib/domain-contract.mjs';
@@ -38,6 +39,315 @@ function fixture(t) {
   const show = () => inspectDomain(readDomain('catalog', { home }));
   return { dir, home, root, config, file, write, show };
 }
+
+const IDENTITY_ARGS = ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'];
+const BATCH_ARGS = [...IDENTITY_ARGS, '--verify', 'HEAD'];
+
+function observeGitCalls(t, override = () => undefined) {
+  const native = childProcess.spawnSync;
+  const calls = [];
+  t.mock.method(childProcess, 'spawnSync', function(command, args, options) {
+    if (command !== 'git') return native.apply(this, arguments);
+    calls.push({ args, options });
+    const replaced = override(args, options);
+    return replaced === undefined ? native.apply(this, arguments) : replaced;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  return calls;
+}
+
+function gitCommand(args) {
+  return args.slice(args.findIndex(value => ['rev-parse', 'symbolic-ref', 'config', 'status'].includes(value)));
+}
+
+function identityOutput(f) {
+  return `${f.root}\n${path.join(f.root, '.git')}\n.git\n`;
+}
+
+test('one fresh bounded Git request observes checkout identity and HEAD', t => {
+  const f = fixture(t);
+  f.write();
+  const expectedHead = git(f.root, ['rev-parse', 'HEAD']);
+  const calls = observeGitCalls(t);
+  const repo = f.show().repos[0];
+  assert.equal(repo.status, 'available');
+  assert.equal(repo.observed.head, expectedHead);
+  assert.equal(calls.length, 5, 'normal observation removes one Git process');
+  assert.deepEqual(calls.filter(call => call.args.includes('rev-parse')).map(call => gitCommand(call.args)), [BATCH_ARGS]);
+  for (const { args, options } of calls) {
+    assert.equal(args[0], '--no-pager');
+    assert.ok(args.includes('core.fsmonitor=false'));
+    assert.equal(options.timeout, 4000);
+    assert.equal(options.maxBuffer, 64 * 1024);
+    assert.equal(options.env.GIT_OPTIONAL_LOCKS, '0');
+    assert.equal(options.env.GIT_TERMINAL_PROMPT, '0');
+  }
+  assert.deepEqual(calls.slice(2).map(call => gitCommand(call.args)), [
+    ['symbolic-ref', '--quiet', '--short', 'HEAD'],
+    ['config', '--null', '--get-all', 'remote.origin.url'],
+    ['status', '--porcelain=v1', '-z', '--untracked-files=normal'],
+  ]);
+});
+
+test('batch records handle CRLF without trimming path or hash bytes', t => {
+  const f = fixture(t);
+  f.write();
+  const head = git(f.root, ['rev-parse', 'HEAD']);
+  const commonDir = path.join(f.dir, 'common directory ');
+  fs.mkdirSync(commonDir);
+  const calls = observeGitCalls(t, args => args.includes('--verify') && args.includes('--show-toplevel')
+    ? { status: 0, stdout: `${f.root}\r\n${path.join(f.root, '.git')}\r\n${commonDir}\r\n${head}\r\n` }
+    : undefined);
+  const repo = f.show().repos[0];
+  assert.equal(repo.status, 'available');
+  assert.equal(repo.observed.head, head);
+  assert.equal(repo.observed.commonDir, commonDir, 'a path-ending space remains part of the identity');
+  assert.equal(calls.length, 5);
+});
+
+test('mixed LF and CRLF identity framing is unavailable without later reads', async t => {
+  for (const stage of ['initial success', 'initial missing HEAD', 'fresh fallback identity']) {
+    for (const ending of ['\n', '\r\n']) await t.test(`${stage}, ${ending === '\n' ? 'LF' : 'CRLF'} final record`, child => {
+      const f = fixture(child);
+      f.write();
+      const head = git(f.root, ['rev-parse', 'HEAD']);
+      const records = [f.root, path.join(f.root, '.git'), '.git', ...(stage === 'initial success' ? [head] : [])];
+      const mixed = records.map((value, index) => value + (index === 0 ? (ending === '\n' ? '\r\n' : '\n') : ending)).join('');
+      const calls = observeGitCalls(child, args => {
+        const command = gitCommand(args).join(' ');
+        if (command === BATCH_ARGS.join(' ')) return stage === 'fresh fallback identity'
+          ? { status: 128, stdout: identityOutput(f) }
+          : { status: stage === 'initial success' ? 0 : 128, stdout: mixed };
+        if (stage === 'fresh fallback identity' && command === IDENTITY_ARGS.join(' ')) return { status: 0, stdout: mixed };
+      });
+      const repo = f.show().repos[0];
+      assert.equal(repo.status, 'unavailable');
+      assert.equal(repo.observed.root, null);
+      assert.equal(repo.observed.gitDir, null);
+      assert.equal(repo.observed.commonDir, null);
+      assert.equal(repo.observed.head, null);
+      assert.equal(calls.length, stage === 'fresh fallback identity' ? 3 : 2, 'mixed identity framing stops before fallback or later HEAD reads');
+    });
+  }
+});
+
+test('a real Git directory ending in a carriage return cannot become its clean sibling', { skip: process.platform === 'win32' }, t => {
+  const f = fixture(t);
+  f.write();
+  const actualGit = path.join(f.dir, 'actual-git\r');
+  const cleanSibling = path.join(f.dir, 'actual-git');
+  fs.renameSync(path.join(f.root, '.git'), actualGit);
+  fs.mkdirSync(cleanSibling);
+  fs.writeFileSync(path.join(f.root, '.git'), `gitdir: ${actualGit}/\n`);
+  const response = spawnSync('git', BATCH_ARGS, { cwd: f.root, encoding: 'utf8', timeout: 4000 });
+  assert.equal(response.status, 0, response.stderr);
+  assert.equal(response.stdout, `${f.root}\n${actualGit}\n${actualGit}\n${git(f.root, ['rev-parse', 'HEAD'])}\n`);
+  const calls = observeGitCalls(t);
+  const repo = f.show().repos[0];
+  assert.equal(repo.status, 'unavailable');
+  assert.equal(repo.observed.gitDir, null, 'the literal CR path is rejected before clean-sibling canonicalization');
+  assert.equal(repo.observed.commonDir, null);
+  assert.equal(calls.length, 2);
+});
+
+test('completed malformed and uncertain batch responses grant no observation or fallback', async t => {
+  const variants = [
+    ['null result', () => null],
+    ['timeout', f => ({ status: null, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }), stdout: identityOutput(f) })],
+    ['signal', f => ({ status: 128, signal: 'SIGTERM', stdout: identityOutput(f) })],
+    ['output bound', f => ({ status: 0, error: Object.assign(new Error('bounded'), { code: 'ENOBUFS' }), stdout: `${identityOutput(f)}${'a'.repeat(40)}\n` })],
+    ['missing status', f => ({ stdout: identityOutput(f) })],
+    ['other status', f => ({ status: 1, stdout: identityOutput(f) })],
+    ['noninteger status', f => ({ status: 0.5, stdout: identityOutput(f) })],
+    ['truncated hash', f => ({ status: 0, stdout: `${identityOutput(f)}${'a'.repeat(39)}\n` })],
+    ['unterminated hash', f => ({ status: 0, stdout: `${identityOutput(f)}${'a'.repeat(40)}` })],
+    ['hash trailing space', f => ({ status: 0, stdout: `${identityOutput(f)}${'a'.repeat(40)} \n` })],
+    ['hash leading space', f => ({ status: 0, stdout: `${identityOutput(f)} ${'a'.repeat(40)}\n` })],
+    ['extra record', f => ({ status: 0, stdout: `${identityOutput(f)}${'a'.repeat(40)}\nextra\n` })],
+    ['extra blank record', f => ({ status: 0, stdout: `${identityOutput(f)}${'a'.repeat(40)}\n\n` })],
+    ['empty identity record', f => ({ status: 0, stdout: `${f.root}\n\n.git\n${'a'.repeat(40)}\n` })],
+    ['control in identity', f => ({ status: 0, stdout: `${f.root}\n${path.join(f.root, '.git')}\n.git\t\n${'a'.repeat(40)}\n` })],
+    ['oversized identity', f => ({ status: 0, stdout: `${f.root}\n${'x'.repeat(4097)}\n.git\n${'a'.repeat(40)}\n` })],
+    ['oversized response', () => ({ status: 0, stdout: 'x'.repeat(64 * 1024 + 1) })],
+    ['128 partial record', f => ({ status: 128, stdout: identityOutput(f).trimEnd() })],
+    ['128 extra record', f => ({ status: 128, stdout: `${identityOutput(f)}HEAD\n` })],
+    ['128 empty record', f => ({ status: 128, stdout: `${f.root}\n\n.git\n` })],
+    ['128 control in record', f => ({ status: 128, stdout: `${f.root}\n${path.join(f.root, '.git')}\n.git\r\r\n` })],
+    ['128 nonabsolute root', f => ({ status: 128, stdout: `relative\n${path.join(f.root, '.git')}\n.git\n` })],
+    ['128 nonabsolute Git directory', f => ({ status: 128, stdout: `${f.root}\n.git\n.git\n` })],
+  ];
+  for (const [name, response] of variants) await t.test(name, child => {
+    const f = fixture(child);
+    f.write();
+    const calls = observeGitCalls(child, args => args.includes('--verify') && args.includes('--show-toplevel') ? response(f) : undefined);
+    const repo = f.show().repos[0];
+    assert.equal(repo.status, 'unavailable');
+    assert.deepEqual(repo.observed, { root: null, gitDir: null, commonDir: null, head: null, origin: null, branch: null, isLinkedWorktree: null, dirty: null, statusEntries: null });
+    assert.equal(calls.length, 2, 'uncertainty stops after config and the batch');
+  });
+});
+
+for (const corrupt of [false, true]) test(`${corrupt ? 'corrupt ref' : 'unborn checkout'} retains advisory missing HEAD through fresh separate reads`, t => {
+  const f = fixture(t);
+  const root = path.join(f.dir, 'no-head');
+  fs.mkdirSync(root);
+  git(root, ['init', '-b', 'main']);
+  if (corrupt) fs.writeFileSync(path.join(root, '.git/refs/heads/main'), 'broken ref\n');
+  f.config.repos[0].root = root;
+  f.write();
+  const calls = observeGitCalls(t);
+  const repo = f.show().repos[0];
+  assert.equal(repo.status, 'available');
+  assert.equal(repo.observed.root, root);
+  assert.equal(repo.observed.head, null);
+  assert.match(repo.warnings.join(' '), /HEAD is unavailable/);
+  assert.equal(calls.length, 7, 'recognized missing HEAD adds only one process over the prior separate reads');
+  assert.deepEqual(calls.filter(call => call.args.includes('rev-parse')).map(call => gitCommand(call.args)), [BATCH_ARGS, IDENTITY_ARGS, ['rev-parse', '--verify', 'HEAD']]);
+});
+
+test('fallback discards partial identities and observes current separate identity and HEAD', t => {
+  const f = fixture(t);
+  f.write();
+  const foreign = path.join(f.dir, 'foreign');
+  fs.mkdirSync(foreign);
+  fs.mkdirSync(path.join(foreign, '.git'));
+  const head = git(f.root, ['rev-parse', 'HEAD']);
+  const calls = observeGitCalls(t, args => args.includes('--verify') && args.includes('--show-toplevel')
+    ? { status: 128, stdout: `${foreign}\n${path.join(foreign, '.git')}\n.git\n` }
+    : undefined);
+  const repo = f.show().repos[0];
+  assert.equal(repo.status, 'available');
+  assert.equal(repo.observed.root, f.root);
+  assert.equal(repo.observed.gitDir, path.join(f.root, '.git'));
+  assert.equal(repo.observed.head, head);
+  assert.equal(calls.length, 7);
+});
+
+test('uncertain or malformed fresh fallback HEAD stops without later metadata reads', async t => {
+  const variants = [
+    ['null result', () => null],
+    ['process error', () => ({ status: null, error: Object.assign(new Error('unavailable'), { code: 'ENOENT' }) })],
+    ['timeout', () => ({ status: null, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) })],
+    ['signal', () => ({ status: 128, signal: 'SIGTERM', stdout: '' })],
+    ['output bound', () => ({ status: 0, error: Object.assign(new Error('bounded'), { code: 'ENOBUFS' }), stdout: `${'a'.repeat(40)}\n` })],
+    ['missing status', () => ({ stdout: `${'a'.repeat(40)}\n` })],
+    ['other completed status', () => ({ status: 1, stdout: '' })],
+    ['unterminated hash', () => ({ status: 0, stdout: 'a'.repeat(40) })],
+    ['hash whitespace', () => ({ status: 0, stdout: `${'a'.repeat(40)} \n` })],
+    ['extra hash record', () => ({ status: 0, stdout: `${'a'.repeat(40)}\n${'a'.repeat(40)}\n` })],
+    ['partial hash', () => ({ status: 0, stdout: `${'a'.repeat(39)}\n` })],
+    ['unexpected missing HEAD output', () => ({ status: 128, stdout: 'HEAD\n' })],
+    ['oversized response', () => ({ status: 0, stdout: 'a'.repeat(64 * 1024 + 1) })],
+  ];
+  for (const [name, response] of variants) await t.test(name, child => {
+    const f = fixture(child);
+    f.write();
+    const calls = observeGitCalls(child, args => {
+      const command = gitCommand(args).join(' ');
+      if (command === BATCH_ARGS.join(' ')) return { status: 128, stdout: identityOutput(f) };
+      if (command === 'rev-parse --verify HEAD') return response();
+    });
+    const repo = f.show().repos[0];
+    assert.equal(repo.status, 'unavailable');
+    assert.equal(repo.observed.head, null);
+    assert.equal(repo.observed.origin, null);
+    assert.equal(repo.observed.branch, null);
+    assert.equal(repo.observed.dirty, null);
+    assert.equal(calls.length, 4, 'fresh HEAD uncertainty stops before branch, origin and status');
+  });
+});
+
+test('uncertain or malformed fresh fallback identity stops without reading HEAD', async t => {
+  const variants = [
+    ['timeout', () => ({ status: null, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) })],
+    ['signal', f => ({ status: 0, signal: 'SIGTERM', stdout: identityOutput(f) })],
+    ['truncated identity', f => ({ status: 0, stdout: identityOutput(f).trimEnd() })],
+    ['nonzero identity', f => ({ status: 128, stdout: identityOutput(f) })],
+  ];
+  for (const [name, response] of variants) await t.test(name, child => {
+    const f = fixture(child);
+    f.write();
+    const calls = observeGitCalls(child, args => {
+      const command = gitCommand(args).join(' ');
+      if (command === BATCH_ARGS.join(' ')) return { status: 128, stdout: identityOutput(f) };
+      if (command === IDENTITY_ARGS.join(' ')) return response(f);
+    });
+    const repo = f.show().repos[0];
+    assert.equal(repo.status, 'unavailable');
+    assert.equal(repo.observed.root, null);
+    assert.equal(repo.observed.head, null);
+    assert.equal(calls.length, 3, 'fresh identity uncertainty stops before HEAD');
+  });
+});
+
+test('fallback rejects a changed checkout identity before reading HEAD', t => {
+  const f = fixture(t);
+  f.write();
+  const foreign = path.join(f.dir, 'foreign');
+  fs.mkdirSync(foreign);
+  fs.mkdirSync(path.join(foreign, '.git'));
+  const calls = observeGitCalls(t, args => {
+    const command = gitCommand(args);
+    if (command.join(' ') === BATCH_ARGS.join(' ')) return { status: 128, stdout: identityOutput(f) };
+    if (command.join(' ') === IDENTITY_ARGS.join(' ')) return { status: 0, stdout: `${foreign}\n${path.join(foreign, '.git')}\n.git\n` };
+  });
+  const repo = f.show().repos[0];
+  assert.equal(repo.status, 'unavailable');
+  assert.equal(repo.observed.root, foreign, 'only the fresh fallback identity reaches the existing root comparison');
+  assert.equal(repo.observed.head, null);
+  assert.equal(calls.length, 3);
+});
+
+test('fallback rechecks the raw Git path after the completed batch', t => {
+  const f = fixture(t);
+  f.write();
+  let changed = false;
+  const calls = observeGitCalls(t, args => {
+    if (!args.includes('--verify') || !args.includes('--show-toplevel')) return;
+    fs.renameSync(path.join(f.root, '.git'), path.join(f.dir, 'moved-git'));
+    fs.symlinkSync(path.join(f.dir, 'moved-git'), path.join(f.root, '.git'), 'dir');
+    changed = true;
+    return { status: 128, stdout: identityOutput(f) };
+  });
+  assert.throws(() => f.show(), /Git identity path is unsafe or symlinked/);
+  assert.equal(changed, true);
+  assert.equal(calls.length, 2, 'unsafe raw identity never reaches separate fallback reads');
+});
+
+test('later observations see changed and detached HEAD without reusing a batch', t => {
+  const f = fixture(t);
+  f.write();
+  const first = f.show().repos[0].observed.head;
+  git(f.root, ['commit', '--allow-empty', '-m', 'New HEAD']);
+  const next = git(f.root, ['rev-parse', 'HEAD']);
+  assert.notEqual(next, first);
+  git(f.root, ['checkout', '--detach', next]);
+  const calls = observeGitCalls(t);
+  for (let index = 0; index < 2; index++) {
+    const repo = f.show().repos[0];
+    assert.equal(repo.observed.head, next);
+    assert.equal(repo.observed.branch, null);
+    assert.equal(repo.observed.dirty, false);
+  }
+  assert.equal(calls.length, 10, 'each public observation obtains its own full batch');
+});
+
+test('SHA-256 HEAD remains exact on Git versions that support it', t => {
+  const f = fixture(t);
+  const root = path.join(f.dir, 'sha256');
+  fs.mkdirSync(root);
+  const initialized = spawnSync('git', ['init', '-b', 'main', '--object-format=sha256'], { cwd: root, encoding: 'utf8', timeout: 4000 });
+  if (initialized.status !== 0) { t.skip('Installed Git has no SHA-256 repository support'); return; }
+  git(root, ['-c', 'user.name=Domain Test', '-c', 'user.email=domain@example.invalid', 'commit', '--allow-empty', '-m', 'SHA-256 seed']);
+  f.config.repos[0].root = root;
+  f.write();
+  const head = git(root, ['rev-parse', 'HEAD']);
+  assert.equal(head.length, 64);
+  const calls = observeGitCalls(t);
+  assert.equal(f.show().repos[0].observed.head, head);
+  assert.equal(calls.length, 5);
+});
 
 test('domain show observes membership, advisory references and Git identity without writes', t => {
   const f = fixture(t);

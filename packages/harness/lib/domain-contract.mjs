@@ -12,6 +12,7 @@ const MAX_REPOS = 32;
 const MAX_REFERENCES = 64;
 const GIT_TIMEOUT = 4000;
 const GIT_MAX_BYTES = 64 * 1024;
+const GIT_IDENTITY_ARGS = ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'];
 
 function failure(message) {
   return Object.assign(new Error(`domain: ${message}`), { code: 'E_DOMAIN', exit: 1 });
@@ -176,11 +177,23 @@ function gitEnvironment() {
 }
 
 function gitObservation(root, prefix, args) {
-  const result = spawnSync('git', ['--no-pager', ...prefix, ...args], {
-    cwd: root, env: gitEnvironment(), encoding: 'utf8', timeout: GIT_TIMEOUT, maxBuffer: GIT_MAX_BYTES,
-  });
-  if (result.error || result.signal || !Number.isInteger(result.status)) return null;
-  return { status: result.status, output: String(result.stdout || '') };
+  try {
+    const result = spawnSync('git', ['--no-pager', ...prefix, ...args], {
+      cwd: root, env: gitEnvironment(), encoding: 'utf8', timeout: GIT_TIMEOUT, maxBuffer: GIT_MAX_BYTES,
+    });
+    if (!result || result.error || result.signal || !Number.isInteger(result.status)) return null;
+    const output = String(result.stdout || '');
+    return Buffer.byteLength(output) <= GIT_MAX_BYTES ? { status: result.status, output } : null;
+  } catch { return null; }
+}
+
+function gitCheckoutRecords(output, count) {
+  if (!output.endsWith('\n')) return null;
+  const ending = output.endsWith('\r\n') ? '\r\n' : '\n';
+  const lines = output.slice(0, -ending.length).split(ending);
+  if (lines.length !== count || lines.some(value => !boundedText(value, 4096))) return null;
+  if (!path.isAbsolute(lines[0]) || !path.isAbsolute(lines[1])) return null;
+  return lines;
 }
 
 function emptyObserved() {
@@ -207,10 +220,18 @@ function inspectRepo(repo, { normalizeIdentity = false } = {}) {
   if (!assertNoSymlinkAncestors(repo.root, '.git')) throw failure(`repo ${repo.id} Git identity path is unsafe or symlinked`);
   const prefix = readGitArgs(repo.root, { timeout: GIT_TIMEOUT, env: gitEnvironment() });
   if (!prefix) { warnings.push('Git configuration metadata is unavailable or malformed.'); return result; }
-  const identity = gitObservation(repo.root, prefix, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir']);
-  if (!identity || identity.status !== 0) { warnings.push('Git checkout metadata is unavailable.'); return result; }
-  const lines = identity.output.trimEnd().split('\n');
-  if (lines.length !== 3 || lines.some(value => !boundedText(value, 4096))) { warnings.push('Git checkout metadata is malformed.'); return result; }
+  let identity = gitObservation(repo.root, prefix, [...GIT_IDENTITY_ARGS, '--verify', 'HEAD']);
+  if (!identity || ![0, 128].includes(identity.status)) { warnings.push('Git checkout metadata is unavailable.'); return result; }
+  const needsHeadFallback = identity.status === 128;
+  let lines = gitCheckoutRecords(identity.output, needsHeadFallback ? 3 : 4);
+  if (!lines || (!needsHeadFallback && !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(lines[3]))) { warnings.push('Git checkout metadata is malformed.'); return result; }
+  if (needsHeadFallback) {
+    if (!assertNoSymlinkAncestors(repo.root, '.git')) throw failure(`repo ${repo.id} Git identity path is unsafe or symlinked`);
+    identity = gitObservation(repo.root, prefix, GIT_IDENTITY_ARGS);
+    if (!identity || identity.status !== 0) { warnings.push('Git checkout metadata is unavailable.'); return result; }
+    lines = gitCheckoutRecords(identity.output, 3);
+    if (!lines) { warnings.push('Git checkout metadata is malformed.'); return result; }
+  }
   try {
     observed.root = canonicalPath(safeAbsolute(lines[0], 'observed checkout root'));
     observed.gitDir = canonicalPath(safeAbsolute(path.resolve(repo.root, lines[1]), 'observed Git directory'));
@@ -218,9 +239,12 @@ function inspectRepo(repo, { normalizeIdentity = false } = {}) {
   } catch { warnings.push('Git checkout identity paths are unavailable.'); return result; }
   if (observed.root !== canonicalPath(repo.root)) { warnings.push('Configured local root differs from the actual checkout root.'); return result; }
   observed.isLinkedWorktree = observed.gitDir !== observed.commonDir;
-  const head = gitObservation(repo.root, prefix, ['rev-parse', '--verify', 'HEAD']);
-  if (head?.status === 0 && /^[a-f0-9]{40}(?:[a-f0-9]{24})?\n?$/.test(head.output)) observed.head = head.output.trim();
-  else warnings.push('HEAD is unavailable; the repository may have no commits.');
+  if (needsHeadFallback) {
+    const head = gitObservation(repo.root, prefix, ['rev-parse', '--verify', 'HEAD']);
+    if (head?.status === 0 && /^[a-f0-9]{40}(?:[a-f0-9]{24})?\r?\n$/.test(head.output)) observed.head = head.output.replace(/\r?\n$/, '');
+    else if (head?.status === 128 && head.output === '') warnings.push('HEAD is unavailable; the repository may have no commits.');
+    else { warnings.push('Git HEAD metadata is unavailable or malformed.'); return result; }
+  } else observed.head = lines[3];
   const branch = gitObservation(repo.root, prefix, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   if (branch?.status === 0 && boundedText(branch.output.trimEnd(), 1024)) observed.branch = branch.output.trimEnd();
   else if (branch?.status !== 1) warnings.push('Branch metadata is unavailable.');

@@ -47,9 +47,14 @@ export function resolveDomainContext({ workspace, home = harnessGlobalHome(), na
   return context;
 }
 
-export function validateDomainContext(context, workspace = context?.workspace) {
+function contextAuthority(context) {
   const authority = contexts.get(context);
   if (!authority) throw failure('an explicit domain context is required; copied context data grants no authority');
+  return authority;
+}
+
+export function validateDomainContext(context, workspace = context?.workspace) {
+  const authority = contextAuthority(context);
   if (canonicalPath(workspace) !== authority.workspace || JSON.stringify(coordinatorIdentity(workspace)) !== JSON.stringify(authority.identity)) throw failure('coordinator identity changed');
   for (const full of [authority.home, authority.root, authority.plansDir]) {
     safePath(full);
@@ -60,17 +65,26 @@ export function validateDomainContext(context, workspace = context?.workspace) {
   return authority;
 }
 
-export function domainPlanPath(context, argument) {
-  const authority = validateDomainContext(context);
+function resolveParentPath(authority, argument) {
   if (typeof argument !== 'string' || !argument || argument.includes('\0')) throw failure('parent plan path is invalid');
   const full = safePath(path.isAbsolute(argument) ? path.resolve(argument) : path.join(authority.plansDir, argument));
   if (path.dirname(full) !== authority.plansDir || !/^[^._/][^/]*\.hplan$/.test(path.basename(full))) throw failure('parent plan must be an .hplan directly inside the selected domain plans directory');
-  return safePath(full);
+  return full;
+}
+
+export function domainPlanPath(context, argument) {
+  const authority = contextAuthority(context);
+  resolveParentPath(authority, argument);
+  validateDomainContext(context);
+  return resolveParentPath(authority, argument);
 }
 
 export function authorizeDomainPlan(context, plan) {
-  const authority = validateDomainContext(context);
-  if (!plan?.fm?.domain_parent || plan.fm.domain_child || plan.fm.domain_parent.name !== authority.name || Number(plan.fm.plan_schema) < 3 || domainPlanPath(context, plan.fullPath) !== safePath(plan.fullPath)) throw failure('plan does not match the explicit domain parent authority');
+  const authority = contextAuthority(context);
+  if (!plan?.fm?.domain_parent || plan.fm.domain_child || plan.fm.domain_parent.name !== authority.name || Number(plan.fm.plan_schema) < 3) throw failure('plan does not match the explicit domain parent authority');
+  const full = resolveParentPath(authority, plan.fullPath);
+  validateDomainContext(context);
+  if (resolveParentPath(authority, plan.fullPath) !== full) throw failure('plan does not match the explicit domain parent authority');
   plans.set(plan, context);
   return plan;
 }
@@ -94,8 +108,10 @@ export function withPlanAuthority(original, updated) {
 export function planRecordRoot(workspace, plan) {
   const context = plans.get(plan);
   if (context) {
-    const authority = validateDomainContext(context, workspace);
-    domainPlanPath(context, plan.fullPath);
+    const authority = contextAuthority(context);
+    resolveParentPath(authority, plan.fullPath);
+    validateDomainContext(context, workspace);
+    resolveParentPath(authority, plan.fullPath);
     return authority.root;
   }
   if (plan?.fm?.domain_parent) throw failure('parent plan has no explicit domain context authority');
