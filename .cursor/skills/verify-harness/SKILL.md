@@ -1,6 +1,6 @@
 ---
 name: verify-harness
-description: Drive the Harness CLI the way an agent does. Use to prove orient, plan lock, implement gate, and worktree isolation against a real binary, not a unit mock.
+description: Prove Harness CLI intent lock, prepare, and worktree isolation with real commands. Use for runtime verification. Not for code review or general CLI questions.
 ---
 
 # Verify Harness
@@ -25,7 +25,7 @@ Two drives can run side by side. Give each drive its own `--workspace`, `--copil
 
 ## Doctor
 
-Run this read-only check before the first drive, and again after any failed drive:
+Each named drive runs this read-only check before its first action. Run it again after a failed drive before re-driving:
 
 ```bash
 node .cursor/skills/verify-harness/scripts/doctor.mjs
@@ -42,7 +42,7 @@ Use isolated temp git repos. Do not drive the operator checkout.
 3. Spawn `node packages/harness/bin/harness.mjs <command> --json`.
 4. Parse stdout JSON and the written plan file. Assert the observable values named in the feature map.
 
-Prefer the scripts in `scripts/` over a hand-typed argv. They are the harness recipe.
+Bind `verify-intent-lock`, `verify-prepare`, or `verify-issue-worktree` to the accepted plan. Harness runs their configured helper argv. Each helper owns readiness, doctor, drive, evidence, and cleanup. These helpers do not start a long-lived server.
 
 ## Evidence
 
@@ -53,9 +53,9 @@ Proof standards:
 - For a mutation, read the file again after the command returns.
 - Do not treat a passing unit test file as proof of the CLI.
 
-Write artifacts to `.cursor/skills/verify-harness/evidence/<feature>/`. Keep that directory out of git. When `/opt/cursor/artifacts` exists, copy the same files there.
+Write artifacts to `.cursor/skills/verify-harness/evidence/<feature>/`. The helper can use `HARNESS_DRIVE_EVIDENCE_ROOT` for an isolated output root. Keep evidence out of git. Each receipt records invocations, owned resource paths, doctor outcome, and cleanup. When `/opt/cursor/artifacts` exists, copy the same files there.
 
-A proof includes the action and the resulting state. Example for intent lock: `plan-new` stdout path, the plan's `intent_sources[0].path`, `intent_sources[0].sha256` equal to the sha256 of the spec bytes at lock, then `gate --phase implement` still exit `0` after the spec file is rewritten.
+A proof includes the action and the resulting state. Example for intent lock: `plan-new` stdout path, the plan's `intent_sources[0].path`, `intent_sources[0].sha256` equal to the sha256 of the spec bytes at lock, then `gate --phase implement` exits `1` after the spec file is rewritten and exits `0` only after an accepted source amendment.
 
 ## Cleanup
 
@@ -67,3 +67,17 @@ Delete temp workspaces, temp `HARNESS_HOME` dirs, and linked git worktrees the d
 - Intent lock proof: `node .cursor/skills/verify-harness/scripts/prove-intent-lock.mjs`
 - Worktree proof: `node .cursor/skills/verify-harness/scripts/prove-issue-worktree.mjs`
 - Prepare proof: `node .cursor/skills/verify-harness/scripts/prove-prepare.mjs`
+
+## Trigger Examples
+
+**Should trigger:**
+
+- "Prove that changed locked specs block implementation."
+- "Verify prepare preserves edited starter documents."
+- "Demonstrate issue worktree isolation through the CLI."
+
+**Should not trigger:**
+
+- "Review this code diff." Use code review.
+- "Explain a CLI option." Answer from command help.
+- "Verify a web application's login." Use that product's own recipe.

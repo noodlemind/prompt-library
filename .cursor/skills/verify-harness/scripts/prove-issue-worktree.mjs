@@ -106,13 +106,13 @@ try {
   git(ctx.ws, ['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`]);
   const plan = writePlan(ctx.ws);
 
-  const blocked = runHarness(['gate', '--phase', 'implement', '--plan', plan], ctx);
+  const blocked = await runHarness(['gate', '--phase', 'implement', '--plan', plan], ctx);
   assertEqual(blocked.status, 1, `blocked gate exit (${blocked.stderr} ${blocked.stdout})`);
   const blockedCheck = parseJson(blocked, 'blocked-gate').checks.find((item) => item.id === 'C-worktree');
   assertEqual(blockedCheck.pass, false, 'C-worktree on primary default branch');
   assertMatch(blockedCheck.message, /harness worktree/, 'C-worktree names worktree');
 
-  const added = runHarness(['worktree', '--slug', 'checkout-retry'], ctx);
+  const added = await runHarness(['worktree', '--slug', 'checkout-retry'], ctx);
   assertEqual(added.status, 0, `worktree add exit (${added.stderr})`);
   const tree = parseJson(added, 'worktree');
   assertEqual(tree.branch, 'harness/checkout-retry', 'worktree branch');
@@ -124,7 +124,7 @@ try {
   const srcGithub = path.join(ctx.ws, '.github');
   if (fs.existsSync(srcGithub)) fs.cpSync(srcGithub, path.join(tree.path, '.github'), { recursive: true });
   assertEqual(fs.existsSync(path.join(tree.path, plan)), false, 'uncommitted plan is absent from the new checkout');
-  const isolated = runHarness(['gate', '--phase', 'implement', '--plan', plan], {
+  const isolated = await runHarness(['gate', '--phase', 'implement', '--plan', plan], {
     ...ctx,
     ws: tree.path,
   });
@@ -132,7 +132,7 @@ try {
   const isolatedCheck = parseJson(isolated, 'isolated-gate').checks.find((item) => item.id === 'C-worktree');
   assertEqual(isolatedCheck.pass, true, 'C-worktree in linked worktree');
 
-  const ci = runHarness(['gate', '--phase', 'implement', '--plan', plan], { ...ctx, env: { CI: 'true' } });
+  const ci = await runHarness(['gate', '--phase', 'implement', '--plan', plan], { ...ctx, env: { CI: 'true' } });
   assertEqual(ci.status, 0, `CI gate exit (${ci.stderr})`);
   const ciCheck = parseJson(ci, 'ci-gate').checks.find((item) => item.id === 'C-worktree');
   assertEqual(ciCheck.pass, true, 'C-worktree skipped in CI');
