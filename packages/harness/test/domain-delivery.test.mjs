@@ -288,6 +288,14 @@ test('completed per-repo proof remains separate from joint compatibility, repair
 });
 
 test('creation uses the existing issue worktree policy without rewriting machine bindings or granting child trust', t => {
+  const ambient = Object.fromEntries(['CI', 'HARNESS_ALLOW_INPLACE'].map(name => [name, process.env[name]]));
+  for (const name of Object.keys(ambient)) delete process.env[name];
+  t.after(() => {
+    for (const [name, value] of Object.entries(ambient)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
   const f = fixture(t);
   git(f.roots.producer, ['branch', '-m', 'main']);
   git(f.roots.producer, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
