@@ -80,6 +80,20 @@ test('repo map is query-ranked, budgeted, and code-relevant', () => {
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
+test('repo map ranks by unique resolved importers without basename collisions', (t) => {
+  const { ws } = gitRepo({
+    'src/a.js': "import { b } from './b.js';\nimport { b as again } from '../src/b.js';\nexport function alpha() {}\n",
+    'src/b.js': 'export function b() {}\n',
+    'lib/b.js': 'export function other() {}\n',
+    'src/c.js': "import { b } from './b';\nexport function see() {}\n",
+  });
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  const map = buildRepoMap({ workspace: ws });
+  assert.deepEqual(map.files, ['src/b.js', 'lib/b.js', 'src/a.js', 'src/c.js']);
+  assert.match(map.body, /src\/b\.js` \(imported by 2\)/);
+  assert.doesNotMatch(map.body, /lib\/b\.js` \(imported by/);
+});
+
 test('a symlinked ancestor (src/ swapped for an outside symlink) never leaks outside content into the map; real files still mapped', () => {
   const { ws } = gitRepo({
     'src/payments.mjs': 'export function insidePayments() {}',

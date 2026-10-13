@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { buildNeighborhood } from '../lib/repo-map/index.mjs';
+import { buildNeighborhood, buildRepoMap } from '../lib/repo-map/index.mjs';
 import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 
 function gitRepo(files) {
@@ -270,5 +270,34 @@ test('a current structural index supplies the neighborhood and a stale one does 
     else process.env.HARNESS_HOME = previous;
     fs.rmSync(ws, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('extensionless relative imports reject ambiguous files and directory indexes', (t) => {
+  for (const targets of [
+    { 'b.js': 'export function b() {}\n', 'b.ts': 'export function other() {}\n' },
+    { 'b/index.js': 'export function b() {}\n', 'b/index.ts': 'export function other() {}\n' },
+  ]) {
+    const { ws } = gitRepo({ 'a.js': "import { b } from './b';\nexport function alpha() {}\n", ...targets });
+    t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+    assert.deepEqual(buildNeighborhood({ workspace: ws, files: ['a.js'] }).files, [
+      { rel: 'a.js', symbols: ['alpha'], imports: ['./b'], importedBy: [] },
+    ]);
+    const map = buildRepoMap({ workspace: ws });
+    assert.ok(map.files.includes('a.js'));
+    assert.doesNotMatch(map.body, /imported by/);
+  }
+});
+
+test('excluding the importer does not make a colliding module name unambiguous', (t) => {
+  for (const specifier of ['b', './b']) {
+    const { ws } = gitRepo({
+      'src/b.js': `import { b } from '${specifier}';\nexport function origin() {}\n`,
+      'src/b.ts': 'export function b() {}\n',
+    });
+    t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+    assert.deepEqual(buildNeighborhood({ workspace: ws, files: ['src/b.js'] }).files, [
+      { rel: 'src/b.js', symbols: ['origin'], imports: [specifier], importedBy: [] },
+    ]);
   }
 });

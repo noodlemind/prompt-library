@@ -59,11 +59,8 @@ function fileFacts(workspace, rels, { extract = lexicalExtract, preferStructural
 }
 
 function uniqueOther(rels, fromRel) {
-  const hits = [];
-  for (const rel of rels || []) {
-    if (rel !== fromRel) hits.push(rel);
-  }
-  return hits.length === 1 ? hits : [];
+  const hits = [...(rels || [])];
+  return hits.length === 1 && hits[0] !== fromRel ? hits : [];
 }
 
 function pathCandidates(normalized, fromRel, trackedSet) {
@@ -75,17 +72,17 @@ function pathCandidates(normalized, fromRel, trackedSet) {
   for (const ext of SOURCE_EXTENSIONS) {
     const file = `${normalized}${ext}`;
     const index = `${normalized}/index${ext}`;
-    if (file !== fromRel && trackedSet.has(file)) files.push(file);
-    if (index !== fromRel && trackedSet.has(index)) indexes.push(index);
+    if (trackedSet.has(file)) files.push(file);
+    if (trackedSet.has(index)) indexes.push(index);
   }
   const init = `${normalized}/__init__.py`;
-  if (init !== fromRel && trackedSet.has(init)) indexes.push(init);
+  if (trackedSet.has(init)) indexes.push(init);
   return files.length ? files : indexes;
 }
 
 function relativeTargets(fromRel, specifier, trackedSet) {
   const normalized = path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), specifier));
-  return pathCandidates(normalized, fromRel, trackedSet);
+  return uniqueOther(pathCandidates(normalized, fromRel, trackedSet), fromRel);
 }
 
 function dotsToRelative(specifier) {
@@ -202,21 +199,11 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   const { facts: info, structural } = fileFacts(workspace, files, { extract, preferStructural });
   const tiers = { treesitter: 0, lexical: 0, error: 0, unreadable: 0 };
   for (const fact of info.values()) {
-    fact.importedBy = 0;
     tiers[fact.tier] += 1;
   }
-
-    const byStem = new Map();
-  for (const rel of files) {
-    const stem = path.basename(rel).replace(/\.\w+$/, '');
-    if (!byStem.has(stem)) byStem.set(stem, []);
-    byStem.get(stem).push(rel);
-  }
-  for (const { imports } of info.values()) {
-    for (const imp of imports) {
-      const last = imp.replace(/['"]/g, '').split(/[./\\]/).filter(Boolean).pop();
-      for (const target of byStem.get(last) || []) info.get(target).importedBy += 1;
-    }
+  const { incoming } = importEdges(info, new Set(files));
+  for (const fact of info.values()) {
+    fact.importedBy = incoming.get(fact.rel)?.length || 0;
   }
 
   const queryTokens = new Set(tokenize(query));
