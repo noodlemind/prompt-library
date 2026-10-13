@@ -1,3 +1,5 @@
+import { gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
+import { planRecordRoot, planHome, planTrustHome, validateDomainContext } from './domain-context.mjs';
 import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'node:child_process';
@@ -93,14 +95,16 @@ function yamlQuote(value) {
  * gate on the verified lane is untouched — insights are a separate episode
  * kind, ranked below verified fixes and barred from promotion.
  */
-export function runInsightCompound({ workspace, copilotHome, flags, log = () => {}, kind = 'insight', home }) {
+export function runInsightCompound({ workspace, copilotHome, flags, log = () => {}, kind = 'insight', home, domainContext = null, authorizedPlan = null }) {
   let verifiedProof = null;
+  let publicationPlan = authorizedPlan;
   if (kind === 'fix') {
-    const selected = selectPlan(workspace, { planPath: flags.plan, requireUnique: true });
+    const selected = authorizedPlan ? { plan: authorizedPlan } : selectPlan(workspace, { planPath: flags.plan, home, domainContext, requireUnique: true });
     if (!selected.plan) return { pass: false, exitCode: 2, kind, path: null, blockedReason: 'Verified fix requires a selected plan' };
     const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
     if (!checked.pass) return { pass: false, exitCode: 2, kind, path: null, blockedReason: checked.message };
     verifiedProof = checked.value;
+    publicationPlan = selected.plan;
   }
   // Kill switch: only the fully-off mode blocks insight capture — freeze and
   // capture-only both keep this lane open (the mode matrix, Task 4).
@@ -183,7 +187,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   // get a deterministic numeric suffix.
   const base = `${date}-${slugify(title)}${flags.operationSuffix ? `-${flags.operationSuffix}` : ''}`;
   const scope = flags.publicationScope || 'private';
-  const target = publicationTarget({ workspace, copilotHome, home, scope });
+  const target = publicationTarget({ workspace, copilotHome, home, scope, plan: publicationPlan });
   const dirRel = path.join(target.dirRel, category);
   // Physical containment: a symlinked docs/solutions (or category) directory
   // must never let the write land outside the chosen base (workspace or the
@@ -199,8 +203,9 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
     };
   }
-  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
-  return withKnowledgeIndexLock({ knowledgeRoot, workspace, copilotHome, flags, log, home }, rebuild => {
+  const privateParent = publicationPlan?.fm?.domain_parent && scope === 'private' ? publicationPlan : null;
+  const knowledgeRoot = privateParent ? path.join(planRecordRoot(workspace, privateParent), '.harness/knowledge') : copilotHome ? path.join(copilotHome, 'knowledge') : null;
+  return withKnowledgeIndexLock({ knowledgeRoot, workspace, copilotHome, flags, log, home, plan: privateParent }, rebuild => {
     let rel;
     let replayed = false;
     if (flags.dryRun) {
@@ -245,7 +250,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
     // just-written episode and restore all of it so retrieval state is exactly
     // pre-write, then return a clean, recoverable failure the caller handles.
     const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
-    const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
+    const indexDir = privateParent ? path.join(planRecordRoot(workspace, privateParent), '.harness/knowledge-index') : resolveIndexDir(copilotHome || '', workspace, home);
     const snapshots = [
       [manifestPath, snapshotFile(manifestPath)],
       [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
@@ -313,7 +318,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
   });
 }
 
-async function runLearningDecision({ workspace, copilotHome, flags, log }) {
+async function runLearningDecision({ workspace, copilotHome, flags, log, domainContext = null }) {
   if (flags.insight) throw new Error('A verified learning decision cannot be combined with --insight');
   const text = flags.learningDecision === '-' ? readBoundedInput() : readFileNoFollow(path.resolve(workspace, flags.learningDecision), { maxBytes: 1024 * 1024 });
   if (!text || Buffer.byteLength(text) > 1024 * 1024) throw new Error('Learning decision is missing, unreadable, or too large');
@@ -321,12 +326,14 @@ async function runLearningDecision({ workspace, copilotHome, flags, log }) {
   if (!decision || typeof decision !== 'object' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(decision.operation || '') || !['no-learning', 'publish'].includes(decision.decision)
     || typeof decision.rationale !== 'string' || !decision.rationale.trim() || (decision.scope && !['private', 'global', 'ship-set-proposal'].includes(decision.scope)) || Object.keys(decision).some(key => !['operation', 'decision', 'rationale', 'scope', 'title', 'body', 'category', 'tags', 'trigger', 'claim'].includes(key))) throw new Error('Learning decision requires operation, decision, rationale, and a supported publication scope');
   if (decision.decision === 'publish' && (typeof decision.title !== 'string' || !decision.title.trim() || typeof decision.body !== 'string' || !decision.body.trim() || decision.tags !== undefined && (!Array.isArray(decision.tags) || !decision.tags.every(tag => typeof tag === 'string')))) throw new Error('Publication requires authored title, body and optional text tags');
-  const selected = selectPlan(workspace, { planPath: flags.plan, session: readSession(workspace), requireUnique: true });
+  const selected = selectPlan(workspace, { planPath: flags.plan, session: readSession(workspace), requireUnique: true, home: flags.harnessHome, domainContext });
   if (!selected.plan) throw new Error('Learning decision requires an unambiguous plan');
+  const recordRoot = planRecordRoot(workspace, selected.plan);
+  const home = planHome(workspace, selected.plan, flags.harnessHome || process.env.HARNESS_HOME);
   const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
   if (!checked.pass) return { pass: false, exitCode: 2, blockedReason: checked.message, plan: selected.plan.path, path: null };
   const operation = recordHash(decision.operation);
-  const target = decision.decision === 'publish' ? publicationTarget({ workspace, copilotHome, home: flags.harnessHome || process.env.HARNESS_HOME, scope: decision.scope || 'private' }) : null;
+  const target = decision.decision === 'publish' ? publicationTarget({ workspace, copilotHome, home, plan: selected.plan, scope: decision.scope || 'private' }) : null;
   const destination = target ? { base: path.resolve(target.base), dirRel: target.dirRel.replace(/\\/g, '/') } : null;
   const digest = recordHash({ decision, proof: checked.value.verificationIdentity, ...(destination ? { destination } : {}) });
   const compatible = record => {
@@ -337,38 +344,39 @@ async function runLearningDecision({ workspace, copilotHome, flags, log }) {
     if (record.digest !== digest && !legacy) throw new Error('Learning operation identity conflicts with a different decision, destination or proof');
   };
   const rel = `.harness/learning/${operation}.json`;
-  const existing = readReviewRecord(workspace, rel);
+  const existing = readReviewRecord(recordRoot, rel);
   compatible(existing);
-  const publish = captureDate => runInsightCompound({ workspace, copilotHome, flags: { ...flags, plan: selected.plan.path, title: decision.title, body: decision.body, category: decision.category, tags: Array.isArray(decision.tags) ? decision.tags.join(',') : '', trigger: decision.trigger, claim: decision.claim, captureDate, operationSuffix: operation.slice(0, 16), publicationScope: decision.scope || 'private' }, log, kind: 'fix', home: flags.harnessHome || process.env.HARNESS_HOME });
+  const publish = captureDate => runInsightCompound({ workspace, copilotHome, flags: { ...flags, plan: selected.plan.path, title: decision.title, body: decision.body, category: decision.category, tags: Array.isArray(decision.tags) ? decision.tags.join(',') : '', trigger: decision.trigger, claim: decision.claim, captureDate, operationSuffix: operation.slice(0, 16), publicationScope: decision.scope || 'private' }, log, kind: 'fix', home, domainContext, authorizedPlan: selected.plan });
   if (flags.dryRun) return decision.decision === 'publish' ? { ...publish(existing?.captureDate), dryRun: true } : { pass: true, exitCode: 0, dryRun: true, decision: decision.decision, path: null, indexed: null };
-  publishReviewRecord(workspace, '.harness/learning/.ready.json', { version: 1 });
+  publishReviewRecord(recordRoot, '.harness/learning/.ready.json', { version: 1 });
   const pointer = learningPointerRel(selected.plan.path);
-  return withPlanUpdateLock(path.join(workspace, pointer), () => withPlanUpdateLock(path.join(workspace, rel), () => {
-    const prior = readReviewRecord(workspace, rel);
+  return withPlanUpdateLock(path.join(recordRoot, pointer), () => withPlanUpdateLock(path.join(recordRoot, rel), () => {
+    const prior = readReviewRecord(recordRoot, rel);
     compatible(prior);
-    const priorPublicationCurrent = !prior || learningPublicationCurrent(workspace, prior, { copilotHome, home: flags.harnessHome || process.env.HARNESS_HOME });
+    const priorPublicationCurrent = !prior || learningPublicationCurrent(recordRoot, prior, { workspace, copilotHome, home, plan: selected.plan });
     if (prior?.state === 'done' && priorPublicationCurrent) {
-      publishReviewRecord(workspace, pointer, { version: 1, operation, record: rel });
+      publishReviewRecord(recordRoot, pointer, { version: 1, operation, record: rel });
       return { ...prior.result, learningRecord: rel, replayed: true };
     }
     const pending = prior ? { ...prior, digest, ...(destination ? { destination } : {}) } : { version: 1, operation, digest, decision, ...(destination ? { destination } : {}), proof: checked.value, captureDate: new Date().toISOString().slice(0, 10), state: 'pending' };
     const fresh = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
     if (!fresh.pass || fresh.id !== checked.id) throw new Error('Work changed before learning publication');
-    publishReviewRecord(workspace, pointer, { version: 1, operation, record: rel });
-    publishReviewRecord(workspace, rel, pending);
+    publishReviewRecord(recordRoot, pointer, { version: 1, operation, record: rel });
+    publishReviewRecord(recordRoot, rel, pending);
     const result = decision.decision === 'no-learning'
       ? { pass: true, exitCode: 0, decision: 'no-learning', path: null, indexed: null, plan: selected.plan.path, verificationEvidence: checked.value.evidencePath }
       : publish(pending.captureDate);
-    publishReviewRecord(workspace, rel, { ...pending, state: result.pass ? 'done' : result.partialRecovery ? 'blocked' : 'pending', result });
+    publishReviewRecord(recordRoot, rel, { ...pending, state: result.pass ? 'done' : result.partialRecovery ? 'blocked' : 'pending', result });
     return { ...result, learningRecord: rel };
   }));
 }
 
-export async function runCompound({ workspace, copilotHome, flags, log = () => {} }) {
-  if (flags.learningDecision) return runLearningDecision({ workspace, copilotHome, flags, log });
+export async function runCompound({ workspace, copilotHome, flags, log = () => {}, domainContext = null }) {
+  if (flags.learningDecision) return runLearningDecision({ workspace, copilotHome, flags, log, domainContext });
+  if (domainContext && flags.insight) throw new Error('Domain learning requires a selected verified parent and an authored learning decision');
   if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log, home: flags.home });
-  const session = readSession(workspace);
-  const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true });
+  const session = readSession(domainContext ? validateDomainContext(domainContext, workspace).root : workspace);
+  const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true, home: flags.harnessHome, domainContext });
   if (!selected.plan) {
     return {
       pass: false,
@@ -381,12 +389,12 @@ export async function runCompound({ workspace, copilotHome, flags, log = () => {
     };
   }
 
-  const evidence = readEvidence(workspace, selected.plan.path);
+  const evidence = readEvidence(planRecordRoot(workspace, selected.plan), selected.plan.path);
   const freshness = validateEvidence({
     workspace,
     plan: selected.plan,
     evidence,
-    maxAgeHours: loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome) }).evidenceTtlHours,
+    maxAgeHours: loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome), home: planTrustHome(workspace, selected.plan) }).evidenceTtlHours,
     copilotHome,
   });
   if (!freshness.pass) {
@@ -401,7 +409,7 @@ export async function runCompound({ workspace, copilotHome, flags, log = () => {
     };
   }
 
-  const knowledgeRoot = copilotHome ? path.join(copilotHome, 'knowledge') : null;
+  const knowledgeRoot = selected.plan.fm.domain_parent ? path.join(planRecordRoot(workspace, selected.plan), '.harness/knowledge') : copilotHome ? path.join(copilotHome, 'knowledge') : null;
 
   const indexed = runIndexKnowledge({
     knowledgeRoot,
@@ -409,7 +417,8 @@ export async function runCompound({ workspace, copilotHome, flags, log = () => {
     copilotHome,
     flags,
     log,
-    home: flags?.home,
+    home: planHome(workspace, selected.plan, flags.harnessHome || flags.home),
+    plan: selected.plan,
   });
 
   let codeIndex = null;
@@ -429,7 +438,7 @@ export async function runCompound({ workspace, copilotHome, flags, log = () => {
     }
   }
 
-  const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 4000, env: gitMetadataEnvironment() });
   if (!flags.dryRun && head.status === 0 && codeIndex && !codeIndex.written) {
     return {
       pass: false,
@@ -450,9 +459,10 @@ export async function runCompound({ workspace, copilotHome, flags, log = () => {
     dryRun: flags.dryRun,
   });
 
-  const sessionState = readSession(workspace) || {};
+  const recordRoot = planRecordRoot(workspace, selected.plan);
+  const sessionState = readSession(recordRoot) || {};
   writeSession(
-    workspace,
+    recordRoot,
     {
       ...sessionState,
       lastCompoundAt: new Date().toISOString(),

@@ -22,6 +22,7 @@ import { validatePlanScope } from '../lib/plan-scope.mjs';
 import { listCommands } from '../lib/registry.mjs';
 import { HELP_COMMAND_ORDER } from '../bin/harness.mjs';
 import YAML from 'yaml';
+import { runNamedCheck } from '../lib/checks.mjs';
 import { approveProject } from '../lib/trust.mjs';
 import { tempDir, runHarness, writePlan, packageRoot, binPath } from './helpers/index.mjs';
 import {
@@ -61,7 +62,7 @@ test('evidence metadata is authoritative and malformed hashed evidence falls bac
     checks: [],
   });
   const generated = JSON.parse(fs.readFileSync(path.join(workspace, rel), 'utf8'));
-  assert.equal(generated.version, 4);
+  assert.equal(generated.version, 5);
   assert.notEqual(generated.verifiedAt, '2000-01-01T00:00:00.000Z');
   assert.equal(generated.evidencePath, rel);
 
@@ -131,6 +132,25 @@ test('evidence binding records the git head and rejects a different or invalid h
   });
   assert.equal(unbound.pass, false);
   assert.match(unbound.message, /not bound|binding.*invalid/i);
+});
+
+test('completion proof rejects a modified required artifact and legacy evidence cannot claim artifact integrity', async t => {
+  const workspace = tempDir('harness-artifact-proof-');
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const planPath = writeVersionedPlan(workspace);
+  const config = { command: [process.execPath, '-e', "require('node:fs').writeFileSync(require('node:path').join(process.env.HARNESS_CHECK_ARTIFACT_DIR,'receipt.json'),JSON.stringify({result:'observed'}))"], artifacts: ['receipt.json'] };
+  fs.writeFileSync(path.join(workspace, '.github/harness/checks.yaml'), YAML.stringify({ version: 1, checks: { 'unit-tests': config } }));
+  initGit(workspace);
+  const plan = loadPlan(workspace, planPath);
+  const check = await runNamedCheck(workspace, 'unit-tests', config);
+  assert.equal(check.status, 'passed', check.message);
+  const evidence = { version: 5, plan: planPath, outcome: 'passed', verifiedAt: new Date().toISOString(), binding: createEvidenceBinding({ workspace, plan, base: 'HEAD', changedFiles: [] }), checks: [check, { id: 'criteria-evidence', status: 'passed' }] };
+  assert.equal(validateEvidence({ workspace, plan, evidence }).pass, true);
+  assert.equal(validateEvidence({ workspace, plan, evidence: { ...evidence, version: 4 } }).pass, false);
+  fs.writeFileSync(path.join(workspace, check.artifacts[0].path), '{"result":"changed"}');
+  const invalid = validateEvidence({ workspace, plan, evidence });
+  assert.equal(invalid.pass, false);
+  assert.match(invalid.message, /artifact changed/i);
 });
 
 test('verify gate requires executed verification evidence, not just a plan heading', () => {

@@ -176,7 +176,7 @@ export function findMatchingPlans(workspace, query, limit = 3) {
 
   for (const { dir, label } of planReadDirs(workspace)) {
     for (const f of fs.readdirSync(dir)) {
-      if (!f.endsWith('.md') || seen.has(f)) continue;
+      if (!/\.(?:md|hplan)$/.test(f) || seen.has(f)) continue;
       const full = path.join(dir, f);
       const raw = readFileNoFollow(full, { root: dir });
       if (raw === null) continue;

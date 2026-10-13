@@ -34,11 +34,14 @@ Escalate when investigation reveals a data migration, security or concurrency im
 1. Use `harness lookup` or `harness orient --read` to retrieve existing plans. Judge semantic overlap before creating another work item.
 2. Read selected specs and relevant /recall evidence. Resolve ambiguity from available sources. If required intent remains ambiguous, capture an unlocked needs-info draft and state the missing decision.
 3. Read `.github/harness/checks.yaml` and inspect each candidate assertion. Never invent a named check. A schema-validation check is inadequate when no schema output is planned. Choose a relevant trusted check and explain any limitation.
+   For a visible behavior change, inspect orient's verification metadata and read the selected recipe. Resolve an ambiguous or incomplete inventory through an explicit accepted selection. Read [product-verification.md](../create-primitive/references/product-verification.md) when creating or updating the recipe or feature map. Choose affected features and shared prerequisites, then bind their named drives to criteria. Create a missing recipe only within the Deliver plan's accepted scope. Answer mode does not create plans or recipes.
 4. Use `harness plan-new --file <creation.json> --json` for new work. Use `harness plan-update --plan <path> --file <decision.json> --json` for accepted amendments, reasoning, phases, progress, findings, gaps, and completion. See `../references/plan-operations.md`. Do not generate frontmatter, headings, dates, hashes, or activity records.
 5. Before the first product edit on the default branch of a primary checkout, use `harness worktree --slug <slug>`. Keep later operations bound to that workspace.
 6. Submit a start decision as its own tool call. Harness validates readiness, changes state, and publishes the implement gate as one recoverable operation. Wait for explicit success before making a product edit in a later tool call. A blocked result supplies missing prerequisites.
 
 ## Continue delivery
+
+After prerequisites pass, follow orient's returned procedure read pointers. A current accepted playbook activates the internal /caffeinated skill by an actual read; a path or `skills_used` declaration alone is insufficient. That skill continues the established Deliver work without repeating intake classification or planning. Missing prerequisites stay with /ensure-plan, and high uncertainty remains abstention.
 
 Implement within the accepted scope. Use focused TDD checks during implementation. Record accepted progress through the CLI. Prepare review with `harness review prepare`, obtain the required judgments, fix valid findings, and collect them with `harness review assemble`. Require passed `harness verify`, then record durable learning or explicit no-learning with `harness compound --learning-decision <file>`. Submit a complete decision.
 

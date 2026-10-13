@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { approveProject } from '../../../../packages/harness/lib/trust.mjs';
+import { runProcess } from '../../../../packages/harness/lib/runner.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const skillRoot = path.resolve(here, '..');
@@ -17,13 +18,21 @@ const requireYaml = createRequire(path.join(packageRoot, 'package.json'));
 export const YAML = requireYaml('yaml');
 
 export const GIT_ENV = {
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_CONFIG_SYSTEM: '/dev/null',
+  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+  GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
   GIT_AUTHOR_NAME: 'harness-verify',
   GIT_AUTHOR_EMAIL: 'harness-verify@example.test',
   GIT_COMMITTER_NAME: 'harness-verify',
   GIT_COMMITTER_EMAIL: 'harness-verify@example.test',
 };
+
+const lifecycle = { outcome: 'failed', doctor: null, commands: [], resources: [], cleaned: false };
+const evidenceFiles = [];
+const copiedFiles = new Map();
+const controller = new AbortController();
+let listening = false;
+let cancellationPoll = null;
+const feature = path.basename(process.argv[1] || '').replace(/^prove-/, '').replace(/\.mjs$/, '');
 
 export function git(cwd, args) {
   const result = spawnSync('git', args, {
@@ -60,7 +69,30 @@ export function writeTracked(ws, rel, body) {
 }
 
 export function initWorkspace() {
+  if (!listening) {
+    listening = true;
+    const cancel = () => { lifecycle.outcome = 'cancelled'; controller.abort(); };
+    for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
+      cancel();
+    });
+    const notice = process.env.HARNESS_RUN_CANCEL_FILE;
+    if (typeof notice === 'string' && path.isAbsolute(notice)) {
+      cancellationPoll = setInterval(() => {
+        try {
+          const stat = fs.lstatSync(notice);
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 256) return;
+          const message = JSON.parse(fs.readFileSync(notice, 'utf8'));
+          if (message.version === 1 && message.pid === process.pid) cancel();
+        } catch { /* the owned cancellation notice appears only on interruption */ }
+      }, 25);
+      cancellationPoll.unref();
+    }
+  }
+  const doctor = spawnSync(process.execPath, [path.join(here, 'doctor.mjs')], { encoding: 'utf8', timeout: 30_000 });
+  lifecycle.doctor = { exitCode: doctor.status, stdout: doctor.stdout, stderr: doctor.stderr };
+  assertEqual(doctor.status, 0, 'doctor before drive');
   const ws = tempDir('verify-harness-ws-');
+  lifecycle.resources.push(ws);
   git(ws, ['init', '-q']);
   git(ws, ['config', 'user.email', 'harness-verify@example.test']);
   git(ws, ['config', 'user.name', 'Harness Verify']);
@@ -75,15 +107,18 @@ export function initWorkspace() {
   git(ws, ['commit', '-qm', 'baseline']);
   const home = tempDir('verify-harness-home-');
   const copilotHome = tempDir('verify-harness-copilot-');
+  lifecycle.resources.push(home, copilotHome);
   approveProject({ workspace: ws, copilotHome, home });
   return { ws, home, copilotHome };
 }
 
-export function runHarness(args, { ws, home, copilotHome, env = {} }) {
+export async function runHarness(args, { ws, home, copilotHome, env = {} }) {
   const full = [...args, '--workspace', ws, '--copilot-home', copilotHome, '--json'];
-  return spawnSync(process.execPath, [binPath, ...full], {
+  const execution = await runProcess({
+    argv: [process.execPath, binPath, ...full],
     cwd: packageRoot,
-    encoding: 'utf8',
+    timeoutMs: 30_000,
+    signal: controller.signal,
     env: {
       ...process.env,
       ...GIT_ENV,
@@ -93,19 +128,34 @@ export function runHarness(args, { ws, home, copilotHome, env = {} }) {
       ...env,
     },
   });
+  const result = { status: execution.exitCode, stdout: execution.stdout, stderr: execution.stderr };
+  lifecycle.commands.push({ argv: [process.execPath, binPath, ...full], cwd: packageRoot, workspace: ws, exitCode: result.status, stdout: result.stdout, stderr: result.stderr });
+  if (process.env.HARNESS_DRIVE_PAUSE_AFTER && lifecycle.commands.length === Number(process.env.HARNESS_DRIVE_PAUSE_AFTER)) {
+    const paused = await runProcess({ argv: [process.execPath, '-e', "console.log('verification-ready:' + process.pid); setTimeout(() => {}, 60000)"], cwd: packageRoot,
+      timeoutMs: 30_000, signal: controller.signal, onStdout: chunk => process.stdout.write(chunk), onSpawn: () => {} });
+    lifecycle.commands.push({ command: 'owned cancellation probe', status: paused.status, pid: paused.pid, groupReaped: paused.groupReaped, treeTermination: paused.treeTermination });
+    assertEqual(paused.status, 'ok', 'drive pause completed');
+  }
+  if (process.env.HARNESS_DRIVE_FAIL_AFTER && lifecycle.commands.length >= Number(process.env.HARNESS_DRIVE_FAIL_AFTER)) {
+    throw new Error('Injected verification drive failure');
+  }
+  return result;
 }
 
 export function writeEvidence(feature, payload) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dir = path.join(skillRoot, 'evidence', feature);
+  const dir = path.join(process.env.HARNESS_CHECK_ARTIFACT_DIR || process.env.HARNESS_DRIVE_EVIDENCE_ROOT || path.join(skillRoot, 'evidence'), feature);
   fs.mkdirSync(dir, { recursive: true });
-  const dest = path.join(dir, `${stamp}.json`);
+  const dest = path.join(dir, process.env.HARNESS_CHECK_ARTIFACT_DIR ? 'drive.json' : `${stamp}.json`);
   fs.writeFileSync(dest, `${JSON.stringify(payload, null, 2)}\n`);
+  evidenceFiles.push(dest);
+  lifecycle.outcome = 'passed';
   const artifactsRoot = '/opt/cursor/artifacts';
   let copied = null;
   if (fs.existsSync(artifactsRoot)) {
     copied = path.join(artifactsRoot, `verify-harness-${feature}-${stamp}.json`);
     fs.copyFileSync(dest, copied);
+    copiedFiles.set(dest, copied);
   }
   return { dest, copied };
 }
@@ -123,7 +173,20 @@ export function assertMatch(actual, re, label) {
 }
 
 export function cleanup(dirs) {
-  for (const dir of dirs) {
+  if (cancellationPoll) clearInterval(cancellationPoll);
+  for (const dir of new Set([...lifecycle.resources, ...dirs])) {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+  lifecycle.cleaned = lifecycle.resources.every(dir => !fs.existsSync(dir));
+  if (!evidenceFiles.length) {
+    const outcome = lifecycle.outcome;
+    writeEvidence(feature, { feature, steps: [] });
+    lifecycle.outcome = outcome;
+  }
+  for (const file of evidenceFiles) {
+    const receipt = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fs.writeFileSync(file, `${JSON.stringify({ ...receipt, lifecycle }, null, 2)}\n`);
+    if (copiedFiles.has(file)) fs.copyFileSync(file, copiedFiles.get(file));
+    assertEqual(fs.existsSync(file), true, 'evidence survives cleanup');
   }
 }

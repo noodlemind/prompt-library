@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { runProcess } from '../lib/runner.mjs';
 
@@ -200,6 +203,113 @@ test('win32 termination path calls killFn once with no POSIX-style escalation', 
   assert.equal(calls[0].plat, 'win32');
 });
 
+for (const termination of [
+  { status: 'confirmed', exitCode: 0 },
+  { status: 'failed', exitCode: 1 },
+  undefined,
+]) {
+  test(`Windows reap requires confirmed tree termination and child closure (${termination?.status || 'unknown'})`, async () => {
+    const child = new EventEmitter();
+    child.pid = 424244;
+    const controller = new AbortController();
+    const pending = runProcess({ argv: ['fake'], spawnFn: () => child, platform: 'win32', signal: controller.signal,
+      killFn: () => termination, killGraceMs: 1, groupReapTimeoutMs: 10 });
+    controller.abort();
+    child.emit('close', 0, null);
+    const result = await pending;
+    assert.equal(result.status, 'cancelled');
+    assert.equal(result.groupReaped, termination?.status === 'confirmed' ? true : termination?.status === 'failed' ? false : null);
+    assert.equal(result.treeTermination?.status, termination?.status || 'unknown');
+  });
+}
+
+test('Windows successful taskkill without child closure does not prove reap', async () => {
+  const child = new EventEmitter();
+  child.pid = 424245;
+  const controller = new AbortController();
+  const pending = runProcess({ argv: ['fake'], spawnFn: () => child, platform: 'win32', signal: controller.signal,
+    killFn: () => ({ status: 'confirmed', exitCode: 0 }), killGraceMs: 1, groupReapTimeoutMs: 10 });
+  controller.abort();
+  assert.equal((await pending).groupReaped, false);
+});
+
+test('Windows cooperative notice reaches the owned process before the bounded force-kill fallback', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-cooperative-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cancellationFile = path.join(root, 'cancel.json');
+  const child = new EventEmitter();
+  child.pid = 424246;
+  const controller = new AbortController();
+  let killCalls = 0;
+  let spawnedEnv;
+  const pending = runProcess({ argv: ['fake'], platform: 'win32', cancellationFile, signal: controller.signal,
+    spawnFn: (_cmd, _args, options) => { spawnedEnv = options.env; return child; }, killFn: () => { killCalls++; return { status: 'confirmed' }; }, killGraceMs: 30, groupReapTimeoutMs: 10 });
+  controller.abort();
+  assert.equal(spawnedEnv.HARNESS_RUN_CANCEL_FILE, cancellationFile);
+  assert.deepEqual(JSON.parse(fs.readFileSync(cancellationFile)), { version: 1, pid: child.pid });
+  assert.equal(killCalls, 0);
+  child.emit('close', 1, null);
+  const result = await pending;
+  assert.equal(result.status, 'cancelled');
+  assert.equal(result.groupReaped, null);
+  assert.equal(result.cancellationNotice.requested, true);
+  await delay(40);
+  assert.equal(killCalls, 0, 'a closed cooperative process must never be killed later by its recycled PID');
+});
+
+test('Windows uncooperative notice falls back to a confirmed tree kill after grace', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-force-fallback-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const child = new EventEmitter();
+  child.pid = 424247;
+  const controller = new AbortController();
+  let killed = false;
+  const pending = runProcess({ argv: ['fake'], platform: 'win32', cancellationFile: path.join(root, 'cancel.json'), signal: controller.signal,
+    spawnFn: () => child, killFn: () => { killed = true; queueMicrotask(() => child.emit('close', null, 'SIGKILL')); return { status: 'confirmed' }; }, killGraceMs: 10, groupReapTimeoutMs: 100 });
+  controller.abort();
+  assert.equal(killed, false);
+  const result = await pending;
+  assert.equal(killed, true);
+  assert.equal(result.groupReaped, true);
+});
+
+test('an existing cancellation notice cannot be overwritten and force-kill failure stays visible', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-notice-conflict-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cancellationFile = path.join(root, 'cancel.json');
+  fs.writeFileSync(cancellationFile, 'foreign bytes');
+  const child = new EventEmitter();
+  child.pid = 424248;
+  const controller = new AbortController();
+  const pending = runProcess({ argv: ['fake'], platform: 'win32', cancellationFile, signal: controller.signal,
+    spawnFn: () => child, killFn: () => { queueMicrotask(() => child.emit('close', 0, null)); return { status: 'failed', exitCode: 1 }; } });
+  controller.abort();
+  const result = await pending;
+  assert.equal(result.cancellationNotice.requested, false);
+  assert.equal(result.cancellationNotice.errorCode, 'EEXIST');
+  assert.equal(fs.readFileSync(cancellationFile, 'utf8'), 'foreign bytes');
+  assert.equal(result.groupReaped, false);
+});
+
+test('native Windows taskkill confirms that the owned child and grandchild are gone', { skip: !isWin32 }, async t => {
+  const controller = new AbortController();
+  let ready;
+  const readiness = new Promise(resolve => { ready = resolve; });
+  let childPid;
+  let grandchildPid;
+  const script = "const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); console.log(child.pid); setInterval(()=>{},1000);";
+  const pending = runProcess({ argv: [process.execPath, '-e', script], signal: controller.signal,
+    onSpawn: details => { childPid = details.pid; }, onStdout: chunk => { const pid = Number(String(chunk).trim()); if (Number.isInteger(pid) && pid > 0) { grandchildPid = pid; ready(); } } });
+  t.after(() => controller.abort());
+  await Promise.race([readiness, pending.then(result => { throw new Error(`tree ended before probe: ${JSON.stringify(result)}`); })]);
+  controller.abort();
+  const result = await pending;
+  assert.equal(result.groupReaped, true, JSON.stringify(result));
+  assert.equal(result.treeTermination.status, 'confirmed');
+  assert.equal(await waitForProcessGone(childPid), true);
+  assert.equal(await waitForProcessGone(grandchildPid), true);
+});
+
 const PLATFORM_INJECTED_ENV_KEYS = {
   darwin: ['__CF_USER_TEXT_ENCODING'],
   win32: [
@@ -271,6 +381,23 @@ test('a plain failed spawn (no abort) still settles as failed', async () => {
   const result = await runProcess({ argv: ['/definitely/not/a/real/executable-harness-fixwave'] });
   assert.equal(result.status, 'failed');
   assert.equal(result.exitCode, null);
+});
+
+test('a provenance callback failure terminates and reaps the owned process group', async () => {
+  let pid;
+  const result = await runProcess({ argv: [process.execPath, '-e', 'setTimeout(() => {}, 10000)'], onSpawn: details => { pid = details.pid; throw new Error('durable provenance failed'); }, killGraceMs: 20 });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.groupReaped, true);
+  assert.equal(processExists(pid), false);
+  assert.match(result.provenanceError, /durable provenance failed/);
+});
+
+test('group reap deadline reports a surviving group without inventing safe recovery', async () => {
+  const child = new EventEmitter(); child.pid = 424243; child.stdout = null; child.stderr = null;
+  const controller = new AbortController();
+  const pending = runProcess({ argv: ['fake'], spawnFn: () => child, platform: 'linux', signal: controller.signal, killFn: () => {}, groupAliveFn: () => true, killGraceMs: 1, groupReapTimeoutMs: 10 });
+  controller.abort(); child.emit('close', null, 'SIGTERM');
+  assert.equal((await pending).groupReaped, false);
 });
 
 test('a throwing killFn never breaks the always-resolve contract', async () => {

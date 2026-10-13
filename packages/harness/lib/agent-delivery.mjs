@@ -4,23 +4,41 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { readSession } from './session.mjs';
-import { loadPlan } from './plan-parse.mjs';
+import { planFromText, loadPlan } from './plan-parse.mjs';
+import { parseFlags } from './flags.mjs';
+import { resolveDomainContext } from './domain-context.mjs';
+import { resolvePlanUpdateFile } from './plan-update.mjs';
+import { readFileNoFollow } from './fs-safe.mjs';
 import { readEvidence } from './evidence.mjs';
-import { normalizeToolPayload, unwrapShellSegments } from '../corpus/hooks/lib/tool-payload.mjs';
+import { harnessControlCommand, normalizeToolPayload, unwrapShellSegments } from '../corpus/hooks/lib/tool-payload.mjs';
 
 export const DELIVERY_BIN = fileURLToPath(new URL('../bin/harness.mjs', import.meta.url));
 const HOOK_ROOT = fileURLToPath(new URL('../corpus/hooks/', import.meta.url));
 const COMMANDS = new Set(['orient', 'recall', 'plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound', 'report', 'status', 'trust', 'prepare', 'index']);
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 
-function toolPayload(call, workspace) {
+function inlineDecisionFlag(input) {
+  if (input.decision === undefined) return null;
+  const offset = ['domain', 'experiment'].includes(input.argv[0]) ? 1 : 0;
+  const operation = input.argv[offset];
+  const flag = operation === 'compound' ? '--learning-decision' : '--file';
+  if (!(input.argv[0] === 'experiment' ? ['begin', 'resolve'] : ['plan-new', 'plan-update', 'compound', 'review']).includes(operation)
+    || operation === 'review' && input.argv[offset + 1] !== 'assemble'
+    || input.argv.some(arg => arg === flag || arg.startsWith(`${flag}=`))) {
+    throw new Error('decision requires plan-new, plan-update, review assemble, compound, experiment begin or experiment resolve without an existing input file');
+  }
+  return flag;
+}
+
+function toolPayload(call, workspace, sessionId) {
   const input = call.input || {};
-  if (call.name === 'apply') return { workspace, tool_name: 'MultiEdit', tool_input: { edits: input.changes } };
+  const context = { workspace, session_id: sessionId || null };
+  if (call.name === 'apply') return { ...context, tool_name: 'MultiEdit', tool_input: { edits: input.changes } };
   if (call.name === 'exec' || call.name === 'bash') {
     const command = call.name === 'exec' ? (input.argv || []).map(quote).join(' ') : input.script;
-    return { workspace, tool_name: 'Bash', tool_input: { command } };
+    return { ...context, tool_name: 'Bash', tool_input: { command } };
   }
-  return { workspace, tool_name: call.name === 'write' ? 'Write' : call.name, tool_input: input };
+  return { ...context, tool_name: call.name === 'write' ? 'Write' : call.name, tool_input: input };
 }
 
 function trustMutation(command) {
@@ -51,12 +69,17 @@ export function beforeDeliveryTool(call, options) {
   if (call.name === 'todo') return { pass: true };
   if (call.name === 'harness') {
     const argv = call.input?.argv;
-    if (!Array.isArray(argv) || !argv.length || !argv.every(arg => typeof arg === 'string') || !COMMANDS.has(argv[0])) return { pass: false, reason: 'harness requires argv for a supported lifecycle command' };
+    if (!Array.isArray(argv) || !argv.length || !argv.every(arg => typeof arg === 'string')) return { pass: false, reason: 'harness requires argv for a supported lifecycle command or exact diagnostic/worklist control' };
+    let decisionFlag;
+    try { decisionFlag = inlineDecisionFlag(call.input); }
+    catch (error) { return { pass: false, reason: error.message }; }
+    const effectiveArgv = decisionFlag ? [...argv, decisionFlag, path.join(os.tmpdir(), 'harness-agent-decision-placeholder', 'decision.json')] : argv;
+    if (!(COMMANDS.has(argv[0]) || ['todo', 'inventory', 'domain', 'experiment'].includes(argv[0]) && harnessControlCommand(['harness', ...effectiveArgv], options.workspace) === argv[0])) return { pass: false, reason: 'harness requires argv for a supported lifecycle command or exact diagnostic/worklist control' };
     if (argv[0] === 'trust' && argv[1] && argv[1] !== 'status') return { pass: false, reason: 'Trust approval or revocation requires a person; the agent may read trust status only.' };
     if (argv.some(arg => /^--(?:workspace|copilot-home|harness-home|home)(?:=|$)/.test(arg))) return { pass: false, reason: 'Lifecycle commands are bound to this run workspace and homes.' };
     return { pass: true };
   }
-  const payload = toolPayload(call, options.workspace);
+  const payload = toolPayload(call, options.workspace, options.sessionId);
   if (trustMutation(payload.tool_input.command)) return { pass: false, reason: 'Trust approval or revocation requires a person; the agent may read trust status only.' };
   for (const name of ['block-destructive-commands.mjs', 'guard-critical-files.mjs', 'require-plan-gate.mjs']) {
     const checked = hook(name, payload, options);
@@ -75,8 +98,31 @@ export function beforeDeliveryTool(call, options) {
 }
 
 export function afterDeliveryTool(call, result, options) {
-  if (call.name === 'harness' || call.name === 'todo') return { pass: true };
-  return hook('record-successful-edit.mjs', { ...toolPayload(call, options.workspace), success: result.status === 'ok' && result.exitCode === 0 }, options);
+  if (call.name === 'harness') {
+    if (options.deliveryState && result.status === 'ok' && result.exitCode === 0) {
+      const argv = call.input?.argv || [];
+      if (argv[0] === 'domain') {
+        const flags = parseFlags(argv);
+        if (flags.plan) {
+          try {
+            const index = argv.findIndex(arg => arg === '--name' || arg.startsWith('--name='));
+            const name = argv[index]?.includes('=') ? argv[index].slice(7) : argv[index + 1];
+            const context = resolveDomainContext({ workspace: options.workspace, home: options.harnessHome || undefined, name });
+            const plan = loadPlan(options.workspace, flags.plan, { domainContext: context });
+            if (!plan) return { pass: false, reason: 'The selected domain parent is missing or unsafe.' };
+            options.deliveryState.domainPlan = { name, path: plan.path };
+          } catch (error) { return { pass: false, reason: error.message }; }
+        }
+      } else if (['plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound'].includes(argv[0]) || argv[0] === 'experiment' && parseFlags(argv).plan) options.deliveryState.domainPlan = null;
+    }
+    return { pass: true };
+  }
+  if (call.name === 'todo') return { pass: true };
+  return hook('record-successful-edit.mjs', {
+    ...toolPayload(call, options.workspace, options.sessionId),
+    success: result.status === 'ok' && result.exitCode === 0,
+    ...(call.name === 'read' ? { tool_response: { truncated: result.truncated } } : {}),
+  }, options);
 }
 
 /** Stage authored decisions outside product scope; only Harness serializes them. */
@@ -84,9 +130,9 @@ export async function runDeliveryCommand(input, run) {
   let directory;
   try {
     const argv = [...input.argv];
-    if (input.decision !== undefined) {
-      const flag = argv[0] === 'compound' ? '--learning-decision' : '--file';
-      if (!['plan-new', 'plan-update', 'compound', 'review'].includes(argv[0]) || argv.includes(flag)) throw new Error('decision requires plan-new, plan-update, review or compound without an existing input file');
+    const flag = inlineDecisionFlag(input);
+    if (['inventory', 'domain', 'experiment'].includes(argv[0]) && !argv.includes('--verbose') && !argv.includes('-v')) argv.push('--verbose');
+    if (flag) {
       directory = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-agent-decision-'));
       const file = path.join(directory, 'decision.json');
       fs.writeFileSync(file, JSON.stringify(input.decision), { mode: 0o600 });
@@ -98,8 +144,16 @@ export async function runDeliveryCommand(input, run) {
   }
 }
 
-export function deliveryCompletion({ workspace, copilotHome, harnessHome, remainingSeconds }) {
+export function deliveryCompletion({ workspace, copilotHome, harnessHome, remainingSeconds, domainPlan = null }) {
   try {
+    if (domainPlan) {
+      const result = spawnSync(process.execPath, [DELIVERY_BIN, 'domain', 'status', '--validate-completion', '--name', domainPlan.name, '--plan', domainPlan.path, '--workspace', workspace,
+        ...(copilotHome ? ['--copilot-home', copilotHome] : []), ...(harnessHome ? ['--harness-home', harnessHome] : []), '--json', '--no-events'], { cwd: workspace, encoding: 'utf8', maxBuffer: 256 * 1024, timeout: Math.max(1, Math.min(10_000, (remainingSeconds ?? 10) * 1000)) });
+      if (result.error) return { pass: false, message: `Domain completion authority unavailable: ${result.error.message}` };
+      if (result.status !== 0) return { pass: false, message: 'Domain completion authority failed; read domain status --validate-completion and repair the reported error.' };
+      const value = JSON.parse(result.stdout);
+      return value && typeof value.pass === 'boolean' ? value : { pass: false, message: 'Domain completion authority returned no valid decision.' };
+    }
     const session = readSession(workspace);
     if (!session?.activePlan) return { pass: false, message: 'Deliver has no current plan. Read ensure-plan and create/start a proportional plan.' };
     const result = spawnSync(process.execPath, [DELIVERY_BIN, 'status', '--validate-completion', '--plan', session.activePlan, '--workspace', workspace,
@@ -110,7 +164,10 @@ export function deliveryCompletion({ workspace, copilotHome, harnessHome, remain
     if (result.status !== 0) return { pass: false, message: 'Completion authority failed; read status --validate-completion and repair the reported error.' };
     const value = JSON.parse(result.stdout);
     if (value?.pass) {
-      const plan = loadPlan(workspace, session.activePlan);
+      const full = resolvePlanUpdateFile(workspace, session.activePlan, { home: harnessHome });
+      const source = readFileNoFollow(full, { root: path.dirname(full), maxBytes: 1024 * 1024 });
+      if (source === null) return { pass: false, message: 'Completion plan is missing, unsafe or unreadable.' };
+      const plan = planFromText(source, { path: session.activePlan, fullPath: full });
       const evidence = readEvidence(workspace, session.activePlan);
       if (evidence?.binding?.changedFiles?.length && !plan?.fm.reviews?.required?.includes('code-review')) return { pass: false, message: 'Changed Deliver work requires code-review. Amend the plan review obligations, collect the bound review, then verify and complete again.' };
     }

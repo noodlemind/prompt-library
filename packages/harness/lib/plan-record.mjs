@@ -1,4 +1,5 @@
 import YAML from 'yaml';
+import { randomUUID } from 'node:crypto';
 
 function nonEmptyStrings(value) {
   return Array.isArray(value)
@@ -36,6 +37,7 @@ export function shortPlanDocument({ goal, acceptance, constraints, check = null,
   const ids = acceptance.map((_, i) => `AC${i + 1}`);
   const fm = {
     plan_format: 'short-v2',
+    plan_id: randomUUID(),
     intent_source_policy: 'content-v1',
     intent_sources: intentSources,
     status: status || (check ? 'in-progress' : 'open'),

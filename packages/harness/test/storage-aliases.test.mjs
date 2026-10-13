@@ -8,8 +8,9 @@ import { binPath } from './helpers/cli.mjs';
 import { tempDir } from './helpers/temp.mjs';
 import { initGit, writeChecks, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 import { repoId, storeDir, storeDirForId } from '../lib/knowledge/store.mjs';
-import { externalPlansDir } from '../lib/project-layout.mjs';
+import { externalPlansDir, normalizePlanRel } from '../lib/project-layout.mjs';
 import { externalPlansDir as hookPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
+import { loadPlan, reloadPlan } from '../lib/plan-parse.mjs';
 
 function fixture() {
   const ws = tempDir('storage-alias-workspace-');
@@ -33,6 +34,29 @@ function run(c, args) {
     encoding: 'utf8', env: { ...process.env, HARNESS_HOME: c.home },
   });
 }
+
+test('unchanged external plans reload when legacy realpath spelling differs from native identity', t => {
+  const c = fixture();
+  t.after(() => { for (const dir of [c.ws, c.home]) fs.rmSync(dir, { recursive: true, force: true }); });
+  const adopted = run(c, ['knowledge', 'migrate-store', '--from-id', c.fromId]);
+  assert.equal(adopted.status, 0, adopted.stdout + adopted.stderr);
+  const loaded = loadPlan(c.ws, c.plan, { home: c.home });
+  assert.ok(loaded);
+  const realpath = fs.realpathSync;
+  const native = realpath.native;
+  const canonicalPlan = native(c.plan);
+  t.mock.method(fs, 'realpathSync', (file, ...args) => path.resolve(String(file)) === path.resolve(loaded.path)
+    ? path.join(path.parse(canonicalPlan).root, 'LEGACY~1', path.basename(canonicalPlan))
+    : realpath(file, ...args));
+  fs.realpathSync.native = native;
+  assert.equal(normalizePlanRel(c.ws, loaded.path, { home: native(c.home) }), canonicalPlan, 'containment must compare native identities rather than alias spellings');
+  assert.ok(reloadPlan(c.ws, loaded), 'the plan reader must use the same canonical identity as plan selection');
+  t.mock.restoreAll();
+  const current = reloadPlan(c.ws, loaded);
+  assert.ok(current, 'the authorized unchanged plan must reload through native canonical containment');
+  assert.equal(current.text, loaded.text);
+  assert.equal(fs.readFileSync(c.plan, 'utf8'), loaded.text);
+});
 
 test('migrate-store adopts old local knowledge and plans without an origin or moving their bytes', () => {
   const c = fixture();

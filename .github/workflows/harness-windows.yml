@@ -43,7 +43,12 @@ jobs:
       - name: Harness test suite (Windows)
         id: suite
         continue-on-error: true
-        run: npm --prefix packages/harness test
+        env:
+          HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-full
+        run: |
+          $preloadRoot = $env:GITHUB_WORKSPACE.Replace('\', '/')
+          $env:NODE_OPTIONS = '--require="' + $preloadRoot + '/packages/harness/test/helpers/domain-parent-profile.cjs"'
+          npm --prefix packages/harness test
 
       - name: CLI scenarios
         continue-on-error: true
@@ -295,7 +300,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: harness-windows-output
-          path: win-output/
+          include-hidden-files: true
+          path: |
+            win-output/
+            .harness/diagnostics/windows-parent-full/
 
       # The one step that decides whether this job is green. It runs LAST, and
       # after the artifact upload, so a red gate never costs us the captured

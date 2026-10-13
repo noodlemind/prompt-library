@@ -406,10 +406,11 @@ function sigintDeliveryEnv() {
   return { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} ${importFlag}`.trim() };
 }
 
-test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --output) exits 130, skips evidence, and records a command.result event mapped to result:"warn"', async () => {
+test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --output) exits 130, skips evidence, and records a command.result event mapped to result:"warn"', async t => {
   const workspace = tempDir('verify-cancel-cli-');
+  const readyPath = path.join(workspace, 'slow-check-ready');
   const plan = writeVersionedPlan(workspace, { required: ['slow-check'] });
-  writeChecks(workspace, { 'slow-check': { command: [process.execPath, '-e', 'setTimeout(() => {}, 5000)'] } });
+  writeChecks(workspace, { 'slow-check': { command: [process.execPath, '-e', "require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(() => {}, 5000);", readyPath] } });
   initGit(workspace);
 
   const child = spawn(process.execPath, [binPath, 'verify', '--plan', plan, '--base', 'HEAD', '--workspace', workspace], {
@@ -422,8 +423,17 @@ test('CLI: Ctrl-C (SIGINT) during `harness verify` (plain ledger path, no --outp
   });
 
   const exitPromise = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGINT');
+      await exitPromise;
+    }
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
   if (!isWindows) {
-        await delay(300);
+    const deadline = Date.now() + 15_000;
+    while (!fs.existsSync(readyPath) && child.exitCode === null && child.signalCode === null && Date.now() < deadline) await delay(25);
+    assert.equal(fs.existsSync(readyPath), true, `The named check must start before SIGINT. stdout: ${stdout}`);
     child.kill('SIGINT');
   }
   const code = await exitPromise;

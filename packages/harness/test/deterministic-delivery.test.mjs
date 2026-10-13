@@ -10,6 +10,7 @@ import { loadPlan } from '../lib/plan-parse.mjs';
 import { validatePlanSchema } from '../lib/plan-schema.mjs';
 import { planDigest, readEvidence } from '../lib/evidence.mjs';
 import { applyPlanUpdate } from '../lib/plan-update.mjs';
+import { redactedJson } from '../lib/redact.mjs';
 import { writeChecks, writeVersionedPlan, initGit } from './helpers/cli-fixtures.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,11 +20,25 @@ function installPackage(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const npm = [process.env.npm_execpath, path.join(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'), path.resolve(path.dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js')].find(candidate => candidate && fs.existsSync(candidate));
   assert.ok(npm, 'npm CLI must be available for clean-package proof');
-  const packed = spawnSync(process.execPath, [npm, 'pack', '--json', '--pack-destination', dir], { cwd: root, encoding: 'utf8', timeout: 60000 });
-  assert.equal(packed.status, 0, packed.stderr);
+  const logsDir = path.join(dir, 'npm-logs');
+  fs.mkdirSync(logsDir);
+  const cacheResult = spawnSync(process.execPath, [npm, 'config', 'get', 'cache', '--json'], { encoding: 'utf8', timeout: 10000 });
+  const npmStep = (label, args, cwd) => {
+    const started = Date.now();
+    const result = spawnSync(process.execPath, [npm, ...args, '--timing', '--logs-dir', logsDir], { cwd, encoding: 'utf8', timeout: 60000 });
+    const diagnostic = { kind: 'package-proof', label, platform: process.platform, node: process.version, durationMs: Date.now() - started,
+      status: result.status, signal: result.signal, error: result.error ? { code: result.error.code, message: result.error.message } : null,
+      npm, cache: { status: cacheResult.status, selected: String(cacheResult.stdout || '').trim().slice(0, 1024), isolated: false }, logsDir,
+      stdout: String(result.stdout || '').slice(0, 65536), stderr: String(result.stderr || '').slice(0, 65536),
+      logs: fs.readdirSync(logsDir).filter(name => /(?:timing\.json|debug-\d+\.log)$/.test(name)).slice(-4)
+        .map(name => ({ name, text: fs.readFileSync(path.join(logsDir, name), 'utf8').slice(-65536) })) };
+    if (process.env.HARNESS_PROOF_LOG) fs.appendFileSync(process.env.HARNESS_PROOF_LOG, redactedJson(diagnostic) + '\n');
+    assert.equal(result.status, 0, redactedJson({ ...diagnostic, logs: diagnostic.logs.map(log => ({ name: log.name, text: log.text.slice(-4096) })) }));
+    return result;
+  };
+  const packed = npmStep('pack', ['pack', '--json', '--pack-destination', dir], root);
   const archive = path.join(dir, JSON.parse(packed.stdout)[0].filename);
-  const installed = spawnSync(process.execPath, [npm, 'install', '--prefix', dir, '--offline', '--ignore-scripts', '--omit=optional', archive], { encoding: 'utf8', timeout: 60000 });
-  assert.equal(installed.status, 0, installed.stderr);
+  npmStep('offline-install', ['install', '--prefix', dir, '--offline', '--ignore-scripts', '--omit=optional', archive]);
   return path.join(dir, 'node_modules/harness');
 }
 

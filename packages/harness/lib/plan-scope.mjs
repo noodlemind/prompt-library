@@ -1,11 +1,12 @@
 import fs from 'node:fs';
+import { planRecordRoot } from './domain-context.mjs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { readGitArgs } from '../corpus/hooks/lib/product-diff.mjs';
+import { readGitArgs, gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 import { readPlanRecord } from './plan-record.mjs';
 
 function runGit(workspace, args, prefix) {
-  return spawnSync('git', [...prefix, ...args], { cwd: workspace, encoding: 'utf8', timeout: 30_000 });
+  return spawnSync('git', [...prefix, ...args], { cwd: workspace, encoding: 'utf8', timeout: 30_000, env: gitMetadataEnvironment() });
 }
 
 function lines(output) {
@@ -32,7 +33,7 @@ export function matchesScope(file, allowed) {
 }
 
 export function collectChangedFiles(workspace, base = null) {
-  const prefix = readGitArgs(workspace, { timeout: 30_000 });
+  const prefix = readGitArgs(workspace, { timeout: 30_000, env: gitMetadataEnvironment() });
   if (!prefix) return { files: [], error: 'Git helper configuration could not be read safely; scope cannot be verified' };
   const inside = runGit(workspace, ['rev-parse', '--is-inside-work-tree'], prefix);
   if (inside.status !== 0 || inside.stdout.trim() !== 'true') {
@@ -67,6 +68,11 @@ export function validatePlanScope({ workspace, plan, base = null }) {
   if (changed.error) return { status: 'inconclusive', allowed, changedFiles: [], violations: [], message: changed.error };
   const activePlan = String(plan.path || '').replace(/\\/g, '/');
   const governedFiles = changed.files.filter((file) => file !== activePlan);
+  if (plan.fm?.domain_parent) {
+    planRecordRoot(workspace, plan);
+    const pass = allowed.length === 0 && governedFiles.length === 0;
+    return { status: pass ? 'passed' : 'failed', allowed, changedFiles: changed.files, violations: governedFiles, message: pass ? 'Domain coordinator is unchanged and grants no product scope' : 'Domain parent requires an unchanged coordinator and empty product scope' };
+  }
   if (allowed.length === 0) {
     if (readPlanRecord(plan.text)) {
       return {

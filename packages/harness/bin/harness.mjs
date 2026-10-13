@@ -13,6 +13,8 @@ import { createRedactor, redactedJson } from '../lib/redact.mjs';
 import { readPkgVersion } from '../lib/commands.mjs';
 import { newRunId, startRun, finishRun, runStatusFromReported, runStatusForExit } from '../lib/run-journal.mjs';
 import { setRunContext } from '../lib/run-context.mjs';
+import { resolveDomainCommandContext } from '../lib/domain-cmd.mjs';
+import { validateDomainContext } from '../lib/domain-context.mjs';
 
 const [, , command = 'help', ...args] = process.argv;
 // This renderer only writes error blocks, which go to stderr — detect there.
@@ -21,7 +23,7 @@ const ui = createStyle({ argv: args, stream: process.stderr });
 const out = createStyle({ argv: args });
 
 export const HELP_COMMAND_ORDER = [
-  'install', 'upgrade', 'doctor', 'status', 'uninstall',
+  'install', 'upgrade', 'doctor', 'inventory', 'domain', 'experiment', 'status', 'uninstall',
   'init-repo', 'prepare', 'migrate', 'index', 'plan-new', 'plan-update', 'worktree', 'route', 'config',
   'model', 'trust', 'resources', 'review',
     'orient', 'gate', 'verify', 'checks', 'exec', 'bash', 'agent', 'validate-plan', 'compound', 'recall', 'get', 'edit', 'write', 'apply', 'todo', 'undo', 'search', 'lookup', 'tree', 'run', 'inspect', 'tui', 'events', 'report',
@@ -192,8 +194,10 @@ async function main() {
     } else if (hasCommand(command)) {
       const { args: laneArgs, output } = extractOutputLane(args);
       const runFlags = parseFlags(args);
-      const runWorkspace = path.resolve(runFlags.workspace);
-      const journaling = !shouldSkipRunJournal(runFlags);
+      const executionWorkspace = path.resolve(runFlags.workspace);
+      const domainContext = command === 'domain' ? resolveDomainCommandContext(laneArgs) : null;
+      const runWorkspace = domainContext ? domainContext.root : executionWorkspace;
+      const journaling = (getCommand(command)?.workspaceJournal !== false || domainContext !== null) && !shouldSkipRunJournal(runFlags);
       runId = newRunId();
       runStartedAt = Date.now();
             setRunContext({ run: runId, actor: detectActor() });
@@ -201,6 +205,7 @@ async function main() {
       runJournalFlags = runFlags;
             const openRun = () => {
         if (!journaling || runOpened) return;
+        if (domainContext) validateDomainContext(domainContext, executionWorkspace);
         runOpened = true;
         startRun(runWorkspace, {
           run: runId,
@@ -214,11 +219,12 @@ async function main() {
           flags: runFlags,
         });
       };
-            const events = createProcessEventRegistry(args, runId);
+            const events = createProcessEventRegistry(args, runId, { recordWorkspace: runWorkspace });
             let signal;
-            if (['verify', 'exec', 'bash', 'checks', 'agent'].includes(command)) {
+            if (['verify', 'exec', 'bash', 'checks', 'agent', 'domain', 'experiment'].includes(command)) {
         const controller = new AbortController();
         process.once('SIGINT', () => controller.abort());
+        if (command === 'experiment') process.once('SIGTERM', () => controller.abort());
         signal = controller.signal;
       }
       code = await dispatchRegistered([command, ...laneArgs], {
@@ -226,6 +232,7 @@ async function main() {
         output,
         events,
         signal,
+        domainContext,
         onRunStart: openRun,
                 reportStatus: (status) => { reportedStatus = status; },
       });

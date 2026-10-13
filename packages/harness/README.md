@@ -68,6 +68,8 @@ The optional `harness agent --profile deliver` loop enforces explicit orientatio
 |---------|---------|
 | `install` / `upgrade` | Hydrate `~/.copilot/` and install the VS Code bridge; upgrade retires lock paths |
 | `doctor` | Health; `--host vscode` runs hook probes |
+| `inventory show` / `inventory refresh --editor <family>` | Optional sourced local IDE snapshot in the selected Harness home |
+| `domain show --name <name>` | Read-only local membership and identity drift from an existing domain configuration |
 | `status` / `uninstall` | Version/lock; remove tracked files only |
 | `init-repo` | Plan/session paths + checks/policy stubs; migrates leftover gitignored `docs/` artifacts |
 | `prepare` | Starter spec and ADR when those paths are missing; skips files that already exist |
@@ -98,6 +100,33 @@ initialize this repo (`init-repo`) from the palette
 | `exec` / `bash` | Governed process / shell |
 | `todo` | Durable worklist (`.harness/todo.json`) |
 | `validate-plan` / `index` / `events` / `run` | Plan check, indexes, ledger, prior runs |
+
+### Domain delivery
+
+`domain_version: 2` separates logical repository and shared-source identities from local root `bindings` in `<harness-home>/domains/<name>.yaml`. Version 1 remains display-only. Shared specs and conventions declared authoritative bind their bytes. Accepted roots bind Git and physical directory identity. Drift requires an authored amendment; changed repository membership requires a new parent.
+
+```bash
+harness domain show --name catalogue --json
+harness domain plan-new --name catalogue --file .harness/decisions/catalogue-create.json --json
+harness domain get --name catalogue --plan <returned-parent-path> --json
+harness domain status --name catalogue --plan <returned-parent-path> --json
+```
+
+Creation requires an authored full-plan decision covering every configured repository, exact touched scopes, child plan decisions, dependencies, configured named joint checks, release order, and rollback responsibility. The coordinator's named check must also exist. Creation does not approve trust. Existing isolation policy determines whether a touched repository needs a linked issue worktree. Use each returned child workspace and plan path for its ordinary delivery lifecycle.
+
+Parent records live in `<harness-home>/domains/<name>/plans/`; children live in their ordinary external project stores. Both use full schema 3 `.hplan` records. The accepted parent binds its coordinator checkout and HEAD. A different checkout cannot mutate, review, verify, compound, or complete the parent. Parent operations use these explicit commands:
+
+| Command | Purpose |
+| --- | --- |
+| `domain plan-update --name <name> --plan <path> --file <decision>` | Authored start, amendment, progress, or completion |
+| `domain gate --name <name> --plan <path> --phase implement` | Parent gate |
+| `domain review prepare` / `domain review assemble` | Parent captured review and collected results, with `--name` and `--plan` |
+| `domain verify --name <name> --plan <path> --base <base>` | Coordinator check and integrated proof after child completion |
+| `domain compound --name <name> --plan <path> --learning-decision <decision>` | Current parent learning or explicit no-learning |
+
+Joint checks run in trusted repository contexts against the exact participating revisions, including unchanged dependencies. Harness supplies their roots and bindings through `HARNESS_DOMAIN_REVISION_MANIFEST` and rejects drift during execution. Valid child and joint receipts remain reusable on resume. Parent completion also requires its current review, learning, tasks, criteria, and closed hard gaps.
+
+Private parent learning publishes and indexes under the selected domain store. Ordinary project recall does not yet search those episodes. Upgrade CLI, corpus, and hooks together; the prior packaged CLI rejects `.hplan` before mutation. See [shared intent and domain delivery](../../docs/adaptive-engineering.md#shared-intent-and-domain-delivery) for configuration, amendment, and authority rules.
 
 ### Optional agent (opt-in add-on)
 
@@ -157,7 +186,15 @@ Human lines: ledger rows (`✓` / `!` / `✗`; ASCII under `NO_COLOR`). `--json`
 | 7 | network |
 | 130 | interrupted |
 
-Gate/verify keep documented policy-driven exits. Plans use `plan_schema: 1` and named checks in `.github/harness/checks.yaml`.
+Gate and verify keep their documented policy-driven exits. New ordinary full plans use `plan_schema: 2`, short plans use `short-v2`, domain plans use full schema 3 `.hplan` records, and supported ordinary experiments use full schema 4 `.hplan` records. Schema 4 preserves domain validation. Legacy plans retain their declared guarantee. Named checks live in `.github/harness/checks.yaml`.
+
+### Experiments
+
+`experiment status --json` reports the installed trusted evaluator paths without probing or writing. An accepted full experiment binds one tracked finite JSON weights candidate, a frozen `linear-json-v1` workload, metric, hard correctness, target and budgets. Only an actual registered linked issue worktree on a probed supported macOS runtime can execute it.
+
+Reserve with `experiment begin --plan <path> --file <decision.json>`, evaluate the returned `attempt_id` once with `experiment evaluate --plan <path> --attempt <UUID>`, then keep/discard/cancel through `experiment resolve --plan <path> --file <decision.json>`. Begin/resolve decisions are bound to the current raw plan hash. Establish and keep the baseline before reserving candidate edits. Every reserved score/guard pair spends two slots; crashes, failed launches and bounded repairs retain that cost. `experiment status --plan <path>` reads durable state without recovery.
+
+Keep requires validated owned artifacts, hard correctness and meaningful improvement. Discard restores recognized editable bytes/modes while preserving HEAD, the user index and unrelated work. Frozen input drift, unknown bytes or unproven child ownership blocks unsafe transitions. An exhausted or cancelled series does not complete the plan; a retained correct target still needs ordinary review, separate behavioral verification, learning/no-learning and completion. See [bounded experiments](../../docs/adaptive-engineering.md#bounded-experiments) for exact contracts, check configuration and recovery.
 
 **VS Code:** `install --configure-vscode` registers hooks (PreToolUse gate, PostToolUse record, Stop requires passed evidence). `harness doctor --host vscode` after install/upgrade.
 

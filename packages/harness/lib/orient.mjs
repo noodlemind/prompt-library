@@ -1,3 +1,5 @@
+import { caffeinatedPointer } from './playbook-binding.mjs';
+import { locateVerification } from './verification-location.mjs';
 import fs from 'fs';
 import path from 'path';
 import { planStateFacts, reviewCoverageFacts } from './report-facts.mjs';
@@ -19,7 +21,7 @@ import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
 import { inertLine } from './knowledge/store.mjs';
-import { resolveObligation } from './intent-sources.mjs';
+import { resolveObligation, intentPage } from './intent-sources.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
 import { trustStatus } from './trust.mjs';
@@ -87,6 +89,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   const session = readSession(workspace) || {};
   const active = flags.plan ? loadPlan(workspace, flags.plan) : pickActivePlan(workspace, session, plans, listPlanRels(workspace));
+  const verification = locateVerification(workspace, active?.fm?.verification?.recipe);
   const planGoal = active ? extractGoalFromPlan(active) : null;
   const planView = active ? buildPlanView(active) : null;
 
@@ -149,12 +152,18 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   const obligation = resolveObligation(workspace, active, q);
   const intentSources = obligation.paths;
+  const intentDiscovery = obligation.metadata;
+  const intentDetail = flags.intentPage ? intentPage(workspace, active?.fm?.intent || q, { page: flags.intentPage, pageSize: flags.intentPageSize || 8 }) : null;
   const isolation = inspectIsolation({ workspace, home, allowInplace: flags.allowInplace });
   if (isolation.blocked) {
     nextTools.unshift(`harness worktree --slug ${planSlugFromPath(active?.path)}`);
   }
+  const procedure = caffeinatedPointer(active, { copilotHome });
+  if (procedure) nextTools.push(`read ${inertLine(procedure.path)}`);
+  if (verification.path) nextTools.push(`read ${inertLine(verification.path)}`);
   if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
-  if (!intentSources.length) nextTools.push(prepareNextTool(workspace));
+  if (obligation.reason === 'none') nextTools.push(prepareNextTool(workspace));
+  if (intentDiscovery?.omittedCount) nextTools.push('harness orient --read --intent-page 1 --json');
 
   let index = { knowledge: 'missing', structural: 'missing' };
     try {
@@ -196,7 +205,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     ({ skills, instructions, contacts } = routingCards(active.fm.routing, inventory));
     if (gatePreview.pass) {
       for (const line of routingLines) {
-        if (line.startsWith('read ')) nextTools.push(line);
+        if (line.startsWith('read ') && !nextTools.includes(line)) nextTools.push(line);
       }
       const javaFile = parseImpactedFiles(active).find((rel) => rel.endsWith('.java'));
       if (javaFile) nextTools.push(`read ${javaFile}`);
@@ -233,6 +242,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
       : null,
     planGoal,
     planView,
+    verification,
     repoMapRef,
     gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
     nextTools,
@@ -240,6 +250,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     routingLines,
     neighborhood,
     intentSources,
+    intentDiscovery,
     worktree: isolation,
   });
 
@@ -287,6 +298,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
           intentContractExcerpt: planGoal.intentContractExcerpt,
         }
       : null,
+    verification,
     contextPack: packRel,
     repoMap: repoMapRef,
     knowledgeDebt,
@@ -299,12 +311,14 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
       skipReason: isolation.skipReason,
     },
     intentSources,
+    intentDiscovery,
+    intentDetail,
     reviewCoverage,
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,
     neighborhood,
-    skills,
+    skills: procedure && !skills.some(skill => skill.id === procedure.id) ? [...skills, procedure] : skills,
     instructions,
     contacts,
     index,

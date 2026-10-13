@@ -2,15 +2,17 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { assertNoSymlinkAncestors, readFileNoFollow, readPrefixNoFollow } from './fs-safe.mjs';
+import { gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 
 const PATH_CAP = 8;
 const LINE_BUDGET = 512;
 const LINE_SEPARATOR = ', ';
 
 /**
- * @typedef {'frozen'|'selected'|'missing'|'none'} ObligationReason
+ * @typedef {'frozen'|'selected'|'missing'|'omitted'|'none'} ObligationReason
  * @typedef {{ path: string, kind: string|null }} IntentSource
- * @typedef {{ reason: ObligationReason, paths: IntentSource[] }} IntentObligation
+ * @typedef {{ candidateCount: number, selectedCount: number, omittedCount: number, bytes: number, truncated: boolean }} IntentMetadata
+ * @typedef {{ reason: ObligationReason, paths: IntentSource[], metadata: IntentMetadata }} IntentObligation
  */
 
 function kindOf(rel) {
@@ -62,11 +64,16 @@ function preferredBasename(item) {
 
 function catalog(workspace) {
   if (!workspace) return [];
-  const listed = spawnSync('git', ['-C', workspace, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+  const listed = spawnSync('git', ['-C', workspace, '-c', 'core.fsmonitor=false', '-c', 'core.longpaths=true', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     encoding: 'buffer',
     timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+    env: { ...gitMetadataEnvironment(), LC_ALL: 'C' },
   });
-  if (listed.status !== 0 || !listed.stdout) return [];
+  if (listed.status !== 0 || !listed.stdout) {
+    if (!listed.error && listed.stderr?.toString('utf8').includes('fatal: not a git repository')) return [];
+    throw Object.assign(new Error('Intent catalog unavailable; Git source enumeration failed or exceeded its bounds'), { code: 'E_INTENT_CATALOG' });
+  }
   const found = [];
   for (const rel of listed.stdout.toString('utf8').split('\0')) {
     if (!rel) continue;
@@ -83,18 +90,17 @@ export function obligationLine(paths) {
 }
 
 function takeLine(ranked) {
-  if (!ranked.length) return [];
-  const kept = [ranked[0]];
-  for (let i = 1; i < ranked.length; i += 1) {
+  const kept = [];
+  for (const item of ranked) {
     if (kept.length >= PATH_CAP) break;
-    const next = kept.concat(ranked[i]);
+    const next = kept.concat(item);
     if (Buffer.byteLength(obligationLine(next), 'utf8') > LINE_BUDGET) break;
-    kept.push(ranked[i]);
+    kept.push(item);
   }
   return kept.map(({ path, kind }) => ({ path, kind }));
 }
 
-export function selectIntent(workspace, text = '') {
+function rankedIntent(workspace, text) {
   const tokens = queryTokens(text);
   const ranked = catalog(workspace);
   for (const item of ranked) {
@@ -106,21 +112,50 @@ export function selectIntent(workspace, text = '') {
     if (prefer) return prefer;
     return a.path.localeCompare(b.path);
   });
-  return takeLine(ranked);
+  return ranked;
+}
+
+function metadataFor(candidates, paths) {
+  const selected = new Set(paths.map(source => source.path));
+  const omittedCount = candidates.filter(source => !selected.has(source.path)).length;
+  return {
+    candidateCount: candidates.length,
+    selectedCount: paths.length,
+    omittedCount,
+    bytes: Buffer.byteLength(obligationLine(paths), 'utf8'),
+    truncated: omittedCount > 0,
+  };
+}
+
+export function discoverIntent(workspace, text = '') {
+  const ranked = rankedIntent(workspace, text);
+  const paths = takeLine(ranked);
+  return { paths, metadata: metadataFor(ranked, paths) };
+}
+
+export function selectIntent(workspace, text = '') {
+  return discoverIntent(workspace, text).paths;
+}
+
+export function intentPage(workspace, text = '', { page = 1, pageSize = PATH_CAP } = {}) {
+  if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 32) {
+    throw Object.assign(new Error('Intent page must be a positive safe integer; pageSize must be between 1 and 32'), { code: 'E_INTENT_PAGE' });
+  }
+  const ranked = rankedIntent(workspace, text);
+  const pageCount = Math.ceil(ranked.length / pageSize);
+  const paths = page > pageCount ? [] : ranked.slice((page - 1) * pageSize, page * pageSize).map(({ path, kind }) => ({ path, kind }));
+  return { paths, page, pageSize, pageCount, hasMore: page < pageCount, metadata: metadataFor(ranked, paths) };
 }
 
 export function resolveObligation(workspace, plan, text = '') {
   const stored = listedIntentSources(plan);
   if (plan && stored && stored.length) {
-    return {
-      reason: 'frozen',
-      paths: stored.map((path) => ({ path, kind: kindOf(path) })),
-    };
+    const paths = stored.map((path) => ({ path, kind: kindOf(path) }));
+    return { reason: 'frozen', paths, metadata: metadataFor(catalog(workspace), paths) };
   }
-  const selected = selectIntent(workspace, plan ? (typeof plan.fm?.intent === 'string' ? plan.fm.intent : '') : text);
-  if (!selected.length) return { reason: 'none', paths: [] };
-  if (plan) return { reason: 'missing', paths: selected };
-  return { reason: 'selected', paths: selected };
+  const discovered = discoverIntent(workspace, plan ? (typeof plan.fm?.intent === 'string' ? plan.fm.intent : '') : text);
+  if (!discovered.paths.length) return { reason: discovered.metadata.candidateCount ? 'omitted' : 'none', ...discovered };
+  return { reason: plan ? 'missing' : 'selected', ...discovered };
 }
 
 export function sourcePath(value) {
@@ -171,9 +206,7 @@ export function lockIntentSources(workspace, entries, { rehash = true } = {}) {
 
 export function bindLockedIntentSources(workspace, entries, { query = '' } = {}) {
   const explicit = entries || [];
-  const seen = new Set(explicit.map(sourcePath).filter(Boolean));
-  const rest = selectIntent(workspace, query).filter((item) => !seen.has(item.path));
-  return lockIntentSources(workspace, [...explicit, ...rest], { rehash: true });
+  return lockIntentSources(workspace, explicit.length ? explicit : selectIntent(workspace, query), { rehash: true });
 }
 
 export function listedIntentSources(plan) {
@@ -195,6 +228,9 @@ export function intentSourcesCheck(plan, workspace) {
     if (stale.length) return { id: 'C-intent-sources', pass: false, message: `Selected intent source changed or unreadable; accept an explicit amendment: ${stale.map(s => s.path).join(', ')}`, severity: 'fail', policy, stale };
   }
   const obligation = resolveObligation(workspace, plan);
+  if (obligation.reason === 'omitted') {
+    return { id: 'C-intent-sources', pass: false, message: `${obligation.metadata.candidateCount} in-repo intent source(s) omitted by compact bounds; retrieve an intent detail page and record reviewed intent_sources`, severity: 'fail', metadata: obligation.metadata };
+  }
   if (obligation.reason === 'missing') {
     return {
       id: 'C-intent-sources',

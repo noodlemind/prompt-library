@@ -575,6 +575,105 @@ export function harnessControlCommand(tokens, workspace) {
   } else return null;
   if (!args.length) return 'help';
   if (HARNESS_CONTROL.has(args[0])) return args[0];
+  if (args[0] === 'experiment') {
+    const verb = args[1], options = { begin: ['--plan', '--file'], evaluate: ['--plan', '--attempt'], resolve: ['--plan', '--file'], status: ['--plan', '--attempt'] };
+    if (!Object.hasOwn(options, verb)) return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--workspace', '--harness-home', '--copilot-home', ...options[verb]]), seen = new Set(), values = new Map();
+    for (let index = 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('='), name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || Buffer.byteLength(value) > 4096 || /[\x00-\x1f\x7f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    if (verb !== 'status' && options[verb].some(key => !values.has(key))) return null;
+    if (values.has('--attempt') && !values.has('--plan')) return null;
+    if (values.has('--attempt') && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(values.get('--attempt'))) return null;
+    if (values.has('--workspace') && path.resolve(values.get('--workspace')) !== path.resolve(workspace)) return null;
+    return 'experiment';
+  }
+  if (args[0] === 'domain') {
+    const verb = args[1], reviewVerb = verb === 'review' ? args[2] : null;
+    const options = {
+      show: [], status: ['--plan'], get: ['--plan', '--offset', '--lines', '--max-bytes'], 'plan-new': ['--file'], 'plan-update': ['--plan', '--file'],
+      gate: ['--plan', '--phase', '--enforcement'],
+      review: ['--plan', '--base', '--domain', '--reviewer', '--file', '--max-bytes', '--packet'],
+      verify: ['--plan', '--base', '--enforcement'], compound: ['--plan', '--learning-decision', '--enforcement'],
+    };
+    if (!Object.hasOwn(options, verb) || (verb === 'review' && !['prepare', 'assemble'].includes(reviewVerb))) return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v', ...(verb === 'status' ? ['--validate-completion'] : [])]);
+    const valued = new Set(['--workspace', '--harness-home', '--copilot-home', '--name', ...options[verb]]);
+    const values = new Map(), seen = new Set();
+    for (let index = verb === 'review' ? 3 : 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('=');
+      const name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      const repeatable = verb === 'review' && reviewVerb === 'prepare' && ['--file', '--reviewer'].includes(name);
+      if (seen.has(key) && !repeatable) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || /[\u0000-\u001f\u007f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    const name = values.get('--name');
+    if (!name || name.length > 64 || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) return null;
+    if (!['show', 'plan-new'].includes(verb) && !values.has('--plan')) return null;
+    if (['plan-new', 'plan-update'].includes(verb) && !values.has('--file')) return null;
+    if (verb === 'review' && reviewVerb === 'assemble' && (!values.has('--packet') || !values.has('--file'))) return null;
+    if (verb === 'compound' && !values.has('--learning-decision')) return null;
+    if (values.has('--phase') && !['implement', 'verify'].includes(values.get('--phase'))) return null;
+    if (values.has('--enforcement') && !['observe', 'warn', 'enforce'].includes(values.get('--enforcement'))) return null;
+    if (values.has('--domain') && !['code', 'document'].includes(values.get('--domain'))) return null;
+    if (values.has('--max-bytes') && !/^\d+$/.test(values.get('--max-bytes'))) return null;
+    return 'domain';
+  }
+  if (args[0] === 'inventory') {
+    const inventory = args[0] === 'inventory', verb = args[1];
+    if (!(inventory ? ['show', 'refresh'].includes(verb) : verb === 'show')) return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--workspace', '--harness-home', '--copilot-home',
+      ...(inventory && verb === 'refresh' ? ['--editor', '--profile', '--installation', '--launcher', '--user-data', '--config-root', '--plugins-root'] : []),
+      ...(!inventory ? ['--name'] : [])]);
+    const values = new Map(), seen = new Set();
+    for (let index = 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('=');
+      const name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || /[\u0000-\u001f\u007f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    if (inventory && verb === 'refresh' && !['vscode', 'cursor', 'jetbrains'].includes(values.get('--editor'))) return null;
+    if (!inventory && (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(values.get('--name') || '') || values.get('--name').length > 64)) return null;
+    return args[0];
+  }
+  if (args[0] === 'todo') {
+    const hasVerb = args[1] && !args[1].startsWith('-');
+    const verb = hasVerb ? args[1] : 'list';
+    if (!['list', 'sync', 'complete'].includes(verb)) return null;
+    const values = new Map();
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--plan', '--id', '--workspace', '--harness-home', '--copilot-home']);
+    for (let index = hasVerb ? 2 : 1; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('=');
+      const name = split < 0 ? token : token.slice(0, split);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name) || values.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-')) return null;
+      values.set(name, value);
+    }
+    if (verb !== 'list' && !values.has('--plan') || verb === 'complete' && !values.has('--id') || verb !== 'complete' && values.has('--id')) return null;
+    return 'todo';
+  }
   if (args[0] === 'checks' && ['list', 'show', 'help'].includes(args[1])) return 'checks';
   if (args[0] === 'trust' && (!args[1] || args[1] === 'status')) return 'trust';
   return null;
@@ -768,6 +867,7 @@ export function toolMutationSucceeded(payload = {}) {
 }
 
 export function activatedSkillFromPayload(payload = {}) {
+  if (payload.truncated === true || payload.tool_response?.truncated === true) return null;
   const normalized = normalizeToolPayload(payload);
   if (!SKILL_READ_TOOLS.has(normalized.toolName)) return null;
 

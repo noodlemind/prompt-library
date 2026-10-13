@@ -8,6 +8,22 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { loadPolicy } from '../lib/policy.mjs';
 import { tempDir } from './helpers/index.mjs';
+import { initGit } from './helpers/cli-fixtures.mjs';
+import { approveProject } from '../lib/trust.mjs';
+
+test('policy authority uses the explicitly selected Harness home', t => {
+  const root = tempDir('policy-selected-harness-home-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, 'product'), home = path.join(root, 'harness'), copilotHome = path.join(root, 'copilot');
+  fs.mkdirSync(workspace); initGit(workspace);
+  fs.mkdirSync(path.join(workspace, '.github/harness'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, '.github/harness/policy.yaml'), 'version: 1\nenforcement: warn\n');
+  assert.equal(approveProject({ workspace, home, copilotHome }).trusted, true);
+  const policy = loadPolicy(workspace, null, { copilotHome, home });
+  assert.equal(policy.projectPolicyIgnored, false);
+  assert.equal(policy.enforcement, 'warn');
+  assert.equal(loadPolicy(workspace, null, { copilotHome, home: path.join(root, 'other') }).projectPolicyIgnored, true);
+});
 
 test('a broken policy in an untrusted project is reported, not thrown', () => {
   const ws = tempDir('policy-untrusted-ws-');

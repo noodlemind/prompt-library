@@ -6,9 +6,10 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { readProductDiff } from './lib/product-diff.mjs';
-import { currentPlanDigest } from './lib/proof-authority.mjs';
+import { callProofAuthority } from './lib/proof-authority.mjs';
 import { resolveAcceptedPlan } from './lib/external-plans.mjs';
 import { writeHookEvent } from './lib/events.mjs';
+import { syncSessionIdentity } from './lib/session-state.mjs';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy, projectTrustIsCurrent } from './lib/policy.mjs';
 import { harnessControlCommand, isPersonalWritePath, isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive, unwrapShellSegments } from './lib/tool-payload.mjs';
@@ -220,7 +221,7 @@ process.stdout.write(JSON.stringify(decideNext(input)));`],
 
 function sessionActivatedSkill(session, skill, sessionId, ttlMinutes) {
   const activation = session?.activatedSkills?.[skill];
-  if (!activation?.activatedAt) return false;
+  if (!activation?.activatedAt || activation.complete === false) return false;
   if (sessionId) return activation.sessionId === sessionId;
   // Hosts may omit session_id; accept only a fresh activation so a stale
   // record from an earlier chat cannot satisfy the governance gate.
@@ -318,6 +319,8 @@ try {
 }
 
 normalized = normalizeToolPayload(payload);
+try { syncSessionIdentity(normalized.workspace, normalized.sessionId); }
+catch (error) { deny('invalid-session-identity', error.message, 'invalid'); }
 policy = loadHookPolicy(normalized.workspace, { ttlKey: 'gate_ttl_minutes', ttlDefault: 30 });
 if (normalized.command) {
     const sessionPath = path.join(normalized.workspace, '.harness', 'session.json');
@@ -424,7 +427,11 @@ if (!planPath) deny('invalid-implement-gate', 'Gated plan is missing or outside 
 const planText = fs.readFileSync(planPath, 'utf8');
 // Digest the Activity-stripped contract text so routine session logging does
 // not invalidate the gate; this must match the evidence-binding digest rule.
-const planDigest = currentPlanDigest(normalized.workspace, session.gatedPlan);
+const planAuthority = callProofAuthority(normalized.workspace, ['--contract-digest', '--plan', session.gatedPlan]);
+const planDigest = planAuthority?.digest || null;
+if (planAuthority?.experiment && !planAuthority.experiment.pass) deny('unreserved-experiment-candidate', planAuthority.experiment.message || 'Keep the baseline and reserve a candidate before editing', 'invalid');
+if (planAuthority?.experiment && (session.gatedPhase !== 'implement' || lastGateAt > Date.now())) deny('invalid-experiment-gate', 'Experiment edits require a current implement gate and reserved candidate', 'invalid');
+if (!planDigest) deny('unreadable-plan-authority', planAuthority?.message || 'Installed Harness could not establish the current plan contract; restore required helpers and rerun the gate', 'invalid');
 if (!session.gatedPlanDigest || session.gatedPlanDigest !== planDigest) {
   deny('changed-implement-plan', 'Plan changed after the implement gate; rerun the gate', 'invalid');
 }
@@ -456,7 +463,7 @@ if (opaque) {
   }
 }
 const planRecord = readPlanRecord(planText);
-const allowed = impactedFiles(planText);
+const allowed = planAuthority?.experiment ? planAuthority.experiment.files || [] : impactedFiles(planText);
 // The planned-ancestor exception applies only to paths mkdir itself creates,
 // not to every target of a compound command that happens to include mkdir.
 const mkdirRelatives = new Set(

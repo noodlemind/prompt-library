@@ -60,8 +60,10 @@ export function buildContextPack({
   routingLines = null,
   neighborhood = null,
   intentSources = null,
+  intentDiscovery = null,
   worktree = null,
   trust = null,
+  verification = null,
 }) {
   const deliveryContract = Boolean(trust || planGoal?.constraints?.length);
     const lines = [
@@ -88,6 +90,12 @@ export function buildContextPack({
     }
   }
 
+  if (verification) {
+    lines.push('', '## Product verification', `- Recipe state: ${inertLine(verification.state)}`);
+    if (verification.path) lines.push(`- Read: ${inertLine(verification.path)}`);
+    for (const warning of verification.warnings || []) lines.push(`- Inventory warning: ${inertLine(warning)}`);
+  }
+
   if (planView) {
     lines.push('', '## Plan view (current phase)', planView.body);
   }
@@ -109,7 +117,8 @@ export function buildContextPack({
   }
 
   const displayedIntent = intentSources?.map((item) => ({ path: inertLine(item.path), kind: item.kind }));
-  const pinnedIntent = displayedIntent?.length ? `## Intent sources\n${obligationLine(displayedIntent)}` : Array.isArray(intentSources) ? '## Intent sources\n- None yet. Use harness prepare before locking intent.' : '';
+  let pinnedIntent = displayedIntent?.length ? `## Intent sources\n${obligationLine(displayedIntent)}` : Array.isArray(intentSources) ? intentDiscovery?.candidateCount ? '## Intent sources\n- Intent exists but is omitted from this bounded pack. Read `harness orient --read --intent-page 1 --json` before locking.' : '## Intent sources\n- None yet. Use harness prepare before locking intent.' : '';
+  if (pinnedIntent && intentDiscovery?.omittedCount) pinnedIntent += `\n- ${intentDiscovery.omittedCount} candidate(s) omitted; retrieve a bounded intent page for review.`;
   if (!pinnedIntent && Array.isArray(intentSources)) {
     lines.push('', '## Intent sources', '- None yet. Run `harness prepare`, then edit the starter spec and ADR.');
   }
