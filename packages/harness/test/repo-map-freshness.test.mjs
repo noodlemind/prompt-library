@@ -114,3 +114,14 @@ test('banner counts effective tiers and parse errors separately, while committed
   const longQuery = buildRepoMap({ workspace: ws, query: 'query '.repeat(1200) });
   assert.ok(longQuery.tokens <= 1000);
 });
+
+test('a failed lexical parse does not make a map claim tree-sitter extraction', async (t) => {
+  const { ws, home } = fixture(t, { 'a.js': 'export function alpha() {}\n' });
+  await buildStructuralIndex({ workspace: ws, home, extractor: {
+    tier: 'lexical', extract: () => { throw new Error('extraction failed'); },
+  } });
+  const map = buildRepoMap({ workspace: ws });
+  assert.match(map.body, /lexical map/);
+  assert.match(map.body, /tree-sitter 0, lexical 0, parse errors 1/);
+  assert.deepEqual(map.files, ['a.js']);
+});

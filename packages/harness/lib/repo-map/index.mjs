@@ -52,7 +52,8 @@ function fileFacts(workspace, rels, { extract = lexicalExtract, preferStructural
       rel,
       symbols: Array.isArray(extracted.symbols) ? extracted.symbols : [],
       imports: Array.isArray(extracted.imports) ? extracted.imports : [],
-      tier: content === null ? 'unreadable' : reusable && pre.errors ? 'error' : reusable && pre.tier === 'treesitter' ? 'treesitter' : 'lexical',
+      tier: content === null ? 'unreadable' : reusable && pre.tier === 'treesitter' ? 'treesitter' : 'lexical',
+      errors: Boolean(reusable && pre.errors),
     });
   }
   return { facts, structural: Boolean(structural) };
@@ -199,7 +200,7 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   const { facts: info, structural } = fileFacts(workspace, files, { extract, preferStructural });
   const tiers = { treesitter: 0, lexical: 0, error: 0, unreadable: 0 };
   for (const fact of info.values()) {
-    tiers[fact.tier] += 1;
+    tiers[fact.errors ? 'error' : fact.tier] += 1;
   }
   const { incoming } = importEdges(info, new Set(files));
   for (const fact of info.values()) {
@@ -220,7 +221,8 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   // across hosts for the same tree.
   scored.sort((a, b) => b.score - a.score || (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 
-  const summary = `> Deterministic ${tiers.treesitter || tiers.error ? 'structural' : 'lexical'} map of ${total} tracked source files${total > files.length ? ` (top ${files.length} scanned)` : ''}.`;
+  const mapTier = [...info.values()].some(fact => fact.tier === 'treesitter') ? 'structural' : 'lexical';
+  const summary = `> Deterministic ${mapTier} map of ${total} tracked source files${total > files.length ? ` (top ${files.length} scanned)` : ''}.`;
   const provenance = preferStructural ? ` tree-sitter ${tiers.treesitter}, lexical ${tiers.lexical}, parse errors ${tiers.error}${tiers.unreadable ? `, unreadable ${tiers.unreadable}` : ''}.` : '';
   const lines = [
     `# ${title}`,
