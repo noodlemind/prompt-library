@@ -16,8 +16,12 @@ export function trackedSourceFiles(workspace) {
     return { files: all.slice(0, MAX_FILES_SCANNED), total: all.length };
 }
 
-export function readFileSafe(workspace, rel) {
+export function readSourceFile(workspace, rel) {
   const full = assertNoSymlinkAncestors(workspace, rel);
-  if (!full) return '';
-    return readFileNoFollow(full, { maxBytes: MAX_FILE_BYTES, root: workspace }) ?? '';
+  if (!full) return null;
+  return readFileNoFollow(full, { maxBytes: MAX_FILE_BYTES, root: workspace });
+}
+
+export function readFileSafe(workspace, rel) {
+  return readSourceFile(workspace, rel) ?? '';
 }

@@ -582,7 +582,8 @@ test('buildRepoMap prefers a current structural index and is byte-identical with
   await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
   const withIndex = buildRepoMap({ workspace: ws, query: 'charge payment' });
   assert.equal(withIndex.structural, true, 'current index is preferred');
-  assert.match(withIndex.body, /structural map/);
+  assert.match(withIndex.body, /lexical map/);
+  assert.match(withIndex.body, /tree-sitter 0, lexical 3, parse errors 0/);
   assert.ok(withIndex.files.includes('src/pay.mjs'), 'ranking still surfaces the relevant file');
 
   // The COMMITTED codebase map never varies with host-local index state.

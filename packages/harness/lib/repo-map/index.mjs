@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { builtinModules } from 'node:module';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { tokenize } from '../tokenize.mjs';
 import { estimateTokens } from '../token-meter.mjs';
 import { extract as lexicalExtract, SOURCE_EXTENSIONS } from './lexical-extractor.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
 import { codebaseMapWriteRel } from '../project-layout.mjs';
-import { trackedSourceFiles, readFileSafe, MAX_FILES_SCANNED } from './scan.mjs';
+import { trackedSourceFiles, readSourceFile, MAX_FILES_SCANNED } from './scan.mjs';
 import { readStructuralIndexIfCurrent } from './structural-index.mjs';
 
 const DEFAULT_MAX_TOKENS = 1000;
@@ -37,19 +38,24 @@ function currentStructuralFiles(workspace) {
   }
 }
 
-function fileFacts(workspace, rels) {
-  const structural = currentStructuralFiles(workspace);
+function fileFacts(workspace, rels, { extract = lexicalExtract, preferStructural = true } = {}) {
+  const structural = preferStructural ? currentStructuralFiles(workspace) : null;
   const facts = new Map();
   for (const rel of rels) {
+    const content = readSourceFile(workspace, rel);
     const pre = structural?.[rel];
-    const extracted = pre || lexicalExtract(rel, readFileSafe(workspace, rel));
+    const reusable = content !== null && pre &&
+      Array.isArray(pre.symbols) && Array.isArray(pre.imports) &&
+      pre.hash === createHash('sha256').update(content).digest('hex');
+    const extracted = content === null ? {} : reusable ? pre : extract(rel, content);
     facts.set(rel, {
       rel,
       symbols: Array.isArray(extracted.symbols) ? extracted.symbols : [],
       imports: Array.isArray(extracted.imports) ? extracted.imports : [],
+      tier: content === null ? 'unreadable' : reusable && pre.errors ? 'error' : reusable && pre.tier === 'treesitter' ? 'treesitter' : 'lexical',
     });
   }
-  return facts;
+  return { facts, structural: Boolean(structural) };
 }
 
 function uniqueOther(rels, fromRel) {
@@ -193,20 +199,11 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   const { files, total } = trackedSourceFiles(workspace);
   if (!files.length) return { files: [], body: '', tokens: 0, empty: true };
 
-    let structural = null;
-  if (preferStructural) {
-    try {
-      structural = readStructuralIndexIfCurrent(workspace);
-    } catch {
-      structural = null;
-    }
-  }
-
-  const info = new Map();
-  for (const rel of files) {
-    const pre = structural?.files?.[rel];
-    const { symbols, imports } = pre || extract(rel, readFileSafe(workspace, rel));
-    info.set(rel, { rel, symbols, imports, importedBy: 0 });
+  const { facts: info, structural } = fileFacts(workspace, files, { extract, preferStructural });
+  const tiers = { treesitter: 0, lexical: 0, error: 0, unreadable: 0 };
+  for (const fact of info.values()) {
+    fact.importedBy = 0;
+    tiers[fact.tier] += 1;
   }
 
     const byStem = new Map();
@@ -236,12 +233,18 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   // across hosts for the same tree.
   scored.sort((a, b) => b.score - a.score || (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 
+  const summary = `> Deterministic ${tiers.treesitter || tiers.error ? 'structural' : 'lexical'} map of ${total} tracked source files${total > files.length ? ` (top ${files.length} scanned)` : ''}.`;
+  const provenance = preferStructural ? ` tree-sitter ${tiers.treesitter}, lexical ${tiers.lexical}, parse errors ${tiers.error}${tiers.unreadable ? `, unreadable ${tiers.unreadable}` : ''}.` : '';
   const lines = [
     `# ${title}`,
     '',
-    `> Deterministic ${structural ? 'structural' : 'lexical'} map of ${total} tracked source files${total > files.length ? ` (top ${files.length} scanned)` : ''}.${query ? ` Ranked for: "${query}".` : ''}`,
+    `${summary}${provenance}${query ? ` Ranked for: "${query}".` : ''}`,
     '',
   ];
+  if (estimateTokens(lines.join('\n')) > maxTokens) lines[2] = `${summary}${provenance}`;
+  if (estimateTokens(lines.join('\n')) > maxTokens) {
+    return { files: [], body: '', tokens: 0, empty: true, totalFiles: total, structural };
+  }
   const selected = [];
   for (const f of scored) {
     const symbolList = f.symbols.slice(0, 6).join(', ');
@@ -298,7 +301,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
   }
   const hop = new Set(seeds);
   let incoming = new Map();
-  const facts = seeds.length ? fileFacts(workspace, tracked) : new Map();
+  const facts = seeds.length ? fileFacts(workspace, tracked).facts : new Map();
   if (seeds.length) {
     const edges = importEdges(facts, trackedSet);
     incoming = edges.incoming;
