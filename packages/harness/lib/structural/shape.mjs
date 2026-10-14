@@ -4,9 +4,9 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
 import { repoId } from '../knowledge/store.mjs';
-import { readFileNoFollow } from '../fs-safe.mjs';
+import { currentSnapshotDir, readSnapshot } from './snapshot.mjs';
 
-export const STRUCTURAL_SHAPE_VERSION = 1;
+export const STRUCTURAL_SHAPE_VERSION = 2;
 
 const worktreeIds = new Map();
 
@@ -32,57 +32,25 @@ const EMPTY_SYMBOLS = Object.freeze({ version: STRUCTURAL_SHAPE_VERSION, symbols
 const EMPTY_GRAPH = Object.freeze({ version: STRUCTURAL_SHAPE_VERSION, calls: [], modules: [], unresolved: [] });
 
 /** `<home>/index/<repo-id>/<worktree-id>/structural` for this workspace. */
-export function structuralDir(workspace, { home } = {}) {
+export function structuralCacheDir(workspace, { home } = {}) {
   return path.join(home || harnessGlobalHome(), 'index', repoId(workspace), worktreeId(workspace), 'structural');
 }
 
-function readJson(dir, name) {
-  const full = path.join(dir, name);
-  if (!fs.existsSync(full)) return { value: null, error: null };
-    const body = readFileNoFollow(full, { root: dir });
-  if (body === null) return { value: null, error: `${name} is unreadable (symlink, oversized, or open failure)` };
-  try {
-    const parsed = JSON.parse(body);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { value: null, error: `${name} is not a JSON object` };
-    }
-    return { value: parsed, error: null };
-  } catch (error) {
-    return { value: null, error: `${name}: ${error.message}` };
-  }
+export function structuralDir(workspace, options = {}) {
+  return currentSnapshotDir(structuralCacheDir(workspace, options));
 }
 
-export function readStructuralIndex(workspace, { home } = {}) {
-  const dir = structuralDir(workspace, { home });
-  const absent = (reason) => ({ present: false, reason, dir, files: {}, symbols: [], graph: EMPTY_GRAPH, meta: null });
-  if (!fs.existsSync(dir)) return absent('structural index not found');
-
-  const meta = readJson(dir, 'meta.json');
-  if (meta.error) return absent(`unreadable meta.json (${meta.error})`);
-  if (!meta.value) return absent('structural index has no meta.json');
-  if (typeof meta.value.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(meta.value.sha)) {
-    return absent('meta.json has no valid baseline sha');
-  }
-    const version = meta.value.version;
-  if (version !== undefined && !(Number.isFinite(version) && version <= STRUCTURAL_SHAPE_VERSION)) {
-    return absent(`unsupported structural index version ${JSON.stringify(version)} (this harness reads ${STRUCTURAL_SHAPE_VERSION})`);
-  }
-
-  const files = readJson(dir, 'files.json');
-  const symbols = readJson(dir, 'symbols.json');
-  const graph = readJson(dir, 'graph.json');
-  const broken = files.error || symbols.error || graph.error;
-  if (broken) return absent(`unreadable structural index (${broken})`);
-
-  return {
-    present: true,
-    reason: null,
-    dir,
-    files: normalizeFiles(files.value),
-    symbols: normalizeSymbols(symbols.value),
-    graph: normalizeGraph(graph.value),
-    meta: meta.value,
-  };
+export function readStructuralIndex(workspace, options = {}) {
+  const root = structuralCacheDir(workspace, options);
+  const absent = reason => ({ present: false, reason, dir: root, files: {}, symbols: [], graph: EMPTY_GRAPH, meta: null });
+  if (!fs.existsSync(root)) return absent('structural index not found');
+  const snapshot = readSnapshot(root);
+  if (!snapshot) return absent('structural index has no meta.json');
+  if (snapshot.unreadable.length) return absent(`unreadable structural index (${snapshot.unreadable.join('; ')})`);
+  if (typeof snapshot.meta?.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(snapshot.meta.sha)) return absent('meta.json has no valid baseline sha');
+  const version = snapshot.meta.version;
+  if (version !== undefined && !(Number.isFinite(version) && version <= STRUCTURAL_SHAPE_VERSION)) return absent(`unsupported structural index version ${JSON.stringify(version)} (this harness reads ${STRUCTURAL_SHAPE_VERSION})`);
+  return { ...snapshot, present: true, reason: null, files: normalizeFiles(snapshot.files), symbols: normalizeSymbols(snapshot.symbols), graph: normalizeGraph(snapshot.graph) };
 }
 
 function normalizeFiles(parsed) {
