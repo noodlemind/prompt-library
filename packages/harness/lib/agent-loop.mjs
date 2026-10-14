@@ -292,7 +292,7 @@ export const DELIVER_AGENT_TOOLS = Object.freeze([
   ...AGENT_TOOLS,
   Object.freeze({
     name: 'harness',
-    description: 'Deliver lifecycle command. argv starts with orient, plan-new, plan-update, gate, review, verify, compound, domain, experiment, report, status or trust status. Optional decision stages JSON for --file (compound and domain compound use --learning-decision). Domain requires an explicit name; experiment begin and resolve require authored decisions and preserve charged one-shot measurement authority. Workspace and homes stay bound to this run.',
+    description: 'Deliver lifecycle command. argv starts with orient, graph, plan-new, plan-update, gate, review, verify, compound, domain, experiment, report, status or trust status. Graph reads current file dependencies, dependents or a directed path; use graph deps <file>, graph dependents <file> or graph path <file> <target>. Optional decision stages JSON for --file (compound and domain compound use --learning-decision). Domain requires an explicit name; experiment begin and resolve require authored decisions and preserve charged one-shot measurement authority. Workspace and homes stay bound to this run.',
     schema: { type: 'object', properties: { argv: { type: 'array', items: { type: 'string' } }, decision: { type: 'object' } }, required: ['argv'] },
   }),
 ]);

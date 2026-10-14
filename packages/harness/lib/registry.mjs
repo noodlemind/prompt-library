@@ -78,6 +78,7 @@ import { cmdInspect, inspectResultOf, inspectExitFor, INSPECT_VERBS } from './in
 import { cmdDomain, domainResultOf, parseDomainArguments, DOMAIN_VERBS } from './domain-cmd.mjs';
 import { cmdExperiment, experimentResultOf, parseExperimentArguments, EXPERIMENT_VERBS } from './experiment-cmd.mjs';
 import { cmdInventory, inventoryResultOf, INVENTORY_VERBS } from './inventory-cmd.mjs';
+import { cmdGraph, graphResultOf, GRAPH_OPERATIONS } from './graph-cmd.mjs';
 
 const REGISTRY = new Map();
 
@@ -825,6 +826,31 @@ registerCommand({
   surfaces: ['cli', 'tui'],
   args: { positionals: [], flags: [] },
   handler: cmdMigrate,
+});
+
+registerCommand({
+  name: 'graph',
+  summary: 'bounded file dependencies, dependents and directed paths from current worktree facts',
+  group: 'workspace',
+  sideEffect: 'read',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<deps|dependents> <file> [--depth <n>] [--limit <n>] | path <file> <target>',
+  verbs: GRAPH_OPERATIONS.map(verb => ({ verb, summary: verb === 'path' ? 'find a bounded directed dependency path' : `read file ${verb}`, sideEffect: 'read', positionals: verb === 'path' ? ['file', 'target'] : ['file'] })),
+  args: {
+    positionals: [
+      { name: 'operation', description: GRAPH_OPERATIONS.join('|'), required: true },
+      { name: 'file', description: 'repository file path', required: true },
+      { name: 'target', description: 'target path for the path operation', required: false },
+    ],
+    flags: [
+      { name: '--depth', type: 'number', valueName: 'n', description: 'traversal depth, 1 to 32; default 1, or 8 for path', required: false, default: null, tui: 'prompt' },
+      { name: '--limit', type: 'number', valueName: 'n', description: 'maximum returned edges and unresolved imports, 1 to 200', required: false, default: 50, tui: 'prompt' },
+    ],
+  },
+  handler: cmdGraph,
+  resultOf: graphResultOf,
 });
 
 registerCommand({

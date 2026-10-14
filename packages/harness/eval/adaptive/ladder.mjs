@@ -25,6 +25,7 @@ import {
 
 const SLICE_KEYS = [
   'neighborhood',
+  'graph',
   'intentSources',
   'intentDiscovery',
   'intentDetail',
