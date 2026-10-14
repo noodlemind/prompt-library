@@ -9,7 +9,9 @@ import { writeFileContained, readFileNoFollow } from '../fs-safe.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
 import { estimateTokens } from '../token-meter.mjs';
 import { EXIT } from '../style.mjs';
-import { trackedSourceFiles, readFileSafe } from './scan.mjs';
+import { trackedSourceFiles, readSourceFile } from './scan.mjs';
+import { buildImportGraph, IMPORT_RESOLVER_VERSION } from './imports.mjs';
+import { readFileFacts } from './facts.mjs';
 import { MAX_IDENTIFIER_LENGTH } from './treesitter-extractor.mjs';
 
 export const STRUCTURAL_INDEX_VERSION = 1;
@@ -88,7 +90,14 @@ export function readStructuralIndexIfCurrent(workspace, { home } = {}) {
   if (!head || head !== meta.sha) return null;
   const index = readStructuralIndex(workspace, { home });
   // A current stamp over an unreadable table is not a usable index.
-  if (!index || index.unreadable.length) return null;
+  if (!index || index.unreadable.length || index.meta.sha !== head) return null;
+  const inventory = trackedSourceFiles(workspace);
+  if (inventory.unavailable || index.meta.inventoryHash && index.meta.inventoryHash !== inventory.inventoryHash) return null;
+  if (Object.keys(index.files).sort().join('\0') !== inventory.files.filter(rel => readSourceFile(workspace, rel) !== null).sort().join('\0')) return null;
+  for (const [rel, row] of Object.entries(index.files)) {
+    const content = readSourceFile(workspace, rel);
+    if (content === null || !row || row.hash !== sha256(content)) return null;
+  }
   return index;
 }
 
@@ -112,11 +121,6 @@ export function validateSinceRef(workspace, ref) {
   return sha;
 }
 
-function changedFilesSince(workspace, sha) {
-  const out = git(workspace, ['diff', '--name-only', sha, '--']);
-  if (out === null) return null; // diff failed → caller degrades to a full pass
-  return new Set(out.split('\n').filter(Boolean));
-}
 
 function cleanName(name) {
   const redacted = redactSecrets(String(name ?? ''));
@@ -142,7 +146,8 @@ function sanitizeEntry(res, { hash, mtime, size }) {
       line: Number.isFinite(r.line) ? r.line : 0,
     })),
     tier: res.tier === 'treesitter' ? 'treesitter' : 'lexical',
-    ...(res.hasErrors ? { errors: true } : {}),
+    limitsReached: res.limitsReached || {},
+    ...(res.hasErrors || res.errors ? { errors: true } : {}),
   };
 }
 
@@ -194,36 +199,10 @@ function buildSymbolTable(files, truncation) {
 
 function buildGraph(files, symbols, truncation) {
   const rels = Object.keys(files).sort();
-    const byStem = new Map();
-  for (const rel of rels) {
-    const stem = path.basename(rel).replace(/\.\w+$/, '');
-    if (!byStem.has(stem)) byStem.set(stem, []);
-    byStem.get(stem).push(rel);
-  }
-  const modules = [];
-  const unresolvedImports = [];
-  for (const rel of rels) {
-    for (const imp of files[rel].imports) {
-            const last = imp
-        .replace(/['"]/g, '')
-        .replace(/\.(?:js|jsx|mjs|cjs|ts|tsx|py|java)$/i, '')
-        .split(/[./\\]/)
-        .filter(Boolean)
-        .pop();
-      const targets = (last && byStem.get(last)) || [];
-      if (targets.length) {
-        for (const to of targets) {
-          if (to === rel) continue;
-          if (modules.length < MAX_MODULE_EDGES) modules.push({ from: rel, to, via: imp });
-          else truncation.moduleEdges = true;
-        }
-      } else if (unresolvedImports.length < MAX_UNRESOLVED) {
-        unresolvedImports.push({ from: rel, import: imp });
-      } else {
-        truncation.unresolved = true;
-      }
-    }
-  }
+  const imports = buildImportGraph(new Map(rels.map(rel => [rel, files[rel]])), new Set(rels), { maxEdges: MAX_MODULE_EDGES, maxUnresolved: MAX_UNRESOLVED });
+  const { modules, unresolvedImports } = imports;
+  truncation.moduleEdges = imports.moduleEdgesTruncated;
+  truncation.unresolved = imports.unresolvedTruncated;
   // Caller/callee approximation: a ref name that the declaration table binds
   // to files OTHER than the caller becomes a call edge; everything else is an
   // explicit unresolved call, never a fabricated edge.
@@ -373,25 +352,8 @@ function publishGeneration(dir, writes) {
   return { ok: true, failed: null };
 }
 
-/**
- * Build (or incrementally refresh) the structural index. Async only because
- * the command path around it is async — the work itself is local fs + git +
- * the injected extractor. Incremental discipline:
- *   1. mtime+size fast path — an unchanged stat reuses the prior entry with
- *      no read at all;
- *   2. sha256 content-hash confirm — a touched-but-identical file reuses the
- *      prior entry without re-parsing;
- *   3. `since` (a PRE-VALIDATED sha from validateSinceRef) narrows the
- *      re-parse candidates to `git diff --name-only <sha> --`; files outside
- *      the diff keep their prior entries verbatim. SOUNDNESS RULE: that
- *      narrowing is only valid when `since` is exactly the sha the PRIOR index
- *      was built at. Any other ref leaves files changed between `since` and
- *      the prior stamp stale while the rebuild stamps meta.sha = HEAD, so the
- *      index would READ as current while carrying stale entries. A misaligned
- *      `--since` is therefore IGNORED (reported, never silent) and the build
- *      degrades to a full incremental pass.
- * Bounded by the shared MAX_FILES_SCANNED / MAX_FILE_BYTES caps.
- */
+/** Read and hash bounded file contents before reusing extraction. Stat metadata
+ * and --since are provenance hints, never a substitute for current bytes. */
 export async function buildStructuralIndex({ workspace, home, extractor, since = null, dryRun = false, log = () => {} }) {
   const dir = structuralIndexDir(workspace, { home });
   const onDisk = readStructuralIndex(workspace, { home });
@@ -400,7 +362,9 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   const priorUnreadable = onDisk?.unreadable?.length ? onDisk.unreadable : [];
   if (priorUnreadable.length) log(`prior structural index unusable: ${priorUnreadable.join('; ')} — rebuilding from scratch`);
   const prior = priorUnreadable.length ? null : onDisk;
-  const { files: tracked, total } = trackedSourceFiles(workspace);
+  const inventory = trackedSourceFiles(workspace);
+  const { files: tracked, total } = inventory;
+  const sourceSha = git(workspace, ['rev-parse', 'HEAD']);
 
   let sinceIgnored = null;
   let appliedSince = null;
@@ -411,7 +375,6 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     sinceIgnored = '--since needs a prior index to narrow against';
   }
   if (sinceIgnored) log(`${sinceIgnored} — running a full incremental pass instead`);
-  const changed = appliedSince ? changedFilesSince(workspace, appliedSince) : null;
 
   const nextFiles = {};
   let reparsed = 0;
@@ -421,38 +384,22 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     // A hand-edited or partially written prior entry is discarded and rebuilt,
     // never reused: it flows into files.json and the symbol table verbatim.
     const priorEntry = usablePriorEntry(raw) ? raw : undefined;
-    if (changed && priorEntry && !changed.has(rel)) {
-      nextFiles[rel] = priorEntry;
-      reused += 1;
-      continue;
-    }
-    let st = null;
-    try {
-      st = fs.statSync(path.join(workspace, rel));
-    } catch {
-      continue; // listed but unreadable — skip, never guess
-    }
-    if (priorEntry && !changed?.has(rel) && priorEntry.mtime === st.mtimeMs && priorEntry.size === st.size) {
-      nextFiles[rel] = priorEntry;
-      reused += 1;
-      continue;
-    }
-    const content = readFileSafe(workspace, rel);
-    const hash = sha256(content);
-    if (priorEntry && priorEntry.hash === hash) {
-      nextFiles[rel] = { ...priorEntry, mtime: st.mtimeMs, size: st.size };
-      reused += 1;
-      continue;
-    }
-    let extracted;
-    try {
-      extracted = extractor.extract(rel, content);
-    } catch (error) {
-      extracted = { symbols: [], imports: [], defs: [], refs: [], hasErrors: true, tier: 'lexical' };
-      log(`structural parse failed ${rel}: ${error.message}`);
-    }
-    nextFiles[rel] = sanitizeEntry(extracted, { hash, mtime: st.mtimeMs, size: st.size });
-    reparsed += 1;
+    let st;
+    try { st = fs.statSync(path.join(workspace, rel)); }
+    catch { continue; }
+    const extract = (file, content) => {
+      try { return extractor.extract(file, content); }
+      catch (error) {
+        log(`structural parse failed ${file}: ${error.message}`);
+        return { symbols: [], imports: [], defs: [], refs: [], hasErrors: true, tier: 'lexical' };
+      }
+    };
+    const read = readFileFacts(workspace, [rel], { extract, cachedFiles: priorEntry ? { [rel]: priorEntry } : null });
+    const fact = read.facts.get(rel);
+    if (fact.tier === 'unreadable') continue;
+    nextFiles[rel] = sanitizeEntry(fact, { hash: fact.hash, mtime: st.mtimeMs, size: st.size });
+    reused += read.reused;
+    reparsed += 1 - read.reused;
   }
   const removedFiles = Object.keys(prior?.files || {}).filter((rel) => !(rel in nextFiles)).length;
 
@@ -473,7 +420,9 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   const basedOn = prior?.meta?.sha || null;
   const meta = {
     version: STRUCTURAL_INDEX_VERSION,
-    sha: git(workspace, ['rev-parse', 'HEAD']),
+    sha: sourceSha,
+    resolverVersion: IMPORT_RESOLVER_VERSION,
+    inventoryHash: inventory.inventoryHash,
     branch: git(workspace, ['rev-parse', '--abbrev-ref', 'HEAD']),
     baseSha: appliedSince || null,
     generatedAt: new Date().toISOString(),
@@ -485,6 +434,8 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     parseFailures: extractor.counters?.parseFailures ?? 0,
     errorFiles,
     filesIndexed: Object.keys(nextFiles).length,
+    unreadableFiles: tracked.length - Object.keys(nextFiles).length,
+    extractionTruncated: Object.values(nextFiles).some(row => Object.values(row.limitsReached).some(Boolean)),
     totalTracked: total,
     truncated: total > tracked.length,
     symbolsTruncated: truncation.symbols,
@@ -493,6 +444,16 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     callEdgesTruncated: truncation.callEdges,
     unresolvedTruncated: truncation.unresolved,
   };
+
+  const finalInventory = trackedSourceFiles(workspace);
+  const sourceChanged = inventory.unavailable || finalInventory.unavailable || inventory.inventoryHash !== finalInventory.inventoryHash || sourceSha !== git(workspace, ['rev-parse', 'HEAD']) || Object.entries(nextFiles).some(([rel, row]) => {
+    const content = readSourceFile(workspace, rel);
+    return content === null || sha256(content) !== row.hash;
+  });
+  if (sourceChanged) {
+    log('structural index not published: source inventory or content changed during extraction');
+    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn, sourceChanged: true };
+  }
 
   if (!meta.sha) {
     log('structural index not published — git HEAD could not be read');

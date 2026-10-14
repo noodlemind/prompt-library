@@ -208,10 +208,12 @@ export function extract(rel, content) {
 
   const symbolList = [...symbols].slice(0, MAX_LEXICAL_SYMBOLS);
   const kept = new Set(symbolList);
+  const references = [...importedNames(lang, text)];
   return {
     symbols: symbolList,
     imports: [...imports].slice(0, MAX_LEXICAL_IMPORTS),
     exported: [...exported].filter((name) => kept.has(name)),
-    references: [...importedNames(lang, text)].slice(0, MAX_LEXICAL_IMPORTS),
+    references: references.slice(0, MAX_LEXICAL_IMPORTS),
+    limitsReached: { symbols: symbols.size > MAX_LEXICAL_SYMBOLS, imports: imports.size > MAX_LEXICAL_IMPORTS, refs: references.length > MAX_LEXICAL_IMPORTS },
   };
 }
