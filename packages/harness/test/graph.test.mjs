@@ -104,3 +104,21 @@ test('a source change during extraction refuses publication and preserves the pr
   assert.equal(result.sourceChanged, true);
   assert.deepEqual(readStructuralIndex(f.workspace, f).files['src/main.mjs'].symbols, ['alpha']);
 });
+
+test('a tracked file removed before its scan turn refuses publication', async (t) => {
+  const f = fixture(t, { 'a.mjs': 'export function alpha() {}\n', 'z.mjs': 'export function z() {}\n' });
+  await buildStructuralIndex(f);
+  const before = readStructuralIndex(f.workspace, f).generation;
+  f.write('a.mjs', 'export function bravo() {}\n');
+  const extractor = {
+    tier: 'lexical',
+    extract(rel, content) {
+      if (rel === 'a.mjs') fs.unlinkSync(path.join(f.workspace, 'z.mjs'));
+      return lexicalV2(rel, content);
+    },
+  };
+  const result = await buildStructuralIndex({ ...f, extractor });
+  assert.equal(result.written, false);
+  assert.equal(result.sourceChanged, true);
+  assert.equal(readStructuralIndex(f.workspace, f).generation, before);
+});

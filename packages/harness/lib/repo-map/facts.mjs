@@ -8,6 +8,13 @@ export function contentHash(content) {
   return createHash('sha256').update(content).digest('hex');
 }
 
+export function readSourceHashes(workspace, rels) {
+  return new Map(rels.map(rel => {
+    const content = readSourceFile(workspace, rel);
+    return [rel, content === null ? null : contentHash(content)];
+  }));
+}
+
 export function readFileFacts(workspace, rels, { extract = lexicalExtract, cachedFiles = null } = {}) {
   const facts = new Map();
   let reused = 0;

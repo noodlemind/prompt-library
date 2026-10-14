@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { readStructuralIndex } from './repo-map/structural-index.mjs';
-import { trackedSourceFiles, readSourceFile } from './repo-map/scan.mjs';
-import { readFileFacts, contentHash, FILE_FACTS_VERSION } from './repo-map/facts.mjs';
+import { trackedSourceFiles } from './repo-map/scan.mjs';
+import { readFileFacts, readSourceHashes, contentHash, FILE_FACTS_VERSION } from './repo-map/facts.mjs';
 import { buildImportGraph, IMPORT_RESOLVER_VERSION } from './repo-map/imports.mjs';
 import { EXIT } from './style.mjs';
 
@@ -30,10 +30,8 @@ export function queryGraph({ workspace, home, operation = 'deps', files = [], de
   const { facts } = read;
   const graph = buildImportGraph(facts, new Set(inventory.files));
   const finalInventory = trackedSourceFiles(workspace);
-  const sourceChanged = finalInventory.unavailable || finalInventory.inventoryHash !== inventory.inventoryHash || [...facts].some(([rel, fact]) => {
-    const content = readSourceFile(workspace, rel);
-    return content === null ? fact.hash !== null : fact.hash !== contentHash(content);
-  });
+  const finalHashes = readSourceHashes(workspace, inventory.files);
+  const sourceChanged = finalInventory.unavailable || finalInventory.inventoryHash !== inventory.inventoryHash || [...facts].some(([rel, fact]) => fact.hash !== finalHashes.get(rel));
   const coverage = {
     tracked: inventory.total,
     scanned: facts.size,

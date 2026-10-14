@@ -46,10 +46,10 @@ export function readStructuralIndex(workspace, options = {}) {
   if (!fs.existsSync(root)) return absent('structural index not found');
   const snapshot = readSnapshot(root);
   if (!snapshot) return absent('structural index has no meta.json');
-  if (snapshot.unreadable.length) return absent(`unreadable structural index (${snapshot.unreadable.join('; ')})`);
-  if (typeof snapshot.meta?.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(snapshot.meta.sha)) return absent('meta.json has no valid baseline sha');
-  const version = snapshot.meta.version;
+  if (snapshot.meta && (typeof snapshot.meta.sha !== 'string' || !/^[0-9a-f]{7,40}$/i.test(snapshot.meta.sha))) return absent('meta.json has no valid baseline sha');
+  const version = snapshot.meta?.version;
   if (version !== undefined && !(Number.isFinite(version) && version <= STRUCTURAL_SHAPE_VERSION)) return absent(`unsupported structural index version ${JSON.stringify(version)} (this harness reads ${STRUCTURAL_SHAPE_VERSION})`);
+  if (snapshot.unreadable.length) return absent(`unreadable structural index (${snapshot.unreadable.join('; ')})`);
   return { ...snapshot, present: true, reason: null, files: normalizeFiles(snapshot.files), symbols: normalizeSymbols(snapshot.symbols), graph: normalizeGraph(snapshot.graph) };
 }
 

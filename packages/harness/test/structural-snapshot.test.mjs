@@ -144,3 +144,21 @@ test('failed manifest publication keeps the selected generation readable', async
   assert.equal(readStructuralIndex(f.workspace, f).generation, before);
   assert.deepEqual(readStructuralIndex(f.workspace, f).files['a.mjs'].symbols, ['alpha']);
 });
+
+for (const missing of ['files.json', 'symbols.json', 'graph.json']) {
+  test(`a legacy snapshot missing ${missing} is incomplete for both readers`, async (t) => {
+    const f = fixture(t);
+    const root = structuralIndexDir(f.workspace, f);
+    await buildStructuralIndex(f);
+    const snapshot = readStructuralIndex(f.workspace, f);
+    for (const name of ['meta.json', 'files.json', 'symbols.json', 'graph.json']) {
+      if (name !== missing) fs.copyFileSync(path.join(snapshot.dir, name), path.join(root, name));
+    }
+    fs.unlinkSync(path.join(root, 'current.json'));
+    const raw = readStructuralIndex(f.workspace, f);
+    assert.ok(raw.unreadable.some(error => error.includes(`${missing} is missing`)));
+    assert.equal(readShapeIndex(f.workspace, f).present, false);
+    assert.equal((await buildStructuralIndex(f)).written, true);
+    assert.deepEqual(readStructuralIndex(f.workspace, f).files['a.mjs'].symbols, ['alpha']);
+  });
+}

@@ -9,9 +9,9 @@ import { readSnapshot, publishSnapshot } from '../structural/snapshot.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
 import { estimateTokens } from '../token-meter.mjs';
 import { EXIT } from '../style.mjs';
-import { trackedSourceFiles, readSourceFile } from './scan.mjs';
+import { trackedSourceFiles } from './scan.mjs';
 import { buildImportGraph, IMPORT_RESOLVER_VERSION } from './imports.mjs';
-import { readFileFacts, FILE_FACTS_VERSION } from './facts.mjs';
+import { readFileFacts, readSourceHashes, FILE_FACTS_VERSION } from './facts.mjs';
 import { MAX_IDENTIFIER_LENGTH } from './treesitter-extractor.mjs';
 
 export const STRUCTURAL_INDEX_VERSION = 2;
@@ -54,10 +54,11 @@ export function structuralIndexIsCurrent(workspace, index) {
   if (!index || index.unreadable.length || index.meta.sha !== git(workspace, ['rev-parse', 'HEAD'])) return false;
   const inventory = trackedSourceFiles(workspace);
   if (inventory.unavailable || index.meta.inventoryHash && index.meta.inventoryHash !== inventory.inventoryHash) return false;
-  if (Object.keys(index.files).sort().join('\0') !== inventory.files.filter(rel => readSourceFile(workspace, rel) !== null).sort().join('\0')) return false;
+  const hashes = readSourceHashes(workspace, inventory.files);
+  if (Object.keys(index.files).sort().join('\0') !== [...hashes].filter(([, hash]) => hash !== null).map(([rel]) => rel).sort().join('\0')) return false;
   for (const [rel, row] of Object.entries(index.files)) {
-    const content = readSourceFile(workspace, rel);
-    if (content === null || !row || row.hash !== sha256(content)) return false;
+    const hash = hashes.get(rel);
+    if (!hash || !row || row.hash !== hash) return false;
   }
   return true;
 }
@@ -280,6 +281,7 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   const inventory = trackedSourceFiles(workspace);
   const { files: tracked, total } = inventory;
   const sourceSha = git(workspace, ['rev-parse', 'HEAD']);
+  const initialHashes = readSourceHashes(workspace, tracked);
 
   let sinceIgnored = null;
   let appliedSince = null;
@@ -364,10 +366,8 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   };
 
   const finalInventory = trackedSourceFiles(workspace);
-  const sourceChanged = inventory.unavailable || finalInventory.unavailable || inventory.inventoryHash !== finalInventory.inventoryHash || sourceSha !== git(workspace, ['rev-parse', 'HEAD']) || Object.entries(nextFiles).some(([rel, row]) => {
-    const content = readSourceFile(workspace, rel);
-    return content === null || sha256(content) !== row.hash;
-  });
+  const finalHashes = readSourceHashes(workspace, tracked);
+  const sourceChanged = inventory.unavailable || finalInventory.unavailable || inventory.inventoryHash !== finalInventory.inventoryHash || sourceSha !== git(workspace, ['rev-parse', 'HEAD']) || [...initialHashes].some(([rel, hash]) => hash !== finalHashes.get(rel)) || Object.entries(nextFiles).some(([rel, row]) => row.hash !== initialHashes.get(rel));
   if (sourceChanged) {
     log('structural index not published: source inventory or content changed during extraction');
     return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn, sourceChanged: true };
