@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { buildStructuralIndex, readStructuralIndex, readStructuralIndexIfCurrent } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
+import { structuralIndexStatus } from '../lib/index-status.mjs';
 
 function fixture(t, files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-graph-'));
@@ -74,7 +75,17 @@ test('current structural graphs reject dirty contents while tolerant baseline re
   assert.deepEqual(readStructuralIndexIfCurrent(f.workspace, f).files['src/main.mjs'].symbols, ['alpha']);
   f.write('src/main.mjs', 'export function bravo() {}\n');
   assert.equal(readStructuralIndexIfCurrent(f.workspace, f), null);
+  assert.equal(structuralIndexStatus(f.workspace, f).stale, true);
   assert.deepEqual(readStructuralIndex(f.workspace, f).files['src/main.mjs'].symbols, ['alpha']);
+});
+
+test('a changed extractor configuration reparses unchanged source', async (t) => {
+  const f = fixture(t, { 'src/main.mjs': 'export function alpha() {}\n' });
+  await buildStructuralIndex(f);
+  const extractor = { ...f.extractor, grammarVersions: { javascript: 'new-parser' }, extract: (rel, content) => ({ ...lexicalV2(rel, content), symbols: ['newParserResult'] }) };
+  const result = await buildStructuralIndex({ ...f, extractor });
+  assert.equal(result.reparsed, 1);
+  assert.deepEqual(readStructuralIndex(f.workspace, f).files['src/main.mjs'].symbols, ['newParserResult']);
 });
 
 test('a source change during extraction refuses publication and preserves the previous snapshot', async (t) => {

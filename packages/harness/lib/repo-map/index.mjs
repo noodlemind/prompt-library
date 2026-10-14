@@ -8,7 +8,7 @@ import { codebaseMapWriteRel } from '../project-layout.mjs';
 import { trackedSourceFiles, readSourceFile, MAX_FILES_SCANNED } from './scan.mjs';
 import { readStructuralIndex } from './structural-index.mjs';
 import { importEdges } from './imports.mjs';
-import { readFileFacts } from './facts.mjs';
+import { readFileFacts, FILE_FACTS_VERSION } from './facts.mjs';
 
 const DEFAULT_MAX_TOKENS = 1000;
 
@@ -30,9 +30,10 @@ function requestRel(workspace, raw) {
 
 function currentStructuralFiles(workspace) {
   try {
-    const index = readStructuralIndex(workspace);
     const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 15_000 });
-    return head.status === 0 && index?.meta.sha === head.stdout.trim() ? index.files : null;
+    if (head.status !== 0) return null;
+    const index = readStructuralIndex(workspace, { expectedSha: head.stdout.trim() });
+    return index && !index.unreadable.length && index.meta.fileFactsVersion === FILE_FACTS_VERSION ? index.files : null;
   } catch {
     return null;
   }

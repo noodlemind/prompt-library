@@ -133,6 +133,14 @@ export function buildImportGraph(facts, trackedSet, { maxEdges = 20_000, maxUnre
     for (const specifier of fact.imports) {
       const match = resolve(from, specifier);
       for (const to of match.targets) {
+        if (!facts.has(to) || facts.get(to).tier === 'unreadable') {
+          if (!unresolved.has(specifier)) {
+            unresolved.add(specifier);
+            if (unresolvedImports.length < maxUnresolved) unresolvedImports.push({ from, import: specifier, reason: 'unreadable' });
+            else unresolvedTruncated = true;
+          }
+          continue;
+        }
         if (seen.has(to)) continue;
         seen.add(to);
         if (modules.length < maxEdges) modules.push({ from, to, via: specifier, resolution: match.resolution });

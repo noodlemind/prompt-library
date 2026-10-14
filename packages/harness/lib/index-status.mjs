@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { resolveIndexDir } from './recall-config.mjs';
-import { structuralIndexDir, readStructuralIndex } from './repo-map/structural-index.mjs';
+import { structuralIndexDir, readStructuralIndex, structuralIndexIsCurrent } from './repo-map/structural-index.mjs';
 import { POSTINGS_INDEX_VERSION } from './postings-index.mjs';
 
 function git(workspace, args) {
@@ -171,7 +171,8 @@ export function structuralIndexStatus(workspace, { home } = {}) {
   }
 
   const indexedHead = meta.sha || meta.headSha || meta.baseSha || null;
-  const { head, commitsSince, filesChanged, stale } = driftFromHead(workspace, indexedHead);
+  const { head, commitsSince, filesChanged, stale: headStale } = driftFromHead(workspace, indexedHead);
+  const stale = headStale || !structuralIndexIsCurrent(workspace, index);
   const filesIndexed = Number.isFinite(meta.filesIndexed) ? meta.filesIndexed : null;
   const tier = meta.extractorTier || null;
 
@@ -180,7 +181,7 @@ export function structuralIndexStatus(workspace, { home } = {}) {
     indexed: true,
     filesIndexed,
     tier,
-    updated: meta.updated || meta.builtAt || null,
+    updated: meta.updated || meta.builtAt || meta.generatedAt || null,
     indexedHead,
     currentHead: head || null,
     commitsSince,
@@ -188,7 +189,9 @@ export function structuralIndexStatus(workspace, { home } = {}) {
     stale,
     unreadable: null,
     recommendation: stale
-      ? `${commitsSince ?? '?'} commits / ${filesChanged ?? '?'} files since last code index — run \`harness index --structural\``
+      ? headStale
+        ? `${commitsSince ?? '?'} commits / ${filesChanged ?? '?'} files since last code index — run \`harness index --structural\``
+        : 'worktree content or tracked inventory changed — run `harness index --structural`'
       : `code symbol index current${filesIndexed != null ? ` · ${filesIndexed} files` : ''}${tier ? ` · tier ${tier}` : ''}`,
     next: stale ? 'harness index --structural' : null,
   };
@@ -227,6 +230,6 @@ export function indexStatus({ workspace, copilotHome, home } = {}) {
     recommendation: parts.join(' · '),
     knowledge,
     structural,
-    structuralDir: structural.indexed ? structuralIndexDir(workspace) : null,
+    structuralDir: structural.indexed ? structuralIndexDir(workspace, { home }) : null,
   };
 }

@@ -15,7 +15,7 @@ function safeRoot(root) {
 function table(dir, name, digest = null) {
   const full = path.join(dir, name);
   if (!fs.existsSync(full)) return { value: null, error: digest ? `${name} is missing` : null };
-  const body = readFileNoFollow(full, { root: dir });
+  const body = readFileNoFollow(full, { root: dir, maxBytes: ['current.json', 'owner.json'].includes(name) ? 16_384 : DEFAULT_MAX_BYTES });
   if (body === null) return { value: null, error: `${name} is unreadable (oversized, symlink, or open failure)` };
   if (digest && hash(body) !== digest) return { value: null, error: `${name} integrity mismatch` };
   try {

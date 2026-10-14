@@ -94,3 +94,53 @@ test('unsafe manifest generation paths cannot escape the structural cache', asyn
   assert.equal(readShapeIndex(f.workspace, f).present, false);
   assert.equal(readStructuralIndex(f.workspace, f), null);
 });
+
+test('a dead owner recovers while live and ownerless locks preserve the prior generation', async (t) => {
+  const f = fixture(t);
+  const root = structuralIndexDir(f.workspace, f);
+  await buildStructuralIndex(f);
+  const before = readStructuralIndex(f.workspace, f).generation;
+  const lock = path.join(root, '.snapshot-lock');
+  fs.mkdirSync(lock);
+  fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ token: 'live', pid: process.pid }));
+  fs.writeFileSync(path.join(f.workspace, 'a.mjs'), 'export function bravo() {}\n');
+  assert.equal((await buildStructuralIndex(f)).written, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'current.json'))).generation, before);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'))).token, 'live');
+  fs.unlinkSync(path.join(lock, 'owner.json'));
+  assert.equal((await buildStructuralIndex(f)).written, false);
+  assert.equal(fs.existsSync(lock), true);
+  const child = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
+  assert.equal(child.status, 0);
+  fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ token: 'dead', pid: child.pid }));
+  assert.equal((await buildStructuralIndex(f)).written, true);
+  assert.deepEqual(readStructuralIndex(f.workspace, f).files['a.mjs'].symbols, ['bravo']);
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('failed manifest publication keeps the selected generation readable', async (t) => {
+  const f = fixture(t);
+  const root = structuralIndexDir(f.workspace, f);
+  await buildStructuralIndex(f);
+  const before = readStructuralIndex(f.workspace, f).generation;
+  fs.writeFileSync(path.join(f.workspace, 'a.mjs'), 'export function bravo() {}\n');
+  const original = fs.renameSync;
+  let attempted = false;
+  let result;
+  try {
+    fs.renameSync = (from, to) => {
+      if (to === path.join(root, 'current.json')) {
+        attempted = true;
+        throw new Error('injected publication failure');
+      }
+      return original(from, to);
+    };
+    result = await buildStructuralIndex(f);
+  } finally {
+    fs.renameSync = original;
+  }
+  assert.equal(attempted, true);
+  assert.equal(result.written, false);
+  assert.equal(readStructuralIndex(f.workspace, f).generation, before);
+  assert.deepEqual(readStructuralIndex(f.workspace, f).files['a.mjs'].symbols, ['alpha']);
+});
