@@ -78,6 +78,7 @@ import { cmdInspect, inspectResultOf, inspectExitFor, INSPECT_VERBS } from './in
 import { cmdDomain, domainResultOf, parseDomainArguments, DOMAIN_VERBS } from './domain-cmd.mjs';
 import { cmdExperiment, experimentResultOf, parseExperimentArguments, EXPERIMENT_VERBS } from './experiment-cmd.mjs';
 import { cmdInventory, inventoryResultOf, INVENTORY_VERBS } from './inventory-cmd.mjs';
+import { cmdPerformance, performanceResultOf, PERFORMANCE_VERBS } from './performance-cmd.mjs';
 
 const REGISTRY = new Map();
 
@@ -1251,6 +1252,30 @@ registerCommand({
   },
   handler: cmdExperiment,
   resultOf: experimentResultOf,
+  exitOf: result => result.exitCode,
+});
+
+registerCommand({
+  name: 'performance',
+  summary: 'analyze journey goals, architecture flows and source dependencies',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  instrument: false,
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: 'analyze [--file <path>] [--domain <name>] [--dry-run]',
+  verbs: [{ verb: 'analyze', summary: 'publish linked performance views from bounded current evidence' }],
+  args: {
+    positionals: [{ name: 'verb', description: PERFORMANCE_VERBS.join('|'), required: true }],
+    flags: [
+      { name: '--file', type: 'string', valueName: 'path', description: 'workspace-relative profile (default .github/harness/performance.json)', tui: 'prompt' },
+      { name: '--domain', type: 'string', valueName: 'name', description: 'existing version-2 domain membership', tui: 'prompt' },
+    ],
+  },
+  handler: cmdPerformance,
+  resultOf: performanceResultOf,
   exitOf: result => result.exitCode,
 });
 

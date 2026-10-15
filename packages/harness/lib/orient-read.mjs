@@ -14,6 +14,7 @@ import { extractGoalFromPlan } from './plan-goal.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
 import { trustStatus } from './trust.mjs';
 import { reviewCoverageFacts } from './report-facts.mjs';
+import { performanceContext } from './performance.mjs';
 
 const INDEX_MISSING = { knowledge: 'missing', structural: 'missing' };
 
@@ -116,7 +117,9 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
 
   const procedure = caffeinatedPointer(active, { copilotHome });
   const obligation = resolveObligation(workspace, active, q);
+  const performance = performanceContext({ workspace, home, files: namedFiles || [] });
   return {
+    ...(performance ? { performance } : {}),
     neighborhood,
     intentSources: obligation.paths,
     intentDiscovery: obligation.metadata,

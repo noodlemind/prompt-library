@@ -25,6 +25,7 @@ import { resolveObligation, intentPage } from './intent-sources.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
 import { trustStatus } from './trust.mjs';
+import { performanceContext } from './performance.mjs';
 
 const ORIENT_BRANCH_CAP = 80;
 function jsonGitContext(gitContext) {
@@ -222,7 +223,9 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }
 
   const reviewCoverage = reviewCoverageFacts({ workspace, plan: active, copilotHome });
+  const performance = performanceContext({ workspace, home, files: namedFiles || [] });
   const packBody = buildContextPack({
+    performance,
     reviewCoverage,
     trust,
     query: q,
@@ -279,6 +282,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   return {
     recall,
+    ...(performance ? { performance } : {}),
     trust,
     learnings,
     deliveredLearnings,

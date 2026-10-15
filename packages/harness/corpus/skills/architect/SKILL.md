@@ -34,6 +34,8 @@ Sketch the shape of a product change before writing it, when that shape is not a
 
 Read the code the change would sit beside. Name the module that already owns this job, or say that none does. Record the local pattern in a few lines: the type, the function that callers already use, and the file that owns the decision.
 
+Apply the [performance code principles](../engineer/references/performance-engineering.md#code-principles) when choosing algorithms, queries, concurrency, or dependencies. For journey design, assess both architecture/flow and implementation/dependency choices using the full reference.
+
 ### 2. Sketch
 
 Write the sketch before code. Keep it to one screen:

@@ -8,6 +8,8 @@ argument-hint: "[describe the engineering outcome]"
 
 Route the user's outcome and any explicit plan path to `@engineer`. The agent selects Answer, Investigate, Deliver, or Review mode; its nine-step lifecycle is canonical only for Deliver mode. It loads detailed skills only when their procedure is needed.
 
+Apply the [performance code principles](references/performance-engineering.md#code-principles) during applicable code authoring and review. Read the full reference for journey goals, architecture/flow gaps, or implementation/dependency investigations.
+
 ## Trigger Examples
 
 **Should trigger:**

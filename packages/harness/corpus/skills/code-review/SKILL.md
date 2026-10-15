@@ -56,6 +56,8 @@ Read the full packet at `packetPath` and retrieve omitted source content before 
 - Read related code and dependencies touched by the changes
 - Write a 2-3 line intent summary: what the change is trying to accomplish
 
+Apply the [performance code principles](../engineer/references/performance-engineering.md#code-principles) to applicable code and dependency choices in every review. When the packet includes performance context or journey goals, read the full reference and assess both lenses. Missing telemetry permits static gap analysis; it cannot support a measured bottleneck claim.
+
 ### 3. Choose Additional Perspectives
 
 The CLI preserves the five mandatory perspectives and selects bundled/product checks from declared globs. Read `references/review-personas.md` and decide whether the change needs additional language or domain judgment. Add each selected specialist with `--reviewer <id>` when preparing the packet. Explain the relevance of additional perspectives before dispatch.
