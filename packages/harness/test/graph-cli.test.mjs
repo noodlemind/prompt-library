@@ -14,7 +14,7 @@ function fixture(t, files = {}) {
   const workspace = path.join(root, 'repo');
   const home = path.join(root, 'home');
   fs.mkdirSync(workspace);
-  const env = { ...process.env, HARNESS_HOME: home, HARNESS_NO_EVENTS: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull };
+  const env = { ...process.env, HARNESS_HOME: home, HARNESS_NO_EVENTS: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
   for (const args of [['init', '-q'], ['config', 'user.name', 'Fixture'], ['config', 'user.email', 'fixture@example.invalid']]) assert.equal(spawnSync('git', args, { cwd: workspace, env }).status, 0);
   const write = (rel, body) => {
     fs.mkdirSync(path.dirname(path.join(workspace, rel)), { recursive: true });

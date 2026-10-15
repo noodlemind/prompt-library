@@ -14,7 +14,7 @@ function fixture(t, files) {
   const home = path.join(root, 'home');
   fs.mkdirSync(workspace);
   const git = (args) => {
-    const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull } });
+    const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } });
     assert.equal(result.status, 0, result.stderr);
     return result.stdout.trim();
   };

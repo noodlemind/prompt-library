@@ -17,7 +17,7 @@ function git(root, args) {
 
 function fixture(t) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-view-')));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }));
   const home = path.join(dir, 'harness');
   const root = path.join(dir, 'product');
   fs.mkdirSync(root);

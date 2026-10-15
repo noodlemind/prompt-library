@@ -14,7 +14,7 @@ function fixture(t) {
   const home = path.join(root, 'home');
   fs.mkdirSync(workspace);
   for (const args of [['init', '-q'], ['config', 'user.name', 'Fixture'], ['config', 'user.email', 'fixture@example.invalid']]) {
-    const r = spawnSync('git', args, { cwd: workspace, env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull } });
+    const r = spawnSync('git', args, { cwd: workspace, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } });
     assert.equal(r.status, 0);
   }
   fs.writeFileSync(path.join(workspace, 'a.mjs'), 'export function alpha() {}\n');
