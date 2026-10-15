@@ -6,6 +6,11 @@ checks:
   prompt-contracts:
     command: ["node", "--test", "packages/harness/test/prompt-library-contracts.test.mjs"]
     timeout_seconds: 120
+  verify-performance:
+    artifacts: ["performance.json"]
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-performance.mjs"]
+    timeout_seconds: 120
+    proof: behavior
   verify-intent-lock:
     artifacts: ["intent-lock/drive.json"]
     command: ["node", ".cursor/skills/verify-harness/scripts/prove-intent-lock.mjs"]

@@ -69,6 +69,7 @@ Delete temp workspaces, temp `HARNESS_HOME` dirs, and linked git worktrees the d
 - Intent lock proof: `node .cursor/skills/verify-harness/scripts/prove-intent-lock.mjs`
 - Worktree proof: `node .cursor/skills/verify-harness/scripts/prove-issue-worktree.mjs`
 - Prepare proof: `node .cursor/skills/verify-harness/scripts/prove-prepare.mjs`
+- Journey performance: `harness checks run verify-performance --json`; the [feature recipe](./features/performance.md) records the CLI and separate browser proof.
 - Installed release proof: `harness checks run verify-installed-release --json` from a trusted checkout on macOS; see [the installed-release recipe](./features/installed-release.md).
 
 ## Trigger Examples
