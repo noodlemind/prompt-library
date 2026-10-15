@@ -27,10 +27,26 @@ export function runPerformancePilot({ artifactDir } = {}) {
   };
   const sourcePaths = { gateway: [gateway, 'gateway.mjs'], worker: [worker, 'worker.mjs'], manifest: [worker, 'package.json'] };
   const sourceHashes = () => Object.fromEntries(Object.entries(sourcePaths).map(([id, [repo, rel]]) => [id, hash(fs.readFileSync(path.join(repo, rel)))]));
-  const observe = () => {
+  const expectedRows = Array.from({ length: 12 }, (_, index) => ({ item: index + 1, value: (index + 1) * 10 }));
+  const workerFixture = `const items = Array.from({ length: 12 }, (_, index) => index + 1);
+const database = new Map(items.map(item => [item, { item, value: item * 10 }]));
+let calls = 0, errors = 0;
+const query = ids => { calls++; return ids.map(id => { const row = database.get(id); if (!row) errors++; return row; }); };
+`;
+  const workerSources = {
+    before: `${workerFixture}const rows = items.flatMap(item => query([item]));\nconsole.log(JSON.stringify({ calls, rows, errors }));\n`,
+    after: `${workerFixture}const rows = query(items);\nconsole.log(JSON.stringify({ calls, rows, errors }));\n`,
+  };
+  const measure = () => {
     const measured = spawnSync(process.execPath, [path.join(worker, 'worker.mjs')], { encoding: 'utf8', timeout: 5000 });
     assert.equal(measured.status, 0, measured.stderr);
-    const { calls } = JSON.parse(measured.stdout);
+    const { calls, rows, errors } = JSON.parse(measured.stdout);
+    assert.deepEqual(rows, expectedRows, 'pilot must return every expected item row');
+    assert.equal(errors, 0, 'pilot must complete without query errors');
+    return { calls, rows: rows.length, errors };
+  };
+  const observe = () => {
+    const { calls } = measure();
     const observation = { version: 1, provenance: { kind: 'synthetic', description: 'Disposable twelve-item journey. Cost is an illustrative USD 0.001 per counted database call; no production billing or latency claim.' }, capturedAt: new Date().toISOString(), environment: 'disposable-fixture', workload: 'twelve items, one journey', sourceHashes: sourceHashes(), metrics: [{ journey: 'checkout', metric: 'cost', statistic: 'mean', unit: 'USD/journey', basis: 'database calls at USD 0.001 per call', value: calls * 0.001, samples: 1 }] };
     write(gateway, 'observations.json', JSON.stringify(observation));
     return calls;
@@ -43,7 +59,7 @@ export function runPerformancePilot({ artifactDir } = {}) {
     }
     fs.mkdirSync(copilot);
     write(gateway, 'gateway.mjs', 'export const worker = "checkout-worker";\n');
-    write(worker, 'worker.mjs', 'let calls = 0; const query = () => { calls++; }; for (let item=0; item<12; item++) query(); console.log(JSON.stringify({calls}));\n');
+    write(worker, 'worker.mjs', workerSources.before);
     write(worker, 'package.json', JSON.stringify({ dependencies: { 'legacy-client': '1.0.0' } }));
     for (const repo of [gateway, worker]) { git(repo, 'add', '.'); git(repo, 'commit', '-m', 'Create disposable fixture'); }
     const domain = { domain_version: 2, name: 'checkout', repos: ['gateway', 'worker'].map(id => ({ id, origin: `https://example.invalid/${id}.git` })), sources: [], bindings: { repos: { gateway, worker }, sources: {} }, shared_specs: [], shared_conventions: [] };
@@ -52,6 +68,21 @@ export function runPerformancePilot({ artifactDir } = {}) {
     profile.journeys.push({ id: 'health', title: 'Read gateway health', entry: 'gateway', completion: 'gateway', nodes: ['gateway'], environment: 'disposable-fixture', workload: 'one health request', maxAgeSeconds: 3600, goals: [], constraints: [] });
     const saveProfile = () => write(gateway, '.github/harness/performance.json', JSON.stringify(profile));
     saveProfile();
+    const probes = [];
+    try {
+      for (let run = 0; run < 5; run++) {
+        for (const variant of ['before', 'after']) {
+          write(worker, 'worker.mjs', workerSources[variant]);
+          const measured = measure();
+          assert.equal(measured.calls, variant === 'before' ? 12 : 1);
+          probes.push({ variant, ...measured, sourceHash: sourceHashes().worker });
+        }
+      }
+    } finally { write(worker, 'worker.mjs', workerSources.before); }
+    const summary = Object.fromEntries(['before', 'after'].map(variant => {
+      const calls = probes.filter(probe => probe.variant === variant).map(probe => probe.calls).sort((a, b) => a - b);
+      return [variant, { samples: calls.length, median: calls[2], range: [calls[0], calls.at(-1)] }];
+    }));
     const beforeCalls = observe();
     const before = cli('performance', 'analyze');
     assert.equal(before.report.journeys[0].goals.find(goal => goal.metric === 'cost').status, 'missed');
@@ -64,7 +95,7 @@ export function runPerformancePilot({ artifactDir } = {}) {
     assert.match(JSON.stringify(oriented.performance), /Batch database reads/);
     const review = cli('review', 'prepare', '--file', 'gateway.mjs');
     assert.match(JSON.stringify(review.preparation.performance), /Batch database reads/);
-    write(worker, 'worker.mjs', 'let calls = 0; const query = () => { calls++; }; query(); console.log(JSON.stringify({calls}));\n');
+    write(worker, 'worker.mjs', workerSources.after);
     write(worker, 'package.json', JSON.stringify({ dependencies: {} }));
     const stale = cli('performance', 'analyze', '--dry-run');
     assert.equal(stale.report.journeys[0].goals.find(goal => goal.metric === 'cost').status, 'stale');
@@ -80,7 +111,7 @@ export function runPerformancePilot({ artifactDir } = {}) {
       fs.writeFileSync(path.join(artifactDir, 'before.json'), JSON.stringify(before.report, null, 2));
       fs.writeFileSync(path.join(artifactDir, 'after.json'), JSON.stringify(after.report, null, 2));
     }
-    receipt = { version: 1, feature: 'performance', scope: 'synthetic disposable domain; no production proof', measurement: { metric: 'database calls per twelve-item journey', before: beforeCalls, after: afterCalls }, before: before.report.id, after: after.report.id, invocations, cleanup: false };
+    receipt = { version: 1, feature: 'performance', scope: 'synthetic disposable domain; no production proof', measurement: { metric: 'database calls per twelve-item journey', before: beforeCalls, after: afterCalls, probes, summary }, before: before.report.id, after: after.report.id, invocations, cleanup: false };
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
   receipt.cleanup = !fs.existsSync(root);
   return receipt;
