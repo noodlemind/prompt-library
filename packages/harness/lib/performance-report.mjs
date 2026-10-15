@@ -163,9 +163,10 @@ function activatePerformanceReport() {
     }
   }
   function observationDetail(parent, observation, metrics = observation.metrics.filter((metric) => metric.journey === journey?.id)) {
+    const freshness = observation.freshness?.find((item) => item.journey === journey?.id);
     add(parent, 'h3', `Observed / ${text(observation.provenance.kind)}`);
     add(parent, 'p', observation.provenance.description);
-    pairs(parent, [['Evidence source', observation.source], ['Captured at', observation.capturedAt], ['Environment', observation.environment], ['Workload', observation.workload], ['Freshness at evaluation', observation.freshness?.state || observation.freshness?.status || observation.freshness || 'See goal status']]);
+    pairs(parent, [['Evidence source', observation.source], ['Captured at', observation.capturedAt], ['Environment', observation.environment], ['Workload', observation.workload], ['Freshness at evaluation', freshness ? `${freshness.status} / ${freshness.reason}` : 'unknown']]);
     list(parent, metrics.map((metric) => `${metric.node || 'Journey'} / ${metricNames[metric.metric] || metric.metric} ${metric.statistic} / ${metric.basis} / ${metric.value} ${metric.unit} / ${metric.samples} samples`));
     add(parent, 'h3', 'Source hash mappings'); pairs(parent, Object.entries(observation.sourceHashes));
     add(parent, 'h3', 'Deployment mappings');

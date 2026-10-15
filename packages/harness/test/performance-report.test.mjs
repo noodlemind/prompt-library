@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import vm from 'node:vm';
 import { test } from 'node:test';
+import { analyzePerformance } from '../lib/performance.mjs';
 import { renderPerformanceHtml } from '../lib/performance-report.mjs';
+import { tempDir } from './helpers/temp.mjs';
+import { initGit } from './helpers/cli-fixtures.mjs';
 
 function fixture() {
   const unknown = (metric) => ({ metric, status: 'unknown', reason: 'No compatible measurement.' });
@@ -159,6 +165,35 @@ test('finding and imported measurement drilldowns preserve provenance and unreso
   assert.match(app.html, /snapshot|Snapshot/);
   assert.match(app.html, /not causal proof/);
   assert.match(app.html, /do not authenticate production/);
+});
+
+test('measurement drilldown selects freshness for the active journey from an analyzed report', t => {
+  const workspace = fs.realpathSync(tempDir('performance-report-freshness-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  initGit(workspace);
+  fs.mkdirSync(path.join(workspace, '.github/harness'), { recursive: true });
+  const code = 'export function run() { return 1; }\n';
+  fs.writeFileSync(path.join(workspace, 'code.mjs'), code);
+  const goal = { metric: 'latency', statistic: 'p95', unit: 'ms', basis: 'request completion', target: 200 };
+  const journeys = [['search', 3600], ['work', 60]].map(([id, maxAgeSeconds]) => ({ id, title: id, entry: 'request', completion: 'request', nodes: ['request'], environment: 'fixture', workload: 'one request', maxAgeSeconds, goals: [goal], constraints: [] }));
+  const observation = { version: 1, provenance: { kind: 'synthetic', description: 'Fixture only' }, capturedAt: '2026-10-15T12:00:00Z', environment: 'fixture', workload: 'one request', sourceHashes: { code: crypto.createHash('sha256').update(code).digest('hex') }, metrics: journeys.map(journey => ({ journey: journey.id, metric: 'latency', statistic: 'p95', unit: 'ms', basis: 'request completion', value: 100, samples: 10 })) };
+  fs.writeFileSync(path.join(workspace, 'trace.json'), JSON.stringify(observation));
+  fs.writeFileSync(path.join(workspace, '.github/harness/performance.json'), JSON.stringify({ version: 1, sources: [{ id: 'code', repo: 'self', path: 'code.mjs', kind: 'code' }, { id: 'trace', repo: 'self', path: 'trace.json', kind: 'evidence' }], nodes: [{ id: 'request', label: 'Request', kind: 'service', sources: ['code'] }], edges: [], journeys, observations: ['trace'] }));
+  const report = analyzePerformance({ workspace, now: Date.parse('2026-10-15T12:02:00Z') });
+  assert.deepEqual(report.observations[0].freshness.map(({ journey, status }) => ({ journey, status })), [{ journey: 'search', status: 'current' }, { journey: 'work', status: 'stale' }]);
+  const app = mount(report);
+  button(app, 'observation-list', 'trace').fire('click');
+  assert.match(app.get('detail').textContent, /Freshness at evaluation current/);
+  assert.doesNotMatch(app.get('detail').textContent, /maximum age|"journey"/);
+  app.get('journey').value = 'work'; app.get('journey').fire('change');
+  button(app, 'observation-list', 'trace').fire('click');
+  assert.match(app.get('detail').textContent, /Freshness at evaluation stale/);
+  assert.doesNotMatch(app.get('detail').textContent, /"journey"/);
+  report.observations[0].freshness = report.observations[0].freshness.filter(item => item.journey !== 'search');
+  const missing = mount(report);
+  button(missing, 'observation-list', 'trace').fire('click');
+  assert.match(missing.get('detail').textContent, /Freshness at evaluation unknown/);
+  assert.doesNotMatch(missing.get('detail').textContent, /maximum age/);
 });
 
 test('hostile node, file, finding and measurement text never creates elements or executable links', () => {

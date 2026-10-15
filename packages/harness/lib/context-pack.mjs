@@ -124,7 +124,9 @@ export function buildContextPack({
       for (const journey of performance.journeys.slice(0, 2)) {
         lines.push(`- ${inertLine(redactSecrets(journey.id))}: ${journey.goals.map(goal => `${inertLine(goal.metric)} ${inertLine(goal.status)}`).join('; ')}`);
       }
-      lines.push('- Retrieve current goals and constraints: `harness orient --read --json`.');
+      const omitted = (performance.omitted?.journeys || 0) + Math.max(0, performance.journeys.length - 2);
+      if (omitted) lines.push(`- ${omitted} journey(s) omitted from this pack. Read full declared goals and constraints from ${inertLine(redactSecrets(performance.profile.path))}.`);
+      lines.push('- Retrieve all current goals and constraints: `harness performance analyze --dry-run --json`.');
     }
   }
 
