@@ -6,8 +6,10 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { harnessControlCommand } from '../corpus/hooks/lib/tool-payload.mjs';
 import { beforeDeliveryTool } from '../lib/agent-delivery.mjs';
+import { createTreesitterExtract, packageGrammarRoots } from '../lib/repo-map/treesitter-extractor.mjs';
 
 const bin = path.resolve(import.meta.dirname, '../bin/harness.mjs');
+const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
 
 function fixture(t, files = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-graph-cli-'));
@@ -128,4 +130,40 @@ test('depth-limited paths qualify absence and never return partial routes', (t) 
   assert.equal(truncated.outcome, 'truncated');
   assert.equal(truncated.path, null);
   assert.deepEqual(truncated.edges, []);
+});
+
+for (const [extension, language] of [['mjs', 'javascript'], ['ts', 'typescript'], ['tsx', 'tsx']]) {
+  test(`literal dynamic imports preserve CLI paths after ${language} indexing`, (t) => {
+    if (!extractor.grammarVersions?.[language]) return t.skip('optional grammar not installed');
+    const loader = `loader.${extension}`;
+    const f = fixture(t, { [loader]: "export const load = () => import('./b.mjs');\n" });
+    const cold = f.json('graph', 'path', loader, 'c.mjs');
+    assert.deepEqual(cold.path, [loader, 'b.mjs', 'c.mjs']);
+    assert.equal(f.cli('index', '--structural').status, 0);
+    const warm = f.json('graph', 'path', loader, 'c.mjs');
+    assert.equal(warm.outcome, 'found');
+    assert.deepEqual(warm.path, [loader, 'b.mjs', 'c.mjs']);
+    assert.deepEqual(warm.edges, cold.edges);
+    assert.equal(warm.nodes.find(node => node.file === loader).tier, 'treesitter');
+    assert.equal(warm.cache.refreshed, 0);
+  });
+}
+
+test('human graph output discloses traversal depth separately from source coverage', (t) => {
+  const f = fixture(t);
+  for (const args of [['deps', 'a.mjs'], ['dependents', 'c.mjs'], ['path', 'a.mjs', 'c.mjs']]) {
+    const limited = f.json('graph', ...args, '--depth', '1');
+    assert.equal(limited.depthLimitReached, true);
+    assert.equal(limited.coverage.complete, true);
+    assert.deepEqual(limited.omitted, { edges: 0, unresolved: 0 });
+    const human = f.cli('graph', ...args, '--depth', '1');
+    assert.equal(human.status, 0, human.stderr);
+    assert.match(human.stdout, /Traversal stopped at --depth 1; increase --depth/);
+    assert.doesNotMatch(human.stdout, /incomplete coverage/);
+    const expanded = f.cli('graph', ...args, '--depth', '2');
+    assert.equal(expanded.status, 0, expanded.stderr);
+    assert.doesNotMatch(expanded.stdout, /Traversal stopped/);
+    assert.match(expanded.stdout, /a\.mjs/);
+    assert.match(expanded.stdout, /c\.mjs/);
+  }
 });

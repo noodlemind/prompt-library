@@ -7,6 +7,10 @@ import { test } from 'node:test';
 import { buildStructuralIndex, readStructuralIndex, readStructuralIndexIfCurrent } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
 import { structuralIndexStatus } from '../lib/index-status.mjs';
+import { structuralCacheDir } from '../lib/structural/shape.mjs';
+import { publishSnapshot } from '../lib/structural/snapshot.mjs';
+import { contentHash } from '../lib/repo-map/facts.mjs';
+import { queryGraph } from '../lib/graph.mjs';
 
 function fixture(t, files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-graph-'));
@@ -86,6 +90,29 @@ test('a changed extractor configuration reparses unchanged source', async (t) =>
   const result = await buildStructuralIndex({ ...f, extractor });
   assert.equal(result.reparsed, 1);
   assert.deepEqual(readStructuralIndex(f.workspace, f).files['src/main.mjs'].symbols, ['newParserResult']);
+});
+
+test('old file facts cannot hide dynamic imports in live queries or incremental rebuilds', async (t) => {
+  const f = fixture(t, {
+    'a.mjs': "export const load = () => import('./b.mjs');\n",
+    'b.mjs': 'export const b = 1;\n',
+  });
+  await buildStructuralIndex(f);
+  const prior = readStructuralIndex(f.workspace, f);
+  prior.files['a.mjs'].imports = [];
+  prior.meta.fileFactsVersion = 2;
+  prior.meta.extractorSignature = contentHash(JSON.stringify({ version: 2, tier: 'lexical', webTreeSitter: null, grammarVersions: {} }));
+  const published = publishSnapshot(structuralCacheDir(f.workspace, f), [
+    ['meta.json', prior.meta], ['files.json', prior.files], ['symbols.json', prior.symbols], ['graph.json', prior.graph],
+  ]);
+  assert.equal(published.ok, true);
+  const current = queryGraph({ ...f, operation: 'path', files: ['a.mjs', 'b.mjs'] });
+  assert.deepEqual(current.path, ['a.mjs', 'b.mjs']);
+  assert.equal(current.cache.reused, 0);
+  const rebuilt = await buildStructuralIndex(f);
+  assert.equal(rebuilt.reparsed, 2);
+  assert.equal(rebuilt.reused, 0);
+  assert.deepEqual(readStructuralIndex(f.workspace, f).files['a.mjs'].imports, ['./b.mjs']);
 });
 
 test('a source change during extraction refuses publication and preserves the previous snapshot', async (t) => {

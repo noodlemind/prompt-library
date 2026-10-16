@@ -172,6 +172,24 @@ test('extraction matrix: javascript and tsx', (t) => {
   assert.ok(tsx.refs.some((r) => r.name === 'go'));
 });
 
+for (const [extension, language] of [['mjs', 'javascript'], ['ts', 'typescript'], ['tsx', 'tsx']]) {
+  test(`${language} captures literal dynamic imports without guessing computed targets`, (t) => {
+    if (!extractor.grammarVersions?.[language]) return t.skip(skipNote);
+    const result = extractor.extract(`loader.${extension}`, [
+      "import './static.mjs';",
+      "const legacy = require('./legacy.mjs');",
+      "const load = () => import('./dynamic.mjs');",
+      'const data = import("./data.json", { with: { type: "json" } });',
+      "const computed = import('./' + name);",
+      'const variable = import(moduleName);',
+      "const method = loader.import('./method.mjs');",
+    ].join('\n'));
+    assert.equal(result.tier, 'treesitter');
+    assert.equal(result.hasErrors, false);
+    assert.deepEqual(result.imports, ['./static.mjs', './legacy.mjs', './dynamic.mjs', './data.json']);
+  });
+}
+
 test('extraction matrix: python defs/imports/refs with module-level export approximation', (t) => {
   if (!grammars) return t.skip(skipNote);
   const src = [
