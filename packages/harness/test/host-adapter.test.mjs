@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { binPath, runHarness } from './helpers/cli.mjs';
 
-const SLICE_KEYS = ['activePlan', 'contacts', 'gateStatus', 'index', 'instructions', 'intentDetail', 'intentDiscovery', 'intentSources', 'learnings', 'neighborhood', 'planGoal', 'reviewCoverage', 'skills', 'trust', 'verification'];
+const SLICE_KEYS = ['activePlan', 'contacts', 'gateStatus', 'graph', 'index', 'instructions', 'intentDetail', 'intentDiscovery', 'intentSources', 'learnings', 'neighborhood', 'planGoal', 'reviewCoverage', 'skills', 'trust', 'verification'];
 
 function git(cwd, args) {
   return spawnSync('git', args, {

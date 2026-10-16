@@ -121,6 +121,7 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
   return {
     ...(performance ? { performance } : {}),
     neighborhood,
+    graph: { commands: ['harness graph deps', 'harness graph dependents', 'harness graph path'], source: 'current-worktree', bounded: true, calls: 'approximate references only' },
     intentSources: obligation.paths,
     intentDiscovery: obligation.metadata,
     intentDetail: flags.intentPage ? intentPage(workspace, active?.fm?.intent || q, { page: flags.intentPage, pageSize: flags.intentPageSize || 8 }) : null,

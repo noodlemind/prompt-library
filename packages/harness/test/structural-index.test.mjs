@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import {
@@ -14,7 +15,7 @@ import {
   renderStructuralDigest,
 } from '../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
-import { readStructuralIndex as readShapeIndex } from '../lib/structural/shape.mjs';
+import { readStructuralIndex as readShapeIndex, structuralCacheDir } from '../lib/structural/shape.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -103,8 +104,9 @@ test('an abandoned staging directory from a crashed build is removed on the next
   const { ws } = gitRepo({ 'src/pay.mjs': 'export const pay = 1;\n' });
   const home = tempHome();
   const first = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor(), log: () => {} });
-  const parent = path.dirname(first.dir);
-  const junk = path.join(parent, `.staging-${path.basename(first.dir)}-old`);
+  const root = structuralCacheDir(ws, { home });
+  const parent = path.dirname(root);
+  const junk = path.join(parent, `.staging-${path.basename(root)}-old`);
   fs.mkdirSync(junk);
   fs.writeFileSync(path.join(junk, 'meta.json'), '{}\n');
   const old = new Date(Date.now() - 120_000);
@@ -401,7 +403,7 @@ test('a hand-edited or partial prior entry is discarded and rebuilt, never a cra
   const ext = countingExtractor();
   const rebuilt = await buildStructuralIndex({ workspace: ws, home, extractor: ext });
   assert.equal(rebuilt.written, true);
-  assert.deepEqual(ext.calls, ['svc.py'], 'only the unusable entry is re-parsed');
+  assert.deepEqual(ext.calls, ['src/audit.mjs', 'src/pay.mjs', 'svc.py'], 'integrity mismatch rejects the whole prior snapshot');
   const index = readStructuralIndex(ws, { home });
   assert.ok(index.files['svc.py'].symbols.includes('PaymentService'));
 });
@@ -444,8 +446,13 @@ test('an index written by a NEWER version is skipped by both readers', async (t)
   await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
   const dir = structuralIndexDir(ws, { home });
   const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
-  assert.equal(meta.version, 1, 'meta.version is written');
-  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ ...meta, version: 99 }));
+  assert.equal(meta.version, 2, 'the immutable snapshot schema is written');
+  const body = JSON.stringify({ ...meta, version: 99 });
+  fs.writeFileSync(path.join(dir, 'meta.json'), body);
+  const manifestPath = path.join(structuralCacheDir(ws, { home }), 'current.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.tables['meta.json'] = createHash('sha256').update(body).digest('hex');
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
 
   assert.equal(readStructuralIndex(ws, { home }), null, 'a future index shape is not half-read');
   assert.equal(readStructuralIndexIfCurrent(ws, { home }), null);
@@ -582,7 +589,8 @@ test('buildRepoMap prefers a current structural index and is byte-identical with
   await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
   const withIndex = buildRepoMap({ workspace: ws, query: 'charge payment' });
   assert.equal(withIndex.structural, true, 'current index is preferred');
-  assert.match(withIndex.body, /structural map/);
+  assert.match(withIndex.body, /lexical map/);
+  assert.match(withIndex.body, /tree-sitter 0, lexical 3, parse errors 0/);
   assert.ok(withIndex.files.includes('src/pay.mjs'), 'ranking still surfaces the relevant file');
 
   // The COMMITTED codebase map never varies with host-local index state.
@@ -683,9 +691,6 @@ test('a null or primitive prior symbol entry rebuilds instead of crashing the bu
 
   const rebuilt = await buildStructuralIndex({ workspace: ws, home, extractor: countingExtractor() });
   assert.equal(rebuilt.written, true, 'the build completes over a corrupt prior symbol table');
-    assert.ok(
-    rebuilt.delta.changed.names.includes(names[0]),
-    `a null prior entry is reported changed: ${JSON.stringify(rebuilt.delta.changed)}`
-  );
-  assert.ok(rebuilt.delta.changed.names.includes(names[1]), 'and so is a primitive one');
+  assert.equal(rebuilt.basedOn, null, 'a tampered snapshot cannot be the delta baseline');
+  assert.deepEqual(readStructuralIndex(ws, { home }).symbols.charge.defs.map(def => def.file), ['src/pay.mjs']);
 });

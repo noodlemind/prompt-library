@@ -10,14 +10,14 @@ import { readDomain, inspectDomain, observeDomainRepositoryIdentity } from '../l
 import { domainResultOf, cmdDomain, DOMAIN_VERBS } from '../lib/domain-cmd.mjs';
 
 function git(root, args) {
-  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 4000 });
-  assert.equal(result.status, 0, result.stderr);
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
   return result.stdout.trim();
 }
 
 function fixture(t) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-view-')));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }));
   const home = path.join(dir, 'harness');
   const root = path.join(dir, 'product');
   fs.mkdirSync(root);

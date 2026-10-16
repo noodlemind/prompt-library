@@ -4,7 +4,7 @@ const cp = require('node:child_process');
 const { performance } = require('node:perf_hooks');
 const { syncBuiltinESMExports } = require('node:module');
 
-const scoped = process.argv.some(value => /(?:^|[\\/])domain-commands\.test\.mjs$/.test(value) || /(?:^|[\\/])domain-command-journey-[^\\/]+(?:[\\/]|$)/.test(value));
+const scoped = process.argv.some(value => /(?:^|[\\/])domain-(?:commands|context)\.test\.mjs$/.test(value) || /(?:^|[\\/])domain-command-journey-[^\\/]+(?:[\\/]|$)/.test(value)) || /(?:^|[\\/])experiment-cli-[^\\/]+(?:[\\/]|$)/.test(process.cwd());
 const directory = process.env.HARNESS_PARENT_PROFILE_LOG;
 const MAX_BYTES = 1024 * 1024, MAX_ROWS = 4096, RESERVE = 32 * 1024;
 const verbs = ['rev-parse', 'config', 'diff', 'status', 'symbolic-ref', 'ls-files', 'worktree', 'rev-list'];
@@ -47,7 +47,7 @@ if (fd !== null && label.join(':') === 'domain:plan-update' && decisionIndex >= 
     }
   } catch {}
 }
-append({ type: 'start', pid: process.pid, platform: process.platform, label, action, validateCompletion: process.argv.includes('--validate-completion') });
+append({ type: 'start', pid: process.pid, ppid: process.ppid, platform: process.platform, label, action, validateCompletion: process.argv.includes('--validate-completion') });
 
 if (fd !== null) {
   const original = cp.spawnSync;

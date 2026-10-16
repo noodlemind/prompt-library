@@ -115,6 +115,7 @@ jobs:
           preload_root="${GITHUB_WORKSPACE//\\//}"
           export NODE_OPTIONS="--require=\"$preload_root/packages/harness/test/helpers/domain-parent-profile.cjs\""
           node --test \
+          packages/harness/test/cli-compound-telemetry.test.mjs \
           packages/harness/test/windows-authority.test.mjs \
           packages/harness/test/domain-contract.test.mjs \
           packages/harness/test/domain-context.test.mjs \

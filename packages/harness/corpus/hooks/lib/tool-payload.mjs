@@ -471,7 +471,7 @@ const GIT_QUERIES = new Set(['status', 'diff', 'log', 'show', 'ls-files', 'ls-tr
 const GIT_DIFF_QUERIES = new Set(['status', 'diff', 'log', 'show', 'blame', 'grep']);
 const GIT_INDEX_QUERIES = new Set(['status', 'diff', 'ls-files', 'blame', 'grep', 'check-ignore']);
 const GIT_HELPER_CONFIG = '^(core\\.(fsmonitor|pager|alternaterefscommand)|pager\\..*|diff\\.(external|.*\\.(command|textconv))|filter\\..*\\.(clean|smudge|process)|log\\.showsignature)$';
-const HARNESS_CONTROL = new Set(['plan-new', 'plan-update', 'gate', 'worktree', 'verify', 'review', 'compound', 'status', 'orient', 'prepare', 'index', 'recall', 'help', '--help', '-h', '--version', '-V', 'validate-plan', 'doctor', 'route']);
+const HARNESS_CONTROL = new Set(['plan-new', 'plan-update', 'gate', 'worktree', 'verify', 'review', 'compound', 'status', 'orient', 'prepare', 'index', 'graph', 'recall', 'help', '--help', '-h', '--version', '-V', 'validate-plan', 'doctor', 'route']);
 
 function terminalSegments(command) {
   const segments = [];

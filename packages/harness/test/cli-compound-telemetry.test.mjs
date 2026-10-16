@@ -198,11 +198,12 @@ test('telemetry serializes concurrent updates without losing counts', async () =
   const moduleUrl = pathToFileURL(path.join(packageRoot, 'lib', 'telemetry.mjs')).href;
   const script = `
     import { recordSkillUsage } from ${JSON.stringify(moduleUrl)};
-    recordSkillUsage({
+    const result = recordSkillUsage({
       copilotHome: process.argv[1],
       plan: { path: 'docs/plans/x.md', fm: { skills_used: ['engineer'] } },
       evidence: { outcome: 'passed' }
     });
+    if (result.error) throw new Error(result.error);
   `;
   const runs = Array.from({ length: 6 }, () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--input-type=module', '-e', script, copilotHome], {

@@ -129,6 +129,16 @@ The remaining boundary is decision input: the Engineer chooses intent, scope, ch
 
 Use `report --facts` for source-bound inventory, versions, declared graphs, coverage and completion facts. Declared delegation is separate from inferred architecture and installed capabilities. Retrieve source records when output reports omissions. A historical passed string never substitutes for current proof.
 
+`orient --read` also advertises `graph deps`, `graph dependents` and `graph path`
+for bounded file dependency queries. These commands use current tracked
+worktree content and qualified import resolution. They expose extraction tiers,
+unknown coverage, limits and snapshot receipts; they do not establish exact
+runtime calls or change plan authority. Structural extraction is cached in
+immutable, hash-checked JSON generations under the per-worktree Harness home.
+Readers select one generation, and source drift refuses publication. See
+[repository dependencies](../packages/harness/README.md#repository-dependencies)
+for query and storage contracts.
+
 The Harness Doctor skill ships an installed product-proof entry and feature-map example. Its clean-package synthetic journey proves executable delegation and broken/fixed enforcement; a selected real product, agreed disposable flow and actual editor invocation need separate evidence. See the shipped `skills/references/installed-product-proof.md`.
 
 The extraction ledger and skill audit live in `.audit/harness-extraction.tsv` and `.audit/harness-skill-boundaries.tsv`. The development-only mechanical evaluator runs repeated regression fixtures with actual observed CLI/hook calls, bytes and wall time. It does not run a model or measure semantic quality, tokens or agent intervention. Those limits must accompany any workflow-improvement claim.

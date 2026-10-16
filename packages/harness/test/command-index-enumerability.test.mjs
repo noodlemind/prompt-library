@@ -136,6 +136,7 @@ test('AC8: the audit does not flag a fully declared usage line', () => {
 // a `tui: 'verb'` disposition quietly downgraded) removes a capability from
 // the palette without any usage line changing. These fixtures are the pin.
 const DECLARED_VERBS = Object.freeze({
+  graph: ['deps', 'dependents', 'path'],
   knowledge: ['on', 'suggest', 'off', 'freeze', 'capture-only', 'status', 'promote', 'prune', 'purge', 'commit', 'migrate-store'],
   learning: ['retire', 'dispute', 'confirm', 'promote'],
   // `lookup`'s eleven entity kinds are verbs rather than a free-text
@@ -191,6 +192,7 @@ const VERB_FLAGS = Object.freeze({
  * same failure mode as a verb that never reached the index at all.
  */
 const VERB_POSITIONALS = Object.freeze({
+  graph: { deps: ['file'], dependents: ['file'], path: ['file', 'target'] },
   knowledge: { purge: ['target'], commit: ['target'] },
   learning: { retire: ['id'], dispute: ['id'], confirm: ['id'], promote: ['id'] },
   // Every lookup kind names exactly one entity, so all eleven consume the
@@ -256,7 +258,6 @@ test('AC8: the declared verb inventory matches its fixture exactly', () => {
     if (verbs.length) actual[name] = verbs;
   }
   assert.deepEqual(actual, { ...DECLARED_VERBS }, 'a verb was added or lost — update the fixture deliberately');
-  assert.equal(Object.values(actual).flat().length, 88, 'Domain, experiment and performance verbs remain enumerable');
 });
 
 test('AC8: the verb-dispositioned flag inventory matches its fixture exactly', () => {
@@ -316,7 +317,10 @@ test('AC8: every declared verb reaches the palette as its own row', () => {
   // Modal families leave the verb strip; remaining verb rows + flag-verbs only.
   const tuiVerbs = rows.filter((r) => r.kind === 'verb').length;
   assert.ok(tuiVerbs < 40, `TUI verb strip should fold heavily (got ${tuiVerbs})`);
-  assert.equal(cliRows.filter((r) => r.kind === 'verb').length, 103, 'the CLI surface keeps domain, experiment and performance forms');
+  const cliIds = new Set(cliRows.map(row => row.id));
+  for (const [command, verbs] of Object.entries(DECLARED_VERBS)) {
+    for (const verb of verbs) assert.equal(cliIds.has(`verb:${command}:${verb}`), true, `${command} ${verb} remains available through CLI discovery`);
+  }
 });
 
 /**
