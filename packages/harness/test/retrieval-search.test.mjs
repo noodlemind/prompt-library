@@ -215,6 +215,11 @@ test('symbol match reads the structural index and reports its absence rather tha
     'utf8',
   );
 
+  const incomplete = search(fx, { query: 'acquireLease', mode: 'symbol' });
+  assert.equal(statusOf(incomplete, 'code').status, 'skipped');
+  assert.match(statusOf(incomplete, 'code').reason, /unreadable structural index/);
+  fs.writeFileSync(path.join(dir, 'files.json'), JSON.stringify({ version: 1, files: {} }), 'utf8');
+  fs.writeFileSync(path.join(dir, 'graph.json'), JSON.stringify({ version: 1, modules: [], calls: [], unresolved: [] }), 'utf8');
   const found = search(fx, { query: 'acquireLease', mode: 'symbol', explain: true });
   const rows = found.results.filter((r) => r.source === 'code');
   assert.deepEqual(rows.map((r) => r.id), ['src/lease.mjs#acquireLease', 'src/lease.mjs#acquireLeaseToken']);

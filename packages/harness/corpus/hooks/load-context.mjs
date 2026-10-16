@@ -8,6 +8,7 @@ import { resolveHookWorkspace } from './lib/tool-payload.mjs';
 function emptyOrientSlice() {
   return {
     neighborhood: null,
+    graph: null,
     intentSources: [],
     intentDiscovery: null,
     intentDetail: null,

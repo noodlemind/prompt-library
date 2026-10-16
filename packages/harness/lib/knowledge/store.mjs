@@ -54,7 +54,10 @@ export function linkedPrimaryCheckout(workspace) {
 }
 
 export function localRepoId(workspace) {
-  const basis = linkedPrimaryCheckout(workspace) || workspace;
+  return localIdForRoot(linkedPrimaryCheckout(workspace) || workspace);
+}
+
+function localIdForRoot(basis) {
   let real = basis;
   try {
     real = fs.realpathSync.native(basis);
@@ -66,7 +69,10 @@ export function localRepoId(workspace) {
 
 export function legacyLocalRepoIds(workspace) {
   if (process.platform !== 'win32') return [];
-  const primary = linkedPrimaryCheckout(workspace) || workspace;
+  return legacyIdsForRoot(workspace, linkedPrimaryCheckout(workspace) || workspace);
+}
+
+function legacyIdsForRoot(workspace, primary) {
   const candidates = [primary];
   try {
     candidates.push(path.resolve(workspace, path.relative(fs.realpathSync.native(workspace), fs.realpathSync.native(primary))));
@@ -79,11 +85,17 @@ export function legacyLocalRepoIds(workspace) {
 }
 
 export function workspaceStorageId(workspace, { home } = {}) {
-  const id = repoId(workspace);
-  return storageIdForRepo(id, { home, legacyIds: id.startsWith('local-') ? legacyLocalRepoIds(workspace) : [] });
+  const { id, primary } = observeRepoIdentity(workspace);
+  const legacyIds = process.platform === 'win32' && id.startsWith('local-')
+    ? legacyIdsForRoot(workspace, primary || linkedPrimaryCheckout(workspace) || workspace) : [];
+  return storageIdForRepo(id, { home, legacyIds });
 }
 
 export function repoId(workspace) {
+  return observeRepoIdentity(workspace).id;
+}
+
+function observeRepoIdentity(workspace) {
   const remote = gitOut(workspace, ['remote', 'get-url', 'origin']);
   if (remote) {
     const canonical = remote
@@ -96,10 +108,11 @@ export function repoId(workspace) {
     const slug = canonical.replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
     if (slug) {
       const suffix = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 8);
-      return `${slug}-${suffix}`;
+      return { id: `${slug}-${suffix}`, primary: null };
     }
   }
-    return localRepoId(workspace);
+  const primary = linkedPrimaryCheckout(workspace) || workspace;
+  return { id: localIdForRoot(primary), primary };
 }
 
 export function storeDirForId(id, { home } = {}) {

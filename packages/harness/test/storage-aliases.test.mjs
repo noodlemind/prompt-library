@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { test } from 'node:test';
 import { binPath } from './helpers/cli.mjs';
 import { tempDir } from './helpers/temp.mjs';
@@ -34,6 +36,33 @@ function run(c, args) {
     encoding: 'utf8', env: { ...process.env, HARNESS_HOME: c.home },
   });
 }
+
+test('Windows storage lookup observes a linked primary once and refreshes the next lookup', { skip: process.platform !== 'win32' }, t => {
+  const c = fixture();
+  const parent = tempDir('storage-identity-linked-'), linked = path.join(parent, 'checkout');
+  const added = spawnSync('git', ['worktree', 'add', '--detach', linked, 'HEAD'], { cwd: c.ws, encoding: 'utf8' });
+  assert.equal(added.status, 0, added.stderr);
+  t.after(() => {
+    spawnSync('git', ['worktree', 'remove', '--force', linked], { cwd: c.ws });
+    for (const dir of [parent, c.ws, c.home]) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+  });
+  const calls = [], original = childProcess.spawnSync;
+  t.mock.method(childProcess, 'spawnSync', function(command, args) {
+    if (command === 'git' && args[0] === 'worktree') calls.push(args);
+    return original.apply(this, arguments);
+  });
+  syncBuiltinESMExports();
+  try {
+    const local = `local-${crypto.createHash('sha256').update(fs.realpathSync.native(c.ws)).digest('hex').slice(0, 12)}`;
+    assert.equal(storeDir(linked, { home: c.home }), path.join(c.home, 'knowledge', local));
+    assert.equal(calls.length, 1, 'canonical and legacy storage candidates must share one primary observation');
+    const remote = spawnSync('git', ['remote', 'add', 'origin', 'https://github.com/example/storage-fresh.git'], { cwd: c.ws, encoding: 'utf8' });
+    assert.equal(remote.status, 0, remote.stderr);
+    const suffix = crypto.createHash('sha256').update('github.com/example/storage-fresh').digest('hex').slice(0, 8);
+    assert.equal(storeDir(linked, { home: c.home }), path.join(c.home, 'knowledge', `github.com-example-storage-fresh-${suffix}`));
+    assert.equal(calls.length, 1, 'the next lookup must observe the new remote rather than cache the local identity');
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+});
 
 test('unchanged external plans reload when legacy realpath spelling differs from native identity', t => {
   const c = fixture();

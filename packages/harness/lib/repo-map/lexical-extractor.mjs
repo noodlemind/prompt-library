@@ -1,13 +1,15 @@
 /** Lexical extract seam; tree-sitter tier lives in treesitter-extractor.mjs. */
 import path from 'node:path';
 
-const IMPORT_PATTERNS = [
-  /^\s*import\s+(?:static\s+)?([\w.]+)/gm, // java
-  /^\s*import\s+[\s\S]*?\bfrom\s+['"]([^'"]+)['"]/gm, // js/ts
-  /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g, // js/ts require
-  /^\s*from\s+([\w.]+)\s+import\b/gm, // python from-import
-  /^\s*import\s+([\w.]+)/gm, // python import
-];
+const IMPORT_PATTERNS = {
+  java: [/^\s*import\s+(?:static\s+)?([\w.]+)/gm],
+  ts: [
+    /\b(?:import|export)\s+[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*['"]([^'"]+)['"]/g,
+    /\b(?:require|import)\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ],
+  py: [/^\s*from\s+([\w.]+)\s+import\b/gm, /^\s*import\s+([\w.]+)/gm],
+};
 
 const SYMBOL_PATTERNS = {
   java: [
@@ -201,17 +203,19 @@ export function extract(rel, content) {
   const imports = new Set();
   // Imports only apply to code languages, not SQL/HCL.
   if (lang !== 'sql' && lang !== 'tf') {
-    for (const pattern of IMPORT_PATTERNS) {
+    for (const pattern of IMPORT_PATTERNS[lang] || []) {
       for (const m of text.matchAll(pattern)) if (m[1]) imports.add(m[1]);
     }
   }
 
   const symbolList = [...symbols].slice(0, MAX_LEXICAL_SYMBOLS);
   const kept = new Set(symbolList);
+  const references = [...importedNames(lang, text)];
   return {
     symbols: symbolList,
     imports: [...imports].slice(0, MAX_LEXICAL_IMPORTS),
     exported: [...exported].filter((name) => kept.has(name)),
-    references: [...importedNames(lang, text)].slice(0, MAX_LEXICAL_IMPORTS),
+    references: references.slice(0, MAX_LEXICAL_IMPORTS),
+    limitsReached: { symbols: symbols.size > MAX_LEXICAL_SYMBOLS, imports: imports.size > MAX_LEXICAL_IMPORTS, refs: references.length > MAX_LEXICAL_IMPORTS },
   };
 }

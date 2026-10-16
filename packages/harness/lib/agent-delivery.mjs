@@ -14,7 +14,7 @@ import { harnessControlCommand, normalizeToolPayload, unwrapShellSegments } from
 
 export const DELIVERY_BIN = fileURLToPath(new URL('../bin/harness.mjs', import.meta.url));
 const HOOK_ROOT = fileURLToPath(new URL('../corpus/hooks/', import.meta.url));
-const COMMANDS = new Set(['orient', 'recall', 'plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound', 'report', 'status', 'trust', 'prepare', 'index']);
+const COMMANDS = new Set(['orient', 'recall', 'plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound', 'report', 'status', 'trust', 'prepare', 'index', 'graph']);
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 
 function inlineDecisionFlag(input) {
