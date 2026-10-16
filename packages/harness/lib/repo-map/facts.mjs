@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { extract as lexicalExtract } from './lexical-extractor.mjs';
 import { readSourceFile } from './scan.mjs';
 
-export const FILE_FACTS_VERSION = 2;
+export const FILE_FACTS_VERSION = 3;
 
 export function contentHash(content) {
   return createHash('sha256').update(content).digest('hex');

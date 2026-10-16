@@ -46,6 +46,7 @@ export async function cmdGraph(argv) {
     else for (const edge of result.edges) console.log(inertLine(`${edge.from} -> ${edge.to} (${edge.resolution})`));
     for (const edge of result.unresolved) console.log(inertLine(`${edge.from}: ${edge.import} (${edge.reason})`));
     if (result.omitted.edges || result.omitted.unresolved) console.log(`${result.omitted.edges} edges and ${result.omitted.unresolved} unresolved imports omitted; increase --limit.`);
+    if (result.depthLimitReached) console.log(`Traversal stopped at --depth ${result.depth}; increase --depth to explore further.`);
   }
   return 0;
 }

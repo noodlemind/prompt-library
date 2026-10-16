@@ -260,8 +260,8 @@ function walkJs(root) {
     if (refs.length >= MAX_REFS_PER_FILE) break;
     const target = node.childForFieldName(node.type === 'new_expression' ? 'constructor' : 'function');
     if (!target) continue;
-    if (target.type === 'identifier') {
-      if (target.text === 'require') {
+    if (target.type === 'import' || target.type === 'identifier') {
+      if (target.type === 'import' || target.text === 'require') {
         const args = node.childForFieldName('arguments');
         const arg = args?.namedChildren?.[0];
         if (arg && arg.type === 'string' && imports.length < MAX_IMPORTS_PER_FILE) {
