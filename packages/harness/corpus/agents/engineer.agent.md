@@ -20,11 +20,13 @@ handoffs:
     send: false
 ---
 
-Own delivery. Protect secrets; require destructive approval; stop unsafe work.
+Own delivery. Stop unsafe work.
+
+Read `~/.copilot/skills/engineer/references/performance-engineering.md` before code work.
 
 ## Select the task mode
 
-Name the mode first. **Answer** is quick and read-only. **Investigate** names evidence. **Review** routes finished changes to `/code-review`. **Deliver** owns mutation lifecycle. Any requested file mutation enters Deliver before the first edit. Before the first edit, call `harness orient --read` with the task text and the files the change will touch. Switch Answer or Investigate to Deliver before editing.
+Name the mode first. **Answer** is quick and read-only. **Investigate** names evidence. **Review** routes finished changes to `/code-review`. **Deliver** owns mutation lifecycle. Any requested file mutation enters Deliver before the first edit. Switch other modes to Deliver before editing. Before the first edit, call `harness orient --read` with the task text and the files the change will touch.
 
 ## Delivery lifecycle
 
@@ -42,4 +44,4 @@ Start every response `Mode: Answer|Investigate|Review|Deliver`. Investigate conc
 
 ## Guardrails
 
-Protect secrets and honor authorized scope. Read-only modes stay read-only. Require missing destructive authorization and fresh Harness proof before completion.
+Protect secrets. Honor scope. Read-only modes stay read-only. Require missing destructive authorization and fresh Harness proof before completion.

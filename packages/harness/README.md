@@ -128,6 +128,20 @@ Joint checks run in trusted repository contexts against the exact participating 
 
 Private parent learning publishes and indexes under the selected domain store. Ordinary project recall does not yet search those episodes. Upgrade CLI, corpus, and hooks together; the prior packaged CLI rejects `.hplan` before mutation. See [shared intent and domain delivery](../../docs/adaptive-engineering.md#shared-intent-and-domain-delivery) for configuration, amendment, and authority rules.
 
+### Performance analysis
+
+```bash
+harness performance analyze --json
+harness performance analyze --domain catalogue --json
+harness performance analyze --file .github/harness/performance.json --dry-run --json
+```
+
+Select exact source files in `.github/harness/performance.json`, using `self` or repository IDs from an existing version 2 domain. Declare each journey's completion, environment, workload, freshness bound, and constraints. Express latency, reliability, throughput, and cost goals separately; missing dimensions remain unknown. The [performance engineering reference](corpus/skills/engineer/references/performance-engineering.md) has the finite schema example and workflow.
+
+Analysis reads selected local inputs, executes no product code, and makes no network requests. It returns content-bound JSON and self-contained HTML under `.harness/performance/<report-id>/`; dry-run creates no report files. The linked architecture/flow and implementation/dependency views distinguish declared structure, lexical extraction, and attributed measurements. Missing telemetry permits static gap analysis. Goal comparisons require compatible current observations and source mappings; unknown and stale evidence remain explicit.
+
+Orientation and review use bounded matching context from the conventional profile. Applicable authoring and review apply the shared code principles. Reports are snapshots and grant no delivery or check authority. Use existing accepted plans, named checks, and supported experiments for changes. CLI evidence does not establish native VS Code or IntelliJ behavior, causal diagnosis, or production improvement.
+
 ### Optional agent (opt-in add-on)
 
 ```bash

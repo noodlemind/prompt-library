@@ -2,6 +2,8 @@
 
 Read this file before the first edit of a Deliver task. Name a principle in the report only after reading its section. The harness does not treat the name as proof.
 
+For code changes, read [performance engineering](../engineer/references/performance-engineering.md) and apply its code principles even when the request does not name performance. Use applicable journey goals and constraints returned by orientation; measure runtime claims through the existing named checks.
+
 | Name | Rule |
 |---|---|
 | smallest-change | Make the smallest change that solves the problem. |

@@ -167,6 +167,7 @@ const DECLARED_VERBS = Object.freeze({
   todo: ['list', 'sync', 'add', 'complete', 'clear'],
   domain: ['show', 'status', 'get', 'plan-new', 'plan-update', 'gate', 'review', 'verify', 'compound'],
   experiment: ['begin', 'evaluate', 'resolve', 'status'],
+  performance: ['analyze'],
   inventory: ['show', 'refresh'],
   inspect: ['config', 'permissions', 'workspace', 'tools'],
 });

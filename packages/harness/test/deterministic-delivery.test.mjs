@@ -16,19 +16,19 @@ import { writeChecks, writeVersionedPlan, initGit } from './helpers/cli-fixtures
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function installPackage(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-package-proof-'));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-package-proof-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const npm = [process.env.npm_execpath, path.join(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'), path.resolve(path.dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js')].find(candidate => candidate && fs.existsSync(candidate));
   assert.ok(npm, 'npm CLI must be available for clean-package proof');
   const logsDir = path.join(dir, 'npm-logs');
   fs.mkdirSync(logsDir);
-  const cacheResult = spawnSync(process.execPath, [npm, 'config', 'get', 'cache', '--json'], { encoding: 'utf8', timeout: 10000 });
+  const cache = path.join(dir, 'npm-cache');
   const npmStep = (label, args, cwd) => {
     const started = Date.now();
-    const result = spawnSync(process.execPath, [npm, ...args, '--timing', '--logs-dir', logsDir], { cwd, encoding: 'utf8', timeout: 60000 });
+    const result = spawnSync(process.execPath, [npm, ...args, '--cache', cache, '--no-audit', '--no-fund', '--timing', '--logs-dir', logsDir], { cwd, encoding: 'utf8', timeout: 60000 });
     const diagnostic = { kind: 'package-proof', label, platform: process.platform, node: process.version, durationMs: Date.now() - started,
       status: result.status, signal: result.signal, error: result.error ? { code: result.error.code, message: result.error.message } : null,
-      npm, cache: { status: cacheResult.status, selected: String(cacheResult.stdout || '').trim().slice(0, 1024), isolated: false }, logsDir,
+      npm, cache: { selected: cache, isolated: true }, logsDir,
       stdout: String(result.stdout || '').slice(0, 65536), stderr: String(result.stderr || '').slice(0, 65536),
       logs: fs.readdirSync(logsDir).filter(name => /(?:timing\.json|debug-\d+\.log)$/.test(name)).slice(-4)
         .map(name => ({ name, text: fs.readFileSync(path.join(logsDir, name), 'utf8').slice(-65536) })) };
@@ -38,7 +38,7 @@ function installPackage(t) {
   };
   const packed = npmStep('pack', ['pack', '--json', '--pack-destination', dir], root);
   const archive = path.join(dir, JSON.parse(packed.stdout)[0].filename);
-  npmStep('offline-install', ['install', '--prefix', dir, '--offline', '--ignore-scripts', '--omit=optional', archive]);
+  npmStep('offline-install', ['install', '--prefix', dir, '--offline', '--ignore-scripts', '--omit=optional', archive], dir);
   return path.join(dir, 'node_modules/harness');
 }
 

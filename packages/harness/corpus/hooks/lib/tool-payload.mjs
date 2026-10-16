@@ -575,6 +575,26 @@ export function harnessControlCommand(tokens, workspace) {
   } else return null;
   if (!args.length) return 'help';
   if (HARNESS_CONTROL.has(args[0])) return args[0];
+  if (args[0] === 'performance') {
+    if (args[1] !== 'analyze') return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--file', '--domain', '--workspace', '--harness-home', '--copilot-home']), seen = new Set(), values = new Map();
+    for (let index = 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('='), name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || Buffer.byteLength(value) > 4096 || /[\x00-\x1f\x7f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    const domain = values.get('--domain'), file = values.get('--file');
+    if (domain && (domain.length > 64 || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(domain))) return null;
+    if (file && (path.isAbsolute(file) || path.win32.isAbsolute(file) || file.includes('\\') || file.split('/').some(part => !part || part === '.' || part === '..'))) return null;
+    if (values.has('--workspace') && path.resolve(values.get('--workspace')) !== path.resolve(workspace)) return null;
+    return 'performance';
+  }
   if (args[0] === 'experiment') {
     const verb = args[1], options = { begin: ['--plan', '--file'], evaluate: ['--plan', '--attempt'], resolve: ['--plan', '--file'], status: ['--plan', '--attempt'] };
     if (!Object.hasOwn(options, verb)) return null;

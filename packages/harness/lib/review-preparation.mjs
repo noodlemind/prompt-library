@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { getCorpusRoot } from './assets.mjs';
 import { externalPlansDir } from './project-layout.mjs';
 import { harnessGlobalHome } from './paths.mjs';
+import { performanceContext, performanceContextIsCurrent } from './performance.mjs';
 import { parsePlanFrontmatter } from './plan-parse.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors, canonicalPath } from './fs-safe.mjs';
 import { readProductDiff, gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
@@ -149,7 +150,7 @@ export function discoverReviewChecks(workspace, files) {
   return { checks, failures };
 }
 
-export function reviewPreparation({ workspace, scope, plan, kind, reviewers, files, maxBytes = 16384 }) {
+export function reviewPreparation({ workspace, scope, plan, kind, reviewers, files, maxBytes = 16384, home }) {
   const corpus = getCorpusRoot();
   const selectedRefs = new Map((files?.length ? files : scope.changedFiles).map(file => {
     const ref = selectedSource(workspace, file, kind, plan);
@@ -166,6 +167,8 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
   const sources = kind === 'document' ? [source(corpus, 'skills/document-review/references/review-criteria.md', 'corpus')] : perspectives.map(id => source(corpus, `agents/${id}.agent.md`, 'corpus'));
   sources.push(source(corpus, 'skills/code-review/references/findings-schema.md', 'corpus'));
   const failures = [...discovery.failures, ...collisions, ...sources.filter(s => !s.sha256).map(s => `Review definition unavailable: ${s.path}`)];
+  const performance = kind === 'code' ? performanceContext({ workspace, home: plan ? planHome(workspace, plan) : home || harnessGlobalHome(), files: covered }) : null;
+  if (performance?.state === 'invalid') failures.push('Performance profile is invalid; inspect the current profile before completing review');
   const refs = covered.map(file => selectedRefs.get(file) || source(workspace, file, 'product'));
   const diff = readProductDiff(workspace, { base: scope.base || 'HEAD', planPath: plan?.path });
   const branchResult = spawnSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8', timeout: 4000, env: gitMetadataEnvironment() });
@@ -181,10 +184,16 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
     bytes += Buffer.byteLength(excerpt);
     included.push({ ...ref, excerpt, truncated: Buffer.byteLength(text) > Buffer.byteLength(excerpt) });
   }
-  return { declaredRequired, required, preparation: { kind, branch: branchResult.status === 0 ? branchResult.stdout.trim() : null, checks: discovery.checks, sources, refs, files: included, omitted, diff: diff === null ? null : Buffer.from(diff).subarray(0, budget).toString('utf8'), diffTruncated: diff === null || Buffer.byteLength(diff) > budget, coverage: { totalFiles: covered.length, includedFiles: included.length, omittedFiles: omitted.length, byteBudget: budget, excerptBytes: bytes }, failures, provenance: 'Host invocation identity unknown; declarations and same-context perspectives are not independent evidence' } };
+  return { declaredRequired, required, preparation: { kind, ...(performance ? { performance } : {}), branch: branchResult.status === 0 ? branchResult.stdout.trim() : null, checks: discovery.checks, sources, refs, files: included, omitted, diff: diff === null ? null : Buffer.from(diff).subarray(0, budget).toString('utf8'), diffTruncated: diff === null || Buffer.byteLength(diff) > budget, coverage: { totalFiles: covered.length, includedFiles: included.length, omittedFiles: omitted.length, byteBudget: budget, excerptBytes: bytes }, failures, provenance: 'Host invocation identity unknown; declarations and same-context perspectives are not independent evidence' } };
 }
 
 export function preparationIsCurrent(workspace, preparation, options = {}) {
+  if (preparation.kind === 'code') {
+    const home = options.plan ? planHome(workspace, options.plan) : options.home || harnessGlobalHome();
+    if (preparation.performance) {
+      if (!performanceContextIsCurrent({ workspace, home, context: preparation.performance })) return false;
+    } else if (performanceContext({ workspace, home, files: preparation.refs.map(ref => ref.path) }) !== null) return false;
+  }
   if (preparation.kind !== 'document' && preparation.refs.some(ref => ref.origin === 'project-plan')) return false;
   if (preparation.kind === 'code') {
     const discovery = discoverReviewChecks(workspace, preparation.refs.map(ref => ref.path));
