@@ -119,6 +119,19 @@ test('declared structural checks use only the journey graph and exact manifest d
   assert.ok(f.analyze().diagnostics.some(d => d.view === 'implementation' && d.kind === 'unknown'));
 });
 
+test('bounded lexical lists retain their truncation flags and disclose incomplete extraction', t => {
+  const f = fixture(t);
+  const imports = Array.from({ length: 257 }, (_, i) => `import { imported${i} } from './dependency-${i}.mjs';`);
+  const symbols = Array.from({ length: 513 }, (_, i) => `export function symbol${i}() {}`);
+  f.write('src/start.mjs', [...imports, ...symbols].join('\n'));
+  const report = f.analyze();
+  const source = report.implementation.nodes.find(node => node.id === 'start-source');
+  assert.equal(source.imports.length, 256);
+  assert.equal(source.symbols.length, 512);
+  assert.deepEqual(source.limitsReached, { symbols: true, imports: true, refs: true });
+  assert.ok(report.unknowns.some(message => message.includes('start-source') && /truncat/i.test(message)));
+});
+
 test('a forbidden direct edge does not become a forbidden transitive path', t => {
   const f = fixture(t);
   f.profile.nodes.push({ id: 'middle', label: 'Middle', kind: 'queue', sources: [] });

@@ -122,12 +122,15 @@ function implementationView(profile, sources, bytes, unknowns) {
   const nodes = sources.map(source => {
     const content = bytes.get(source.id);
     const extracted = source.kind === 'code' && content !== null ? extract(source.path, content.toString('utf8')) : { symbols: [], imports: [] };
+    const limitsReached = extracted.limitsReached || { symbols: false, imports: false, refs: false };
+    const truncated = Object.keys(limitsReached).filter(key => limitsReached[key]);
+    if (truncated.length) unknowns.push(`Source ${source.id} lexical extraction is truncated for ${truncated.join(', ')}; additional entries are omitted.`);
     const manifest = manifests(source, content);
     if (source.kind === 'manifest') {
       manifestData.set(source.id, manifest);
       if (source.state === 'regular' && manifest.state !== 'regular') unknowns.push(`Manifest ${source.id} is malformed or exceeds the bounded dependency contract; package choices are unknown.`);
     }
-    return { ...source, symbols: extracted.symbols.map(value => value.slice(0, 256)), imports: extracted.imports.map(value => value.slice(0, 1024)), packages: manifest.packages };
+    return { ...source, symbols: extracted.symbols.map(value => value.slice(0, 256)), imports: extracted.imports.map(value => value.slice(0, 1024)), limitsReached, packages: manifest.packages };
   });
   const byLocation = new Map(profile.sources.map(source => [`${source.repo}\0${source.path}`, source.id]));
   const edges = [];

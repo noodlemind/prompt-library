@@ -123,6 +123,17 @@ test('journey view shows four independent goals, linked maps and unknown coverag
   assert.match(app.get('snapshot-inputs').textContent, /b{64}.*c{40}/s);
 });
 
+test('source lists and drilldowns disclose truncated extraction beside the affected file', () => {
+  const report = fixture();
+  report.implementation.nodes[0].limitsReached = { symbols: true, imports: true, refs: false };
+  const app = mount(report);
+  const source = button(app, 'source-list', 'src/web.mjs');
+  assert.match(source.textContent, /truncat.*symbols.*imports/i);
+  source.fire('click');
+  assert.match(app.get('detail').textContent, /truncat.*symbols.*imports.*omitted/i);
+  assert.doesNotMatch(button(app, 'source-list', 'package.json').textContent, /truncat/i);
+});
+
 test('node and source buttons cross-highlight their mapping while retaining keyboard focus', () => {
   const app = mount(fixture());
   const node = button(app, 'architecture-graph', 'Run query');

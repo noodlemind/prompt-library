@@ -105,6 +105,7 @@ function activatePerformanceReport() {
   const metricNames = { latency: 'Latency', reliability: 'Reliability', throughput: 'Throughput', cost: 'Cost' };
   const kindNames = { 'structural-violation': 'Structural violation', 'measured-symptom': 'Measured symptom', unknown: 'Unknown' };
   const sources = new Map(report.inputs.sources.map((source) => [source.id, source]));
+  const extractionLimits = new Map(report.implementation.nodes.map(source => [source.id, Object.entries(source.limitsReached || {}).filter(([, limited]) => limited).map(([key]) => key === 'refs' ? 'references' : key)]));
   const nodes = new Map(report.architecture.nodes.map((node) => [node.id, node]));
   const selector = get('journey');
   let journey = report.journeys[0], selection = null, controls = [], activeSources = new Set(), activeObservations = [];
@@ -179,6 +180,7 @@ function activatePerformanceReport() {
     const repo = report.inputs.repos.find((item) => item.id === source.repo);
     pairs(parent, [['Source', source.id], ['Kind', source.kind], ['Read state', source.state], ['Original byte hash', source.sha256], ['Bytes', source.bytes], ['Repository root', repo?.root], ['Snapshot commit', repo?.head]]);
     const implementation = report.implementation.nodes.find((item) => item.id === id);
+    if (extractionLimits.get(id)?.length) add(parent, 'p', `Extraction truncated for ${extractionLimits.get(id).join(', ')}; additional entries are omitted.`);
     if (implementation) { add(parent, 'p', 'Extracted / lexical. These references do not prove runtime calls.'); for (const key of ['symbols', 'imports', 'packages']) { add(parent, 'h3', key[0].toUpperCase() + key.slice(1)); list(parent, implementation[key]?.length ? implementation[key] : ['None extracted; absence is not proof of absence.']); } }
     for (const observation of activeObservations.filter((item) => item.source === id)) observationDetail(parent, observation);
   }
@@ -244,7 +246,11 @@ function activatePerformanceReport() {
       if (!findings.length) add(host, 'p', 'No findings for this view. This does not establish performance.', 'muted');
     }
     get('source-list').replaceChildren();
-    for (const source of report.inputs.sources.filter((item) => activeSources.has(item.id))) { const button = control(get('source-list'), `${source.repo} / ${source.path}`, 'source', source.id); add(button, 'small', `${source.kind} / ${source.state}`); }
+    for (const source of report.inputs.sources.filter((item) => activeSources.has(item.id))) {
+      const button = control(get('source-list'), `${source.repo} / ${source.path}`, 'source', source.id);
+      add(button, 'small', `${source.kind} / ${source.state}`);
+      if (extractionLimits.get(source.id)?.length) add(button, 'small', `Extraction truncated: ${extractionLimits.get(source.id).join(', ')}`);
+    }
     if (!activeSources.size) add(get('source-list'), 'p', 'No sources mapped to this journey.', 'muted');
     get('observation-list').replaceChildren();
     for (const observation of activeObservations) control(get('observation-list'), `${observation.source} / ${text(observation.provenance.kind)} / ${observation.capturedAt}`, 'observation', observation.source, 'finding');
