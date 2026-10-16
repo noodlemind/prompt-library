@@ -48,7 +48,10 @@ jobs:
         run: |
           $preloadRoot = $env:GITHUB_WORKSPACE.Replace('\', '/')
           $env:NODE_OPTIONS = '--require="' + $preloadRoot + '/packages/harness/test/helpers/domain-parent-profile.cjs"'
-          npm --prefix packages/harness test
+          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoLogo -NoProfile -NonInteractive -Command '[Console]::Write([System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks)'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Location packages/harness
+          node --test --test-concurrency=2 ./test/*.test.mjs
 
       - name: CLI scenarios
         continue-on-error: true

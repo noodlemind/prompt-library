@@ -300,7 +300,8 @@ function contextFiles(files) {
 
 function matchedSourceIds(root, report, files) {
   const requested = files.map(file => {
-    const full = path.resolve(root, file);
+    let full = path.resolve(root, file);
+    try { full = canonicalPath(full); } catch {}
     let directory = /[/\\]$/.test(file);
     if (!directory) {
       try { directory = fs.lstatSync(full, { throwIfNoEntry: false })?.isDirectory() === true; } catch {}
@@ -309,7 +310,8 @@ function matchedSourceIds(root, report, files) {
   });
   const repos = new Map(report.inputs.repos.map(repo => [repo.id, repo.root]));
   return new Set(report.inputs.sources.filter(source => {
-    const full = path.resolve(repos.get(source.repo), source.path);
+    let full = path.resolve(repos.get(source.repo), source.path);
+    try { full = canonicalPath(full); } catch {}
     return requested.some(request => full === request.full || (request.directory && full.startsWith(request.full + path.sep)));
   }).map(source => source.id));
 }
@@ -346,9 +348,13 @@ export function performanceContext({ workspace, home, files = [], maxBytes = 409
     return boundedContext({ version: 1, state: 'invalid', profile, domain: null, reportId, error: message, journeys: [], omitted: { journeys: 0 }, binding: { version: 1, reportId, filesHash: digest(selectedFiles), profilePath: relative, domain: null } }, maxBytes);
   }
   const matches = matchedSourceIds(root, report, selectedFiles);
-  const journeys = selectedFiles.length ? report.journeys.filter(journey => [...journeySourceIds(report.architecture, journey)].some(id => matches.has(id))).map(journey => {
-    const sourceIds = [...journeySourceIds(report.architecture, journey)].filter(id => matches.has(id));
-    return { id: journey.id, title: journey.title, goals: journey.goals, constraints: journey.constraints, sourceIds, paths: report.inputs.sources.filter(source => sourceIds.includes(source.id)).map(({ repo, path }) => ({ repo, path })) };
+  const journeys = selectedFiles.length ? report.journeys.flatMap(journey => {
+    const linked = journeySourceIds(report.architecture, journey);
+    for (const observation of report.observations) {
+      if (observation.metrics.some(metric => metric.journey === journey.id)) linked.add(observation.source);
+    }
+    const sourceIds = [...linked].filter(id => matches.has(id));
+    return sourceIds.length ? [{ id: journey.id, title: journey.title, goals: journey.goals, constraints: journey.constraints, sourceIds, paths: report.inputs.sources.filter(source => sourceIds.includes(source.id)).map(({ repo, path }) => ({ repo, path })) }] : [];
   })
     : report.journeys.map(journey => ({ id: journey.id, title: journey.title, goals: journey.goals.map(({ metric, direction, statistic, unit, basis, target, status, reason }) => ({ metric, direction, ...(statistic === undefined ? {} : { statistic, unit, basis, target }), status, reason })) }));
   const domain = report.inputs.domain?.name ?? null;

@@ -339,6 +339,28 @@ test('directory scopes retrieve only the selected sources and applicable journey
   }
 });
 
+test('physical path aliases select the same file and directory journey context', t => {
+  const f = fixture(t);
+  const alias = path.join(f.dir, 'product-alias');
+  fs.symlinkSync(f.workspace, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  for (const file of [path.join(alias, 'src/start.mjs'), path.join(alias, 'src')]) {
+    const context = performanceContext({ workspace: f.workspace, home: f.home, files: [file] });
+    assert.deepEqual(context.journeys.map(journey => journey.id), ['request']);
+    assert.ok(context.journeys[0].sourceIds.includes('start-source'));
+  }
+});
+
+test('observation-only edits retrieve guidance for exactly the measured journeys', t => {
+  const f = fixture(t);
+  f.profile.journeys.push({ ...f.profile.journeys[0], id: 'unmeasured', title: 'An unmeasured journey' });
+  f.save();
+  const context = performanceContext({ workspace: f.workspace, home: f.home, files: ['measurements.json'] });
+  assert.deepEqual(context.journeys.map(journey => journey.id), ['request']);
+  assert.deepEqual(context.journeys[0].sourceIds, ['measurement']);
+  assert.deepEqual(context.journeys[0].paths, [{ repo: 'self', path: 'measurements.json' }]);
+  assert.equal(context.journeys[0].constraints[0].text, 'Return only after acceptance.');
+});
+
 test('context reports malformed profiles and currentness notices evidence/profile deletion and domain edits', t => {
   const f = fixture(t);
   const context = performanceContext({ workspace: f.workspace, home: f.home, files: ['src/start.mjs'] });
