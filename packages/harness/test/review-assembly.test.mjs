@@ -2,24 +2,33 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { initGit, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const baseline = ['architecture-strategist', 'security-sentinel', 'performance-oracle', 'code-simplicity-reviewer', 'pattern-recognition-specialist'];
-function fixture(t) {
+function fixture(t, { changed = true, copyPackage = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-review-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const packageRoot = copyPackage ? path.join(dir, 'cli') : root;
+  if (copyPackage) {
+    fs.mkdirSync(packageRoot);
+    for (const entry of ['bin', 'lib', 'corpus', 'config', 'node_modules', 'package.json']) {
+      fs.cpSync(path.join(root, entry), path.join(packageRoot, entry), { recursive: true });
+    }
+  }
   const ws = path.join(dir, 'product');
   fs.mkdirSync(ws);
   fs.writeFileSync(path.join(ws, '.gitignore'), '.harness/\n');
   const plan = writeVersionedPlan(ws);
   fs.writeFileSync(path.join(ws, plan), fs.readFileSync(path.join(ws, plan), 'utf8').replace('required: []', 'required: [code-review]'));
   initGit(ws);
-  fs.writeFileSync(path.join(ws, 'src/example.js'), Array.from({ length: 12 }, (_, i) => `export const value${i} = ${i};`).join('\n') + '\n');
-  const cli = (...args) => spawnSync(process.execPath, [path.join(root, 'bin/harness.mjs'), 'review', ...args, '--workspace', ws, '--copilot-home', path.join(dir, 'copilot'), '--harness-home', path.join(dir, 'home'), '--json'], { cwd: ws, env: { ...process.env, HARNESS_NO_EVENTS: '1' }, encoding: 'utf8', timeout: 15000 });
+  if (changed) fs.writeFileSync(path.join(ws, 'src/example.js'), Array.from({ length: 12 }, (_, i) => `export const value${i} = ${i};`).join('\n') + '\n');
+  const cliEnv = { ...process.env, HARNESS_NO_EVENTS: '1' };
+  const cli = (...args) => spawnSync(process.execPath, [path.join(packageRoot, 'bin/harness.mjs'), 'review', ...args, '--workspace', ws, '--copilot-home', path.join(dir, 'copilot'), '--harness-home', path.join(dir, 'home'), '--json'], { cwd: ws, env: cliEnv, encoding: 'utf8', timeout: 15000 });
   const prepare = (...args) => { const r = cli('prepare', '--plan', plan, '--base', 'HEAD', ...args); assert.equal(r.status, 0, r.stderr + r.stdout); return JSON.parse(r.stdout); };
   const assemble = (packet, results, extra = {}) => {
     const file = path.join(ws, '.harness/results.json');
@@ -27,10 +36,44 @@ function fixture(t) {
     const r = cli('assemble', '--plan', plan, '--packet', packet.id, '--file', file);
     return { ...r, value: r.stdout.trim() ? JSON.parse(r.stdout) : null };
   };
-  return { ws, plan, cli, prepare, assemble };
+  return { dir, ws, plan, packageRoot, cliEnv, cli, prepare, assemble };
 }
 const clean = reviewer => ({ reviewer, status: 'completed', findings: [], residual_risks: [], testing_gaps: [] });
 const finding = (fields = {}) => ({ file: './src/example.js', line: 3, title: 'Missing guard', description: 'The input is unchecked.', suggested_fix: 'Validate the input.', severity: 'P2', confidence: 0.7, autofix_class: 'manual', evidence: ['src/example.js:3'], ...fields });
+function prepareDocument(f, ...files) {
+  const result = f.cli('prepare', '--domain', 'document', '--base', 'HEAD', ...files.flatMap(file => ['--file', file]));
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  return JSON.parse(result.stdout);
+}
+function assembleDocument(f, packet, results = packet.required.map(clean)) {
+  const file = path.join(f.ws, '.harness/document-results.json');
+  fs.writeFileSync(file, JSON.stringify({ packet: packet.id, results }));
+  const result = f.cli('assemble', '--packet', packet.id, '--file', file);
+  return { ...result, value: result.stdout.trim() ? JSON.parse(result.stdout) : null };
+}
+function forbidReads(f, forbidden) {
+  const probe = path.join(f.dir, 'read-probe.mjs');
+  const log = path.join(f.dir, 'unselected-reads.log');
+  fs.writeFileSync(probe, `import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const forbidden = ${JSON.stringify(forbidden)};
+const log = ${JSON.stringify(log)};
+for (const operation of ['openSync', 'readFileSync', 'readdirSync']) {
+  const original = fs[operation];
+  fs[operation] = function (file, ...args) {
+    const full = file instanceof URL ? fileURLToPath(file) : typeof file === 'string' || Buffer.isBuffer(file) ? path.resolve(String(file)) : null;
+    if (full && (full === forbidden || full.startsWith(forbidden + path.sep))) {
+      fs.appendFileSync(log, operation + ' ' + full + '\\n');
+      throw new Error('Attempted to read an unselected review source');
+    }
+    return original.call(this, file, ...args);
+  };
+}
+`);
+  f.cliEnv.NODE_OPTIONS = [f.cliEnv.NODE_OPTIONS, `--import=${pathToFileURL(probe).href}`].filter(Boolean).join(' ');
+  return () => assert.equal(fs.existsSync(log), false, fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : undefined);
+}
 
 test('prepare owns mandatory coverage and brace/comma/glob discovery', t => {
   const f = fixture(t);
@@ -121,6 +164,169 @@ test('standalone document review uses the same collection and factual report con
   const result = f.cli('assemble', '--packet', packet.id, '--file', file);
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.equal(JSON.parse(result.stdout).coverage.complete, true);
+});
+
+for (const workspaceCase of ['clean checkout', 'plain untracked directory', 'nested Git checkout']) {
+  test(`explicit standalone document review prepares and assembles with a ${workspaceCase}`, t => {
+    const f = fixture(t, { changed: false });
+    let assertNoReads = () => {};
+    if (workspaceCase !== 'clean checkout') {
+      const unrelated = path.join(f.ws, 'unrelated');
+      fs.mkdirSync(unrelated);
+      if (workspaceCase === 'nested Git checkout') initGit(unrelated);
+      fs.writeFileSync(path.join(unrelated, 'private.md'), '# Unselected private draft\n');
+      if (workspaceCase === 'nested Git checkout') assertNoReads = forbidReads(f, unrelated);
+    }
+    const packet = prepareDocument(f, f.plan);
+    const result = assembleDocument(f, packet);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.equal(result.value.coverage.complete, true);
+    assert.equal(result.value.plan, null);
+    assert.deepEqual(result.value.required, ['coherence', 'design', 'feasibility', 'scope']);
+    assertNoReads();
+  });
+}
+
+test('explicit standalone document scope binds only the selected source bytes', t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.ws, 'selected.md'), '# Selected companion\n\nReview this too.\n');
+  fs.writeFileSync(path.join(f.ws, 'unselected.md'), '# Private unrelated draft\n');
+  const selected = [f.plan, 'selected.md'].sort();
+  const packet = prepareDocument(f, ...selected);
+  assert.deepEqual(packet.scope.files?.map(ref => ref.path), selected);
+  assert.deepEqual(packet.preparation.refs.map(ref => ref.path), selected);
+  assert.deepEqual(packet.preparation.files.map(ref => ref.path), selected);
+  assert.equal(packet.preparation.coverage.totalFiles, selected.length);
+  for (const ref of packet.preparation.refs) {
+    assert.equal(ref.state, 'regular');
+    assert.equal(ref.sha256, createHash('sha256').update(fs.readFileSync(path.join(f.ws, ref.path))).digest('hex'));
+  }
+  assert.deepEqual(packet.scope.files, packet.preparation.refs);
+  assert.ok(!JSON.stringify(packet).includes('unselected.md'));
+  assert.ok(!packet.preparation.diff?.includes('src/example.js'));
+  assert.equal(assembleDocument(f, packet).status, 0);
+});
+
+test('unrelated changes after standalone document preparation do not stale the selected review', t => {
+  const f = fixture(t, { changed: false });
+  const packet = prepareDocument(f, f.plan);
+  fs.appendFileSync(path.join(f.ws, 'src/example.js'), 'export const unrelated = true;\n');
+  fs.writeFileSync(path.join(f.ws, 'unrelated.md'), '# Unrelated new document\n');
+  const nested = path.join(f.ws, 'unrelated-checkout');
+  fs.mkdirSync(nested);
+  initGit(nested);
+  const result = assembleDocument(f, packet);
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.equal(result.value.coverage.complete, true);
+  assert.deepEqual(result.value.scope, packet.scope);
+});
+
+test('selected document changes still stale standalone review assembly', t => {
+  const f = fixture(t, { changed: false });
+  const packet = prepareDocument(f, f.plan);
+  fs.appendFileSync(path.join(f.ws, f.plan), '\nSelected content changed.\n');
+  const result = assembleDocument(f, packet);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr + result.stdout, /stale|changed/i);
+});
+
+for (const sourceCase of ['missing', 'directory', 'symlink', 'outside workspace']) {
+  test(`explicit standalone document preparation rejects a selected ${sourceCase} source`, t => {
+    const f = fixture(t, { changed: false });
+    let selected = 'selected.md';
+    if (sourceCase === 'directory') fs.mkdirSync(path.join(f.ws, selected));
+    if (sourceCase === 'symlink') {
+      try { fs.symlinkSync(path.join(f.ws, f.plan), path.join(f.ws, selected)); }
+      catch (error) { if (error.code === 'EPERM') return t.skip('Symlink creation requires OS permission'); throw error; }
+    }
+    if (sourceCase === 'outside workspace') {
+      selected = path.join(f.dir, 'outside.md');
+      fs.writeFileSync(selected, '# Outside the project\n');
+    }
+    const result = f.cli('prepare', '--domain', 'document', '--file', selected, '--base', 'HEAD');
+    assert.notEqual(result.status, 0, result.stderr + result.stdout);
+    assert.match(result.stderr + result.stdout, /missing|unreadable|unsafe|regular|inside the workspace|current project/i);
+  });
+}
+
+test('selected document preparation rejects a symlink ancestor before reading source content', t => {
+  const f = fixture(t, { changed: false });
+  fs.mkdirSync(path.join(f.ws, 'real'));
+  fs.writeFileSync(path.join(f.ws, 'real/doc.md'), '# Selected document\n');
+  const alias = path.join(f.ws, 'alias');
+  try { fs.symlinkSync('real', alias, 'dir'); }
+  catch (error) { if (error.code === 'EPERM') return t.skip('Symlink creation requires OS permission'); throw error; }
+  const assertNoReads = forbidReads(f, alias);
+  const result = f.cli('prepare', '--domain', 'document', '--file', 'alias/doc.md', '--base', 'HEAD');
+  assertNoReads();
+  assert.notEqual(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stderr + result.stdout, /symlink|unsafe|regular|unreadable/i);
+});
+
+test('selected document assembly rejects a replaced symlink ancestor before reading source content', t => {
+  const f = fixture(t, { changed: false });
+  const selected = path.join(f.ws, 'selected');
+  fs.mkdirSync(selected);
+  fs.writeFileSync(path.join(selected, 'doc.md'), '# Selected document\n');
+  const packet = prepareDocument(f, 'selected/doc.md');
+  fs.renameSync(selected, path.join(f.ws, 'real'));
+  try { fs.symlinkSync('real', selected, 'dir'); }
+  catch (error) { if (error.code === 'EPERM') return t.skip('Symlink creation requires OS permission'); throw error; }
+  assert.equal(createHash('sha256').update(fs.readFileSync(path.join(selected, 'doc.md'))).digest('hex'), packet.scope.files[0].sha256);
+  const assertNoReads = forbidReads(f, selected);
+  const result = assembleDocument(f, packet);
+  assertNoReads();
+  assert.equal(result.status, 2, result.stderr + result.stdout);
+  assert.match(result.stderr + result.stdout, /stale|changed/i);
+});
+
+test('explicit standalone document preparation rejects a selected unreadable source', t => {
+  const f = fixture(t, { changed: false });
+  const selected = path.join(f.ws, 'unreadable.md');
+  fs.writeFileSync(selected, '# Unreadable document\n');
+  fs.chmodSync(selected, 0);
+  t.after(() => { if (fs.existsSync(selected)) fs.chmodSync(selected, 0o600); });
+  try {
+    fs.readFileSync(selected);
+    return t.skip('The current user can still read permission-denied files');
+  } catch (error) { assert.ok(['EACCES', 'EPERM'].includes(error.code), error.message); }
+  const result = f.cli('prepare', '--domain', 'document', '--file', 'unreadable.md', '--base', 'HEAD');
+  assert.notEqual(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stderr + result.stdout, /unreadable|unsafe|regular|permission|denied/i);
+});
+
+test('document review definition drift still stales a standalone packet', t => {
+  const f = fixture(t, { changed: false, copyPackage: true });
+  const packet = prepareDocument(f, f.plan);
+  fs.appendFileSync(path.join(f.packageRoot, 'corpus/skills/document-review/references/review-criteria.md'), '\nNew review obligation.\n');
+  const result = assembleDocument(f, packet);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr + result.stdout, /stale|changed/i);
+});
+
+test('governing policy drift still stales a standalone document packet', t => {
+  const f = fixture(t, { changed: false });
+  const packet = prepareDocument(f, f.plan);
+  fs.writeFileSync(path.join(f.ws, '.github/harness/policy.yaml'), 'enforcement: enforce\n');
+  const result = assembleDocument(f, packet);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr + result.stdout, /stale|changed/i);
+});
+
+test('standalone document findings cannot report an unselected readable document', t => {
+  const f = fixture(t, { changed: false });
+  fs.writeFileSync(path.join(f.ws, 'unselected.md'), '# Unselected document\n\nPrivate draft content.\n');
+  const packet = prepareDocument(f, f.plan);
+  const assertNoReads = forbidReads(f, path.join(f.ws, 'unselected.md'));
+  const results = packet.required.map(clean);
+  results[0].findings = [finding({ file: 'unselected.md', line: 1, title: 'Unselected finding', evidence: ['unselected.md:1'] })];
+  const result = assembleDocument(f, packet, results);
+  assertNoReads();
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  assert.equal(result.value.coverage.complete, false);
+  assert.deepEqual(result.value.findings, []);
+  assert.match(result.value.failures.flatMap(failure => failure.errors).join('\n'), /selected|scope/i);
+  assert.ok(!result.value.report.includes('Unselected finding'));
 });
 
 test('ambiguous overlaps change only through explicit, recorded adjudication', t => {

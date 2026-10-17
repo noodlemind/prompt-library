@@ -14,6 +14,7 @@ import { readProductDiff, gitMetadataEnvironment } from '../corpus/hooks/lib/pro
 
 export const CODE_REVIEWERS = Object.freeze(['architecture-strategist', 'security-sentinel', 'performance-oracle', 'code-simplicity-reviewer', 'pattern-recognition-specialist']);
 export const DOCUMENT_REVIEWERS = Object.freeze(['design', 'scope', 'coherence', 'feasibility']);
+export const DOCUMENT_REVIEW_DEFINITIONS = Object.freeze(['skills/document-review/references/review-criteria.md', 'skills/code-review/references/findings-schema.md']);
 export const reviewHash = value => createHash('sha256').update(stableJson(value)).digest('hex');
 export function stableJson(value) {
   return JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
@@ -110,9 +111,12 @@ function currentSource(workspace, ref, options = {}) {
   return source(ref.origin === 'corpus' ? getCorpusRoot() : workspace, ref.path, ref.origin);
 }
 
-function selectedSource(workspace, file, kind, plan) {
+function selectedSource(workspace, file, kind, plan, requireSafeAncestors = false) {
   const full = path.resolve(workspace, file), rel = path.relative(workspace, full).replace(/\\/g, '/');
-  if (rel && rel !== '..' && !rel.startsWith('../') && !path.isAbsolute(rel)) return source(workspace, rel, 'product');
+  if (rel && rel !== '..' && !rel.startsWith('../') && !path.isAbsolute(rel)) {
+    if (requireSafeAncestors && !assertNoSymlinkAncestors(workspace, rel)) throw new Error('Selected document path has unsafe symlink ancestors');
+    return source(workspace, rel, 'product');
+  }
   if (kind === 'document' || domainContextOf(plan)) {
     const location = projectPlanLocation(workspace, full, { plan });
     if (location) {
@@ -121,6 +125,26 @@ function selectedSource(workspace, file, kind, plan) {
     }
   }
   throw new Error('Review files must be inside the workspace or readable plans in the current project store for document reviews');
+}
+
+export function selectedDocumentSources(workspace, files) {
+  if (!Array.isArray(files) || !files.length) throw new Error('Selected document review requires a nonempty file list');
+  const refs = new Map();
+  for (const file of files) {
+    if (typeof file !== 'string' || !file || /[\0\r\n]/.test(file) || (path.win32.isAbsolute(file) && !path.isAbsolute(file))) throw new Error(`Invalid selected document path: ${file}`);
+    let ref;
+    try { ref = selectedSource(workspace, file.replace(/\\/g, '/'), 'document', undefined, true); }
+    catch (error) { throw new Error(`Selected document ${file}: ${error.message}`); }
+    if (ref.state !== 'regular' || !ref.sha256) throw new Error(`Selected document ${file} is ${ref.state}; require a readable regular source within the source hash limit`);
+    refs.set(`${ref.origin}:${ref.path}`, ref);
+  }
+  return [...refs.values()].sort((a, b) => compareText(a.origin, b.origin) || compareText(a.path, b.path));
+}
+
+export function refreshDocumentSources(workspace, refs) {
+  return refs.map(ref => ref.origin === 'product' && !assertNoSymlinkAncestors(workspace, ref.path)
+    ? { ...ref, state: 'unreadable', sha256: null }
+    : currentSource(workspace, ref));
 }
 
 export function discoverReviewChecks(workspace, files) {
@@ -152,25 +176,26 @@ export function discoverReviewChecks(workspace, files) {
 
 export function reviewPreparation({ workspace, scope, plan, kind, reviewers, files, maxBytes = 16384, home }) {
   const corpus = getCorpusRoot();
-  const selectedRefs = new Map((files?.length ? files : scope.changedFiles).map(file => {
+  const selectedDocument = scope.mode === 'selected-document-v1';
+  const selectedRefs = new Map(selectedDocument ? scope.files.map(ref => [ref.path, ref]) : (files?.length ? files : scope.changedFiles).map(file => {
     const ref = selectedSource(workspace, file, kind, plan);
     return [ref.path, ref];
   }));
   const selected = [...selectedRefs.keys()].sort(compareText);
-  const covered = [...new Set([...scope.changedFiles, ...selected])].sort(compareText);
+  const covered = selectedDocument ? scope.files.map(ref => ref.path) : [...new Set([...scope.changedFiles, ...selected])].sort(compareText);
   const discovery = kind === 'code' ? discoverReviewChecks(workspace, covered) : { checks: [], failures: [] };
   const declaredRequired = [...new Set(plan?.fm.reviews?.required || [])].sort(compareText);
   const required = [...new Set([...(kind === 'document' ? DOCUMENT_REVIEWERS : CODE_REVIEWERS), ...declaredRequired.filter(r => r !== 'code-review'), ...reviewers, ...discovery.checks.filter(c => c.matched).map(c => c.name)])].sort(compareText);
   if (required.some(id => typeof id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))) throw new Error('Invalid required review IDs');
   const perspectives = kind === 'document' ? DOCUMENT_REVIEWERS : [...new Set([...CODE_REVIEWERS, ...reviewers, ...declaredRequired.filter(id => id !== 'code-review')])];
   const collisions = discovery.checks.filter(c => c.matched && perspectives.includes(c.name)).map(c => `Review check name collides with a required perspective: ${c.name}`);
-  const sources = kind === 'document' ? [source(corpus, 'skills/document-review/references/review-criteria.md', 'corpus')] : perspectives.map(id => source(corpus, `agents/${id}.agent.md`, 'corpus'));
-  sources.push(source(corpus, 'skills/code-review/references/findings-schema.md', 'corpus'));
+  const sources = kind === 'document' ? [source(corpus, DOCUMENT_REVIEW_DEFINITIONS[0], 'corpus')] : perspectives.map(id => source(corpus, `agents/${id}.agent.md`, 'corpus'));
+  sources.push(source(corpus, DOCUMENT_REVIEW_DEFINITIONS[1], 'corpus'));
   const failures = [...discovery.failures, ...collisions, ...sources.filter(s => !s.sha256).map(s => `Review definition unavailable: ${s.path}`)];
   const performance = kind === 'code' ? performanceContext({ workspace, home: plan ? planHome(workspace, plan) : home || harnessGlobalHome(), files: covered }) : null;
   if (performance?.state === 'invalid') failures.push('Performance profile is invalid; inspect the current profile before completing review');
-  const refs = covered.map(file => selectedRefs.get(file) || source(workspace, file, 'product'));
-  const diff = readProductDiff(workspace, { base: scope.base || 'HEAD', planPath: plan?.path });
+  const refs = selectedDocument ? scope.files : covered.map(file => selectedRefs.get(file) || source(workspace, file, 'product'));
+  const diff = selectedDocument ? null : readProductDiff(workspace, { base: scope.base || 'HEAD', planPath: plan?.path });
   const branchResult = spawnSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8', timeout: 4000, env: gitMetadataEnvironment() });
   const budget = Math.max(1024, Math.min(maxBytes, 131072));
   const included = [], omitted = [];
@@ -184,7 +209,7 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
     bytes += Buffer.byteLength(excerpt);
     included.push({ ...ref, excerpt, truncated: Buffer.byteLength(text) > Buffer.byteLength(excerpt) });
   }
-  return { declaredRequired, required, preparation: { kind, ...(performance ? { performance } : {}), branch: branchResult.status === 0 ? branchResult.stdout.trim() : null, checks: discovery.checks, sources, refs, files: included, omitted, diff: diff === null ? null : Buffer.from(diff).subarray(0, budget).toString('utf8'), diffTruncated: diff === null || Buffer.byteLength(diff) > budget, coverage: { totalFiles: covered.length, includedFiles: included.length, omittedFiles: omitted.length, byteBudget: budget, excerptBytes: bytes }, failures, provenance: 'Host invocation identity unknown; declarations and same-context perspectives are not independent evidence' } };
+  return { declaredRequired, required, preparation: { kind, ...(performance ? { performance } : {}), branch: branchResult.status === 0 ? branchResult.stdout.trim() : null, checks: discovery.checks, sources, refs, files: included, omitted, diff: diff === null ? null : Buffer.from(diff).subarray(0, budget).toString('utf8'), diffTruncated: selectedDocument ? false : diff === null || Buffer.byteLength(diff) > budget, coverage: { totalFiles: covered.length, includedFiles: included.length, omittedFiles: omitted.length, byteBudget: budget, excerptBytes: bytes }, failures, provenance: 'Host invocation identity unknown; declarations and same-context perspectives are not independent evidence' } };
 }
 
 export function preparationIsCurrent(workspace, preparation, options = {}) {
