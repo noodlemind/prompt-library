@@ -10,14 +10,16 @@ const normalizedClaim = text => text.trim().replace(/\s+/g, ' ');
 export const findingIdentity = finding => reviewHash({ file: finding.file, line: finding.line, title: normalizedTitle(finding.title), description: normalizedClaim(finding.description), suggested_fix: normalizedClaim(finding.suggested_fix) });
 const findingOrder = (a, b) => severityRank[a.severity] - severityRank[b.severity] || b.confidence - a.confidence || compareText(a.file, b.file) || a.line - b.line || compareText(a.title, b.title) || compareText(stableJson(a), stableJson(b));
 
-export function normalizeFinding(workspace, finding, sourceRefs = []) {
+export function normalizeFinding(workspace, finding, sourceRefs = [], selectedOnly = false) {
   const errors = [];
   if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return { errors: ['Finding must be an object'] };
   const raw = typeof finding.file === 'string' ? finding.file.replace(/\\/g, '/') : '';
   const externalPlan = sourceRefs.find(ref => ref.origin === 'project-plan' && ref.path === raw);
   if (!raw || (!externalPlan && (path.posix.isAbsolute(raw) || /^[A-Za-z]:/.test(raw))) || raw.split('/').includes('..') || /[\0\r\n]/.test(raw)) errors.push('Invalid finding file');
   const file = externalPlan ? raw : path.posix.normalize(raw);
-  const text = errors.length ? null : externalPlan ? readReviewFile(workspace, externalPlan, { maxBytes: 1024 * 1024 }) : readFileNoFollow(path.join(workspace, file), { root: workspace, maxBytes: 1024 * 1024 });
+  const selectedRef = externalPlan || sourceRefs.find(ref => ref.origin === 'product' && ref.path === file);
+  if (selectedOnly && !selectedRef) errors.push('Finding file is outside the selected document scope');
+  const text = errors.length ? null : selectedOnly ? readReviewFile(workspace, selectedRef, { maxBytes: 1024 * 1024 }) : externalPlan ? readReviewFile(workspace, externalPlan, { maxBytes: 1024 * 1024 }) : readFileNoFollow(path.join(workspace, file), { root: workspace, maxBytes: 1024 * 1024 });
   if (text === null || !Number.isInteger(finding.line) || finding.line < 1 || finding.line > text.split(/\r?\n/).length) errors.push('Finding location is missing, unreadable, or outside the file');
   if (!['P1', 'P2', 'P3'].includes(finding.severity)) errors.push('Invalid severity');
   if (!Number.isFinite(finding.confidence) || finding.confidence < 0 || finding.confidence > 1) errors.push('Invalid confidence');
@@ -46,7 +48,7 @@ function mergedPartitions(ids, decisions) {
   return { representative, groups: [...groups.values()].map(group => group.sort(compareText)) };
 }
 
-export function synthesizeReview(workspace, required, input, preparationFailures = [], sourceRefs = []) {
+export function synthesizeReview(workspace, required, input, preparationFailures = [], sourceRefs = [], selectedOnly = false) {
   const results = [], failures = preparationFailures.map(message => ({ reviewer: null, errors: [message] })), suppressed = [], accepted = [];
   for (const result of input.results) {
     const errors = [];
@@ -56,7 +58,7 @@ export function synthesizeReview(workspace, required, input, preparationFailures
     for (const field of ['residual_risks', 'testing_gaps']) if (!Array.isArray(result?.[field]) || !result[field].every(s => typeof s === 'string')) errors.push(`Invalid ${field}`);
     const normalized = [];
     if (Array.isArray(result?.findings)) for (const finding of result.findings) {
-      const parsed = normalizeFinding(workspace, finding, sourceRefs);
+      const parsed = normalizeFinding(workspace, finding, sourceRefs, selectedOnly);
       errors.push(...parsed.errors);
       if (parsed.value) normalized.push({ ...parsed.value, reviewer: result.reviewer });
     }
