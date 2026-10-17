@@ -260,8 +260,15 @@ Keep requires validated owned artifacts, hard correctness and meaningful improve
 ```bash
 cd packages/harness
 npm test
-npm version patch && npm publish
+npm version patch --no-git-tag-version
+npm pack
 ```
+
+`package.json` is the CLI release authority. Use `npm version` to update it and both root version fields in `package-lock.json` together. Use a patch for compatible fixes and prompt maintenance, a minor for new compatible behavior, and a major for incompatible contracts. Review and commit the version change before publishing the reviewed package.
+
+`npm run check:release` compares the manifests with both CLI version flags and checks the agent prompt budgets. It runs before and after `npm version` and before `npm pack` or `npm publish`. CI runs the same tests. A failed check blocks packaging. These checks catch inconsistent versions and prompt growth, but maintainers still choose the release increment.
+
+The bundled VS Code bridge has its own version in `vscode-extension/package.json`. Increment it when bridge behavior or metadata changes. Agent and skill files ship under the CLI version. Schema versions, dependency ranges, host compatibility floors, and historical release examples describe separate contracts.
 
 ```text
 bin/harness.mjs   lib/   test/   eval/   corpus/   config/
@@ -269,7 +276,7 @@ bin/harness.mjs   lib/   test/   eval/   corpus/   config/
 
 Node 20+. Runtime: `yaml`. Optional tree-sitter packages for structural index only (lexical fallback if missing).
 
-## Deterministic work operations (0.10.0)
+## Deterministic work operations (since 0.10.0)
 
 Use `plan-new --file` and `plan-update --file` for accepted creation, amendments, notes, progress, new gap declarations and completion. Harness owns representation and revision/replay checks. Use `review prepare` and `review assemble` for captured scope and collected perspective coverage; semantic adjudication remains an explicit decision.
 
