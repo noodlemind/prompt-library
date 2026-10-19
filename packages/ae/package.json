@@ -29,7 +29,7 @@
     "doctor": "node ./bin/ae.mjs doctor",
     "install:local": "node ./bin/ae.mjs install --configure-vscode --configure-path",
     "install:global": "npm install -g .",
-    "test": "node --test ./test/*.test.mjs"
+    "test": "node --import ./test/helpers/isolate-runtime-env.mjs --test ./test/*.test.mjs"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
