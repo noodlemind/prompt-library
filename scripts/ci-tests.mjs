@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const reporter = fileURLToPath(new URL('./ci-test-reporter.mjs', import.meta.url));
+const reporter = new URL('./ci-test-reporter.mjs', import.meta.url).href;
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sorted = values => [...values].sort();
 
