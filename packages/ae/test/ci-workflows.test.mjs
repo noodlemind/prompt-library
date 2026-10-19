@@ -26,7 +26,11 @@ test('full suites retain discovery and replace the repeated delivery and adaptiv
   assert.equal(linux.on.pull_request?.paths, undefined);
   assert.equal(windows.on.pull_request?.paths, undefined);
   assert.match(suite(linux.jobs.test).run, /npm --prefix packages\/ae test/);
-  assert.match(suite(windows.jobs.windows).run, /node --test --test-concurrency=2 \.\/test\/\*\.test\.mjs/);
+  assert.deepEqual(windows.jobs.tests.strategy.matrix.shard, [1, 2, 3, 4]);
+  assert.equal(windows.jobs.tests.strategy['fail-fast'], false);
+  assert.match(suite(windows.jobs.tests).run, /node scripts\/ci-tests\.mjs --shard \$\{\{ matrix.shard \}\} --shards 4/);
+  assert.equal(windows.jobs.windows.needs, 'tests');
+  assert.equal(windows.jobs.windows.if, 'always()');
   const manifest = JSON.parse(fs.readFileSync(new URL('packages/ae/package.json', root), 'utf8'));
   assert.match(manifest.scripts.test, /--test \.\/test\/\*\.test\.mjs$/);
   for (const file of ['deterministic-delivery', 'insight-compound', 'domain-commands', 'windows-authority', 'ci-workflows']) {
@@ -35,7 +39,7 @@ test('full suites retain discovery and replace the repeated delivery and adaptiv
 });
 
 test('both full suites preserve installed-delivery transcripts and captured output after failure', () => {
-  for (const [name, key, log] of [['harness-tests', 'test', 'harness-tests.log'], ['harness-windows', 'windows', 'windows-tests.log']]) {
+  for (const [name, key, log] of [['harness-tests', 'test', 'harness-tests.log'], ['harness-windows', 'tests', 'windows-tests.log']]) {
     const job = workflow(name).jobs[key];
     assert.equal(suite(job).env.HARNESS_PROOF_LOG, '${{ github.workspace }}/delivery-transcripts.jsonl');
     assert.match(suite(job).run, new RegExp(log.replaceAll('.', '\\.')));
@@ -64,27 +68,31 @@ test('Linux log capture preserves the real suite exit code', { skip: process.pla
 });
 
 test('Windows consolidation retains the native probes and the final fail-closed gate', () => {
-  const job = workflow('harness-windows').jobs.windows;
-  assert.match(suite(job).run, /Tee-Object -FilePath windows-tests\.log/);
-  assert.match(suite(job).run, /exit \$LASTEXITCODE/);
-  assert.equal(suite(job)['continue-on-error'], true);
+  const windows = workflow('harness-windows');
+  const job = windows.jobs.windows;
+  assert.match(suite(windows.jobs.tests).run, /Tee-Object -FilePath windows-tests\.log/);
+  assert.match(suite(windows.jobs.tests).run, /exit \$LASTEXITCODE/);
+  assert.equal(suite(windows.jobs.tests)['continue-on-error'], undefined);
   for (const name of ['CLI scenarios', 'Redaction on Windows', 'Runner descendant termination via taskkill', 'Environment fingerprint']) {
     assert.ok(job.steps.some(step => step.name === name), name);
   }
   const gate = job.steps.at(-1);
   assert.equal(gate.name, 'Windows probe gate');
   assert.equal(gate.if, 'always()');
-  assert.equal(gate.env.SUITE_OUTCOME, '${{ steps.suite.outcome }}');
+  assert.equal(gate.env.SUITE_OUTCOME, '${{ needs.tests.result }}');
+  assert.equal(gate.env.INVENTORY_OUTCOME, '${{ steps.inventory.outcome }}');
   assert.equal(gate.env.REDACTION_RESULT, '${{ steps.redaction.outputs.result }}');
   assert.equal(gate.env.CANCELLATION_RESULT, '${{ steps.cancellation.outputs.result }}');
-  assert.ok(upload(job).with.path.includes('.harness/diagnostics/windows-parent-full/'));
+  assert.ok(upload(windows.jobs.tests).with.path.includes('.harness/diagnostics/windows-parent-full/'));
+  assert.ok(upload(windows.jobs.tests).with.path.includes('ci-test-results/'));
+  assert.ok(job.steps.some(step => step.id === 'inventory' && step.run === 'node scripts/ci-tests.mjs --verify-manifests windows-shards'));
 });
 
 test('native Windows log capture preserves the real suite exit code', { skip: process.platform !== 'win32' }, t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-ci-pipeline-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const command = suite(workflow('harness-windows').jobs.windows).run.trim().split('\n').slice(-2).join('\n');
-  const probe = command.replace('node --test --test-concurrency=2 ./test/*.test.mjs',
+  const command = suite(workflow('harness-windows').jobs.tests).run.trim().split('\n').slice(-2).join('\n');
+  const probe = command.replace('node scripts/ci-tests.mjs --shard ${{ matrix.shard }} --shards 4',
     '& $env:AE_CI_TEST_NODE -e \'console.log("suite-marker"); process.exit(Number(process.env.AE_CI_TEST_EXIT));\'');
   assert.notEqual(probe, command);
   for (const code of [0, 7]) {
