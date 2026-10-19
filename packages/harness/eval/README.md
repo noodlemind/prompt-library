@@ -55,7 +55,7 @@ node eval/context/run.mjs --out /absolute/new/external/directory
 node eval/context/run.mjs --out /absolute/new/live/directory --live --provider <provider> --model <exact-available-id>
 ```
 
-The first command makes no model calls. Its 108 trials validate broken baselines, fixture preparation and policy packaging. Dry runs and scripted tests never count as model task success. Live runs require configured provider access. The runner selects no fallback model.
+The output directory must be new, its parent must exist, and its physical path must be outside the checkout. The first command makes no model calls. Its 108 trials validate broken baselines, fixture preparation and policy packaging. Dry runs and scripted tests never count as model task success. Live runs require configured provider access. The runner selects no fallback model.
 
 Each arm starts in a fresh Git workspace. Acceptance checks stay outside the editable workspace and run again after the agent stops. Hash checks detect checker changes. File snapshots detect changes outside the allowed scope, including new files. This protects measurement integrity; it is not an operating-system sandbox. Results retain failed attempts, case/checker/protocol/source hashes, runtime and model identity, observed usage coverage, conservative evidence-before-edit observations and unknown costs. Reads through shell commands and opaque hosts remain unobserved. The runner does not expose acceptance checks as an agent verifier.
 

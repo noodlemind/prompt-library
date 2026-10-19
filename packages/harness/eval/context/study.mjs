@@ -13,6 +13,15 @@ const checker = path.join(here, 'check.mjs');
 const GENERATED_METADATA = new Set(['.harness/context-pack.md', '.harness/repo-map.md', '.harness/session.json', '.harness/todo.json']);
 export const PROTOCOL = Object.freeze(JSON.parse(fs.readFileSync(protocolFile, 'utf8')));
 
+export function resolveStudyOutput({ checkout, output }) {
+  const requested = path.resolve(output);
+  const resolved = path.join(fs.realpathSync(path.dirname(requested)), path.basename(requested));
+  const relative = path.relative(fs.realpathSync(checkout), resolved);
+  const outside = relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  if (!outside || fs.existsSync(resolved)) throw new Error('--out must be a new directory outside the checkout');
+  return resolved;
+}
+
 function safePath(file) {
   if (typeof file !== 'string' || !file || file.includes('\\') || path.posix.isAbsolute(file) || file.split('/').some(part => ['.', '..', '.git', '.harness', ''].includes(part))) {
     throw new TypeError(`invalid fixture path: ${file}`);

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { prepareCase, runChecks, runStudy, summarizeStudy } from '../eval/context/study.mjs';
+import { prepareCase, resolveStudyOutput, runChecks, runStudy, summarizeStudy } from '../eval/context/study.mjs';
 
 const simple = {
   id: 'example', split: 'development', family: 'known-file',
@@ -17,6 +17,15 @@ function directory(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+test('study output cannot enter the checkout through a linked parent', (t) => {
+  const root = directory(t), checkout = path.join(root, 'repo');
+  fs.mkdirSync(checkout);
+  const linked = path.join(root, 'linked');
+  fs.symlinkSync(checkout, linked, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => resolveStudyOutput({ checkout, output: path.join(linked, 'receipts') }), /outside/);
+  assert.equal(resolveStudyOutput({ checkout, output: path.join(root, 'receipts') }), path.join(fs.realpathSync(root), 'receipts'));
+});
 
 test('independent checks reject baseline and accept repair outside the editable workspace', async (t) => {
   const root = directory(t);

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runStudy } from './study.mjs';
+import { resolveStudyOutput, runStudy } from './study.mjs';
 import { PROVIDERS } from '../../lib/provider.mjs';
 
 const args = process.argv.slice(2);
@@ -15,9 +15,8 @@ for (let i = 0; i < args.length; i++) {
   options[name] = args[++i];
 }
 if (!options.out) throw new Error('--out <new-external-directory> is required');
-const out = path.resolve(options.out);
 const checkout = path.resolve(import.meta.dirname, '../../../..');
-if (fs.existsSync(out) || !path.relative(checkout, out).startsWith(`..${path.sep}`)) throw new Error('--out must be a new directory outside the checkout');
+const out = resolveStudyOutput({ checkout, output: options.out });
 if (options.live && (!Object.hasOwn(PROVIDERS, options.provider) || !options.model || options.model.toLowerCase() === 'auto')) throw new Error('live runs require an explicit provider and an exact available model; no fallback is selected');
 const split = options.split || 'all';
 if (!['all', 'development', 'held-out'].includes(split)) throw new Error('split must be all, development or held-out');
