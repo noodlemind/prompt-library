@@ -128,6 +128,32 @@ test('structured retention is opt-in and sends a current handoff to the provider
   assert.ok(provider.requests[0].messages.some(message => message.contextCategory === 'handoff' && message.text.includes('continue accepted work')));
 });
 
+test('structured retention compacts old searches while preserving references and pagination', async (t) => {
+  const { ws, home } = scaffold('agent-search-retention');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(ws, 'a.mjs'), 'export const retentionMarker = 1;\n');
+  fs.writeFileSync(path.join(ws, 'b.mjs'), 'export const retentionMarker = 2;\n');
+  initGit(ws);
+  const provider = scriptedProvider([
+    callTool('old-search', 'search', { query: 'retentionMarker', contextVersion: 2, limit: 1 }),
+    ...Array.from({ length: 7 }, (_, i) => callTool(`read-${i}`, 'read', { path: 'a.mjs' })),
+    say('finished'),
+  ]);
+  const result = await agentResultOf(argvFor(ws, home, 'inspect sources', ['--retention-policy', 'structured', '--max-turns', '12']), {}, { startProviderFn: provider.start });
+  assert.equal(result.stopReason, 'done');
+  const findSearch = request => request.messages.flatMap(message => message.toolResults || []).find(row => row.id === 'old-search');
+  const original = findSearch(provider.requests[1]);
+  const compacted = findSearch(provider.requests.at(-1));
+  assert.match(compacted.output, /Earlier search omitted/);
+  assert.doesNotMatch(compacted.output, /export const retentionMarker/);
+  assert.equal(compacted.search.query, 'retentionMarker');
+  assert.equal(compacted.search.nextCursor, original.search.nextCursor);
+  assert.ok(compacted.search.nextCursor);
+  assert.equal(compacted.search.results[0].reference, original.search.results[0].reference);
+  assert.match(compacted.output, /a\.mjs@sha256:|b\.mjs@sha256:/);
+});
+
 test('selective context refreshes source data before each model request', async (t) => {
   const { ws, home } = scaffold('agent-selective-context');
   t.after(() => fs.rmSync(ws, { recursive: true, force: true }));

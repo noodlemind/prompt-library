@@ -637,7 +637,7 @@ export async function dispatchToolCall(call, {
     if (input.contextVersion !== undefined) argv.push('--context-version', String(input.contextVersion));
     if (input.contextVersion === 2) argv.push('--limit', String(Math.max(1, Math.min(SEARCH_ROWS, Math.trunc(input.limit || SEARCH_ROWS)))));
     if (typeof input.cursor === 'string') argv.push('--cursor', input.cursor);
-    run = searchToolResultOf;
+    run = (args, context) => searchToolResultOf(args, context, query);
   } else if (call.name === 'todo') {
     fatalOnThrow = false;
     const verb = input.verb === undefined ? 'list' : typeof input.verb === 'string' ? input.verb.trim() : '';
@@ -749,7 +749,7 @@ export async function dispatchToolBatch(calls, options = {}) {
   return outcomes;
 }
 
-async function searchToolResultOf(argv, ctx = {}) {
+async function searchToolResultOf(argv, ctx = {}, query) {
   const result = await searchResultOf(argv, ctx);
   const hits = (result.results || []).slice(0, SEARCH_ROWS);
   const lines = hits.map((r) => `${r.location || r.id}  ${String(r.snippet || '').replace(/\s+/g, ' ').slice(0, 100)}`);
@@ -763,6 +763,14 @@ async function searchToolResultOf(argv, ctx = {}) {
     exitCode: 0,
     total: result.total ?? hits.length,
     nextCursor: result.nextCursor,
+    search: {
+      query,
+      contextVersion: result.contextVersion || 1,
+      total: result.total ?? hits.length,
+      nextCursor: result.nextCursor || null,
+      sources: result.sources.map(({ source, status, reason }) => ({ source, status, reason })),
+      results: hits.map(row => ({ id: row.id, location: row.location, reference: row.evidence?.reference || null })),
+    },
     output: [{ line: header }, ...(result.contextVersion === 2 ? [{ line: JSON.stringify({ nextCursor: result.nextCursor, sources: result.sources.map(({ source, status, reason }) => ({ source, status, reason })), semanticCompleteness: 'unverified' }) }, ...hits.filter(row => row.evidence).map(row => ({ line: JSON.stringify({ id: row.id, reference: row.evidence.reference, state: row.evidence.state || 'available' }) }))] : []), { line: '' }, ...lines.map((line) => ({ line }))],
   };
 }
@@ -825,7 +833,9 @@ export function compactMessages(messages, {
     const retained = base.map((message, index) => index >= recent || !message.toolResults ? message : {
       ...message,
       toolResults: message.toolResults.map(result => {
-        if (result.isError || !result.source?.sha256) return result;
+        if (result.isError) return result;
+        if (result.search) return { ...result, output: `[Earlier search omitted. Rerun the query or refresh its references before using source contents.]\n${JSON.stringify(result.search)}` };
+        if (!result.source?.sha256) return result;
         const reference = `${result.source.path}@sha256:${result.source.sha256}`;
         return { ...result, output: `[Earlier read omitted. Refresh ${reference} before using its contents.]` };
       }),
@@ -1170,6 +1180,7 @@ export async function runAgentLoop({
           : outcome.result.status;
         toolResults.push({ id: call.id, output, isError: outcome.result.status !== 'ok' || failedAction,
           ...(call.name === 'read' && outcome.result.sha256 ? { source: { path: outcome.result.path, sha256: outcome.result.sha256 } } : {}),
+          ...(call.name === 'search' && outcome.result.search ? { search: outcome.result.search } : {}),
         });
         toolRecords.push({
           tool: call.name,

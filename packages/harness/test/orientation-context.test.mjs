@@ -7,6 +7,7 @@ import { buildContextPack } from '../lib/context-pack.mjs';
 import { parseFlags } from '../lib/flags.mjs';
 import { collectOrientationFacts } from '../lib/orientation-facts.mjs';
 import { buildContextRecord } from '../lib/context-record.mjs';
+import { validateContextSnapshot } from '../lib/task-handoff.mjs';
 
 function fixture(t) {
   const f = makeScopes();
@@ -107,6 +108,26 @@ test('an explicit version two read records source identities for later edit chec
   assert.equal(session.contextSnapshot.version, 2);
   assert.equal(session.contextSnapshot.state, 'validated');
   assert.equal(session.contextSnapshot.evidence[0].sha256, record.evidence[0].sha256);
+});
+
+test('bare version two refresh replaces a stale session snapshot before edits resume', (t) => {
+  const f = fixture(t);
+  f.invoke('--read', '--context-version', '2', '--query', 'alpha', '--file', 'a.mjs');
+  fs.writeFileSync(path.join(f.workspace, 'a.mjs'), 'export const alpha = 2;\n');
+  const current = f.invoke('--read', '--context-version', '2');
+  const session = JSON.parse(fs.readFileSync(path.join(f.workspace, '.harness/session.json'), 'utf8'));
+  assert.equal(session.contextSnapshot.evidence[0].sha256, current.evidence[0].sha256);
+  assert.equal(validateContextSnapshot({ workspace: f.workspace, snapshot: session.contextSnapshot, targets: ['a.mjs'] }).pass, true);
+});
+
+test('bare expansion restores the selection from the most recent explicit read', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.workspace, 'b.mjs'), 'export const beta = 2;\n');
+  f.invoke('--context-version', '2', '--query', 'alpha', '--file', 'a.mjs');
+  f.invoke('--read', '--context-version', '2', '--query', 'beta', '--file', 'b.mjs');
+  const current = f.invoke('--read', '--context-version', '2');
+  assert.deepEqual(current.selection.files, ['b.mjs']);
+  assert.equal(current.evidence[0].location, 'b.mjs');
 });
 
 test('a crowded contract keeps a complete expansion reference or returns a barrier', () => {
