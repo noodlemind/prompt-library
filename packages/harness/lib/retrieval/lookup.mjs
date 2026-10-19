@@ -101,7 +101,7 @@ function fileEntity({ workspace, identifier }) {
 }
 
 function symbolEntity({ workspace, identifier, home }) {
-  const index = readStructuralIndex(workspace, { home });
+  const index = readStructuralIndex(workspace, { home, requireCurrent: true });
   if (!index.present) {
     throw notFound({
       kind: 'symbol',
@@ -123,7 +123,7 @@ function symbolEntity({ workspace, identifier, home }) {
     id: identifier,
     location: first.file ? `${first.file}:${first.def?.line ?? ''}`.replace(/:$/, '') : null,
     title: identifier,
-    provenance: { source: 'structural-index', generation: index.meta?.sha ?? null },
+    provenance: { source: 'structural-index', generation: index.meta.sourceState.digest },
     metadata: {
       definitions: matches.length,
       exported: Boolean(first.exported),

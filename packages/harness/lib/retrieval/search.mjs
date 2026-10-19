@@ -198,9 +198,9 @@ function topCandidates(results) {
 // ---------------------------------------------------------------- code
 
 function codeSymbols({ query, workspace, home, explain }) {
-  const index = readStructuralIndex(workspace, { home });
+  const index = readStructuralIndex(workspace, { home, requireCurrent: true });
     if (!index.present) return skipped('code', `${index.reason} — build one with: harness index --structural`);
-  const generation = typeof index.meta?.sha === 'string' ? index.meta.sha : null;
+  const generation = index.meta.sourceState.digest;
   const needle = query.toLowerCase();
   const results = [];
   for (const symbol of index.symbols || []) {

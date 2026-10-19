@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
 import { repoId } from '../knowledge/store.mjs';
 import { readFileNoFollow } from '../fs-safe.mjs';
+import { structuralCurrentness } from '../repo-map/working-sources.mjs';
 
 export const STRUCTURAL_SHAPE_VERSION = 1;
 
@@ -52,7 +53,7 @@ function readJson(dir, name) {
   }
 }
 
-export function readStructuralIndex(workspace, { home } = {}) {
+export function readStructuralIndex(workspace, { home, requireCurrent = false } = {}) {
   const dir = structuralDir(workspace, { home });
   const absent = (reason) => ({ present: false, reason, dir, files: {}, symbols: [], graph: EMPTY_GRAPH, meta: null });
   if (!fs.existsSync(dir)) return absent('structural index not found');
@@ -73,6 +74,13 @@ export function readStructuralIndex(workspace, { home } = {}) {
   const graph = readJson(dir, 'graph.json');
   const broken = files.error || symbols.error || graph.error;
   if (broken) return absent(`unreadable structural index (${broken})`);
+  if (requireCurrent && (!files.value || !symbols.value || !graph.value)) return absent('incomplete structural index tables');
+  const after = readJson(dir, 'meta.json');
+  if (after.error || JSON.stringify(after.value) !== JSON.stringify(meta.value)) return absent('index generation changed during read');
+  if (requireCurrent) {
+    const freshness = structuralCurrentness(workspace, meta.value);
+    if (!freshness.current) return absent(`stale structural index: ${freshness.reason}`);
+  }
 
   return {
     present: true,

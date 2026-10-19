@@ -8,6 +8,7 @@ import { writeFileContained } from '../fs-safe.mjs';
 import { codebaseMapWriteRel } from '../project-layout.mjs';
 import { trackedSourceFiles, readFileSafe, MAX_FILES_SCANNED } from './scan.mjs';
 import { readStructuralIndexIfCurrent } from './structural-index.mjs';
+import { readSourceFile } from './working-sources.mjs';
 
 const DEFAULT_MAX_TOKENS = 1000;
 const IMPORT_SUFFIX = /\.(?:js|jsx|mjs|cjs|ts|tsx|py|java)$/i;
@@ -29,16 +30,16 @@ function requestRel(workspace, raw) {
   return text;
 }
 
-function currentStructuralFiles(workspace) {
+function currentStructuralFiles(workspace, home) {
   try {
-    return readStructuralIndexIfCurrent(workspace)?.files || null;
+    return readStructuralIndexIfCurrent(workspace, { home })?.files || null;
   } catch {
     return null;
   }
 }
 
-function fileFacts(workspace, rels) {
-  const structural = currentStructuralFiles(workspace);
+function fileFacts(workspace, rels, home) {
+  const structural = currentStructuralFiles(workspace, home);
   const facts = new Map();
   for (const rel of rels) {
     const pre = structural?.[rel];
@@ -255,7 +256,7 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   return { files: selected, body, tokens: estimateTokens(body), empty: false, totalFiles: total, structural: Boolean(structural) };
 }
 
-export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_SCANNED } = {}) {
+export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_SCANNED, home } = {}) {
   const requested = Array.isArray(files) ? files : [files];
   const normalized = requested.map((raw) => ({ raw, rel: requestRel(workspace, raw) }));
   const trackedAll = listTracked(workspace);
@@ -267,6 +268,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
     normalized.map((item) => item.rel),
   );
   const trackedSet = new Set(tracked);
+  const inputs = [];
   const missing = [];
   const seenMissing = new Set();
   const seeds = [];
@@ -274,6 +276,27 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
   const requestedRels = [];
   const seen = new Set();
   for (const { raw, rel } of normalized) {
+    const input = readSourceFile(workspace, rel);
+    let state = input.state;
+    if (state === 'readable' && !trackedAllSet.has(rel)) {
+      const ignored = spawnSync('git', ['-C', workspace, 'check-ignore', '-q', '--', rel], { timeout: 15_000 });
+      if (ignored.status !== 1) state = 'excluded';
+      else state = 'new';
+    }
+    inputs.push({ rel, state, ...(input.hash ? { hash: input.hash } : {}) });
+    if (state !== 'readable' && state !== 'new') {
+      if (state === 'missing' && !seenMissing.has(rel)) {
+        seenMissing.add(rel);
+        missing.push(rel);
+      }
+      continue;
+    }
+    if (state === 'new') {
+      if (SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase())) {
+        tracked.push(rel);
+        trackedSet.add(rel);
+      } else trackedAllSet.add(rel);
+    }
     if (rel && trackedSet.has(rel)) {
       if (!seen.has(rel)) {
         seen.add(rel);
@@ -298,7 +321,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
   }
   const hop = new Set(seeds);
   let incoming = new Map();
-  const facts = seeds.length ? fileFacts(workspace, tracked) : new Map();
+  const facts = seeds.length ? fileFacts(workspace, tracked, home) : new Map();
   if (seeds.length) {
     const edges = importEdges(facts, trackedSet);
     incoming = edges.incoming;
@@ -317,7 +340,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
     filesOut.push({ rel, symbols: [], imports: [], importedBy: [] });
   }
   filesOut.sort((a, b) => compareRel(a.rel, b.rel));
-  return { files: filesOut, missing, requested: requestedRels };
+  return { files: filesOut, missing, requested: requestedRels, inputs };
 }
 
 /**

@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { resolveIndexDir } from './recall-config.mjs';
 import { structuralIndexDir, readStructuralIndex } from './repo-map/structural-index.mjs';
 import { POSTINGS_INDEX_VERSION } from './postings-index.mjs';
+import { structuralCurrentness } from './repo-map/working-sources.mjs';
 
 function git(workspace, args) {
   const r = spawnSync('git', ['-C', workspace, ...args], { encoding: 'utf8', timeout: 10_000 });
@@ -171,7 +172,9 @@ export function structuralIndexStatus(workspace, { home } = {}) {
   }
 
   const indexedHead = meta.sha || meta.headSha || meta.baseSha || null;
-  const { head, commitsSince, filesChanged, stale } = driftFromHead(workspace, indexedHead);
+  const { head, commitsSince, filesChanged } = driftFromHead(workspace, indexedHead);
+  const freshness = structuralCurrentness(workspace, meta);
+  const stale = !freshness.current;
   const filesIndexed = Number.isFinite(meta.filesIndexed) ? meta.filesIndexed : null;
   const tier = meta.extractorTier || null;
 
@@ -186,6 +189,7 @@ export function structuralIndexStatus(workspace, { home } = {}) {
     commitsSince,
     filesChanged,
     stale,
+    freshnessReason: freshness.reason,
     unreadable: null,
     recommendation: stale
       ? `${commitsSince ?? '?'} commits / ${filesChanged ?? '?'} files since last code index — run \`harness index --structural\``

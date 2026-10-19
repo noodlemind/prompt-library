@@ -7,12 +7,12 @@ export const MAX_FILES_SCANNED = 4000;
 export const MAX_FILE_BYTES = 200_000;
 
 export function trackedSourceFiles(workspace) {
-  const res = spawnSync('git', ['-C', workspace, 'ls-files'], { encoding: 'utf8', timeout: 15_000 });
+  const res = spawnSync('git', ['-C', workspace, 'ls-files', '-z'], { encoding: 'utf8', timeout: 15_000 });
   if (res.status !== 0) return { files: [], total: 0 };
-  const all = res.stdout
-    .split('\n')
+  const all = [...new Set(res.stdout
+    .split('\0')
     .filter(Boolean)
-    .filter((rel) => SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase()));
+    .filter((rel) => SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase())))].sort();
     return { files: all.slice(0, MAX_FILES_SCANNED), total: all.length };
 }
 

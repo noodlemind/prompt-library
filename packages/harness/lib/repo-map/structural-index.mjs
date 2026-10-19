@@ -9,8 +9,8 @@ import { writeFileContained, readFileNoFollow } from '../fs-safe.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
 import { estimateTokens } from '../token-meter.mjs';
 import { EXIT } from '../style.mjs';
-import { trackedSourceFiles, readFileSafe } from './scan.mjs';
 import { MAX_IDENTIFIER_LENGTH } from './treesitter-extractor.mjs';
+import { captureWorkingSources, readSourceFile, structuralCurrentness } from './working-sources.mjs';
 
 export const STRUCTURAL_INDEX_VERSION = 1;
 
@@ -37,7 +37,7 @@ export function structuralIndexDir(workspace, { home } = {}) {
 
 function readTable(dir, name) {
   const full = path.join(dir, name);
-  if (!fs.existsSync(full)) return { value: null, error: null };
+  if (!fs.existsSync(full)) return { value: null, error: `${name} is missing` };
   const body = readFileNoFollow(full, { root: dir });
   if (body === null) return { value: null, error: `${name} is unreadable (oversized, symlink, or open failure)` };
   try {
@@ -68,6 +68,8 @@ export function readStructuralIndex(workspace, { home } = {}) {
   const symbols = readTable(dir, 'symbols.json');
   const graph = readTable(dir, 'graph.json');
   const unreadable = [files.error, symbols.error, graph.error].filter(Boolean);
+  const after = readMeta(dir);
+  if (!after || JSON.stringify(after) !== JSON.stringify(meta)) unreadable.push('index generation changed during read');
   return {
     dir,
     meta,
@@ -79,16 +81,13 @@ export function readStructuralIndex(workspace, { home } = {}) {
 }
 
 export function readStructuralIndexIfCurrent(workspace, { home } = {}) {
-  if (!fs.existsSync(path.join(home || harnessGlobalHome(), 'index'))) return null;
   const dir = structuralIndexDir(workspace, { home });
-  if (!fs.existsSync(path.join(dir, 'meta.json'))) return null;
   const meta = readMeta(dir);
-  if (!meta || !meta.sha) return null;
-  const head = git(workspace, ['rev-parse', 'HEAD']);
-  if (!head || head !== meta.sha) return null;
+  if (!meta || git(workspace, ['rev-parse', 'HEAD']) !== meta.sha) return null;
   const index = readStructuralIndex(workspace, { home });
-  // A current stamp over an unreadable table is not a usable index.
   if (!index || index.unreadable.length) return null;
+  if (JSON.stringify(index.meta) !== JSON.stringify(meta)) return null;
+  if (!structuralCurrentness(workspace, index.meta).current) return null;
   return index;
 }
 
@@ -110,12 +109,6 @@ export function validateSinceRef(workspace, ref) {
     });
   }
   return sha;
-}
-
-function changedFilesSince(workspace, sha) {
-  const out = git(workspace, ['diff', '--name-only', sha, '--']);
-  if (out === null) return null; // diff failed → caller degrades to a full pass
-  return new Set(out.split('\n').filter(Boolean));
 }
 
 function cleanName(name) {
@@ -373,25 +366,6 @@ function publishGeneration(dir, writes) {
   return { ok: true, failed: null };
 }
 
-/**
- * Build (or incrementally refresh) the structural index. Async only because
- * the command path around it is async — the work itself is local fs + git +
- * the injected extractor. Incremental discipline:
- *   1. mtime+size fast path — an unchanged stat reuses the prior entry with
- *      no read at all;
- *   2. sha256 content-hash confirm — a touched-but-identical file reuses the
- *      prior entry without re-parsing;
- *   3. `since` (a PRE-VALIDATED sha from validateSinceRef) narrows the
- *      re-parse candidates to `git diff --name-only <sha> --`; files outside
- *      the diff keep their prior entries verbatim. SOUNDNESS RULE: that
- *      narrowing is only valid when `since` is exactly the sha the PRIOR index
- *      was built at. Any other ref leaves files changed between `since` and
- *      the prior stamp stale while the rebuild stamps meta.sha = HEAD, so the
- *      index would READ as current while carrying stale entries. A misaligned
- *      `--since` is therefore IGNORED (reported, never silent) and the build
- *      degrades to a full incremental pass.
- * Bounded by the shared MAX_FILES_SCANNED / MAX_FILE_BYTES caps.
- */
 export async function buildStructuralIndex({ workspace, home, extractor, since = null, dryRun = false, log = () => {} }) {
   const dir = structuralIndexDir(workspace, { home });
   const onDisk = readStructuralIndex(workspace, { home });
@@ -400,7 +374,9 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   const priorUnreadable = onDisk?.unreadable?.length ? onDisk.unreadable : [];
   if (priorUnreadable.length) log(`prior structural index unusable: ${priorUnreadable.join('; ')} — rebuilding from scratch`);
   const prior = priorUnreadable.length ? null : onDisk;
-  const { files: tracked, total } = trackedSourceFiles(workspace);
+  const snapshot = captureWorkingSources(workspace);
+  const tracked = snapshot.files || [];
+  const total = snapshot.state?.total || 0;
 
   let sinceIgnored = null;
   let appliedSince = null;
@@ -411,36 +387,24 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     sinceIgnored = '--since needs a prior index to narrow against';
   }
   if (sinceIgnored) log(`${sinceIgnored} — running a full incremental pass instead`);
-  const changed = appliedSince ? changedFilesSince(workspace, appliedSince) : null;
+  const extractorKey = sha256(JSON.stringify([extractor.tier || 'lexical', extractor.webTreeSitter || null, extractor.grammarVersions || {}, extractor.missingGrammars || [], extractor.integrityFailures || []]));
+  const canReuse = prior?.meta?.extractorKey === extractorKey && prior?.meta?.sourceState?.configDigest === snapshot.state?.configDigest;
 
   const nextFiles = {};
   let reparsed = 0;
   let reused = 0;
+  let inputsChanged = false;
   for (const rel of tracked) {
     const raw = prior?.files?.[rel];
     // A hand-edited or partially written prior entry is discarded and rebuilt,
     // never reused: it flows into files.json and the symbol table verbatim.
-    const priorEntry = usablePriorEntry(raw) ? raw : undefined;
-    if (changed && priorEntry && !changed.has(rel)) {
-      nextFiles[rel] = priorEntry;
-      reused += 1;
-      continue;
-    }
-    let st = null;
-    try {
-      st = fs.statSync(path.join(workspace, rel));
-    } catch {
-      continue; // listed but unreadable — skip, never guess
-    }
-    if (priorEntry && !changed?.has(rel) && priorEntry.mtime === st.mtimeMs && priorEntry.size === st.size) {
-      nextFiles[rel] = priorEntry;
-      reused += 1;
-      continue;
-    }
-    const content = readFileSafe(workspace, rel);
-    const hash = sha256(content);
+    const priorEntry = canReuse && usablePriorEntry(raw) ? raw : undefined;
+    const input = readSourceFile(workspace, rel);
+    if (input.state !== snapshot.entries[rel].state || input.hash !== snapshot.entries[rel].hash) inputsChanged = true;
+    if (input.state !== 'readable') continue;
+    const { content, hash, mtime, size } = input;
     if (priorEntry && priorEntry.hash === hash) {
-      nextFiles[rel] = { ...priorEntry, mtime: st.mtimeMs, size: st.size };
+      nextFiles[rel] = { ...priorEntry, mtime, size };
       reused += 1;
       continue;
     }
@@ -451,7 +415,7 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
       extracted = { symbols: [], imports: [], defs: [], refs: [], hasErrors: true, tier: 'lexical' };
       log(`structural parse failed ${rel}: ${error.message}`);
     }
-    nextFiles[rel] = sanitizeEntry(extracted, { hash, mtime: st.mtimeMs, size: st.size });
+    nextFiles[rel] = sanitizeEntry(extracted, { hash, mtime, size });
     reparsed += 1;
   }
   const removedFiles = Object.keys(prior?.files || {}).filter((rel) => !(rel in nextFiles)).length;
@@ -474,6 +438,8 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   const meta = {
     version: STRUCTURAL_INDEX_VERSION,
     sha: git(workspace, ['rev-parse', 'HEAD']),
+    sourceState: snapshot.state || null,
+    extractorKey,
     branch: git(workspace, ['rev-parse', '--abbrev-ref', 'HEAD']),
     baseSha: appliedSince || null,
     generatedAt: new Date().toISOString(),
@@ -494,8 +460,9 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     unresolvedTruncated: truncation.unresolved,
   };
 
-  if (!meta.sha) {
-    log('structural index not published — git HEAD could not be read');
+  const finalSnapshot = captureWorkingSources(workspace);
+  if (!snapshot.valid || !finalSnapshot.valid || inputsChanged || snapshot.state.digest !== finalSnapshot.state.digest || meta.sha !== snapshot.head) {
+    log('structural index not published because source inputs changed or could not be read');
     return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
   }
 

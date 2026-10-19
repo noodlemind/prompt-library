@@ -5,8 +5,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { storeDir } from '../lib/knowledge/store.mjs';
-import { structuralDir } from '../lib/structural/shape.mjs';
 import { MATCH_MODES, REGEX_MAX_PATTERN, runSearch } from '../lib/retrieval/search.mjs';
+import { buildStructuralIndex } from '../lib/repo-map/structural-index.mjs';
+import { lexicalV2 } from '../lib/repo-map/treesitter-extractor.mjs';
 
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
@@ -189,7 +190,7 @@ test('path match does glob and substring discovery over tracked files', () => {
   assert.match(learnings.reason, /addressed by/);
 });
 
-test('symbol match reads the structural index and reports its absence rather than emptiness', () => {
+test('symbol match reads a current structural index and reports its absence rather than emptiness', async () => {
   const fx = fixture('search-symbol-');
 
   const absent = search(fx, { query: 'acquireLease', mode: 'symbol' });
@@ -199,28 +200,16 @@ test('symbol match reads the structural index and reports its absence rather tha
   assert.equal(absent.total, 0);
   assert.equal(absent.partial, false, 'skipped is not failed');
 
-  const dir = structuralDir(fx.ws, { home: fx.home });
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ version: 1, sha: 'a'.repeat(40) }), 'utf8');
-  fs.writeFileSync(
-    path.join(dir, 'symbols.json'),
-    JSON.stringify({
-      version: 1,
-      symbols: [
-        { name: 'acquireLease', file: 'src/lease.mjs', kind: 'function', exported: true, def: { line: 1 }, refs: [] },
-        { name: 'acquireLeaseToken', file: 'src/lease.mjs', kind: 'function', exported: false, def: { line: 9 }, refs: [] },
-        { name: 'unrelated', file: 'src/other.mjs', kind: 'const', exported: true, def: { line: 1 }, refs: [] },
-      ],
-    }),
-    'utf8',
-  );
+  fs.appendFileSync(path.join(fx.ws, 'src/lease.mjs'), '\nexport function acquireLeaseToken() { return 1; }\n');
+  const built = await buildStructuralIndex({ workspace: fx.ws, home: fx.home, extractor: { tier: 'lexical', extract: lexicalV2 } });
+  assert.equal(built.written, true);
 
   const found = search(fx, { query: 'acquireLease', mode: 'symbol', explain: true });
   const rows = found.results.filter((r) => r.source === 'code');
   assert.deepEqual(rows.map((r) => r.id), ['src/lease.mjs#acquireLease', 'src/lease.mjs#acquireLeaseToken']);
   assert.equal(rows[0].location, 'src/lease.mjs:1');
   assert.ok(rows[0].sourceScore > rows[1].sourceScore, 'an exact name outranks a prefix');
-  assert.equal(rows[0].generation, 'a'.repeat(40), 'the index sha is the code generation for symbol match');
+  assert.equal(rows[0].generation, built.meta.sourceState.digest);
   assert.match(rows[0].reason, /exact/);
   assert.match(rows[1].reason, /prefix/);
 });
