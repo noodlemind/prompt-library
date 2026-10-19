@@ -2,6 +2,7 @@
  * `harness agent "<task>"` — CLI surface for the headless turn loop.
  */
 import path from 'node:path';
+import { buildTaskContext, CONTEXT_POLICIES } from './context-policy.mjs';
 import { createHash } from 'node:crypto';
 import { parseFlags } from './flags.mjs';
 import { createStyle, keyWidthFor, EXIT } from './style.mjs';
@@ -220,6 +221,8 @@ export function planAgent(argv) {
   const verifyCmd = parseVerifyCmd(argv);
   const retentionPolicy = stringFlag(argv, '--retention-policy') || 'legacy';
   if (!['legacy', 'structured'].includes(retentionPolicy)) throw usageError('--retention-policy must be legacy or structured');
+  const contextPolicy = stringFlag(argv, '--context-policy') || 'legacy';
+  if (!CONTEXT_POLICIES.includes(contextPolicy)) throw usageError('--context-policy must be legacy, selective or subsystem');
 
   const maxTurnsFallback = configured.maxTurns
     ?? profile.maxTurnsDefault
@@ -240,6 +243,7 @@ export function planAgent(argv) {
     profile,
     verifyCmd,
     retentionPolicy,
+    contextPolicy,
     maxTurns: boundedNumber(argv, '--max-turns', { ...AGENT_LIMITS.maxTurns, fallback: maxTurnsFallback }),
     maxSeconds: boundedNumber(argv, '--max-seconds', { ...AGENT_LIMITS.maxSeconds, fallback: maxSecondsFallback }),
     toolTimeoutSeconds: boundedNumber(argv, '--tool-timeout', { ...AGENT_LIMITS.toolTimeout, fallback: null }),
@@ -262,6 +266,7 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
   const p = planAgent(argv);
   const persona = resolvePersona(p.copilotHome, p.personaName);
   const hasVerifier = Array.isArray(p.verifyCmd) && p.verifyCmd.length > 0;
+  const contextProvider = p.contextPolicy === 'legacy' ? null : () => buildTaskContext({ workspace: p.workspace, copilotHome: p.copilotHome, task: p.task, files: p.flags.files || [], home: p.flags.harnessHome || process.env.HARNESS_HOME, policy: p.contextPolicy });
 
   if (p.flags.dryRun) {
     const orientation = await orientForTask({
@@ -278,9 +283,12 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
       orientation: orientation.pack,
       hasVerifier,
     });
+    const context = contextProvider?.();
     return {
       schema: 1,
       dryRun: true,
+      contextPolicy: p.contextPolicy,
+      context: context ? { files: context.files, coverage: context.coverage, bytes: Buffer.byteLength(context.body) } : null,
       runtime: 'optional-addon',
       disclaimer: AGENT_ADDON_DISCLAIMER,
       task: p.task,
@@ -335,6 +343,8 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
     maxSeconds: Math.max(1, p.maxSeconds - spent),
     toolTimeoutSeconds: p.toolTimeoutSeconds,
     retentionPolicy: p.retentionPolicy,
+    contextPolicy: p.contextPolicy,
+    contextProvider,
     ctx,
     signal: ctx.signal ?? null,
     startProviderFn:

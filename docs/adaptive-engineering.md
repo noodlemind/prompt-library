@@ -42,6 +42,16 @@ The optional headless Deliver loop uses the same mutation hooks and completion a
 
 Orient shows trust, constraints, acceptance criteria, review coverage and an implement-only gate preview. With no explicit file list it derives the change neighborhood from the selected plan scope. The compact pack removes repeated plan paths and optional prose before the work contract; an oversized contract creates an explicit context-read barrier. `orient --read --plan <path>` returns the contract and neighborhood without pack truncation. Finalize eval check and routing files before the person approval that pins them. An agent edit of pinned policy invalidates that approval.
 
+## Current and expandable context
+
+Structural indexes bind working source bytes, tracked paths, resolver configuration, and extractor revisions. A dirty edit invalidates current reads. Orientation uses current lexical facts when the index is stale. Explicit new files contribute facts without indexing unrelated untracked files.
+
+Orientation shares one fact collector across the pack and read response. Existing clients retain the eleven-field read format. `harness orient --read --context-version 2` adds source identities, coverage limits, omissions, and accounting. A returned source reference refuses changed bytes. These records do not prove semantic completeness.
+
+The optional headless runtime exposes experimental `legacy`, `selective`, and `subsystem` context policies. Selective evidence follows task seeds and import neighbors. Subsystem evidence adds files under seed directories. Each policy reports clipping and omissions. Structured retention reloads the existing plan and evidence after context changes. Both defaults remain legacy until task evaluation supports a change.
+
+Reports separate produced-artifact estimates, runtime requests, and observed host usage. Missing host visibility remains unavailable. Model-task quality and installed-editor behavior require their own evidence.
+
 ## How capability is acquired
 
 A capability moves through candidate, experimental, active, deprecated, and retired. Promotion needs a trigger eval, an outcome eval, and promotion evidence. Retirement leaves a tombstone so a later task can see the overlap with what replaced it.

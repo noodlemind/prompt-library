@@ -1,37 +1,40 @@
-# Context Budget (Composer-style)
+# Context selection and budgets
 
-Keep retrieved context **small and frozen per turn**. Full procedures live in skills; only **top-k facts** enter the model.
+Start with the task contract and a compact orientation. Expand evidence when a requirement, dependency, failure, or unresolved question needs more information. A small pack does not prove that the agent has enough evidence.
 
-## Budget tiers
+## Initial budgets
 
-| Tier | Max size | Contents | When loaded |
-|------|----------|----------|-------------|
-| **F0 Frozen** | 600–900 tokens | Stable Engineer identity, task modes, nine-step delivery lifecycle, guardrails, and core tool actions | Every `@engineer` turn |
-| **F1 Recall** | ~800 tokens | ≤3 manifest entries (title, symptom, path, 1-line summary each) | Phase 0 |
-| **F2 Plan slice** | ~1500 tokens | `## Memory Cards` + `## Acceptance Criteria` + current phase tasks | Before implement |
-| **F3 On demand** | skill-defined | `capture-gate`, `subagent-context-packet`, delegation matrix | Only when delegating or gating |
+| Tier | Initial budget | Content |
+|---|---|---|
+| F0 Frozen | 600-900 estimated tokens | Engineer identity, modes, delivery lifecycle, required policy, and core actions |
+| F1 Recall | 2048-byte context pack | Task contract, gate preview, selected facts, and expansion reference |
+| F2 Plan slice | About 1500 estimated tokens | Complete constraints and acceptance criteria, current tasks, and relevant decisions |
+| F3 On demand | Bound each request | Needed skill procedures, source excerpts, checks, and supporting references |
 
-**Never** load full solution files (>30 lines) unless user asks. **Never** load full `## Activity` logs — scan last 2 entries only.
+These budgets guide initial loading. If mandatory content exceeds a budget, report the barrier and read its source. Do not shorten accepted constraints to fit. The host can add instructions, tools, and history outside the pack.
 
-## Memory Cards section cap
+## Select and expand evidence
 
-- Max **15 bullets**
-- Max **1200 characters** total in `## Memory Cards`
-- Each bullet ≤1 line + `source:` path
+Use `harness orient --read --context-version 2 --query <task> --file <path>` before product edits. Version two reports source identities, omissions, scan limits, and the task contract. The default read format remains available to existing clients.
 
-## Manifest recall cap
+Use a returned `path@sha256:<hash>` reference with `get --path <reference> --context-version 2`. A changed source requires fresh selection. Version two adds a source range and bounded declaration, import, type, or document-heading candidates. These candidates do not prove semantic completeness.
 
-- Score by tag/symptom keyword overlap
-- Return **top 3** entries only
-- Read at most **first 25 lines** of each matched solution file
+Start with at most three relevant memory matches. Read the required section or next window when an excerpt lacks needed evidence. Broader relevant files are permitted within the task scope. Avoid repeated whole-file reads when a named section resolves the question.
 
-## Profile cap
+Keep required policy resident. Load a skill procedure when its trigger applies, then load its references as needed. Do not reload a duplicate copy of instructions the host already supplied.
 
-`~/.copilot/knowledge/profile.md` — keep under **1500 characters** (Hermes-scale user store).
+## Preserve task state
 
-## Anti-patterns (Composer reviewers would flag)
+The existing plan and evidence records own accepted intent, constraints, decisions, progress, unresolved work, and proof. After compaction or restart, reorient and reload their current state. A summary cannot amend accepted intent or make old source facts current.
 
-- Pasting entire plan file into chat
-- Loading all of `copilot-instructions` into engineer (host may already load it)
-- Re-explaining capture gate in prose every turn
-- Keyword manifest scan of 50+ files without ranking
+Read relevant Research Notes and Review Findings before continuing unresolved work. Read Activity entries when their history resolves a question. Keep source references for omitted material.
+
+## Retain bounded memory
+
+Keep Memory Cards within 15 bullets and 1200 characters. Give each claim a source. Keep the profile under 1500 characters. These summaries guide retrieval and do not replace source evidence.
+
+## Measure the complete task
+
+Separate produced artifacts, runtime requests, and host observations. Count retries and failed attempts. Keep estimates and unavailable input distinct from observed usage. A cached request does not establish relevance or retained task knowledge.
+
+The optional headless runtime exposes `--context-policy legacy|selective|subsystem` and `--retention-policy legacy|structured`. Defaults remain legacy. Evaluate task quality and total cost before changing a default. Native host compaction remains host-controlled unless an integration proves otherwise.

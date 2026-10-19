@@ -27,6 +27,7 @@ import { EXIT } from '../lib/style.mjs';
 import { setRunContext, clearRunContext } from '../lib/run-context.mjs';
 import { createEventRegistry } from '../lib/event-registry.mjs';
 import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
+import { initGit } from './helpers/index.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'harness.mjs');
@@ -125,6 +126,24 @@ test('structured retention is opt-in and sends a current handoff to the provider
   assert.equal(result.task, 'continue accepted work');
   assert.equal(result.retentionPolicy, 'structured');
   assert.ok(provider.requests[0].messages.some(message => message.contextCategory === 'handoff' && message.text.includes('continue accepted work')));
+});
+
+test('selective context refreshes source data before each model request', async (t) => {
+  const { ws, home } = scaffold('agent-selective-context');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(ws, 'src'));
+  fs.writeFileSync(path.join(ws, 'src/target.mjs'), 'export function item() { return 1; }\n');
+  initGit(ws);
+  const provider = scriptedProvider([callTool('edit', 'edit', { path: 'src/target.mjs', old: 'return 1;', new: 'return 2;' }), say('finished')]);
+  const result = await agentResultOf(argvFor(ws, home, 'update target', ['--context-policy', 'selective', '--file', 'src/target.mjs']), {}, { startProviderFn: provider.start });
+  assert.equal(result.task, 'update target');
+  assert.equal(result.contextPolicy, 'selective');
+  assert.match(provider.requests[0].messages.find(message => message.contextCategory === 'evidence').text, /return 1/);
+  const evidence = provider.requests[1].messages.filter(message => message.contextCategory === 'evidence');
+  assert.equal(evidence.length, 1);
+  assert.match(evidence[0].text, /return 2/);
+  assert.doesNotMatch(evidence[0].text, /return 1/);
 });
 
 test('a tool timeout above exec\'s maximum clamps to the maximum instead of killing the run', async () => {

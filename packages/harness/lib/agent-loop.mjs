@@ -307,6 +307,7 @@ export const AGENT_VALUE_FLAGS = Object.freeze([
   '--workspace', '--copilot-home', '--harness-home', '--output', '--plan', '--host', '--limit', '--query',
   '--profile', '--verify-cmd',
   '--retention-policy',
+  '--context-policy', '--file',
 ]);
 
 function usageError(message, hint) {
@@ -878,6 +879,8 @@ export async function runAgentLoop({
   onTurn = null,
   onContext = null,
   retentionPolicy = 'legacy',
+  contextPolicy = 'legacy',
+  contextProvider = null,
   now = () => Date.now(),
 }) {
   const resolvedProfile = profile?.id ? profile : resolveProfile(profile);
@@ -892,6 +895,7 @@ export async function runAgentLoop({
     hasVerifier,
   });
   let messages = [{ role: 'user', text: task }];
+  let contextSummary = null;
   const turns = [];
   const contextRequests = [];
   const readIdentities = [];
@@ -937,11 +941,18 @@ export async function runAgentLoop({
         });
       }
 
+      if (contextProvider) {
+        const current = await contextProvider();
+        const retained = messages.filter(message => message.contextCategory !== 'evidence');
+        messages = current.body ? [retained[0], { role: 'user', contextCategory: 'evidence', text: current.body }, ...retained.slice(1)] : retained;
+        contextSummary = { policy: current.policy, contextId: current.contextId, files: current.files, coverage: current.coverage, bytes: Buffer.byteLength(current.body) };
+      }
       messages = compactMessages(messages, {
         keepTurns: TRANSCRIPT_FULL_TURNS,
         mode: retentionPolicy === 'structured' ? 'structured' : isAutonomous ? 'all' : 'explore',
         handoff: retentionPolicy === 'structured' ? buildTaskHandoff({ workspace, task }) : null,
       });
+      if (now() >= deadline) { stop = 'time-budget'; break; }
 
       const turnIndex = turns.length + 1;
       const turnStartedAt = now();
@@ -950,7 +961,7 @@ export async function runAgentLoop({
       const components = [
         { category: 'instructions', id: 'system', content: request.system },
         { category: 'capabilities', id: 'tools', content: request.tools },
-        ...request.messages.map((message, index) => ({ category: message.contextCategory === 'handoff' ? 'handoff' : message.toolResults ? 'toolResults' : 'history', id: `message-${index}`, content: message })),
+        ...request.messages.map((message, index) => ({ category: message.contextCategory || (message.toolResults ? 'toolResults' : 'history'), id: `message-${index}`, content: message })),
       ];
       const requestIndex = contextRequests.length;
       contextRequests.push(accountContext({ boundary: 'headless-request', components, reads: readIdentities }));
@@ -1217,6 +1228,8 @@ export async function runAgentLoop({
     turnCount: turns.length,
     contextAccounting: contextRequests,
     retentionPolicy,
+    contextPolicy,
+    context: contextSummary,
     maxTurns,
     maxSeconds,
     usage,
