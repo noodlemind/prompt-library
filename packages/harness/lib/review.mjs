@@ -5,13 +5,13 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseFlags } from './flags.mjs';
 import { loadPlan } from './plan-parse.mjs';
-import { createEvidenceBinding } from './evidence.mjs';
+import { createEvidenceBinding, proofPolicyDigest } from './evidence.mjs';
 import { collectChangedFiles } from './plan-scope.mjs';
 import { readFileNoFollow, writeFileContained, readBoundedInput } from './fs-safe.mjs';
 import { ensureHarnessDir } from './session.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { redactedJson } from './redact.mjs';
-import { reviewPreparation, preparationIsCurrent, reviewHash, compareText, CODE_REVIEWERS } from './review-preparation.mjs';
+import { reviewPreparation, preparationIsCurrent, selectedDocumentSources, refreshDocumentSources, reviewHash, stableJson, compareText, CODE_REVIEWERS, DOCUMENT_REVIEW_DEFINITIONS } from './review-preparation.mjs';
 import { synthesizeReview, renderReview } from './review-synthesis.mjs';
 
 export const REVIEW_VERBS = Object.freeze(['prepare', 'assemble']);
@@ -22,6 +22,31 @@ const scopePlan = plan => plan || { path: '__standalone__', text: '', phase: 0 }
 const packetValue = packet => { const { id, createdAt, ...value } = packet; return value; };
 const packetHash = packet => packet.version === 2 ? reviewHash(packetValue(packet)) : recordHash({ version: packet.version, plan: packet.plan, scope: packet.scope, required: packet.required });
 function usage(message) { return Object.assign(new Error(message), { code: 'E_USAGE', exit: 2, hint: 'harness help review' }); }
+const validBase = base => base === null || (typeof base === 'string' && Boolean(base) && !base.startsWith('-') && !/[\0\r\n]/.test(base));
+
+function packetScopeNow(workspace, plan, packet, copilotHome) {
+  const { scope, preparation } = packet;
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope)) throw usage('Review packet scope is invalid');
+  if (!Object.hasOwn(scope, 'mode')) return currentReviewScope(workspace, plan, scope.base, copilotHome);
+  if (scope.mode !== 'selected-document-v1') throw usage('Review packet scope mode is unsupported');
+  const regularRef = ref => ref && typeof ref === 'object' && !Array.isArray(ref)
+    && ref.state === 'regular' && typeof ref.sha256 === 'string' && ID.test(ref.sha256)
+    && typeof ref.path === 'string' && ref.path && !/[\\\0\r\n]/.test(ref.path)
+    && Object.keys(ref).sort().join(',') === 'origin,path,sha256,state';
+  const canonicalRef = ref => regularRef(ref) && (ref.origin === 'product'
+    ? !path.posix.isAbsolute(ref.path) && !path.win32.isAbsolute(ref.path) && ref.path !== '.' && !ref.path.split('/').includes('..') && path.posix.normalize(ref.path) === ref.path
+    : ref.origin === 'project-plan' && path.isAbsolute(ref.path) && path.resolve(ref.path).replace(/\\/g, '/') === ref.path);
+  const ordered = (a, b) => compareText(a.origin, b.origin) || compareText(a.path, b.path);
+  if (packet.kind !== 'document' || packet.plan !== null || plan || preparation?.kind !== 'document'
+    || !validBase(scope.base) || typeof scope.policyDigest !== 'string' || !ID.test(scope.policyDigest)
+    || !Array.isArray(scope.files) || !scope.files.length
+    || !scope.files.every((ref, index) => canonicalRef(ref) && (index === 0 || ordered(scope.files[index - 1], ref) < 0))) throw usage('Selected document scope must contain canonical regular sources for a standalone document review');
+  if (stableJson(preparation.refs) !== stableJson(scope.files)
+    || !Array.isArray(preparation.checks) || preparation.checks.length
+    || !Array.isArray(preparation.sources) || preparation.sources.length !== DOCUMENT_REVIEW_DEFINITIONS.length
+    || !preparation.sources.every((ref, index) => regularRef(ref) && ref.origin === 'corpus' && ref.path === DOCUMENT_REVIEW_DEFINITIONS[index])) throw usage('Selected document preparation must match its captured sources and document review definitions');
+  return { mode: scope.mode, base: scope.base, policyDigest: proofPolicyDigest(workspace, copilotHome), files: refreshDocumentSources(workspace, scope.files) };
+}
 
 export function currentReviewScope(workspace, plan, base = null, copilotHome) {
   if (plan?.fm?.domain_parent) {
@@ -50,7 +75,9 @@ export function prepareReview({ workspace, plan, base = null, copilotHome, kind 
   const recordRoot = planRecordRoot(workspace, plan);
   if (!['code', 'document'].includes(kind)) throw usage('Review domain must be code or document');
   if (kind === 'document' && plan?.fm.reviews?.required?.includes('code-review')) throw usage('A document review cannot satisfy this plan\'s required code review; use a standalone document packet');
-  const scope = currentReviewScope(workspace, plan, base, copilotHome);
+  const selectedDocument = kind === 'document' && !plan && files?.length;
+  if (selectedDocument && !validBase(base)) throw usage('Review base must be a nonempty safe string or null');
+  const scope = selectedDocument ? { mode: 'selected-document-v1', base, policyDigest: proofPolicyDigest(workspace, copilotHome), files: selectedDocumentSources(workspace, files) } : currentReviewScope(workspace, plan, base, copilotHome);
   const prepared = reviewPreparation({ workspace, scope, plan, kind, reviewers, files: files || (plan?.fm?.domain_parent ? [plan.path] : null), maxBytes, home });
   const contract = { version: 2, plan: plan?.path || null, kind, scope, ...prepared };
   const id = reviewHash(contract);
@@ -59,9 +86,10 @@ export function prepareReview({ workspace, plan, base = null, copilotHome, kind 
   const existing = readReviewRecord(recordRoot, rel);
   if (existing) {
     if (packetHash(existing) !== id) throw usage('Stored review packet is invalid');
+    if (selectedDocument && (stableJson(scope) !== stableJson(packetScopeNow(workspace, plan, existing, copilotHome)) || !preparationIsCurrent(workspace, existing.preparation, { plan, home }))) throw usage('Review scope changed during preparation');
     return existing;
   }
-  if (JSON.stringify(scope) !== JSON.stringify(currentReviewScope(workspace, plan, base, copilotHome)) || !preparationIsCurrent(workspace, prepared.preparation, { plan, home })) throw usage('Review scope changed during preparation');
+  if (JSON.stringify(scope) !== JSON.stringify(packetScopeNow(workspace, plan, packet, copilotHome)) || !preparationIsCurrent(workspace, prepared.preparation, { plan, home })) throw usage('Review scope changed during preparation');
   if (Buffer.byteLength(JSON.stringify(packet)) > 1024 * 1024) throw usage('Review packet exceeds storage limit; narrow the explicit review files');
   if (!dryRun) publishReviewRecord(recordRoot, rel, packet);
   return packet;
@@ -73,14 +101,14 @@ export function assembleReview({ workspace, plan, packetId, input, copilotHome, 
   const packet = readReviewRecord(recordRoot, `.harness/reviews/packets/${packetId}.json`);
   if (!packet || packet.id !== packetId || packetHash(packet) !== packetId) throw usage('Review packet is missing or tampered');
   if (packet.version !== 2) throw usage('Review packet version requires current preparation; version 1 records remain readable');
-  const scope = currentReviewScope(workspace, plan, packet.scope.base, copilotHome);
+  const scope = packetScopeNow(workspace, plan, packet, copilotHome);
   if (packet.plan !== (plan?.path || null) || JSON.stringify(scope) !== JSON.stringify(packet.scope) || (packet.version === 2 && !preparationIsCurrent(workspace, packet.preparation, { plan, home }))) throw usage('Review packet is stale; prepare and review the current scope');
   if (input?.packet !== packetId || !Array.isArray(input.results)) throw usage('Results must reference the packet and contain a results array');
-  const synthesis = synthesizeReview(workspace, packet.required, input, packet.preparation?.failures || [], packet.kind === 'document' ? packet.preparation.refs : []);
+  const synthesis = synthesizeReview(workspace, packet.required, input, packet.preparation?.failures || [], packet.kind === 'document' ? packet.preparation.refs : [], scope.mode === 'selected-document-v1');
   const value = { version: packet.version, plan: packet.plan, packet: packetId, kind: packet.kind || 'code', scope, required: packet.required, declaredRequired: packet.declaredRequired || packet.required, ...synthesis };
   const id = reviewHash(value);
   const record = { ...value, id, recordedAt: new Date().toISOString() };
-  if (JSON.stringify(scope) !== JSON.stringify(currentReviewScope(workspace, plan, packet.scope.base, copilotHome)) || (packet.version === 2 && !preparationIsCurrent(workspace, packet.preparation, { plan, home }))) throw usage('Review scope changed during assembly');
+  if (JSON.stringify(scope) !== JSON.stringify(packetScopeNow(workspace, plan, packet, copilotHome)) || (packet.version === 2 && !preparationIsCurrent(workspace, packet.preparation, { plan, home }))) throw usage('Review scope changed during assembly');
   if (Buffer.byteLength(JSON.stringify(record)) > 1024 * 1024) throw usage('Review record exceeds storage limit; reduce input size');
   const observationPath = `.harness/reviews/observations/${recordHash(input)}.json`;
   if (!dryRun) {
@@ -103,6 +131,7 @@ export function validateReview({ workspace, plan, copilotHome }) {
   if (!record || ![1, 2].includes(record.version)) return failure('Required reviews need a bound Harness review record; declared completed strings do not supply evidence');
   const { id, recordedAt, ...value } = record;
   if (id !== pointer.id || (record.version === 2 ? reviewHash(value) : recordHash(value)) !== id) return failure('Review record is invalid');
+  if (record.scope?.mode === 'selected-document-v1') return failure('Standalone selected document review cannot satisfy delivery review obligations');
   if (record.plan !== plan.path || JSON.stringify(record.version === 2 ? record.declaredRequired : record.required) !== JSON.stringify([...new Set(required)].sort(compareText))) return failure('Review obligations changed');
   if (record.version === 2 && required.includes('code-review') && (record.kind !== 'code' || CODE_REVIEWERS.some(id => !record.required.includes(id)))) return failure('Required code review perspectives are missing');
   if (JSON.stringify(record.scope) !== JSON.stringify(currentReviewScope(workspace, plan, record.scope.base, copilotHome))) return failure('Reviewed content or policy changed; prepare and review the current scope');
