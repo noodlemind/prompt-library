@@ -1,0 +1,519 @@
+{
+  "schema": 1,
+  "note": "Six development and six held-out JavaScript tasks. This pilot does not establish statistical power or cross-language quality. Checks remain outside agent workspaces.",
+  "cases": [
+    {
+      "id": "greeting",
+      "split": "development",
+      "family": "known-file",
+      "prompt": "Fix the spelling in src/greet.mjs. greet(name) must return hello followed by a space and the name.",
+      "files": {
+        "src/greet.mjs": "export function greet(name) { return 'helo ' + name; }\n"
+      },
+      "editable": [
+        "src/greet.mjs"
+      ],
+      "seeds": [
+        "src/greet.mjs"
+      ],
+      "requiredEvidence": [
+        "src/greet.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/greet.mjs",
+          "export": "greet",
+          "args": [
+            "Ada"
+          ],
+          "expected": "hello Ada"
+        },
+        {
+          "module": "src/greet.mjs",
+          "export": "greet",
+          "args": [
+            "Lin"
+          ],
+          "expected": "hello Lin"
+        }
+      ]
+    },
+    {
+      "id": "double",
+      "split": "development",
+      "family": "new-export",
+      "prompt": "Export double(n) from src/math.mjs. Return twice the number and preserve version.",
+      "files": {
+        "src/math.mjs": "export const version = 1;\n"
+      },
+      "editable": [
+        "src/math.mjs"
+      ],
+      "seeds": [
+        "src/math.mjs"
+      ],
+      "requiredEvidence": [
+        "src/math.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/math.mjs",
+          "export": "double",
+          "args": [
+            -3
+          ],
+          "expected": -6
+        },
+        {
+          "module": "src/math.mjs",
+          "export": "double",
+          "args": [
+            0
+          ],
+          "expected": 0
+        },
+        {
+          "module": "src/math.mjs",
+          "export": "version",
+          "expected": 1
+        }
+      ]
+    },
+    {
+      "id": "rename",
+      "split": "development",
+      "family": "static-consumer",
+      "prompt": "Rename oldName to newName and update its consumers. Preserve the result 42. Remove oldName.",
+      "files": {
+        "src/a.mjs": "export function oldName() { return 42; }\n",
+        "src/b.mjs": "import { oldName } from './a.mjs';\nexport function useIt() { return oldName(); }\n"
+      },
+      "editable": [
+        "src/a.mjs",
+        "src/b.mjs"
+      ],
+      "seeds": [
+        "src/a.mjs"
+      ],
+      "requiredEvidence": [
+        "src/a.mjs",
+        "src/b.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/a.mjs",
+          "export": "newName",
+          "args": [],
+          "expected": 42
+        },
+        {
+          "module": "src/a.mjs",
+          "export": "oldName",
+          "absent": true
+        },
+        {
+          "module": "src/b.mjs",
+          "export": "useIt",
+          "args": [],
+          "expected": 42
+        }
+      ]
+    },
+    {
+      "id": "configuration",
+      "split": "development",
+      "family": "configuration",
+      "prompt": "Set the client limit to 25 through its configuration. Preserve the client interface.",
+      "files": {
+        "config.mjs": "export const LIMIT = 10;\n",
+        "src/client.mjs": "import { LIMIT } from '../config.mjs';\nexport const limit = LIMIT;\n"
+      },
+      "editable": [
+        "config.mjs"
+      ],
+      "seeds": [
+        "src/client.mjs"
+      ],
+      "requiredEvidence": [
+        "src/client.mjs",
+        "config.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/client.mjs",
+          "export": "limit",
+          "expected": 25
+        },
+        {
+          "module": "config.mjs",
+          "export": "LIMIT",
+          "expected": 25
+        }
+      ]
+    },
+    {
+      "id": "units",
+      "split": "development",
+      "family": "input-contract",
+      "prompt": "parseUnits(value) must reject blank and negative values with an error containing invalid. Preserve valid numeric conversion.",
+      "files": {
+        "src/units.mjs": "export function parseUnits(value) { return Number(value); }\n"
+      },
+      "editable": [
+        "src/units.mjs"
+      ],
+      "seeds": [
+        "src/units.mjs"
+      ],
+      "requiredEvidence": [
+        "src/units.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/units.mjs",
+          "export": "parseUnits",
+          "args": [
+            "12"
+          ],
+          "expected": 12
+        },
+        {
+          "module": "src/units.mjs",
+          "export": "parseUnits",
+          "args": [
+            ""
+          ],
+          "throws": "invalid"
+        },
+        {
+          "module": "src/units.mjs",
+          "export": "parseUnits",
+          "args": [
+            "-1"
+          ],
+          "throws": "invalid"
+        }
+      ]
+    },
+    {
+      "id": "dirty-import",
+      "split": "development",
+      "family": "dirty-source",
+      "prompt": "The uncommitted caller now uses new.mjs. Make conversion triple its argument. Change the active implementation only.",
+      "files": {
+        "src/a.mjs": "import { convert } from './old.mjs';\nexport function read() { return convert(2); }\n",
+        "src/old.mjs": "export function convert(n) { return n + 1; }\n",
+        "src/new.mjs": "export function convert(n) { return n * 2; }\n"
+      },
+      "editable": [
+        "src/new.mjs"
+      ],
+      "seeds": [
+        "src/a.mjs"
+      ],
+      "requiredEvidence": [
+        "src/a.mjs",
+        "src/new.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/a.mjs",
+          "export": "read",
+          "args": [],
+          "expected": 6
+        },
+        {
+          "module": "src/old.mjs",
+          "export": "convert",
+          "args": [
+            2
+          ],
+          "expected": 3
+        }
+      ],
+      "workingEdits": {
+        "src/a.mjs": "import { convert } from './new.mjs';\nexport function read() { return convert(2); }\n"
+      },
+      "indexBeforeEdits": true
+    },
+    {
+      "id": "new-fee",
+      "split": "held-out",
+      "family": "untracked-source",
+      "prompt": "Implement the new src/fee.mjs helper. fee(n) is two percent with a minimum fee of 1. Preserve total(n).",
+      "files": {
+        "src/use.mjs": "import { fee } from './fee.mjs';\nexport function total(n) { return n + fee(n); }\n"
+      },
+      "editable": [
+        "src/fee.mjs"
+      ],
+      "seeds": [
+        "src/use.mjs",
+        "src/fee.mjs"
+      ],
+      "requiredEvidence": [
+        "src/use.mjs",
+        "src/fee.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/use.mjs",
+          "export": "total",
+          "args": [
+            10
+          ],
+          "expected": 11
+        },
+        {
+          "module": "src/use.mjs",
+          "export": "total",
+          "args": [
+            100
+          ],
+          "expected": 102
+        }
+      ],
+      "newFiles": {
+        "src/fee.mjs": "export function fee(n) { return 0; }\n"
+      }
+    },
+    {
+      "id": "dynamic-consumer",
+      "split": "held-out",
+      "family": "outside-neighborhood",
+      "prompt": "Rename oldValue to currentValue and update every consumer. Preserve publicValue() and the result 7. Remove oldValue.",
+      "files": {
+        "src/service.mjs": "export function oldValue() { return 7; }\n",
+        "client/adapter.mjs": "const route = '../src/' + 'service.mjs';\nexport async function publicValue() { const m = await import(route); return m.oldValue(); }\n"
+      },
+      "editable": [
+        "src/service.mjs",
+        "client/adapter.mjs"
+      ],
+      "seeds": [
+        "src/service.mjs"
+      ],
+      "requiredEvidence": [
+        "src/service.mjs",
+        "client/adapter.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/service.mjs",
+          "export": "currentValue",
+          "args": [],
+          "expected": 7
+        },
+        {
+          "module": "src/service.mjs",
+          "export": "oldValue",
+          "absent": true
+        },
+        {
+          "module": "client/adapter.mjs",
+          "export": "publicValue",
+          "args": [],
+          "expected": 7
+        }
+      ]
+    },
+    {
+      "id": "versioned-contract",
+      "split": "held-out",
+      "family": "document-authority",
+      "prompt": "Implement roundMoney using the current version 2 contract. Preserve both signs. Historical notes do not define current behavior.",
+      "files": {
+        "docs/contract.md": "---\nversion: 2\n---\n# Money\nRound to two decimal places. Round halves away from zero.\n",
+        "docs/history.md": "---\nversion: 1\n---\n# Old behavior\nTruncate money to two decimal places.\n",
+        "src/money.mjs": "export function roundMoney(n) { return Math.trunc(n * 100) / 100; }\n"
+      },
+      "editable": [
+        "src/money.mjs"
+      ],
+      "seeds": [
+        "docs/contract.md",
+        "src/money.mjs"
+      ],
+      "requiredEvidence": [
+        "docs/contract.md",
+        "src/money.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/money.mjs",
+          "export": "roundMoney",
+          "args": [
+            1.235
+          ],
+          "expected": 1.24
+        },
+        {
+          "module": "src/money.mjs",
+          "export": "roundMoney",
+          "args": [
+            -1.235
+          ],
+          "expected": -1.24
+        },
+        {
+          "module": "src/money.mjs",
+          "export": "roundMoney",
+          "args": [
+            0.1
+          ],
+          "expected": 0.1
+        }
+      ]
+    },
+    {
+      "id": "regional-rate",
+      "split": "held-out",
+      "family": "ambiguous-symbol",
+      "prompt": "Update the EU rate to 0.22. Preserve the US rate and order interface.",
+      "files": {
+        "src/order.mjs": "import { rate } from './eu/rate.mjs';\nexport function total(n) { return n * (1 + rate); }\n",
+        "src/eu/rate.mjs": "export const rate = 0.2;\n",
+        "src/us/rate.mjs": "export const rate = 0.1;\n"
+      },
+      "editable": [
+        "src/eu/rate.mjs"
+      ],
+      "seeds": [
+        "src/order.mjs"
+      ],
+      "requiredEvidence": [
+        "src/order.mjs",
+        "src/eu/rate.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/order.mjs",
+          "export": "total",
+          "args": [
+            100
+          ],
+          "expected": 122
+        },
+        {
+          "module": "src/us/rate.mjs",
+          "export": "rate",
+          "expected": 0.1
+        }
+      ]
+    },
+    {
+      "id": "falsey-values",
+      "split": "held-out",
+      "family": "edge-cases",
+      "prompt": "readOrNull(record, key) must preserve false, zero and the empty string. Return null for a missing key.",
+      "files": {
+        "src/cache.mjs": "export function readOrNull(record, key) { return record[key] || null; }\n"
+      },
+      "editable": [
+        "src/cache.mjs"
+      ],
+      "seeds": [
+        "src/cache.mjs"
+      ],
+      "requiredEvidence": [
+        "src/cache.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/cache.mjs",
+          "export": "readOrNull",
+          "args": [
+            {
+              "x": false
+            },
+            "x"
+          ],
+          "expected": false
+        },
+        {
+          "module": "src/cache.mjs",
+          "export": "readOrNull",
+          "args": [
+            {
+              "x": 0
+            },
+            "x"
+          ],
+          "expected": 0
+        },
+        {
+          "module": "src/cache.mjs",
+          "export": "readOrNull",
+          "args": [
+            {
+              "x": ""
+            },
+            "x"
+          ],
+          "expected": ""
+        },
+        {
+          "module": "src/cache.mjs",
+          "export": "readOrNull",
+          "args": [
+            {},
+            "x"
+          ],
+          "expected": null
+        }
+      ]
+    },
+    {
+      "id": "public-validation",
+      "split": "held-out",
+      "family": "unconnected-consumer",
+      "prompt": "Reject blank IDs in normalize with an error containing invalid. Route resolve through normalize. resolve must return status 400 for invalid IDs and status 200 with the normalized key for valid IDs.",
+      "files": {
+        "src/ids.mjs": "export function normalize(id) { return String(id).trim(); }\n",
+        "src/api.mjs": "export function resolve(raw) { return { status: 200, key: raw.trim() }; }\n"
+      },
+      "editable": [
+        "src/ids.mjs",
+        "src/api.mjs"
+      ],
+      "seeds": [
+        "src/ids.mjs"
+      ],
+      "requiredEvidence": [
+        "src/ids.mjs",
+        "src/api.mjs"
+      ],
+      "checks": [
+        {
+          "module": "src/ids.mjs",
+          "export": "normalize",
+          "args": [
+            " "
+          ],
+          "throws": "invalid"
+        },
+        {
+          "module": "src/api.mjs",
+          "export": "resolve",
+          "args": [
+            " "
+          ],
+          "expected": {
+            "status": 400
+          }
+        },
+        {
+          "module": "src/api.mjs",
+          "export": "resolve",
+          "args": [
+            " abc "
+          ],
+          "expected": {
+            "status": 200,
+            "key": "abc"
+          }
+        }
+      ]
+    }
+  ]
+}
