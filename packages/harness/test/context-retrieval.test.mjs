@@ -71,6 +71,15 @@ test('version two cursors reject another query and a changed dirty source genera
   assert.throws(() => f.search({ query: 'item', mode: 'literal', cursor: first.nextCursor, contextVersion: 2 }), error => error.code === 'E_CURSOR_STALE');
 });
 
+test('search supplies the exact excerpt whose representation hash it reports', (t) => {
+  const f = fixture(t);
+  const result = f.search({ query: 'item', mode: 'literal', contextVersion: 2 });
+  const row = result.results.find(row => row.location.startsWith('a.mjs:'));
+  assert.equal(typeof row.excerpt, 'string');
+  assert.equal(row.evidence.representationField, 'excerpt');
+  assert.equal(createHash('sha256').update(row.excerpt).digest('hex'), row.evidence.representationSha256);
+});
+
 test('legacy cursors also refuse a different source generation', () => {
   const source = generation => [{ source: 'code', generation, results: ['a','b'].map(id => createRetrievalResult({ source: 'code', id, score: 1 })) }];
   const first = federate({ sources: source('old'), limit: 1 });

@@ -720,7 +720,8 @@ export function runSearch({
         const location = String(row.location || row.id).replace(/:\d+(?::\d+)?$/, '');
         const offset = Number(/:(\d+)$/.exec(row.location || '')?.[1]) || 1;
         const excerpt = runGet({ workspace, copilotHome, home, flags: { ...(row.source === 'knowledge' ? { docid: row.id } : { path: location }), offset, lines: 5, maxBytes: 800, contextVersion: 2 } });
-        row.evidence = excerpt.evidence;
+        row.excerpt = excerpt.excerpt;
+        row.evidence = { ...excerpt.evidence, representationField: 'excerpt' };
         row.context = excerpt.context;
       } catch {
         row.evidence = { state: 'unavailable', reference: null };
