@@ -87,6 +87,33 @@ test('unchanged external plans reload when legacy realpath spelling differs from
   assert.equal(fs.readFileSync(c.plan, 'utf8'), loaded.text);
 });
 
+test('a remote rename keeps the original plan readable and gateable after explicit adoption', t => {
+  const c = fixture();
+  t.after(() => { for (const dir of [c.ws, c.home]) fs.rmSync(dir, { recursive: true, force: true }); });
+  assert.equal(spawnSync('git', ['remote', 'add', 'origin', 'https://github.com/example/before.git'], { cwd: c.ws }).status, 0);
+  const oldId = repoId(c.ws);
+  const plans = path.join(c.home, 'projects', oldId, 'plans');
+  fs.renameSync(path.dirname(c.plans), path.dirname(plans));
+  fs.renameSync(c.knowledge, path.join(c.home, 'knowledge', oldId));
+  const plan = path.join(plans, path.basename(c.plan)), saved = fs.readFileSync(plan);
+  assert.equal(spawnSync('git', ['remote', 'set-url', 'origin', 'https://github.com/example/after.git'], { cwd: c.ws }).status, 0);
+  assert.notEqual(repoId(c.ws), oldId);
+  const dry = run(c, ['knowledge', 'migrate-store', '--from-id', oldId, '--dry-run']);
+  assert.equal(dry.status, 0, dry.stdout + dry.stderr);
+  assert.equal(JSON.parse(dry.stdout).migrated, false);
+  assert.equal(fs.existsSync(path.join(c.home, 'storage-aliases')), false);
+  const adopted = run(c, ['knowledge', 'migrate-store', '--from-id', oldId]);
+  assert.equal(adopted.status, 0, adopted.stdout + adopted.stderr);
+  assert.equal(externalPlansDir(c.ws, { home: c.home }), plans);
+  assert.ok(loadPlan(c.ws, plan, { home: c.home }));
+  const gate = run(c, ['gate', '--plan', plan, '--phase', 'implement', '--allow-inplace']);
+  assert.equal(gate.status, 0, gate.stdout + gate.stderr);
+  assert.deepEqual(fs.readFileSync(plan), saved);
+  const replay = run(c, ['knowledge', 'migrate-store', '--from-id', oldId]);
+  assert.equal(replay.status, 0, replay.stdout + replay.stderr);
+  assert.equal(JSON.parse(replay.stdout).unchanged, true);
+});
+
 test('migrate-store adopts old local knowledge and plans without an origin or moving their bytes', () => {
   const c = fixture();
   const saved = fs.readFileSync(c.plan);

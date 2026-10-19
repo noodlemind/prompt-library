@@ -1,8 +1,8 @@
 {
   "name": "ae-copilot-bridge",
   "displayName": "AE Copilot Bridge",
-  "description": "Routes Harness model discovery and requests through the signed-in VS Code language model API.",
-  "version": "0.1.1",
+  "description": "Routes Adaptive Engineering model discovery and requests through the signed-in VS Code language model API.",
+  "version": "0.2.0",
   "publisher": "harness",
   "license": "UNLICENSED",
   "engines": {

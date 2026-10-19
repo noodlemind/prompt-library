@@ -10,6 +10,8 @@ Developers use Copilot **`@engineer`**. The kernel never starts an LLM on the ho
 
 ## Install
 
+Before the first registry publication, install from the source checkout or a qualified archive. The package workflow produces candidate archives; publication is an owner action.
+
 ```bash
 npm install -g ae-harness@latest
 # local monorepo:
