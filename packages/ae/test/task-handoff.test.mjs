@@ -3,12 +3,67 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { makeScopes, writeVersionedPlan, initGit } from './helpers/index.mjs';
-import { writeSession } from '../lib/session.mjs';
+import { writeSession, readSession } from '../lib/session.mjs';
 import { runGet } from '../lib/get-cmd.mjs';
 import { compactMessages } from '../lib/agent-loop.mjs';
 import { buildTaskHandoff, validateContextSnapshot } from '../lib/task-handoff.mjs';
 import { policyDigest } from '../lib/trust.mjs';
 import { captureWorkingSources } from '../lib/repo-map/working-sources.mjs';
+import { readOrientSlice } from '../lib/orient-read.mjs';
+import { inspectSourceFile, MAX_FILE_BYTES } from '../lib/repo-map/scan.mjs';
+import { DEFAULT_MAX_BYTES } from '../lib/fs-safe.mjs';
+
+test('fresh explicit task evidence permits large text edits without expanding extraction', t => {
+  const { workspace, copilotHome } = makeScopes();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  const file = path.join(workspace, 'large.mjs');
+  const content = `export const item = 1;\n${' '.repeat(MAX_FILE_BYTES)}`;
+  fs.writeFileSync(file, content);
+  initGit(workspace);
+  const refresh = () => readOrientSlice({ workspace, copilotHome, flags: { contextVersion: 2 }, query: 'Update the large task file', files: ['large.mjs'] });
+  const validate = () => validateContextSnapshot({ workspace, snapshot: readSession(workspace).contextSnapshot, targets: ['large.mjs'] });
+  const first = refresh();
+  assert.equal(inspectSourceFile(workspace, 'large.mjs').state, 'oversized');
+  assert.equal(first.evidence[0].sha256, runGet({ workspace, copilotHome, flags: { path: 'large.mjs' } }).sha256);
+  assert.equal(validate().pass, true);
+  assert.equal(buildTaskHandoff({ workspace }).evidence[0].state, 'current');
+  fs.writeFileSync(file, content.replace('item = 1', 'item = 2'));
+  assert.equal(validate().pass, false);
+  assert.equal(buildTaskHandoff({ workspace }).evidence[0].state, 'changed');
+  assert.notEqual(refresh().evidence[0].sha256, first.evidence[0].sha256);
+  assert.equal(validate().pass, true);
+});
+
+test('explicit task evidence retains the file read size limit', t => {
+  const { workspace, copilotHome } = makeScopes();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  const file = path.join(workspace, 'oversized.mjs');
+  fs.writeFileSync(file, '');
+  fs.truncateSync(file, DEFAULT_MAX_BYTES + 1);
+  initGit(workspace);
+  const result = readOrientSlice({ workspace, copilotHome, flags: { contextVersion: 2 }, query: 'Update the oversized task file', files: ['oversized.mjs'] });
+  assert.equal(result.evidence[0].state, 'oversized');
+  assert.equal(result.evidence[0].sha256, null);
+  assert.equal(validateContextSnapshot({ workspace, snapshot: readSession(workspace).contextSnapshot, targets: ['oversized.mjs'] }).pass, false);
+  assert.throws(() => runGet({ workspace, copilotHome, flags: { path: 'oversized.mjs' } }), /file not found/);
+});
+
+test('equivalent relative and absolute edit targets share current evidence', t => {
+  const { workspace, copilotHome } = makeScopes();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, 'a.mjs'), 'export const item = 1;');
+  initGit(workspace);
+  readOrientSlice({ workspace, copilotHome, flags: { contextVersion: 2 }, query: 'Update the item', files: ['./a.mjs'] });
+  const snapshot = readSession(workspace).contextSnapshot;
+  const targets = ['a.mjs', './a.mjs', 'sub/../a.mjs', path.join(workspace, 'a.mjs')];
+  for (const target of targets) assert.equal(validateContextSnapshot({ workspace, snapshot, targets: [target] }).pass, true, target);
+  assert.equal(validateContextSnapshot({ workspace, snapshot, targets: ['../a.mjs'] }).pass, false);
+  fs.writeFileSync(path.join(workspace, 'a.mjs'), 'export const item = 2;');
+  for (const target of targets) assert.equal(validateContextSnapshot({ workspace, snapshot, targets: [target] }).pass, false, target);
+});
 
 test('handoff reloads the plan and marks changed evidence for refresh', (t) => {
   const { workspace, copilotHome } = makeScopes();
