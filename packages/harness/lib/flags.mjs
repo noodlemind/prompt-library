@@ -69,6 +69,7 @@ export function parseFlags(argv) {
     workspace: process.cwd(),
     query: null,
     files: null,
+    contextVersion: 1,
     explain: false,
     read: false,
     phase: 'implement',
@@ -139,6 +140,8 @@ export function parseFlags(argv) {
     else if (a === '--learning-decision') flags.learningDecision = scan[++i];
     else if (a === '--explain') flags.explain = true;
     else if (a === '--read') flags.read = true;
+    else if (a === '--context-version') flags.contextVersion = Number(scan[++i]);
+    else if (a.startsWith('--context-version=')) flags.contextVersion = Number(a.slice('--context-version='.length));
     else if (a === '--refresh') flags.refresh = true;
     else if (a === '--semantic') flags.semantic = true;
     else if (a === '--include-plans') flags.includePlans = true;

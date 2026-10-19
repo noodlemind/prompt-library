@@ -1,20 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { planStateFacts, reviewCoverageFacts } from './report-facts.mjs';
-import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
-import { runGate } from './gate.mjs';
+import { planStateFacts } from './report-facts.mjs';
+import { rankRecall } from './recall-rank.mjs';
 import { buildContextPack, learningsSectionBytes } from './context-pack.mjs';
 import { buildPlanView } from './plan-view.mjs';
-import { buildNeighborhood, buildRepoMap } from './repo-map/index.mjs';
-import { indexStatus } from './index-status.mjs';
-import { parseImpactedFiles } from './plan-scope.mjs';
-import { discoverInventory, routingCards, routingReadPointers, primitiveReadRoots } from './route.mjs';
-import { extractGoalFromPlan } from './plan-goal.mjs';
-import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
-import { pickActivePlan, listPlanRels, loadPlan } from './plan-parse.mjs';
+import { buildRepoMap } from './repo-map/index.mjs';
+import { ensureHarnessDir, writeSession } from './session.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
-import { rankLearnings, explainLearnings } from './knowledge/retrieve.mjs';
-import { readStoreConfig, storeDir } from './knowledge/store.mjs';
+import { explainLearnings } from './knowledge/retrieve.mjs';
+import { storeDir } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
@@ -22,7 +16,8 @@ import { inertLine } from './knowledge/store.mjs';
 import { resolveObligation } from './intent-sources.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
-import { trustStatus } from './trust.mjs';
+import { collectOrientationFacts } from './orientation-facts.mjs';
+import { buildContextRecord } from './context-record.mjs';
 
 const ORIENT_BRANCH_CAP = 80;
 function jsonGitContext(gitContext) {
@@ -34,13 +29,6 @@ function jsonGitContext(gitContext) {
     headSha: gitContext.headSha,
     baseSha: gitContext.baseSha,
   };
-}
-
-function indexPlane(plane) {
-  if (!plane?.indexed) return 'missing';
-  if (plane.unreadable?.length) return 'unreadable';
-  if (plane.stale) return 'stale';
-  return 'current';
 }
 
 export function runOrient({ workspace, copilotHome, flags, query, files }) {
@@ -57,6 +45,9 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }
 
   const home = flags.harnessHome || flags.home;
+  const facts = collectOrientationFacts({ workspace, copilotHome, flags, query: q, files });
+  const { active, session, namedFiles, gate: gatePreview, routingLines, status } = facts;
+  const { planGoal, learnings, trust, reviewCoverage, index, skills, instructions, contacts, neighborhood } = facts.slice;
   const recall = rankRecall(q, {
     copilotHome,
     workspace,
@@ -78,16 +69,13 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   const planFacts = planStateFacts(workspace);
   const planTotal = planFacts.total;
-  const plans = findMatchingPlans(workspace, q, flags.limit || 3).map((p) => ({
+  const plans = facts.matches.map((p) => ({
     path: p.path,
     status: p.status,
     plan_lock: p.plan_lock,
     score: Number(p.score.toFixed(3)),
   }));
 
-  const session = readSession(workspace) || {};
-  const active = flags.plan ? loadPlan(workspace, flags.plan) : pickActivePlan(workspace, session, plans, listPlanRels(workspace));
-  const planGoal = active ? extractGoalFromPlan(active) : null;
   const planView = active ? buildPlanView(active) : null;
 
   let memoryExcerpt = '';
@@ -100,39 +88,12 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
       .join('\n');
   }
 
-  const gatePreview = runGate({
-    workspace,
-    flags: { ...flags, phase: 'implement' },
-    query: q,
-  });
-
-  const suppliedFiles = Array.isArray(files) ? files : flags.files;
-  const namedFiles = suppliedFiles?.length ? suppliedFiles : active ? parseImpactedFiles(active) : session.files || [];
-
-    let learnings = [];
-  let explain = null;
-  try {
-    const { mode } = readStoreConfig(workspace, {});
-    if (mode !== 'off' && mode !== 'capture-only') {
-      learnings = rankLearnings({
-        workspace,
-        query: q,
-        limit: 3,
-        ...(Array.isArray(namedFiles) && namedFiles.length ? { signals: namedFiles } : {}),
-      });
-      if (flags.explain) {
-        explain = explainLearnings({ workspace, query: q });
-      }
-    }
-  } catch {
-    learnings = [];
-    explain = null;
-  }
+  const explain = flags.explain ? explainLearnings({ workspace, query: q, home }) : null;
 
     let repoMapRef = null;
   try {
     const repoMapRel = '.harness/repo-map.md';
-    const repoMap = buildRepoMap({ workspace, query: q });
+    const repoMap = buildRepoMap({ workspace, query: q, home });
     if (!repoMap.empty) {
       if (!flags.dryRun) fs.writeFileSync(path.join(workspace, repoMapRel), repoMap.body, 'utf8');
       repoMapRef = { path: repoMapRel, files: repoMap.files.length, totalFiles: repoMap.totalFiles };
@@ -144,7 +105,6 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   const nextTools = gatePreview.pass
     ? ['harness gate --phase implement', 'read plan ## Impacted Files', `harness review prepare --plan ${active?.path || '<path>'}`, 'harness verify', `harness compound --plan ${active?.path || '<path>'} --learning-decision <file>`, `harness plan-update --plan ${active?.path || '<path>'} --file <complete-decision.json>`]
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
-  const trust = trustStatus({ workspace, copilotHome, home });
   if (!trust.trusted) nextTools.push('harness trust status  # a person must approve policy before named checks run');
 
   const obligation = resolveObligation(workspace, active, q);
@@ -156,20 +116,9 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
   if (!intentSources.length) nextTools.push(prepareNextTool(workspace));
 
-  let index = { knowledge: 'missing', structural: 'missing' };
-    try {
-    const status = indexStatus({ workspace, copilotHome, home });
-    index = {
-      knowledge: indexPlane(status.knowledge),
-      structural: indexPlane(status.structural),
-    };
-    if (status.stale) nextTools.push('harness index  # knowledge index is behind HEAD');
-    if (status.structural && !status.structural.indexed) nextTools.push('harness index  # code index is not built');
-    else if (status.structural?.unreadable?.length) nextTools.push('harness index  # code index is unreadable');
-    else if (status.structural?.stale) nextTools.push('harness index  # code index is behind HEAD');
-  } catch {
-    // Staleness is advisory; never block orientation on it.
-  }
+  if (status?.stale) nextTools.push('harness index  # knowledge index is behind HEAD');
+  if (status?.structural?.unreadable?.length) nextTools.push('harness index --structural  # code index is unreadable');
+  else if (!status?.structural?.indexed || status.structural.stale) nextTools.push('harness index --structural  # refresh current code facts');
 
     let knowledgeDebt = null;
   try {
@@ -186,33 +135,12 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     // Advisory; never block orientation on it.
   }
 
-  let routingLines = null;
-  let skills = [];
-  let instructions = [];
-  let contacts = [];
-  if (active?.fm?.routing) {
-    const inventory = discoverInventory(primitiveReadRoots(copilotHome));
-    routingLines = routingReadPointers(active.fm.routing, inventory);
-    ({ skills, instructions, contacts } = routingCards(active.fm.routing, inventory));
-    if (gatePreview.pass) {
-      for (const line of routingLines) {
-        if (line.startsWith('read ')) nextTools.push(line);
-      }
-      const javaFile = parseImpactedFiles(active).find((rel) => rel.endsWith('.java'));
-      if (javaFile) nextTools.push(`read ${javaFile}`);
-    }
+  if (gatePreview.pass && routingLines) {
+    for (const line of routingLines) if (line.startsWith('read ')) nextTools.push(line);
+    const javaFile = namedFiles.find(rel => rel.endsWith('.java'));
+    if (javaFile) nextTools.push(`read ${javaFile}`);
   }
 
-  let neighborhood = null;
-  if (Array.isArray(namedFiles) && namedFiles.length) {
-    try {
-      neighborhood = buildNeighborhood({ workspace, files: namedFiles });
-    } catch {
-      // Neighborhood is advisory context; never fail orientation on it.
-    }
-  }
-
-  const reviewCoverage = reviewCoverageFacts({ workspace, plan: active, copilotHome });
   const packBody = buildContextPack({
     reviewCoverage,
     trust,
@@ -256,6 +184,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     lastQuery: q,
     lastOrientAt: new Date().toISOString(),
     activePlan: active?.path || null,
+    lastContextFiles: namedFiles,
     contextPack: packRel,
     gateStatus: gatePreview.pass ? 'pass' : 'blocked',
     blockedReason: gatePreview.blockedReason,
@@ -308,6 +237,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     instructions,
     contacts,
     index,
+    ...(flags.contextVersion === 2 ? { context: buildContextRecord({ workspace, flags, query: q, facts }) } : {}),
   };
 }
 

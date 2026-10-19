@@ -43,11 +43,13 @@ function fileFacts(workspace, rels, home) {
   const facts = new Map();
   for (const rel of rels) {
     const pre = structural?.[rel];
-    const extracted = pre || lexicalExtract(rel, readFileSafe(workspace, rel));
+    const input = pre ? null : readSourceFile(workspace, rel);
+    const extracted = pre || lexicalExtract(rel, input.content || '');
     facts.set(rel, {
       rel,
       symbols: Array.isArray(extracted.symbols) ? extracted.symbols : [],
       imports: Array.isArray(extracted.imports) ? extracted.imports : [],
+      sha256: pre?.hash || input?.hash || null,
     });
   }
   return facts;
@@ -190,14 +192,14 @@ function trackedSourceForNeighborhood(sourceFiles, maxFiles, required) {
   return chosen;
 }
 
-export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract, title = 'Repo Map', preferStructural = true } = {}) {
+export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract, title = 'Repo Map', preferStructural = true, home } = {}) {
   const { files, total } = trackedSourceFiles(workspace);
   if (!files.length) return { files: [], body: '', tokens: 0, empty: true };
 
     let structural = null;
   if (preferStructural) {
     try {
-      structural = readStructuralIndexIfCurrent(workspace);
+      structural = readStructuralIndexIfCurrent(workspace, { home });
     } catch {
       structural = null;
     }
@@ -256,7 +258,7 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   return { files: selected, body, tokens: estimateTokens(body), empty: false, totalFiles: total, structural: Boolean(structural) };
 }
 
-export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_SCANNED, home } = {}) {
+export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_SCANNED, home, includeEvidence = false } = {}) {
   const requested = Array.isArray(files) ? files : [files];
   const normalized = requested.map((raw) => ({ raw, rel: requestRel(workspace, raw) }));
   const trackedAll = listTracked(workspace);
@@ -335,6 +337,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
     symbols: facts.get(rel).symbols,
     imports: facts.get(rel).imports,
     importedBy: [...(incoming.get(rel) || [])].sort(compareRel),
+    ...(includeEvidence ? { sha256: facts.get(rel).sha256 } : {}),
   }));
   for (const rel of plain) {
     filesOut.push({ rel, symbols: [], imports: [], importedBy: [] });

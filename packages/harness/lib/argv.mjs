@@ -17,6 +17,7 @@ const FLAGS_WITH_VALUES = new Set([
     '--match',
   '--source',
   '--cursor',
+  '--context-version',
   '--depth',
   '--file',
   '--adapter',
