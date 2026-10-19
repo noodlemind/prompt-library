@@ -66,6 +66,17 @@ test('policy changes during context assembly invalidate the record', (t) => {
   assert.equal(result.coverage.sourceState, 'changed-or-unavailable');
 });
 
+test('an oversized version two response returns a bounded read barrier', (t) => {
+  const f = fixture(t);
+  const facts = collectOrientationFacts({ workspace: f.workspace, copilotHome: f.copilotHome, flags: { contextVersion: 2 }, files: ['a.mjs'] });
+  facts.slice.planGoal = { intent: 'Preserve every accepted constraint', constraints: ['Never discard a constraint. '.repeat(4000)] };
+  const result = buildContextRecord({ workspace: f.workspace, facts });
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 32768);
+  assert.equal(result.coverage.renderBarrier, true);
+  assert.equal(result.slice, null);
+  assert.match(result.expansion.reason, /read.*plan|task.*contract/i);
+});
+
 test('bare version two expansion restores selected files and accepts the equals spelling', (t) => {
   const f = fixture(t);
   f.invoke('--file', path.join(f.workspace, 'a.mjs'), '--query', 'alpha');

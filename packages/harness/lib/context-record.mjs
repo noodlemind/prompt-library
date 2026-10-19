@@ -8,6 +8,7 @@ import { accountContext } from './token-meter.mjs';
 import { policyDigest } from './trust.mjs';
 
 const EVIDENCE_LIMIT = 80;
+const MAX_RECORD_BYTES = 32768;
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
 export function buildContextRecord({ workspace, flags = {}, query = '', facts }) {
@@ -41,15 +42,18 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
     (record.sha256 && readSourceFile(workspace, record.location).hash !== record.sha256) ||
     (factHashes.has(record.location) && factHashes.get(record.location) !== record.sha256)));
   const stableFacts = { ...facts.slice, trust: { state: facts.slice.trust.state, digest: facts.slice.trust.digest } };
-  return {
+  const record = {
     ...identity,
     contextId: digest(JSON.stringify({ ...identity, facts: stableFacts })),
     slice: facts.slice,
     coverage: {
       sourceState: changed ? 'changed-or-unavailable' : 'validated',
+      validationReason: !snapshot.valid ? snapshot.reason : !after.valid ? after.reason : changed ? 'Source, task or policy changed during assembly.' : null,
       semanticCompleteness: 'unverified',
+      maxBytes: MAX_RECORD_BYTES,
+      renderBarrier: false,
       failures: facts.failures,
-      scan: { maxFiles: MAX_FILES_SCANNED, maxFileBytes: MAX_FILE_BYTES, total: snapshot.state?.total ?? null, truncated: snapshot.state?.truncated ?? null },
+      scan: { maxFiles: MAX_FILES_SCANNED, maxFileBytes: MAX_FILE_BYTES, total: snapshot.state?.total ?? null, truncated: snapshot.state?.truncated ?? null, resolverFiles: snapshot.state?.resolverFiles ?? null, resolverTruncated: snapshot.state?.resolverTruncated ?? null },
       evidenceOmitted: Math.max(0, paths.length - EVIDENCE_LIMIT),
       unavailable: evidence.filter((record) => record.state !== 'readable'),
       scanOmissions: snapshot.state?.omitted || [],
@@ -58,4 +62,16 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
     expansion: { command: 'harness orient --read --context-version 2', sourceChanged: changed },
     accounting: accountContext({ boundary: 'orientation-output', components: [{ category: 'evidence', id: 'orientation-facts', content: facts.slice }] }),
   };
+  if (Buffer.byteLength(JSON.stringify(record)) <= MAX_RECORD_BYTES) return record;
+  const barrier = {
+    schema: record.schema, contextId: record.contextId, worktree: record.worktree,
+    task: record.task, policyDigest: record.policyDigest,
+    selection: { queryHash: identity.selection.queryHash, filesHash: digest(JSON.stringify(facts.namedFiles)), fileCount: facts.namedFiles.length },
+    sourceState: snapshot.state ? { version: snapshot.state.version, digest: snapshot.state.digest, extractorRevision: snapshot.state.extractorRevision, configDigest: snapshot.state.configDigest } : null,
+    evidence: [], slice: null,
+    coverage: { sourceState: record.coverage.sourceState, validationReason: record.coverage.validationReason, semanticCompleteness: 'unverified', maxBytes: MAX_RECORD_BYTES, renderBarrier: true, evidenceOmitted: paths.length },
+    expansion: { command: 'harness orient --read --context-version 2', reason: 'Read the source plan or task contract, then request a smaller explicit file batch. This response contains no partial editing context.' },
+  };
+  barrier.accounting = accountContext({ boundary: 'orientation-output', components: [{ category: 'evidence', id: 'orientation-barrier', content: barrier }] });
+  return barrier;
 }

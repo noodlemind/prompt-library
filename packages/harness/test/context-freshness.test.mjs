@@ -10,6 +10,8 @@ import { readStructuralIndex } from '../lib/structural/shape.mjs';
 import { structuralIndexStatus } from '../lib/index-status.mjs';
 import { buildNeighborhood } from '../lib/repo-map/index.mjs';
 import { runSearch } from '../lib/retrieval/search.mjs';
+import { captureWorkingSources } from '../lib/repo-map/working-sources.mjs';
+import { MAX_FILES_SCANNED } from '../lib/repo-map/scan.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'context-freshness-'));
@@ -52,6 +54,19 @@ test('dirty bytes invalidate current readers, status and symbol search while his
   assert.match(result.sources[0].reason, /stale|changed/i);
   const neighborhood = buildNeighborhood({ workspace: f.workspace, home: f.home, files: ['a.mjs'] });
   assert.deepEqual(neighborhood.files.map((file) => file.rel), ['a.mjs', 'c.mjs']);
+});
+
+test('resolver files beyond the scan budget cannot be reported as validated', (t) => {
+  const f = fixture(t);
+  for (let i = 0; i <= MAX_FILES_SCANNED; i++) {
+    fs.mkdirSync(path.join(f.workspace, `module-${i}`));
+    f.write(`module-${i}/package.json`, '{}');
+  }
+  f.git('add', '.');
+  const snapshot = captureWorkingSources(f.workspace);
+  assert.equal(snapshot.valid, false);
+  assert.match(snapshot.reason, /resolver.*budget/i);
+  assert.ok(Object.keys(snapshot.entries).length <= MAX_FILES_SCANNED + snapshot.files.length);
 });
 
 test('an incremental rebuild hashes bytes even when size and timestamp are restored', async (t) => {

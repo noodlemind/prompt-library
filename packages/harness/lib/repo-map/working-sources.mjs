@@ -38,13 +38,16 @@ export function captureWorkingSources(workspace) {
   const sourcePaths = paths.filter((rel) => SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase()));
   const selected = sourcePaths.slice(0, MAX_FILES_SCANNED);
   const configs = paths.filter((rel) => RESOLVER_FILE.test(path.posix.basename(rel)));
-  const entries = Object.fromEntries([...new Set([...selected, ...configs])].map((rel) => {
+  const selectedConfigs = configs.slice(0, MAX_FILES_SCANNED);
+  const configSet = new Set(configs);
+  const entries = Object.fromEntries([...new Set([...selected, ...selectedConfigs])].map((rel) => {
     const { content, mtime, ...identity } = readSourceFile(workspace, rel);
     return [rel, identity];
   }));
   const identities = Object.entries(entries).map(([rel, { state, hash, size }]) => [rel, state, hash || null, size ?? null]);
   return {
-    valid: true,
+    valid: configs.length <= MAX_FILES_SCANNED,
+    reason: configs.length > MAX_FILES_SCANNED ? 'resolver files exceed the source scan budget' : null,
     head: head.stdout.trim(),
     files: selected,
     entries,
@@ -52,10 +55,12 @@ export function captureWorkingSources(workspace) {
       version: SOURCE_STATE_VERSION,
       digest: digest(JSON.stringify([SOURCE_STATE_VERSION, EXTRACTOR_REVISION, head.stdout.trim(), sourcePaths, configs, identities])),
       extractorRevision: EXTRACTOR_REVISION,
-      configDigest: digest(JSON.stringify(identities.filter(([rel]) => configs.includes(rel)))),
+      configDigest: digest(JSON.stringify(identities.filter(([rel]) => configSet.has(rel)))),
       scanned: selected.length,
       total: sourcePaths.length,
       truncated: sourcePaths.length > selected.length,
+      resolverFiles: configs.length,
+      resolverTruncated: configs.length > selectedConfigs.length,
       omitted: Object.entries(entries).filter(([, entry]) => entry.state !== 'readable').map(([rel, entry]) => ({ rel, state: entry.state })),
     },
   };
