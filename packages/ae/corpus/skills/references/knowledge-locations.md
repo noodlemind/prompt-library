@@ -28,4 +28,4 @@ The Copilot home defaults to `~/.copilot`. `--copilot-home` replaces it for one 
 | New personal skill, agent, or instruction | `ae resources create skill <name>` (also `agent` and `instruction`) |
 | Skill, agent, or instruction for every install | commit under `packages/ae/corpus/skills/`, `packages/ae/corpus/agents/`, or `packages/ae/corpus/instructions/` |
 
-The Harness store root defaults to `~/.ae`. `--ae-home` overrides it for one command and wins over `AE_HOME`. Use CLI-returned paths and `/recall` rather than reconstructing repository IDs or writing managed plans directly.
+A fresh store defaults to `~/.ae`. If `~/.harness` contains records and `~/.ae` does not, the CLI and hooks keep using the legacy root. If both contain records, select a home explicitly; no merge is inferred. The paths above describe a fresh installation. `--ae-home` overrides it for one command and wins over `AE_HOME`. Use CLI-returned paths and `/recall` rather than reconstructing repository IDs or writing managed plans directly.

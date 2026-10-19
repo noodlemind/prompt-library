@@ -24,7 +24,7 @@ After `ae install`, use the **global** command from any repo:
 ae orient --query "..." --workspace . --json
 ```
 
-Not on PATH? `node ~/.copilot/bin/harness …` or `ae install --configure-path`.
+Not on PATH? `node ~/.copilot/bin/ae …` or `ae install --configure-path`.
 
 ## Operating Rules
 

@@ -1,6 +1,6 @@
 # Harness Tool Contract
 
-**SSOT** for ae agent-runtime commands. Skills and `@engineer` **call harness**; harness does not invoke skills. `harness` is the npm package name and the command name.
+**SSOT** for ae agent-runtime commands. Skills and `@engineer` **call ae**; harness does not invoke skills. `ae-harness` is the npm package; `ae` is the command.
 
 Budget: [`context-budget.md`](context-budget.md)
 
@@ -8,7 +8,7 @@ Budget: [`context-budget.md`](context-budget.md)
 
 | Tier | Location | Use when |
 |------|----------|----------|
-| **A — Harness CLI** | `harness` command from the `harness` npm package or local clone | Same behavior needed across product repos (recall, gate, index, compound, validate-plan) |
+| **A — Harness CLI** | `ae` command from the `ae-harness` npm package or local clone | Same behavior needed across product repos (recall, gate, index, compound, validate-plan) |
 | **B — Skill-local scripts** | `packages/ae/corpus/skills/<name>/scripts/` | Narrow, read-only validators for one skill only — **exception**, not default |
 
 **Rule:** Cross-repo → harness command. Product-only → product check or script.
@@ -20,10 +20,10 @@ Budget: [`context-budget.md`](context-budget.md)
 **Primary** — global CLI (after `ae install`):
 
 ```bash
-harness <command> [args] --workspace . --json
+ae <command> [args] --workspace . --json
 ```
 
-Installed to `~/.copilot/bin/harness` on every `ae install`. Add to PATH with `ae install --configure-path`, or invoke as `node ~/.copilot/bin/harness …` from any directory.
+Installed to `~/.copilot/bin/ae` on every `ae install`. Add to PATH with `ae install --configure-path`, or invoke as `node ~/.copilot/bin/ae …` from any directory.
 
 **Install paths (all produce the same global CLI):**
 
@@ -35,7 +35,7 @@ Installed to `~/.copilot/bin/harness` on every `ae install`. Add to PATH with `a
 **Per-repo bootstrap:** `ae init-repo` creates `.harness/run.mjs` (delegates to global harness + sets `--workspace`).
 
 - Pin version in product repos: `devDependencies`, a globally installed package, or `.harness-version` (see harness README).
-- If `harness` is not on `PATH`, install from the registry with `npm install -g ae-harness@latest`, then `ae install --configure-path`.
+- If `ae` is not on `PATH`, install from the registry with `npm install -g ae-harness@latest`, then `ae install --configure-path`.
 - Do not use `npx ae-harness` in agent runtime instructions; reserve `npx` for one-off bootstrap or pinned CI when a registry package is available.
 - **Read** `.harness/context-pack.md` after `orient` — do not paste full CLI stdout into chat.
 - Developers use Copilot agents/skills; they do not prompt the CLI directly.
@@ -86,7 +86,7 @@ This table tracks only what differs in runtime character across commands — whi
 
 ¹ `init-repo`/`recall`/`validate-plan`/`index` historically called `writeEvent` (types `init_repo`/`recall`/`validate_plan`/`index`) while those four type strings were absent from the `EVENT_TYPES` allow-list (`events.mjs`), so the calls silently no-opped. The allow-list now includes all four (harness evolution Phase 1 hygiene) — the events record in `events.jsonl` like every other lifecycle write, in ADDITION to the dispatch-level bracketing of footnote ².
 
-² **Every registered command dispatch (P1.6, `lib/registry.mjs`) is bracketed with `command.start`/`command.result` telemetry, independent of the domain-specific "Events" column above** — this is a dispatch-pipeline concern, not a per-command opt-in, so it applies uniformly regardless of whether that column says "writes" or "none". Two commands opt out — `events` and `report`, the two that read `events.jsonl` themselves (footnote ³). A real, observable side effect: running any instrumented registered `harness` command — every one except the two that opt out above — including ones whose Events column says "none", like `get`, `learnings`, or `eval-knowledge` — creates/appends `.harness/events.jsonl` under whatever `--workspace` resolves to (default: the current directory), in ANY cwd, even one with no other `.harness/` state. Opt out with `--no-events`, `--dry-run`, or `HARNESS_NO_EVENTS=1` (all three short-circuit `lib/events.mjs#writeEvent` before anything is written, for both the domain-specific events above and this dispatch-level bracketing).
+² **Every registered command dispatch (P1.6, `lib/registry.mjs`) is bracketed with `command.start`/`command.result` telemetry, independent of the domain-specific "Events" column above** — this is a dispatch-pipeline concern, not a per-command opt-in, so it applies uniformly regardless of whether that column says "writes" or "none". Two commands opt out — `events` and `report`, the two that read `events.jsonl` themselves (footnote ³). A real, observable side effect: running any instrumented registered `ae` command — every one except the two that opt out above — including ones whose Events column says "none", like `get`, `learnings`, or `eval-knowledge` — creates/appends `.harness/events.jsonl` under whatever `--workspace` resolves to (default: the current directory), in ANY cwd, even one with no other `.harness/` state. Opt out with `--no-events`, `--dry-run`, or `HARNESS_NO_EVENTS=1` (all three short-circuit `lib/events.mjs#writeEvent` before anything is written, for both the domain-specific events above and this dispatch-level bracketing).
 
 ³ `events` and `report` are the two commands excluded from footnote ² (`entry.instrument === false`, `lib/registry.mjs`) — neither emits `command.start`/`command.result` for its own dispatch. For `events`, its own handler's job is reading and summarizing everything already in `events.jsonl`, so bracketing its own dispatch would append that very invocation's own `command.start` to the file an instant before the handler reads it back — a self-referential read-your-own-write that would inflate `ae events`'s own totals on every call. `report` opts out for the same reason (it reads `events.jsonl` via `loadReportEvents`, and `--sync` would copy the phantom row into the global store).
 

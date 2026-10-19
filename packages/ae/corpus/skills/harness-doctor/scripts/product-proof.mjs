@@ -31,6 +31,7 @@ function main() {
   const selectedHome = flags['--ae-home'] || flags['--harness-home'];
   if (selectedHome) env.AE_HOME = env.HARNESS_HOME = path.resolve(selectedHome);
   delete env.HARNESS_BIN;
+  delete env.AE_BIN;
   const observations = [];
   const run = (family, args = [], input) => {
     const result = spawnSync(process.execPath, family === 'Stop' ? [hook] : [bin, family, ...args, '--workspace', workspace, '--copilot-home', copilotHome, '--json', ...(flags['--harness-home'] ? ['--harness-home', env.HARNESS_HOME] : [])], { cwd: workspace, env, input, encoding: 'utf8', timeout: 120000, maxBuffer: 1024 * 1024 });

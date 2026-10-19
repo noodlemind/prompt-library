@@ -52,7 +52,7 @@ test('installed product proof entry rejects placeholders and proves broken/fixed
   f.hook('record-successful-edit.mjs', { tool_name: 'replace_string_in_file', tool_input: { filePath: 'src/example.js' }, tool_response: 'File edited successfully' });
   const map = '.harness/product-flow.json';
   fs.writeFileSync(path.join(f.ws, map), JSON.stringify({ schema: 1, product: 'TODO', environment: 'Disposable fixture', flow: { id: 'return-two', acceptance: 'The exported value is two.', checks: ['behavior'] } }));
-  const proof = (stage, cwd = f.ws, home = f.home) => f.receipt('product-proof', [stage], spawnSync(process.execPath, [script, '--workspace', f.ws, '--copilot-home', f.copilot, '--harness-home', home, '--plan', plan, '--map', map, '--stage', stage], { cwd, encoding: 'utf8', timeout: 120000, env: { ...f.env, HARNESS_HOME: path.join(f.home, 'wrong-store') } }));
+  const proof = (stage, cwd = f.ws, home = f.home) => f.receipt('product-proof', [stage], spawnSync(process.execPath, [script, '--workspace', f.ws, '--copilot-home', f.copilot, '--harness-home', home, '--plan', plan, '--map', map, '--stage', stage], { cwd, encoding: 'utf8', timeout: 120000, env: { ...f.env, AE_BIN: path.join(f.home, 'wrong-bin.mjs'), HARNESS_HOME: path.join(f.home, 'wrong-store') } }));
   assert.notEqual(proof('broken').status, 0, 'a placeholder map never proves a product');
   fs.writeFileSync(path.join(f.ws, map), JSON.stringify({ schema: 1, product: 'Synthetic export fixture', environment: 'Disposable fixture', flow: { id: 'return-two', acceptance: 'The exported value is two.', checks: ['behavior'] } }));
   const broken = proof('broken');

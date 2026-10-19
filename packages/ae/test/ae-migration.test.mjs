@@ -92,6 +92,10 @@ test('the public Engineer keeps its identity and invokes ae', () => {
   assert.match(agent, /ae orient --read/);
   assert.match(agent, /agent: engineer/);
   assert.equal(fs.existsSync(path.join(root, 'corpus/agents/ae.agent.md')), false);
+  const contract = fs.readFileSync(path.join(root, 'corpus/skills/references/harness-tool-contract.md'), 'utf8');
+  assert.match(contract, /^ae <command> /m);
+  assert.doesNotMatch(contract, /~\/\.copilot\/bin\/harness/);
+  assert.match(contract, /`ae-harness`.*npm package/);
 });
 
 test('conflicting home settings produce explicit hook denials', () => {

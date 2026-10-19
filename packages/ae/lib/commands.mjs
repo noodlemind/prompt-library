@@ -421,7 +421,7 @@ export async function cmdMigrate(argv) {
     const result = migrateHome({ from: flags.fromHome, to: flags.home, dryRun: flags.dryRun });
     if (flags.json) emitJson(flags, result);
     else {
-      console.log(ui.line({ state: 'ok', key: 'migrate', value: `${result.dryRun ? 'would copy' : result.unchanged ? 'already copied' : 'copied'} ${result.files} files; original backup: ${result.backup}` }));
+      console.log(ui.line({ state: 'ok', key: 'migrate', value: `${result.unchanged ? 'already copied' : result.dryRun ? 'would copy' : 'copied'} ${result.files} files; original backup: ${result.backup}` }));
       for (const next of result.next) printNext(next);
     }
     return 0;
