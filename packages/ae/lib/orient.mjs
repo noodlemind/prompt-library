@@ -1,0 +1,332 @@
+import { caffeinatedPointer } from './playbook-binding.mjs';
+import { locateVerification } from './verification-location.mjs';
+import fs from 'fs';
+import path from 'path';
+import { planStateFacts, reviewCoverageFacts } from './report-facts.mjs';
+import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
+import { runGate } from './gate.mjs';
+import { buildContextPack, learningsSectionBytes } from './context-pack.mjs';
+import { buildPlanView } from './plan-view.mjs';
+import { buildNeighborhood, buildRepoMap } from './repo-map/index.mjs';
+import { indexStatus } from './index-status.mjs';
+import { parseImpactedFiles } from './plan-scope.mjs';
+import { discoverInventory, routingCards, routingReadPointers, primitiveReadRoots } from './route.mjs';
+import { extractGoalFromPlan } from './plan-goal.mjs';
+import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
+import { pickActivePlan, listPlanRels, loadPlan } from './plan-parse.mjs';
+import { parseQueryFromArgv } from './argv.mjs';
+import { rankLearnings, explainLearnings } from './knowledge/retrieve.mjs';
+import { readStoreConfig, storeDir } from './knowledge/store.mjs';
+import { consolidateStatus } from './knowledge/consolidate.mjs';
+import { deriveGitContext } from './git-context.mjs';
+import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
+import { inertLine } from './knowledge/store.mjs';
+import { resolveObligation, intentPage } from './intent-sources.mjs';
+import { prepareNextTool } from './prepare.mjs';
+import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
+import { trustStatus } from './trust.mjs';
+import { performanceContext } from './performance.mjs';
+
+const ORIENT_BRANCH_CAP = 80;
+function jsonGitContext(gitContext) {
+  if (!gitContext) return null;
+  return {
+    branch: gitContext.branch ? inertLine(redactSecrets(String(gitContext.branch))).slice(0, ORIENT_BRANCH_CAP) : null,
+    branchKey: gitContext.branchKey,
+    detached: gitContext.detached,
+    headSha: gitContext.headSha,
+    baseSha: gitContext.baseSha,
+  };
+}
+
+function indexPlane(plane) {
+  if (!plane?.indexed) return 'missing';
+  if (plane.unreadable?.length) return 'unreadable';
+  if (plane.stale) return 'stale';
+  return 'current';
+}
+
+export function runOrient({ workspace, copilotHome, flags, query, files }) {
+  const q = query || flags.query || '';
+  // A symlinked .harness redirects the context pack out of the workspace.
+  if (ensureHarnessDir(workspace, flags.dryRun) === null) return null;
+
+    let gitContext = null;
+  try {
+    gitContext = deriveGitContext({ workspace });
+    if (!gitContext.branch && !gitContext.detached) gitContext = null;
+  } catch {
+    gitContext = null;
+  }
+
+  const home = flags.harnessHome || flags.home;
+  const recall = rankRecall(q, {
+    copilotHome,
+    workspace,
+    limit: flags.limit || 3,
+    collection: flags.collection,
+    minScore: flags.minScore ?? 0.15,
+    home,
+      }).map((e) => redactRecallEntry({
+    docid: e.docid || e.id,
+    path: e.path,
+    title: e.title,
+    score: Number(e.score.toFixed(3)),
+    summary: e.summary || '',
+    snippet: e.snippet || '',
+    scope: e.scope,
+    kind: e.kind || 'solution',
+    ranker: e.ranker || 'overlap',
+  }));
+
+  const planFacts = planStateFacts(workspace);
+  const planTotal = planFacts.total;
+  const plans = findMatchingPlans(workspace, q, flags.limit || 3).map((p) => ({
+    path: p.path,
+    status: p.status,
+    plan_lock: p.plan_lock,
+    score: Number(p.score.toFixed(3)),
+  }));
+
+  const session = readSession(workspace) || {};
+  const active = flags.plan ? loadPlan(workspace, flags.plan) : pickActivePlan(workspace, session, plans, listPlanRels(workspace));
+  const verification = locateVerification(workspace, active?.fm?.verification?.recipe);
+  const planGoal = active ? extractGoalFromPlan(active) : null;
+  const planView = active ? buildPlanView(active) : null;
+
+  let memoryExcerpt = '';
+  if (active) {
+    const cards = active.sections.memoryCards || '';
+    memoryExcerpt = cards
+      .split('\n')
+      .filter((l) => l.trim())
+      .slice(0, 12)
+      .join('\n');
+  }
+
+  const gatePreview = runGate({
+    workspace,
+    flags: { ...flags, phase: 'implement' },
+    query: q,
+  });
+
+  const suppliedFiles = Array.isArray(files) ? files : flags.files;
+  const namedFiles = suppliedFiles?.length ? suppliedFiles : active ? parseImpactedFiles(active) : session.files || [];
+
+    let learnings = [];
+  let explain = null;
+  try {
+    const { mode } = readStoreConfig(workspace, {});
+    if (mode !== 'off' && mode !== 'capture-only') {
+      learnings = rankLearnings({
+        workspace,
+        query: q,
+        limit: 3,
+        ...(Array.isArray(namedFiles) && namedFiles.length ? { signals: namedFiles } : {}),
+      });
+      if (flags.explain) {
+        explain = explainLearnings({ workspace, query: q });
+      }
+    }
+  } catch {
+    learnings = [];
+    explain = null;
+  }
+
+    let repoMapRef = null;
+  try {
+    const repoMapRel = '.harness/repo-map.md';
+    const repoMap = buildRepoMap({ workspace, query: q });
+    if (!repoMap.empty) {
+      if (!flags.dryRun) fs.writeFileSync(path.join(workspace, repoMapRel), repoMap.body, 'utf8');
+      repoMapRef = { path: repoMapRel, files: repoMap.files.length, totalFiles: repoMap.totalFiles };
+    }
+  } catch {
+    // Repo map is advisory context; never fail orientation on it.
+  }
+
+  const nextTools = gatePreview.pass
+    ? ['ae gate --phase implement', 'read plan ## Impacted Files', `ae review prepare --plan ${active?.path || '<path>'}`, 'ae verify', `ae compound --plan ${active?.path || '<path>'} --learning-decision <file>`, `ae plan-update --plan ${active?.path || '<path>'} --file <complete-decision.json>`]
+    : [`ae gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
+  const trust = trustStatus({ workspace, copilotHome, home });
+  if (!trust.trusted) nextTools.push('ae trust status  # a person must approve policy before named checks run');
+
+  const obligation = resolveObligation(workspace, active, q);
+  const intentSources = obligation.paths;
+  const intentDiscovery = obligation.metadata;
+  const intentDetail = flags.intentPage ? intentPage(workspace, active?.fm?.intent || q, { page: flags.intentPage, pageSize: flags.intentPageSize || 8 }) : null;
+  const isolation = inspectIsolation({ workspace, home, allowInplace: flags.allowInplace });
+  if (isolation.blocked) {
+    nextTools.unshift(`ae worktree --slug ${planSlugFromPath(active?.path)}`);
+  }
+  const procedure = caffeinatedPointer(active, { copilotHome });
+  if (procedure) nextTools.push(`read ${inertLine(procedure.path)}`);
+  if (verification.path) nextTools.push(`read ${inertLine(verification.path)}`);
+  if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
+  if (obligation.reason === 'none') nextTools.push(prepareNextTool(workspace));
+  if (intentDiscovery?.omittedCount) nextTools.push('ae orient --read --intent-page 1 --json');
+
+  let index = { knowledge: 'missing', structural: 'missing' };
+    try {
+    const status = indexStatus({ workspace, copilotHome, home });
+    index = {
+      knowledge: indexPlane(status.knowledge),
+      structural: indexPlane(status.structural),
+    };
+    if (status.stale) nextTools.push('ae index  # knowledge index is behind HEAD');
+    if (status.structural && !status.structural.indexed) nextTools.push('ae index  # code index is not built');
+    else if (status.structural?.unreadable?.length) nextTools.push('ae index  # code index is unreadable');
+    else if (status.structural?.stale) nextTools.push('ae index  # code index is behind HEAD');
+  } catch {
+    // Staleness is advisory; never block orientation on it.
+  }
+
+    let knowledgeDebt = null;
+  try {
+    if (fs.existsSync(storeDir(workspace))) {
+      const debt = consolidateStatus({ workspace, copilotHome });
+      if (['on', 'suggest'].includes(debt.mode)) {
+        knowledgeDebt = { debt: debt.debt, threshold: debt.threshold, due: debt.due };
+                if (debt.due && !active) {
+          nextTools.push(`ae consolidate --candidates  # knowledge debt ${debt.debt}/${debt.threshold}`);
+        }
+      }
+    }
+  } catch {
+    // Advisory; never block orientation on it.
+  }
+
+  let routingLines = null;
+  let skills = [];
+  let instructions = [];
+  let contacts = [];
+  if (active?.fm?.routing) {
+    const inventory = discoverInventory(primitiveReadRoots(copilotHome));
+    routingLines = routingReadPointers(active.fm.routing, inventory);
+    ({ skills, instructions, contacts } = routingCards(active.fm.routing, inventory));
+    if (gatePreview.pass) {
+      for (const line of routingLines) {
+        if (line.startsWith('read ') && !nextTools.includes(line)) nextTools.push(line);
+      }
+      const javaFile = parseImpactedFiles(active).find((rel) => rel.endsWith('.java'));
+      if (javaFile) nextTools.push(`read ${javaFile}`);
+    }
+  }
+
+  let neighborhood = null;
+  if (Array.isArray(namedFiles) && namedFiles.length) {
+    try {
+      neighborhood = buildNeighborhood({ workspace, files: namedFiles });
+    } catch {
+      // Neighborhood is advisory context; never fail orientation on it.
+    }
+  }
+
+  const reviewCoverage = reviewCoverageFacts({ workspace, plan: active, copilotHome });
+  const performance = performanceContext({ workspace, home, files: namedFiles || [] });
+  const packBody = buildContextPack({
+    performance,
+    reviewCoverage,
+    trust,
+    query: q,
+    recall,
+    learnings,
+    plans,
+    planTotal,
+    planStateCounts: planFacts.counts,
+    activePlan: active
+      ? {
+          path: active.path,
+          status: active.status,
+          plan_lock: active.plan_lock,
+          phase: active.phase,
+          memoryExcerpt,
+        }
+      : null,
+    planGoal,
+    planView,
+    verification,
+    repoMapRef,
+    gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
+    nextTools,
+    gitContext,
+    routingLines,
+    neighborhood,
+    intentSources,
+    intentDiscovery,
+    worktree: isolation,
+  });
+
+    const learningsBytes = learningsSectionBytes(packBody);
+
+    const deliveredLearnings = learnings.filter((l) => packBody.includes(`- [${l.id}]`)).map((l) => l.id);
+
+  const packRel = '.harness/context-pack.md';
+  const packFull = path.join(workspace, packRel);
+  if (!flags.dryRun) fs.writeFileSync(packFull, packBody, 'utf8');
+
+  const newSession = {
+    ...session,
+    lastQuery: q,
+    lastOrientAt: new Date().toISOString(),
+    activePlan: active?.path || null,
+    contextPack: packRel,
+    gateStatus: gatePreview.pass ? 'pass' : 'blocked',
+    blockedReason: gatePreview.blockedReason,
+        gitBranch: gitContext?.branch || null,
+    gitBranchKey: gitContext?.branchKey || null,
+    gitDetached: gitContext?.detached || false,
+    gitHeadSha: gitContext?.headSha || null,
+  };
+  writeSession(workspace, newSession, flags.dryRun);
+
+  return {
+    recall,
+    ...(performance ? { performance } : {}),
+    trust,
+    learnings,
+    deliveredLearnings,
+    explain,
+    learningsBytes,
+    plans,
+    planTotal,
+    planStateCounts: planFacts.counts,
+    activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
+    planGoal: planGoal
+      ? {
+          planPath: planGoal.planPath,
+          intent: planGoal.intent,
+          success_criteria: planGoal.success_criteria,
+          constraints: planGoal.constraints,
+          expected_outputs: planGoal.expected_outputs,
+          intentContractExcerpt: planGoal.intentContractExcerpt,
+        }
+      : null,
+    verification,
+    contextPack: packRel,
+    repoMap: repoMapRef,
+    knowledgeDebt,
+    gitContext: jsonGitContext(gitContext),
+    worktree: {
+      blocked: isolation.blocked,
+      linked: isolation.linked,
+      onDefault: isolation.onDefault,
+      isolated: isolation.isolated,
+      skipReason: isolation.skipReason,
+    },
+    intentSources,
+    intentDiscovery,
+    intentDetail,
+    reviewCoverage,
+    gateStatus: newSession.gateStatus,
+    blockedReason: newSession.blockedReason,
+    nextTools,
+    neighborhood,
+    skills: procedure && !skills.some(skill => skill.id === procedure.id) ? [...skills, procedure] : skills,
+    instructions,
+    contacts,
+    index,
+  };
+}
+
+export { parseQueryFromArgv };

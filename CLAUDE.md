@@ -8,11 +8,11 @@ This is a skill-driven prompt library for software development teams. The primar
 
 ### Architecture: Skill-First Primitives
 
-- **Skills** (`packages/harness/corpus/skills/*/SKILL.md`, read from `~/.copilot/skills/`): 27 workflows total, including five internal workflows (`ensure-plan`, experimental `caffeinated`, `ensure-capability`, `auto-compound`, and experimental `auto-skill-draft`) and design-before-code `/architect`. The single entry is `@engineer`; the only user-invocable skills are `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal (`user-invocable: false`), loaded on demand by the Engineer. The connected pipeline `/capture-issue` → `/plan-issue` → Engineer Deliver mode → `/code-review` → `/compound-learnings` is the engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. Quick Q&A is `@engineer` Answer mode (ceremony-free). `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
-- **Agents** (`packages/harness/corpus/agents/*.agent.md`, read from `~/.copilot/agents/`): 22 agents — 17 stateless domain experts using judgment-criteria design, 1 delivery classifier, 1 engineer, 1 code-implementer, plus 2 internal coordinator agents (`code-review-coordinator`, `plan-coordinator`) dispatched by `@engineer`. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
-- **Instructions** (`packages/harness/corpus/instructions/*.instructions.md`, 5 files: harness-global, TypeScript, Python, Java, PostgreSQL; read from `~/.copilot/instructions/`): Scoped context that activates based on file patterns. Spring Boot and AWS SDK guidance loads on demand via the `/java` and `/aws` skill references, so a single `.java` file no longer stacks three always-on instructions.
-- **Prompt wrappers**: Retired. `.github/prompts/` no longer exists — users select `@engineer` from the agent dropdown, and `harness upgrade` purges previously hydrated wrappers via `retired.json`.
-- **Review checks** (`packages/harness/corpus/skills/code-review/references/checks/*.md`, read from `~/.copilot/skills/code-review/references/checks/`, optional product `.github/checks/*.md`): Bundled and project-specific criteria discovered by `/code-review`.
+- **Skills** (`packages/ae/corpus/skills/*/SKILL.md`, read from `~/.copilot/skills/`): 27 workflows total, including five internal workflows (`ensure-plan`, experimental `caffeinated`, `ensure-capability`, `auto-compound`, and experimental `auto-skill-draft`) and design-before-code `/architect`. The single entry is `@engineer`; the only user-invocable skills are `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal (`user-invocable: false`), loaded on demand by the Engineer. The connected pipeline `/capture-issue` → `/plan-issue` → Engineer Deliver mode → `/code-review` → `/compound-learnings` is the engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. Quick Q&A is `@engineer` Answer mode (ceremony-free). `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
+- **Agents** (`packages/ae/corpus/agents/*.agent.md`, read from `~/.copilot/agents/`): 22 agents — 17 stateless domain experts using judgment-criteria design, 1 delivery classifier, 1 engineer, 1 code-implementer, plus 2 internal coordinator agents (`code-review-coordinator`, `plan-coordinator`) dispatched by `@engineer`. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
+- **Instructions** (`packages/ae/corpus/instructions/*.instructions.md`, 5 files: harness-global, TypeScript, Python, Java, PostgreSQL; read from `~/.copilot/instructions/`): Scoped context that activates based on file patterns. Spring Boot and AWS SDK guidance loads on demand via the `/java` and `/aws` skill references, so a single `.java` file no longer stacks three always-on instructions.
+- **Prompt wrappers**: Retired. `.github/prompts/` no longer exists — users select `@engineer` from the agent dropdown, and `ae upgrade` purges previously hydrated wrappers via `retired.json`.
+- **Review checks** (`packages/ae/corpus/skills/code-review/references/checks/*.md`, read from `~/.copilot/skills/code-review/references/checks/`, optional product `.github/checks/*.md`): Bundled and project-specific criteria discovered by `/code-review`.
 
 ### Connected Pipeline
 
@@ -25,12 +25,12 @@ Issues flow through a state machine tracked in YAML frontmatter:
 
 Key fields: `status`, `plan_lock` (must be `true` before coding), `phase` (current phase number).
 
-New plan files live in `~/.harness/projects/<repo-id>/plans/`; existing `.harness/plans/` and `docs/plans/` remain readable legacy locations. Use Harness-returned paths and authored decisions to update managed plans. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes` (from planning), `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes` (from work), `## Review Findings` (from review). Treat each plan file as the local context pack for the issue.
+New plan files live in `~/.ae/projects/<repo-id>/plans/`; existing `.harness/plans/` and `docs/plans/` remain readable legacy locations. Use Harness-returned paths and authored decisions to update managed plans. Activity logs in `## Activity` sections provide session continuity. Inter-step memory flows through designated plan file sections: `## Context`, `## Acceptance Criteria`, `## Research Notes` (from planning), `## Impacted Files`, `## Verification Plan`, `## Risk & Review Routing`, `## Implementation Notes` (from work), `## Review Findings` (from review). Treat each plan file as the local context pack for the issue.
 
 ### Knowledge Compounding
 
 - **Accumulated knowledge**: `.github/agent-context.md` — prompt-library repo knowledge, not a global Copilot primitive.
-- **Team solutions**: `packages/harness/corpus/knowledge/solutions/` (hydrated to `~/.copilot/knowledge/`). Product repos write new private episodes to `~/.harness/projects/<repo-id>/docs/solutions/`; committed `docs/solutions/` remains readable. Use `/recall` before similar work.
+- **Team solutions**: `packages/ae/corpus/knowledge/solutions/` (hydrated to `~/.copilot/knowledge/`). Product repos write new private episodes to `~/.ae/projects/<repo-id>/docs/solutions/`; committed `docs/solutions/` remains readable. Use `/recall` before similar work.
 
 ## Directory Structure
 
@@ -43,7 +43,7 @@ New plan files live in `~/.harness/projects/<repo-id>/plans/`; existing `.harnes
   mcp.json             — MCP server configuration (Context7)
 docs/
   adaptive-engineering.md — how the Engineer and Harness work, and how capability is acquired
-packages/harness/      — CLI package
+packages/ae/      — CLI package
   corpus/
     skills/            — 27 skill directories with SKILL.md
     agents/            — 22 agent definitions (17 specialists + 1 delivery classifier + 1 engineer + 1 implementer + 2 coordinators)
@@ -125,7 +125,7 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 18. **/recall**: Recall global knowledge manifest and local plans before engineering work
 19. **/index-memory**: Rebuild team knowledge manifest from solution files
 20. **/codebase-context**: Generate codebase snapshot with architecture diagrams to docs/codebase-snapshot.md
-21. **/consolidate**: Convert unconsolidated learning episodes into ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops and apply them via `harness consolidate`
+21. **/consolidate**: Convert unconsolidated learning episodes into ADD/STRENGTHEN/SUPERSEDE/MERGE/NOOP ops and apply them via `ae consolidate`
 
 ### Engineer-Internal (loaded on demand) — Internal Workflows
 22. **/ensure-plan**: Internally capture, research, and lock a plan for trackable Engineer work
@@ -145,7 +145,7 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 - **Progressive disclosure**: Skills load in 3 levels (frontmatter → body → references)
 - **Skill-first primitive boundaries**: Default repeated procedures to skills; create agents only for distinct judgment, authority, isolation, or evaluation standards; prompt wrappers are retired
 - **GitHub Copilot-first**: VS Code discovers globally hydrated agents, skills, and instructions from `%USERPROFILE%\.copilot`; IntelliJ IDEA discovers hydrated customizations from `%LOCALAPPDATA%\github-copilot\intellij` when the current plugin features are enabled
-- **Knowledge compounding**: `packages/harness/corpus/knowledge/solutions/` + `/index-memory` + repository `.github/agent-context.md` make the system smarter over time
+- **Knowledge compounding**: `packages/ae/corpus/knowledge/solutions/` + `/index-memory` + repository `.github/agent-context.md` make the system smarter over time
 - **Confidence-gated review**: Code review uses persona synthesis with 0.0-1.0 confidence scores, merge/dedup, and action routing
 - **Explicit execution boundary**: Engineer Deliver mode owns execution; trackable work still requires a locked plan (via `/ensure-plan`) before coding
 - **Skill-specific error recovery**: Each orchestrating skill handles its own failure modes, not generic boilerplate
@@ -164,7 +164,7 @@ Update these files to keep everything synchronized:
 
 1. `CLAUDE.md` — counts and inventory lists
 2. `AGENTS.md` — cross-tool agent/skill lists
-3. `packages/harness/corpus/copilot-instructions.md` — shared context
+3. `packages/ae/corpus/copilot-instructions.md` — shared context
 4. `.github/agent-context.md` — prompt-library repo knowledge
 5. `README.md` — overview if applicable
 6. `docs/adaptive-engineering.md` — if primitive boundaries or workflow contracts changed

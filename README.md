@@ -2,13 +2,13 @@
 
 The Engineer decides. The Harness checks the work and keeps the record. You start with those two. Skills, specialist agents, and instructions are acquired when the work needs them.
 
-This repository authors that ship set under `packages/harness/corpus/`. `harness install` copies the tree onto `~/.copilot/`.
+This repository authors that ship set under `packages/ae/corpus/`. `ae install` copies the tree onto `~/.copilot/`.
 
 Read [how it grows](docs/adaptive-engineering.md).
 
 ```bash
-npm install -g harness
-harness install --configure-vscode
+npm install -g ae-harness
+ae install --configure-vscode
 ```
 
 Select `@engineer` in Copilot Chat.
@@ -20,4 +20,4 @@ Select `@engineer` in Copilot Chat.
            Review      → independent assessment
 ```
 
-Product plans and private solutions live under `~/.harness/projects/<repo-id>/`. They are not committed in the product repository. `--harness-home <path>` moves that root for one command. `HARNESS_HOME` moves it for every command. The flag wins.
+Product plans and private solutions live under `~/.ae/projects/<repo-id>/`. They are not committed in the product repository. `--ae-home <path>` moves that root for one command. `AE_HOME` moves it for every command. The flag wins.

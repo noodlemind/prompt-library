@@ -11,9 +11,9 @@ assert.ok(process.env.HARNESS_CHECK_ARTIFACT_DIR, 'The verification controller m
 const artifactRoot = fs.realpathSync(path.resolve(process.env.HARNESS_CHECK_ARTIFACT_DIR));
 assert.ok(fs.statSync(artifactRoot).isDirectory(), 'The verification controller must create its artifact directory.');
 const repoRoot = fs.realpathSync(process.cwd());
-const packageDirectory = path.join(repoRoot, 'packages/harness');
+const packageDirectory = path.join(repoRoot, 'packages/ae');
 const sourceManifest = JSON.parse(fs.readFileSync(path.join(packageDirectory, 'package.json'), 'utf8'));
-assert.equal(sourceManifest.name, 'harness');
+assert.equal(sourceManifest.name, 'ae-harness');
 const version = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(sourceManifest.version);
 assert.ok(version && (Number(version[1]) > 0 || Number(version[2]) >= 11), 'Installed proof requires Harness 0.11.0 or later.');
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -25,7 +25,7 @@ let tarball, sourceCommit;
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-installed-release-')));
 const prefix = path.join(root, 'installed'), home = path.join(root, 'harness'), copilotHome = path.join(root, 'copilot');
 const primary = path.join(root, 'primary'), workspace = path.join(root, 'issue');
-const env = { ...process.env, HARNESS_HOME: home, COPILOT_HOME: copilotHome, HARNESS_NO_EVENTS: '1',
+const env = { ...process.env, AE_HOME: home, HARNESS_HOME: home, COPILOT_HOME: copilotHome, HARNESS_NO_EVENTS: '1',
   GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
   GIT_TRACE2: '0', GIT_TRACE2_EVENT: '0', GIT_TRACE2_PERF: '0', npm_config_cache: path.join(root, 'npm-cache') };
 for (const name of Object.keys(env)) if (name.startsWith('GIT_') && !['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM', 'GIT_TRACE2', 'GIT_TRACE2_EVENT', 'GIT_TRACE2_PERF'].includes(name)) delete env[name];
@@ -35,7 +35,7 @@ const measurements = [];
 const summary = { version: 1, startedAt: new Date().toISOString(), source: { repoRoot, packageVersion: sourceManifest.version },
   platform: { os: process.platform, arch: process.arch, osRelease: os.release(), node: process.version, nodePath: fs.realpathSync(process.execPath) },
   proofKind: 'Installed package and hydrated CLI scripted acceptance. No native editor or model quality claim.',
-  limitations: ['Windows pilot waived by the user.', 'Native editor activation remains unverified.', 'No model calls occur in this proof.'],
+  limitations: ['Windows native editor acceptance is deferred to the user.', 'Native editor activation remains unverified.', 'No model calls occur in this proof.'],
   output, temporaryRoot: root, commands: receipts };
 
 function run(executable, args, { cwd = root, timeout = 60_000, expected = 0, input } = {}) {
@@ -104,23 +104,23 @@ try {
   summary.source.commit = sourceCommit;
   summary.source.porcelain = git(repoRoot, 'status', '--porcelain=v1', '--untracked-files=normal');
   summary.source.dirty = Boolean(summary.source.porcelain);
-  const packed = JSON.parse(run('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', buildRoot, './packages/harness'], { cwd: repoRoot, timeout: 120_000 }).stdout);
+  const packed = JSON.parse(run('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', buildRoot, './packages/ae'], { cwd: repoRoot, timeout: 120_000 }).stdout);
   assert.equal(packed.length, 1); assert.equal(packed[0].name, sourceManifest.name); assert.equal(packed[0].version, sourceManifest.version);
   assert.equal(path.basename(packed[0].filename), packed[0].filename, 'Pack filename must remain inside the artifact build directory.');
   tarball = path.join(buildRoot, packed[0].filename); assert.ok(fs.statSync(tarball).isFile());
   summary.tarball = { path: tarball, sha256: sha(fs.readFileSync(tarball)), bytes: fs.statSync(tarball).size, npmIntegrity: packed[0].integrity, bundled: packed[0].bundled };
   run('npm', ['install', '--prefix', prefix, '--offline', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', tarball], { timeout: 120_000 });
-  const packageRoot = path.join(prefix, 'node_modules/harness');
+  const packageRoot = path.join(prefix, 'node_modules/ae-harness');
   const manifest = json(path.join(packageRoot, 'package.json'));
   assert.equal(manifest.version, sourceManifest.version);
-  bin = path.join(packageRoot, 'bin/harness.mjs');
+  bin = path.join(packageRoot, 'bin/ae.mjs');
   assert.equal(run(process.execPath, [bin, '--version']).stdout.trim(), manifest.version);
   fs.mkdirSync(workspace);
   const freshCopilot = path.join(root, 'fresh-copilot'), freshHarness = path.join(root, 'fresh-harness');
   run(process.execPath, [bin, 'install', '--target', 'cli', '--workspace', workspace, '--copilot-home', freshCopilot, '--harness-home', freshHarness, '--json', '--no-events'], { cwd: workspace });
-  assert.equal(run(process.execPath, [path.join(freshCopilot, '.harness-bin/bin/harness.mjs'), '--version']).stdout.trim(), manifest.version);
+  assert.equal(run(process.execPath, [path.join(freshCopilot, '.ae-bin/bin/ae.mjs'), '--version']).stdout.trim(), manifest.version);
   assert.equal(json(path.join(freshCopilot, '.harness-lock.json')).version, manifest.version);
-  assert.match(fs.readFileSync(path.join(freshCopilot, '.harness-bin/config/plan-schema.v4.yaml'), 'utf8'), /^version: 4\s/m);
+  assert.match(fs.readFileSync(path.join(freshCopilot, '.ae-bin/config/plan-schema.v4.yaml'), 'utf8'), /^version: 4\s/m);
   summary.freshInstall = { version: manifest.version, matchedPackage: true, schema4: true };
   const predecessorPath = path.join(packageDirectory, 'test/fixtures/prior-harness-domain-1265403.tgz');
   const predecessor = json(predecessorPath.replace(/\.tgz$/, '.json'));
@@ -143,15 +143,15 @@ try {
   raw(['upgrade', '--target', 'cli']);
   assert.equal(json(path.join(copilotHome, '.harness-lock.json')).version, manifest.version);
   assert.equal(json(path.join(copilotHome, '.harness-lock.json')).command, 'upgrade');
-  assert.match(fs.readFileSync(path.join(copilotHome, 'skills/caffeinated/references/experiment-workflow.md'), 'utf8'), /harness experiment status/);
+  assert.match(fs.readFileSync(path.join(copilotHome, 'skills/caffeinated/references/experiment-workflow.md'), 'utf8'), /ae experiment status/);
   assert.match(fs.readFileSync(path.join(copilotHome, 'skills/caffeinated/SKILL.md'), 'utf8'), /experiment-workflow\.md/);
   summary.upgrade = { predecessor: { sourceCommit: predecessor.sourceCommit, version: predecessor.packageVersion, sha256: predecessor.sha256, provenance: 'Exact pre-experiment source-package fixture, not a published release.' }, finalVersion: manifest.version, lockUpdated: true, newReferenceHydrated: true };
   fs.rmSync(workspace, { recursive: true });
-  bin = path.join(copilotHome, '.harness-bin/bin/harness.mjs');
-  env.HARNESS_BIN = bin;
+  bin = path.join(copilotHome, '.ae-bin/bin/ae.mjs');
+  env.AE_BIN = bin; env.HARNESS_BIN = bin;
   assert.equal(run(process.execPath, [bin, '--version']).stdout.trim(), manifest.version);
   assert.equal(run(process.execPath, [path.join(copilotHome, 'bin/harness'), '--version']).stdout.trim(), manifest.version);
-  const installedRoot = path.join(copilotHome, '.harness-bin');
+  const installedRoot = path.join(copilotHome, '.ae-bin');
   assert.match(fs.readFileSync(path.join(installedRoot, 'config/plan-schema.v4.yaml'), 'utf8'), /^version: 4\s/m);
   const help = run(process.execPath, [bin, 'help', 'experiment']).stdout;
   for (const verb of ['begin', 'evaluate', 'resolve', 'status']) assert.match(help, new RegExp(`\\b${verb}\\b`));

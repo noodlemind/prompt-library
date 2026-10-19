@@ -29,8 +29,8 @@ const git = spawnSync('git', ['--version'], { encoding: 'utf8' });
 note(git.status === 0, `git on PATH (${(git.stdout || git.stderr).trim() || git.status})`);
 
 const help = spawnSync(process.execPath, [binPath, '--help'], { encoding: 'utf8', cwd: packageRoot });
-note(help.status === 0, `harness --help exits 0`);
-note(/plan-new/.test(help.stdout) && /prepare/.test(help.stdout) && /gate/.test(help.stdout) && /worktree/.test(help.stdout), 'harness --help names prepare, plan-new, gate, and worktree');
+note(help.status === 0, `ae --help exits 0`);
+note(/plan-new/.test(help.stdout) && /prepare/.test(help.stdout) && /gate/.test(help.stdout) && /worktree/.test(help.stdout), 'ae --help names prepare, plan-new, gate, and worktree');
 note(fs.existsSync(path.join(repoRoot, '.cursor/skills/verify-harness/SKILL.md')), 'verify-harness skill is present');
 
 if (problems.length) {

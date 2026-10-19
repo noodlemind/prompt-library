@@ -110,7 +110,7 @@ try {
   assertEqual(blocked.status, 1, `blocked gate exit (${blocked.stderr} ${blocked.stdout})`);
   const blockedCheck = parseJson(blocked, 'blocked-gate').checks.find((item) => item.id === 'C-worktree');
   assertEqual(blockedCheck.pass, false, 'C-worktree on primary default branch');
-  assertMatch(blockedCheck.message, /harness worktree/, 'C-worktree names worktree');
+  assertMatch(blockedCheck.message, /ae worktree/, 'C-worktree names worktree');
 
   const added = await runHarness(['worktree', '--slug', 'checkout-retry'], ctx);
   assertEqual(added.status, 0, `worktree add exit (${added.stderr})`);

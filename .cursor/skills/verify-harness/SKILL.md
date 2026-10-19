@@ -5,7 +5,7 @@ description: Prove Harness CLI intent lock, prepare, worktree isolation, and ins
 
 # Verify Harness
 
-The user-facing surface is the `harness` CLI in `packages/harness`. There is no web UI. Agents call `orient`, `prepare`, `plan-new --file`, `plan-update --file`, `gate --phase implement`, and `worktree`. Prove those commands in disposable git workspaces. The installed-release drive packs the checkout, installs that archive, upgrades the preceding source-package fixture, and then runs the hydrated CLI.
+The user-facing surface is the `harness` CLI in `packages/ae`. There is no web UI. Agents call `orient`, `prepare`, `plan-new --file`, `plan-update --file`, `gate --phase implement`, and `worktree`. Prove those commands in disposable git workspaces. The installed-release drive packs the checkout, installs that archive, upgrades the preceding source-package fixture, and then runs the hydrated CLI.
 
 ## Launch
 
@@ -14,14 +14,14 @@ There is no long-lived server. Install package deps once, then start each drive 
 From the prompt-library root:
 
 ```bash
-node packages/harness/bin/harness.mjs --help
+node packages/ae/bin/ae.mjs --help
 ```
 
 Ready when that command exits `0` and prints command names including `orient`, `prepare`, `plan-new`, `gate`, and `worktree`.
 
-Teardown is per drive. Delete the temp workspace and `HARNESS_HOME` directory that drive created. Do not kill by process name.
+Teardown is per drive. Delete the temp workspace and `AE_HOME` directory that drive created. Do not kill by process name.
 
-Two drives can run side by side. Give each drive its own `--workspace`, `--copilot-home`, and `HARNESS_HOME`.
+Two drives can run side by side. Give each drive its own `--workspace`, `--copilot-home`, and `AE_HOME`.
 
 ## Doctor
 
@@ -31,15 +31,15 @@ Each named drive runs this read-only check before its first action. Run it again
 node .cursor/skills/verify-harness/scripts/doctor.mjs
 ```
 
-Doctor exits `0` only when Node is 20 or newer, `packages/harness/bin/harness.mjs` exists, the `yaml` package loads, and `git` is on `PATH`. Do not drive an instance whose doctor failed.
+Doctor exits `0` only when Node is 20 or newer, `packages/ae/bin/ae.mjs` exists, the `yaml` package loads, and `git` is on `PATH`. Do not drive an instance whose doctor failed.
 
 ## Drive
 
 Use isolated temp git repos. Do not drive the operator checkout.
 
 1. Create a temp workspace with `git init`, a tracked spec under `docs/specs/`, and `.github/harness/checks.yaml`.
-2. Set `HARNESS_HOME` to a temp directory. Pass `--workspace` and `--copilot-home` on every command.
-3. Spawn `node packages/harness/bin/harness.mjs <command> --json`.
+2. Set `AE_HOME` to a temp directory. Pass `--workspace` and `--copilot-home` on every command.
+3. Spawn `node packages/ae/bin/ae.mjs <command> --json`.
 4. Parse stdout JSON and the written plan file. Assert the observable values named in the feature map.
 
 Bind `verify-intent-lock`, `verify-prepare`, `verify-issue-worktree`, or `verify-installed-release` to the accepted plan. Harness runs their configured helper argv. Each helper owns readiness, drive, evidence, and cleanup. Run doctor before selecting a drive. These helpers do not start a long-lived server.
@@ -61,7 +61,7 @@ A proof includes the action and the resulting state. Example for intent lock: `p
 
 ## Cleanup
 
-Delete temp workspaces, temp `HARNESS_HOME` dirs, and linked git worktrees the drive created. Kill only PIDs the drive started. Leave evidence files in place. Confirm the evidence path still exists after cleanup.
+Delete temp workspaces, temp `AE_HOME` dirs, and linked git worktrees the drive created. Kill only PIDs the drive started. Leave evidence files in place. Confirm the evidence path still exists after cleanup.
 
 ## Helpers
 
@@ -69,8 +69,8 @@ Delete temp workspaces, temp `HARNESS_HOME` dirs, and linked git worktrees the d
 - Intent lock proof: `node .cursor/skills/verify-harness/scripts/prove-intent-lock.mjs`
 - Worktree proof: `node .cursor/skills/verify-harness/scripts/prove-issue-worktree.mjs`
 - Prepare proof: `node .cursor/skills/verify-harness/scripts/prove-prepare.mjs`
-- Journey performance: `harness checks run verify-performance --json`; the [feature recipe](./features/performance.md) records the CLI and separate browser proof.
-- Installed release proof: `harness checks run verify-installed-release --json` from a trusted checkout on macOS; see [the installed-release recipe](./features/installed-release.md).
+- Journey performance: `ae checks run verify-performance --json`; the [feature recipe](./features/performance.md) records the CLI and separate browser proof.
+- Installed release proof: `ae checks run verify-installed-release --json` from a trusted checkout on macOS; see [the installed-release recipe](./features/installed-release.md).
 
 ## Trigger Examples
 

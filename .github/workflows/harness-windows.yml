@@ -34,10 +34,10 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: packages/harness/package-lock.json
+          cache-dependency-path: packages/ae/package-lock.json
 
       - name: Install harness dependencies
-        run: npm ci --prefix packages/harness
+        run: npm ci --prefix packages/ae
 
       # Collect diagnostics after a failed suite; the final gate enforces its outcome.
       - name: Harness test suite (Windows)
@@ -47,10 +47,10 @@ jobs:
           HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-full
         run: |
           $preloadRoot = $env:GITHUB_WORKSPACE.Replace('\', '/')
-          $env:NODE_OPTIONS = '--require="' + $preloadRoot + '/packages/harness/test/helpers/domain-parent-profile.cjs"'
+          $env:NODE_OPTIONS = '--require="' + $preloadRoot + '/packages/ae/test/helpers/domain-parent-profile.cjs"'
           & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoLogo -NoProfile -NonInteractive -Command '[Console]::Write([System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks)'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Set-Location packages/harness
+          Set-Location packages/ae
           node --test --test-concurrency=2 ./test/*.test.mjs
 
       - name: CLI scenarios
@@ -68,7 +68,7 @@ jobs:
           function Probe($name, $cmdArgs) {
             $header = "`n=== $name ===`n`$ harness $($cmdArgs -join ' ')"
             Write-Host $header
-            $out = & node packages/harness/bin/harness.mjs @cmdArgs 2>&1 | Out-String
+            $out = & node packages/ae/bin/ae.mjs @cmdArgs 2>&1 | Out-String
             $code = $LASTEXITCODE
             Write-Host $out
             Write-Host "[exit $code]"
@@ -115,7 +115,7 @@ jobs:
           $ws = Join-Path $env:RUNNER_TEMP 'ws'
           # -Width is pinned: Out-String otherwise wraps at the console width,
           # and a secret split across a wrap would slip past the match below.
-          $out = & node packages/harness/bin/harness.mjs learnings --why $env:MY_API_TOKEN --workspace $ws 2>&1 | Out-String -Width 4096
+          $out = & node packages/ae/bin/ae.mjs learnings --why $env:MY_API_TOKEN --workspace $ws 2>&1 | Out-String -Width 4096
           Write-Host $out
           Add-Content -Path win-output/scenarios.txt -Value "`n=== redaction (ledger) ===`n$out"
 
@@ -160,7 +160,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           New-Item -ItemType Directory -Force -Path win-output | Out-Null
           $script = @'
-          import { runProcess } from './packages/harness/lib/runner.mjs';
+          import { runProcess } from './packages/ae/lib/runner.mjs';
 
           // The child is `process.execPath` on BOTH platforms: node is guaranteed to be
           // installed, it never reads stdin, and it behaves identically everywhere. The
