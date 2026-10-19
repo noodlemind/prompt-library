@@ -121,6 +121,7 @@ for (const contextVersion of [1, 2]) {
 for (const scope of ['product', 'global', 'product-user']) {
   test(`knowledge references expand through path readers for ${scope} documents`, async (t) => {
     const f = fixture(t);
+    f.write('lesson-id', 'A workspace file with the same name as the document ID.\n');
     const home = path.join(f.copilotHome, 'control');
     const root = scope === 'global' ? path.join(f.copilotHome, 'knowledge') : scope === 'product-user' ? projectStoreDir(f.workspace, { home }) : f.workspace;
     const document = path.join(root, 'docs/solutions/lesson.md');

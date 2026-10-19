@@ -75,6 +75,14 @@ test('clean installed package expands current context and rejects stale source r
   assert.equal(ok('get', '--path', largeEvidence.reference, '--context-version', '2').evidence.sha256, largeEvidence.sha256);
   fs.writeFileSync(path.join(workspace, 'large.mjs'), largeBody.replace('marker = 1', 'marker = 2'));
   assert.notEqual(cli('get', '--path', largeEvidence.reference, '--context-version', '2').status, 0);
+  const document = path.join(copilotHome, 'knowledge/docs/solutions/lesson.md');
+  fs.mkdirSync(path.dirname(document), { recursive: true });
+  fs.writeFileSync(document, '# Reference lesson\n');
+  fs.writeFileSync(path.join(copilotHome, 'knowledge/manifest.yaml'), 'entries:\n  - id: lesson-id\n    path: docs/solutions/lesson.md\n    title: reference lesson\n    scope: global\n');
+  const knowledgeReference = ok('search', 'reference lesson', '--source', 'knowledge', '--context-version', '2').results[0].evidence.reference;
+  assert.equal(ok('get', '--path', knowledgeReference).excerpt, '# Reference lesson\n');
+  fs.writeFileSync(document, '# Changed lesson\n');
+  assert.match(cli('get', '--path', knowledgeReference).stderr, /source changed/);
   const lock = path.join(runtime, 'lib/repo-map/grammars.lock');
   const lockBytes = fs.readFileSync(lock);
   for (const state of ['missing', 'unreadable']) {
@@ -82,7 +90,8 @@ test('clean installed package expands current context and rejects stale source r
       fs.rmSync(lock);
       if (state === 'unreadable') fs.mkdirSync(lock);
       try {
-        assert.equal(cli('help').status, 0);
+        const help = cli('help', 'doctor');
+        assert.equal(help.status, 0, help.stdout + help.stderr);
         const index = ok('index', '--structural');
         assert.equal(index.tier, 'lexical');
         assert.ok(index.integrityFailures.some(row => row.language === 'lock'));

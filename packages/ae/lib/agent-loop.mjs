@@ -635,7 +635,7 @@ export async function dispatchToolCall(call, {
     if (!query) return { dispatched: false, reason: 'search requires a non-empty `query`', fatal: false };
     argv = [...base, query];
     if (input.contextVersion !== undefined) argv.push('--context-version', String(input.contextVersion));
-    if (input.contextVersion === 2) argv.push('--limit', String(Math.max(1, Math.min(SEARCH_ROWS, Math.trunc(input.limit || SEARCH_ROWS)))));
+    argv.push('--limit', String(Math.max(1, Math.min(SEARCH_ROWS, Math.trunc(input.limit || SEARCH_ROWS)))));
     if (typeof input.cursor === 'string') argv.push('--cursor', input.cursor);
     run = (args, context) => searchToolResultOf(args, context, query);
   } else if (call.name === 'todo') {

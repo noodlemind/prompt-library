@@ -57,8 +57,9 @@ function truncateUtf8(text, maxBytes) {
 
 export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = null }) {
   const reference = parseSourceReference(flags.docid || flags.path);
-  const docid = flags.docid ? reference.path : null;
-  const relPath = flags.path ? reference.path : null;
+  const documentReference = reference.sha256 && reference.path.startsWith('docid:');
+  const docid = documentReference ? reference.path.slice('docid:'.length) : flags.docid ? reference.path : null;
+  const relPath = flags.path && !documentReference ? reference.path : null;
   const maxLines = flags.lines || GET_DEFAULT_LINES;
   const maxBytes = flags.maxBytes || GET_DEFAULT_MAX_BYTES;
   const offset = Math.max(1, Math.floor(flags.offset || 1));
@@ -135,7 +136,7 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
     ...(flags.contextVersion === 2 ? {
       context: sourceContext(entry.path || relPath || '', raw, offset),
       evidence: {
-        reference: `${docid || relPath}@sha256:${sha256}`,
+        reference: `${docid ? `docid:${docid}` : relPath}@sha256:${sha256}`,
         sha256,
         representationSha256: sourceHash(excerpt),
         redacted: wasRedacted,
