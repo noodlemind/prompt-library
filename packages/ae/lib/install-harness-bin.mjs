@@ -1,0 +1,107 @@
+import fs from 'fs';
+import path from 'path';
+import { createRequire } from 'node:module';
+import { readLock } from './lock.mjs';
+
+const require = createRequire(import.meta.url);
+const COPY_DIRS = ['bin', 'lib', 'config', 'corpus', 'vscode-extension'];
+const COPY_FILES = ['package.json', 'retired.json'];
+
+/**
+ * Copy harness CLI into ~/.copilot/.ae-bin so agents can run without npx.
+ */
+export function installHarnessBin(pkgRoot, copilotHome, flags, log) {
+  const destRoot = path.join(copilotHome, '.ae-bin');
+  const stats = { created: 0, updated: 0, files: [] };
+
+  for (const dir of COPY_DIRS) {
+    const srcDir = path.join(pkgRoot, dir);
+    if (!fs.existsSync(srcDir)) continue;
+    for (const ent of fs.readdirSync(srcDir, { withFileTypes: true })) {
+      const src = path.join(srcDir, ent.name);
+      const rel = path.join(dir, ent.name).replace(/\\/g, '/');
+      const dest = path.join(destRoot, rel);
+      if (ent.isDirectory()) {
+        copyDirRecursive(src, dest, destRoot, flags, log, stats);
+      } else {
+        copyFile(src, dest, rel, flags, log, stats);
+      }
+    }
+  }
+
+  for (const file of COPY_FILES) {
+    const src = path.join(pkgRoot, file);
+    if (!fs.existsSync(src)) continue;
+    const rel = file;
+    const dest = path.join(destRoot, rel);
+    copyFile(src, dest, rel, flags, log, stats);
+  }
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
+  for (const dependency of Object.keys(manifest.dependencies || {})) {
+    const src = resolveDependencyRoot(dependency);
+    const dest = path.join(destRoot, 'node_modules', dependency);
+    copyDirRecursive(src, dest, destRoot, flags, log, stats);
+  }
+
+  const legacyRel = '.harness-bin/bin/harness.mjs';
+  const previous = readLock(copilotHome);
+  if (['harness', 'ae-harness'].includes(previous?.package) && previous.files?.includes(legacyRel)) {
+    const segments = ['.harness-bin', '.harness-bin/bin', legacyRel];
+    const managed = segments.every((relative, index) => {
+      const stat = fs.lstatSync(path.join(copilotHome, relative), { throwIfNoEntry: false });
+      return stat && !stat.isSymbolicLink() && (index === segments.length - 1 ? stat.isFile() : stat.isDirectory());
+    });
+    if (managed) {
+      if (!flags.dryRun) fs.writeFileSync(path.join(copilotHome, legacyRel), "#!/usr/bin/env node\nimport { main } from '../../.ae-bin/bin/ae.mjs';\n\nawait main();\n");
+      stats.updated++;
+      stats.files.push(legacyRel);
+      log(`${flags.dryRun ? 'would update' : 'updated'} owned legacy runtime: ${legacyRel}`);
+    }
+  }
+
+  return stats;
+}
+
+function resolveDependencyRoot(name) {
+  let current = path.dirname(require.resolve(name));
+  while (true) {
+    const manifest = path.join(current, 'package.json');
+    if (fs.existsSync(manifest)) {
+      const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+      if (pkg.name === name) return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) throw new Error(`Unable to locate runtime dependency: ${name}`);
+    current = parent;
+  }
+}
+
+function copyDirRecursive(srcDir, destDir, destRoot, flags, log, stats) {
+  if (!flags.dryRun) fs.mkdirSync(destDir, { recursive: true });
+  for (const ent of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    const src = path.join(srcDir, ent.name);
+    const rel = path.relative(destRoot, path.join(destDir, ent.name)).replace(/\\/g, '/');
+    const dest = path.join(destRoot, rel);
+    if (ent.isDirectory()) {
+      copyDirRecursive(src, dest, destRoot, flags, log, stats);
+    } else {
+      copyFile(src, dest, rel, flags, log, stats);
+    }
+  }
+}
+
+function copyFile(src, dest, rel, flags, log, stats) {
+  const exists = fs.existsSync(dest);
+  if (flags.dryRun) {
+    log(`would ${exists ? 'update' : 'create'} harness-bin: ${rel}`);
+    stats[exists ? 'updated' : 'created']++;
+    stats.files.push(`.ae-bin/${rel}`);
+    return;
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(src, dest);
+  stats[exists ? 'updated' : 'created']++;
+  stats.files.push(`.ae-bin/${rel}`);
+  if (flags.verbose) log(`${exists ? 'update' : 'create'} harness-bin: ${rel}`);
+}

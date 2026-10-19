@@ -31,11 +31,12 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install pinned harness
+      - name: Install pinned AE
         run: |
           set -euo pipefail
           : "${HARNESS_VERSION:?Harness version must be configured in the HARNESS_VERSION repository variable}"
-          npm install --global "harness@${HARNESS_VERSION}"
+          npm install --global "ae-harness@${HARNESS_VERSION}"
+          test "$(ae --version)" = "$HARNESS_VERSION"
         env:
           HARNESS_VERSION: ${{ vars.HARNESS_VERSION }}
 
@@ -46,7 +47,7 @@ jobs:
           # Read-only: exits non-zero if a tracked surface (engineer agent,
           # any SKILL.md, context pack) exceeds its budget. No telemetry
           # history required; degrades to a pass when no artifacts are present.
-          harness report --check --workspace .
+          ae report --check --workspace .
 
       - name: Resolve exactly one linked plan for product changes
         id: plan
@@ -98,8 +99,8 @@ jobs:
           PLAN: ${{ steps.plan.outputs.path }}
         run: |
           set -euo pipefail
-          harness validate-plan --plan "$PLAN" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
-          harness gate --phase implement --plan "$PLAN" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
+          ae validate-plan --plan "$PLAN" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
+          ae gate --phase implement --plan "$PLAN" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
 
       - name: Run named checks and plan-to-diff verification
         if: steps.plan.outputs.skip != 'true'
@@ -107,7 +108,7 @@ jobs:
         env:
           PLAN: ${{ steps.plan.outputs.path }}
           BASE_SHA: ${{ steps.plan.outputs.base_sha }}
-        run: harness verify --plan "$PLAN" --base "$BASE_SHA" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
+        run: ae verify --plan "$PLAN" --base "$BASE_SHA" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
 
       - name: Upload verification evidence
         if: always() && steps.plan.outcome == 'success' && steps.plan.outputs.skip != 'true'

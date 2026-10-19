@@ -11,10 +11,10 @@ Prepare writes starter spec and architecture files on a brownfield repository so
 
 ## How to get to it (user POV)
 
-- Run `harness init-repo` on a product repo, then `harness prepare`.
-- Run `harness orient --json`. When `intentSources` is empty, the next tool is `harness prepare`, or an un-ignore hint when `docs/` is gitignored.
-- Edit the starter files. Run `harness prepare` again. Existing files stay as edited.
-- Run `harness plan-new` after the files exist. Lock records `{ path, sha256 }` for each starter.
+- Run `ae init-repo` on a product repo, then `ae prepare`.
+- Run `ae orient --json`. When `intentSources` is empty, the next tool is `ae prepare`, or an un-ignore hint when `docs/` is gitignored.
+- Edit the starter files. Run `ae prepare` again. Existing files stay as edited.
+- Run `ae plan-new` after the files exist. Lock records `{ path, sha256 }` for each starter.
 
 ## Driving it with prove-prepare.mjs
 
@@ -24,11 +24,11 @@ Preconditions:
 - You are not using the operator checkout as `--workspace`.
 - The temp workspace is a git repo. Orient does not discover files written outside git.
 
-- **Hint.** On a temp git repo with no spec, run `harness orient --query architecture --workspace <ws> --json`. `intentSources` is empty and `nextTools` includes `harness prepare`.
-- **Create.** Run `harness prepare --workspace <ws> --json`. `created` is `2`. `docs/specs/overview.md` and `docs/adr/0000-architecture.md` exist and contain `TODO`.
+- **Hint.** On a temp git repo with no spec, run `ae orient --query architecture --workspace <ws> --json`. `intentSources` is empty and `nextTools` includes `ae prepare`.
+- **Create.** Run `ae prepare --workspace <ws> --json`. `created` is `2`. `docs/specs/overview.md` and `docs/adr/0000-architecture.md` exist and contain `TODO`.
 - **Discover.** Run orient again. `intentSources` paths are those two files, with kinds `adr` and `spec`.
-- **Skip.** Rewrite the spec. Run `harness prepare` again. The spec status is `skipped` and the rewrite is still on disk.
-- **Ignore.** In a second temp repo, commit a `.gitignore` of `docs/`. Run `harness prepare --json`. Both files have status `ignored` and neither path exists. Orient `nextTools` includes `un-ignore docs/specs and docs/adr, then harness prepare`.
+- **Skip.** Rewrite the spec. Run `ae prepare` again. The spec status is `skipped` and the rewrite is still on disk.
+- **Ignore.** In a second temp repo, commit a `.gitignore` of `docs/`. Run `ae prepare --json`. Both files have status `ignored` and neither path exists. Orient `nextTools` includes `un-ignore docs/specs and docs/adr, then ae prepare`.
 - **Proof.** Run `node .cursor/skills/verify-harness/scripts/prove-prepare.mjs`. Exit `0`. The evidence JSON records the created paths, the orient kinds, the skipped edit, and the ignored refusal.
 
 ## Gotchas

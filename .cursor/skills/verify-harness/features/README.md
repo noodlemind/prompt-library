@@ -4,10 +4,10 @@ This directory is the maintained source for verifying user-facing Harness CLI be
 
 ## Baseline preconditions
 
-- Work from a prompt-library checkout that contains `packages/harness/bin/harness.mjs`.
+- Work from a prompt-library checkout that contains `packages/ae/bin/ae.mjs`.
 - Run `node .cursor/skills/verify-harness/scripts/doctor.mjs` and require exit `0`.
 - Drive only disposable git workspaces. Never pass `--workspace` at the operator checkout for a mutating proof.
-- Set `HARNESS_HOME` and `--copilot-home` to temp directories owned by the drive.
+- Set `AE_HOME` and `--copilot-home` to temp directories owned by the drive.
 - Keep `CI` and `HARNESS_ALLOW_INPLACE` unset unless a recipe names them.
 
 ## Driving conventions
@@ -37,7 +37,7 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 ## Features
 
 - [Intent lock](./intent-lock.md) covers spec discovery, hashes at plan lock, missing-source gate failure, and no mid-flight hash fail.
-- [Issue worktree](./issue-worktree.md) covers isolation from the default-branch checkout and `harness worktree --slug`.
+- [Issue worktree](./issue-worktree.md) covers isolation from the default-branch checkout and `ae worktree --slug`.
 - [Prepare](./prepare.md) covers starter spec and ADR files, orient discovery, skip-on-edit, and gitignored `docs/`.
 - [Journey performance](./performance.md) covers a disposable domain, linked analysis views, stale measurements and scoped authoring/review context through `verify-performance`.
 - [Installed release](./installed-release.md) covers a packed fresh installation, predecessor upgrade, matching hydrated runtime and corpus, and completed bounded experiment delivery.
