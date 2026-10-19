@@ -48,6 +48,19 @@ test('npm test forwards filters and propagates the selected test result', t => {
   assert.match(fail.stdout, /selected failure/);
 });
 
+test('npm test discovers every top-level test file', t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.repo, 'test/first.test.mjs'), "import { test } from 'node:test'; test('discovered first', () => {});\n");
+  fs.writeFileSync(path.join(f.repo, 'test/second.test.mjs'), "import { test } from 'node:test'; test('discovered second', () => {});\n");
+  fs.writeFileSync(path.join(f.repo, 'test/not-a-test.mjs'), "throw new Error('support file must not execute');\n");
+  const result = f.run('discovered .+');
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^ok \d+ - discovered first$/m);
+  assert.match(result.stdout, /^ok \d+ - discovered second$/m);
+  assert.match(result.stdout, /^# pass 2$/m);
+});
+
 test('npm test preserves the caller control home', t => {
   const f = fixture(t);
   fs.copyFileSync(path.join(f.source, 'test/trust.test.mjs'), path.join(f.repo, 'test/trust.test.mjs'));
