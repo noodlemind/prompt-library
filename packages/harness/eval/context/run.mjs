@@ -28,7 +28,7 @@ function execute({ task, workspace, copilotHome, harnessHome, policy, model, pro
   const env = { ...process.env, COPILOT_HOME: copilotHome, HARNESS_HOME: harnessHome };
   const common = ['--workspace', workspace, '--copilot-home', copilotHome, '--harness-home', harnessHome, '--no-events', '--json'];
   const setup = spawnSync(process.execPath, [bin, 'config', 'set', 'agent.enabled', 'true', '--scope', 'user', ...common], { env, encoding: 'utf8', timeout: 15_000 });
-  if (setup.status !== 0) throw new Error(`fixture configuration failed: ${setup.stderr?.slice(0, 1000)}`);
+  if (setup.error || setup.status !== 0) throw new Error(`fixture configuration failed: ${setup.error?.code || setup.stderr?.slice(0, 1000)}`);
   const prompt = `${task.prompt}\nAllowed changed files: ${task.editable.join(', ')}. Preserve all other files. Independently check your changes before finishing.`;
   const result = spawnSync(process.execPath, [bin, 'agent', prompt, '--profile', 'autonomous', '--provider', options.provider, '--model', model,
     '--max-turns', String(protocol.maxTurns), '--max-seconds', String(protocol.maxSeconds), '--context-policy', policy, '--retention-policy', protocol.retentionPolicy,

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { buildTaskContext } from '../../lib/context-policy.mjs';
 import { buildStructuralIndex } from '../../lib/repo-map/structural-index.mjs';
@@ -83,9 +83,11 @@ function integrity(fixture) {
 
 export async function runChecks(fixture) {
   if (!integrity(fixture)) return { pass: false, integrity: false, reason: 'check content changed' };
-  const result = spawnSync(process.execPath, [checker, fixture.workspace, fixture.checkFile], { encoding: 'utf8', timeout: PROTOCOL.checkerTimeoutMs, maxBuffer: 64_000 });
+  const challenge = randomBytes(16).toString('hex');
+  const result = spawnSync(process.execPath, [checker, fixture.workspace, fixture.checkFile], { input: challenge, encoding: 'utf8', timeout: PROTOCOL.checkerTimeoutMs, maxBuffer: 64_000 });
   const intact = integrity(fixture);
-  return { pass: intact && result.status === 0, integrity: intact, exitCode: result.status, signal: result.signal, error: result.error?.code ?? null, diagnostic: result.stderr?.slice(0, 2000) || null };
+  const completed = (result.stdout || '').split(/\r?\n/).includes(`harness-context-checked-v1:${challenge}:${fixture.task.checks.length}`);
+  return { pass: intact && !result.error && result.status === 0 && completed, integrity: intact, completed, exitCode: result.status, signal: result.signal, error: result.error?.code ?? null, diagnostic: result.stderr?.slice(0, 2000) || (!completed ? 'Checker did not report completed assertions.' : null) };
 }
 
 function scopeResult(fixture) {

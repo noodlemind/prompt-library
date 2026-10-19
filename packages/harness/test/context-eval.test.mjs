@@ -58,6 +58,28 @@ test('independent checks reject baseline and accept repair outside the editable 
   assert.equal((await runChecks(fixture)).integrity, false);
 });
 
+test('acceptance timeout remains a failure when source exits zero on termination', async t => {
+  const fixture = await prepareCase({ root: directory(t), id: 'timeout-zero', task: {
+    ...simple,
+    files: { 'src/value.mjs': "process.on('SIGTERM', () => process.exit(0));\nsetInterval(() => {}, 100);\nexport async function value() { return await new Promise(() => {}); }\n" },
+    checks: [{ module: 'src/value.mjs', export: 'value', args: [], expected: 2 }],
+  } });
+  const result = await runChecks(fixture);
+  assert.equal(result.error, 'ETIMEDOUT');
+  if (process.platform !== 'win32') assert.equal(result.exitCode, 0);
+  assert.equal(result.pass, false);
+});
+
+test('source cannot pass acceptance by exiting before the assertions run', async t => {
+  const fixture = await prepareCase({ root: directory(t), id: 'premature-exit', task: {
+    ...simple, files: { 'src/value.mjs': 'process.exit(0);\nexport const value = 0;\n' },
+  } });
+  const result = await runChecks(fixture);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.error, null);
+  assert.equal(result.pass, false);
+});
+
 test('all frozen cases have failing acceptance baselines in every policy arm', async (t) => {
   const cases = JSON.parse(fs.readFileSync(new URL('../eval/context/cases.json', import.meta.url))).cases;
   const result = await runStudy({ root: directory(t), cases, repeats: 1, dryRun: true });

@@ -4,6 +4,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const [workspace, checkFile] = process.argv.slice(2);
+const challenge = fs.readFileSync(0, 'utf8').trim();
+assert.match(challenge, /^[a-f0-9]{32}$/);
 const task = JSON.parse(fs.readFileSync(checkFile, 'utf8'));
 for (const check of task.checks) {
   const module = await import(pathToFileURL(path.join(workspace, check.module)));
@@ -15,3 +17,4 @@ for (const check of task.checks) {
     else assert.deepEqual(await evaluate(), check.expected);
   }
 }
+console.log(`harness-context-checked-v1:${challenge}:${task.checks.length}`);
