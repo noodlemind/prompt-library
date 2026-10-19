@@ -12,8 +12,6 @@ name: Harness on Windows
 on:
   pull_request:
   workflow_dispatch:
-  push:
-    branches: ['feat/**', 'feature/**']
 
 permissions:
   contents: read
@@ -45,13 +43,15 @@ jobs:
         continue-on-error: true
         env:
           HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-full
+          HARNESS_PROOF_LOG: ${{ github.workspace }}/delivery-transcripts.jsonl
         run: |
           $preloadRoot = $env:GITHUB_WORKSPACE.Replace('\', '/')
           $env:NODE_OPTIONS = '--require="' + $preloadRoot + '/packages/ae/test/helpers/domain-parent-profile.cjs"'
           & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoLogo -NoProfile -NonInteractive -Command '[Console]::Write([System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks)'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Location packages/ae
-          node --test --test-concurrency=2 ./test/*.test.mjs
+          node --test --test-concurrency=2 ./test/*.test.mjs 2>&1 | Tee-Object -FilePath windows-tests.log
+          exit $LASTEXITCODE
 
       - name: CLI scenarios
         continue-on-error: true
@@ -306,6 +306,8 @@ jobs:
           include-hidden-files: true
           path: |
             win-output/
+            packages/ae/windows-tests.log
+            delivery-transcripts.jsonl
             .harness/diagnostics/windows-parent-full/
 
       # The one step that decides whether this job is green. It runs LAST, and

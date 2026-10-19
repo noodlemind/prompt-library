@@ -49,111 +49,19 @@ jobs:
         run: npm ci --prefix packages/ae
 
       - name: Harness test suite
-        run: npm --prefix packages/ae test
+        shell: bash
+        env:
+          HARNESS_PROOF_LOG: ${{ github.workspace }}/delivery-transcripts.jsonl
+        run: npm --prefix packages/ae test 2>&1 | tee harness-tests.log
 
       - name: Prompt library contracts
         run: node --test packages/ae/test/prompt-library-contracts.test.mjs
 
-  delivery-contracts:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '22'
-      - run: npm ci --prefix packages/ae
-      - name: Worktree and platform contracts
-        run: node --test packages/ae/test/issue-intake.test.mjs packages/ae/test/corpus-home.test.mjs packages/ae/test/provider-adapters.test.mjs packages/ae/test/resources-plugins.test.mjs packages/ae/test/unchanged-retry.test.mjs packages/ae/test/windows-workflow.test.mjs packages/ae/test/fs-copy.test.mjs packages/ae/test/vscode-lm-bridge.test.mjs packages/ae/test/storage-aliases.test.mjs
-      - name: CLI and installed delivery contracts
-        id: proof
-        continue-on-error: true
-        shell: bash
-        env:
-          HARNESS_PROOF_LOG: delivery-transcripts.jsonl
-        run: node --test packages/ae/test/deterministic-delivery.test.mjs packages/ae/test/insight-compound.test.mjs > delivery-proof.log 2>&1
-      - name: Preserve proof output
+      - name: Preserve test and installed-delivery output
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: delivery-proof-${{ matrix.os }}
+          name: harness-tests-linux-output
           path: |
-            delivery-proof.log
+            harness-tests.log
             delivery-transcripts.jsonl
-      - name: Require an executed passing verdict
-        if: always()
-        shell: bash
-        env:
-          PROOF_OUTCOME: ${{ steps.proof.outcome }}
-        run: |
-          cat delivery-proof.log || true
-          test "$PROOF_OUTCOME" = success
-
-  windows-adaptive-contracts:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '22'
-      - run: npm ci --prefix packages/ae
-      - name: Native Windows authority, discovery and cleanup contracts
-        id: adaptive
-        continue-on-error: true
-        shell: bash
-        env:
-          HARNESS_PROOF_LOG: windows-adaptive-transcripts.jsonl
-          HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-focus
-        run: |
-          preload_root="${GITHUB_WORKSPACE//\\//}"
-          export NODE_OPTIONS="--require=\"$preload_root/packages/ae/test/helpers/domain-parent-profile.cjs\""
-          node --test \
-          packages/ae/test/cli-compound-telemetry.test.mjs \
-          packages/ae/test/windows-authority.test.mjs \
-          packages/ae/test/domain-contract.test.mjs \
-          packages/ae/test/domain-context.test.mjs \
-          packages/ae/test/domain-bindings.test.mjs \
-          packages/ae/test/domain-delivery.test.mjs \
-          packages/ae/test/domain-commands.test.mjs \
-          packages/ae/test/domain-plans.test.mjs \
-          packages/ae/test/experiment-state.test.mjs \
-          packages/ae/test/experiment-snapshots.test.mjs \
-          packages/ae/test/adaptive-intent.test.mjs \
-          packages/ae/test/caffeinated.test.mjs \
-          packages/ae/test/inventory.test.mjs \
-          packages/ae/test/inventory-editors.test.mjs \
-          packages/ae/test/diagnostic-commands.test.mjs \
-          packages/ae/test/runner.test.mjs \
-          packages/ae/test/verification-recipes.test.mjs \
-          packages/ae/test/hook-runtime.test.mjs \
-          packages/ae/test/project-layout.test.mjs \
-          packages/ae/test/external-plan-review.test.mjs \
-          packages/ae/test/cli-evidence-verify.test.mjs \
-          packages/ae/test/agent-delivery.test.mjs \
-          packages/ae/test/plan-operations.test.mjs \
-          > windows-adaptive-proof.log 2>&1
-      - name: Preserve native Windows proof
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: windows-adaptive-proof
-          include-hidden-files: true
-          path: |
-            windows-adaptive-proof.log
-            windows-adaptive-transcripts.jsonl
-            .harness/diagnostics/windows-parent-focus/
-      - name: Require native Windows passing verdict
-        if: always()
-        shell: bash
-        env:
-          ADAPTIVE_OUTCOME: ${{ steps.adaptive.outcome }}
-        run: |
-          cat windows-adaptive-proof.log || true
-          test "$ADAPTIVE_OUTCOME" = success
