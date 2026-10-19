@@ -185,6 +185,7 @@ export async function runStudy({ root, cases, repeats = PROTOCOL.repeats, polici
   const provenance = {
     corpusHash: hash(JSON.stringify(cases)), checkerHash: hash(fs.readFileSync(checker)), protocolHash: hash(fs.readFileSync(protocolFile)),
     runtime: process.version, platform: process.platform, arch: process.arch, host, model,
+    modelSelection: model?.trim().toLowerCase() === 'auto' ? 'automatic' : 'fixed',
     revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: here, encoding: 'utf8' }).trim(),
     sourceDirty: Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: here, encoding: 'utf8' }).trim()),
     profile: PROTOCOL.profile, publicVerifier: PROTOCOL.publicVerifier,
@@ -219,7 +220,7 @@ export async function runStudy({ root, cases, repeats = PROTOCOL.repeats, polici
           pass: ['live', 'scripted'].includes(kind) && result.status === 'ok' && checks.pass && scope.pass,
           baseline, publicBaseline, checks, scope, error, durationMs: Date.now() - startedAt, stopReason: result.stopReason ?? null,
           requestedModel: result.model ?? model, observedModels: models,
-          actualModel: requests.length && requests.every(record => record.model) && models.length === 1 ? models[0] : null,
+          actualModel: requests.length && requests.every(record => record.model) && models.length === 1 && models[0] !== 'auto' ? models[0] : null,
           provider: result.provider ?? null,
           accounting: result.contextAccounting || [], evidenceBeforeEdit: evidenceResult(task, result),
           context: result.context ? { files: result.context.files, coverage: result.context.coverage } : null,
@@ -259,7 +260,8 @@ export function summarizeStudy(attempts, provenance) {
     };
   }
   const limits = PROTOCOL.promotion;
-  const eligible = attempts.length && attempts.every(row => row.kind === 'live' && row.actualModel === provenance.model)
+  const eligible = provenance.modelSelection !== 'automatic' && provenance.model !== 'auto'
+    && attempts.length && attempts.every(row => row.kind === 'live' && row.actualModel === provenance.model)
     && ['legacy', 'selective', 'subsystem'].every(policy => arms[policy]?.heldOutAttempts >= limits.minimumHeldOutAttemptsPerArm && arms[policy].usageCoverage === 'complete')
     && arms.legacy.passed / arms.legacy.attempts >= limits.minimumBaselinePassRate;
   const candidates = eligible ? ['selective', 'subsystem'].filter(policy => arms[policy].failed <= arms.legacy.failed + limits.maximumAdditionalFailures

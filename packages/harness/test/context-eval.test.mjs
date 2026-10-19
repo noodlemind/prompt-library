@@ -293,3 +293,44 @@ test('development improvements cannot conceal a held-out quality regression', ()
   assert.ok(result.arms.selective.heldOutFailed > result.arms.legacy.heldOutFailed);
   assert.equal(result.comparison, 'no-candidate');
 });
+
+test('the live CLI requires explicit permission for native Auto diagnostics', t => {
+  const root = directory(t);
+  const bin = path.resolve(import.meta.dirname, '../eval/context/run.mjs');
+  const cases = [
+    { args: ['--provider', 'github-copilot', '--model', 'auto'], message: /explicit.*--allow-auto/ },
+    { args: ['--provider', 'openai', '--model', 'auto', '--allow-auto'], message: /GitHub Copilot/ },
+    { args: ['--provider', 'github-copilot', '--model', 'auto', '--allow-auto', '--split', 'invalid'], message: /split must/ },
+  ];
+  for (const [index, sample] of cases.entries()) {
+    const out = path.join(root, String(index));
+    const result = spawnSync(process.execPath, [bin, '--out', out, '--live', ...sample.args], { encoding: 'utf8', timeout: 15000 });
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, sample.message);
+    assert.equal(fs.existsSync(out), false);
+  }
+});
+
+test('an Auto alias stays observed without claiming a resolved model identity', async t => {
+  const result = await runStudy({ root: directory(t), cases: [simple], repeats: 1, policies: ['legacy'], model: 'auto', host: 'scripted-test',
+    execute: async fixture => {
+      fs.writeFileSync(path.join(fixture.workspace, 'src/value.mjs'), 'export const value = 2;\n');
+      return { status: 'ok', contextAccounting: [{ boundary: 'headless-request', model: 'auto' }] };
+    },
+  });
+  assert.equal(result.provenance.modelSelection, 'automatic');
+  assert.deepEqual(result.attempts[0].observedModels, ['auto']);
+  assert.equal(result.attempts[0].actualModel, null);
+  assert.equal(result.summary.comparison, 'inconclusive');
+});
+
+test('automatic routing cannot qualify promotion even with complete qualifying usage', () => {
+  const attempts = ['legacy', 'selective', 'subsystem'].flatMap(policy => Array.from({ length: 30 }, () => ({
+    policy, kind: 'live', pass: true, split: 'held-out', actualModel: 'auto',
+    accounting: [{ boundary: 'headless-request', modelUsage: { measurement: 'observed', inputTokens: policy === 'legacy' ? 100 : 50, outputTokens: 10 } }],
+  })));
+  const result = summarizeStudy(attempts, { policies: ['legacy', 'selective', 'subsystem'], model: 'auto', modelSelection: 'automatic' });
+  assert.equal(result.comparison, 'inconclusive');
+  assert.deepEqual(result.candidates, []);
+});

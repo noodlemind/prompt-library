@@ -53,9 +53,12 @@ Metrics: `eval/results/latest.json` (autonomous only — do not merge into AE gr
 ```bash
 node eval/context/run.mjs --out /absolute/new/external/directory
 node eval/context/run.mjs --out /absolute/new/live/directory --live --provider <provider> --model <exact-available-id>
+node eval/context/run.mjs --out /absolute/new/auto/directory --live --provider github-copilot --model auto --allow-auto
 ```
 
 The output directory must be new, its parent must exist, and its physical path must be outside the checkout. The first command makes no model calls. Its 126 trials validate broken baselines, fixture preparation and policy packaging. Dry runs and scripted tests never count as model task success. Live runs require configured provider access. The runner selects no fallback model.
+
+`--allow-auto` permits an explicit native GitHub Copilot Auto diagnostic. The agent preserves that selection through the editor bridge. Auto responses identify the routing alias. The resolved model identity remains unknown unless the provider reports it. Automatic selection remains ineligible for policy promotion, even with complete usage. Other providers keep their existing default-model behavior.
 
 Each arm starts in a fresh Git workspace. The autonomous agent receives public task tests through a fixed verifier command. Private acceptance checks stay outside the editable workspace and run again after the agent stops. Both baselines must fail before an attempt begins. Public tests use separate probes; they do not replace private preservation checks. Hash checks detect checker changes. File snapshots detect changes outside the allowed scope, including public verifier files and new files. Valid native edit undo receipts are recorded metadata. Unregistered undo files remain scope violations. This protects measurement integrity; it is not an operating-system sandbox.
 

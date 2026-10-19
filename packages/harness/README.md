@@ -162,6 +162,8 @@ calls GitHub Copilot model/completion endpoints itself. The companion extension
 uses `vscode.lm`, keeping authentication, proxy policy, and enterprise CA
 handling inside VS Code.
 
+An explicit `--model auto` selects VS Code's native Auto routing for GitHub Copilot. An omitted model keeps Harness default selection. Other providers interpret `auto` as their default model. Auto responses may identify only the routing alias, so resolved model identity remains unknown.
+
 After installation or upgrade, reload the VS Code window and sign in to GitHub
 Copilot Chat. The extension starts automatically, opens an authenticated
 loopback bridge, and publishes its connection state under `~/.copilot/.harness/`.

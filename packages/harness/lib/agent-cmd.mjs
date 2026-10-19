@@ -16,8 +16,7 @@ import { readModelCache } from './model-cache.mjs';
 import {
   DEFAULT_PROVIDER,
   PROVIDERS,
-  isAutoModel,
-  resolveDefaultModel,
+  resolveRequestedModel,
   startProvider,
   normalizeEnabledProviders,
 } from './provider.mjs';
@@ -212,9 +211,7 @@ export function planAgent(argv) {
   }
 
   const explicitModel = stringFlag(argv, '--model') || configured.model || null;
-  const model = explicitModel && !isAutoModel(explicitModel)
-    ? explicitModel
-    : resolveDefaultModel(providerId, readModelCache(copilotHome));
+  const model = resolveRequestedModel(providerId, explicitModel, readModelCache(copilotHome));
 
   const profileName = stringFlag(argv, '--profile') || configured.profile || DEFAULT_PROFILE_ID;
   const profile = resolveProfile(profileName);

@@ -231,6 +231,26 @@ test('the GitHub Copilot adapter uses the editor for both catalogue and completi
   assert.equal(completion.model, 'copilot/gpt-4.1');
 });
 
+test('explicit Copilot Auto reaches the native selector through the real adapter', async t => {
+  const copilotHome = tempDir('bridge-auto-home-');
+  const { vscode, context } = fakeVSCode();
+  const [model] = await vscode.lm.selectChatModels();
+  const requested = [];
+  vscode.lm.selectChatModels = async selector => {
+    requested.push(selector.id ?? null);
+    return !selector.id || selector.id === 'auto' ? [{ ...model, id: 'auto', name: 'Auto' }] : [];
+  };
+  const bridge = await startBridgeServer({ vscode, context, copilotHome });
+  t.after(() => bridge.close());
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  const provider = startProvider({ provider: 'github-copilot', model: 'auto', copilotHome });
+  t.after(() => provider.close());
+  const result = await provider.complete({ messages: [{ role: 'user', text: 'hello' }], tools: [] });
+  assert.equal(provider.model, 'auto');
+  assert.equal(result.model, 'auto');
+  assert.equal(requested[0], 'auto');
+});
+
 test('GitHub Copilot refuses direct HTTPS credentials when the editor bridge is absent', async (t) => {
   const copilotHome = tempDir('bridge-required-home-');
   let directRequests = 0;

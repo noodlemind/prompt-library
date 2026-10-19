@@ -110,7 +110,7 @@ test('unsetConfigValue removes only the named keys and refuses a file it cannot 
 
 // --- `auto` resolves through the fetched catalogue --------------------------
 
-test('an unset or auto model resolves through the fetched catalogue before the static table', () => {
+test('an unset model resolves through the catalogue while explicit Copilot Auto stays native', () => {
   const home = tempDir('knobs-auto-home-');
   const ws = tempDir('knobs-auto-ws-');
   const base = ['do', 'a', 'thing', '--workspace', ws, '--copilot-home', home];
@@ -126,7 +126,8 @@ test('an unset or auto model resolves through the fetched catalogue before the s
   });
   assert.equal(planAgent(base).model, 'gpt-4.1',
     'the declared default, confirmed callable by the catalogue, beats whatever sorts first');
-  assert.equal(planAgent([...base, '--model', 'auto']).model, 'gpt-4.1', 'typed auto resolves the same way');
+  assert.equal(planAgent([...base, '--model', 'auto']).model, 'auto');
+  assert.equal(planAgent([...base, '--provider', 'openai', '--model', 'auto']).model, PROVIDERS.openai.defaultModel);
   assert.equal(planAgent([...base, '--model', 'gpt-4.1']).model, 'gpt-4.1', 'an explicit model is never second-guessed');
 
   writeModelCache(home, {

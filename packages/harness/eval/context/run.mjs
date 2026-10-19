@@ -10,6 +10,7 @@ const options = {};
 const allowed = ['out', 'provider', 'model', 'split', 'repeats', 'policies', 'retention-policy'];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--live') { options.live = true; continue; }
+  if (args[i] === '--allow-auto') { options.allowAuto = true; continue; }
   const name = args[i].slice(2);
   if (!args[i].startsWith('--') || !allowed.includes(name) || options[name] !== undefined || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`invalid argument: ${args[i]}`);
   options[name] = args[++i];
@@ -17,7 +18,12 @@ for (let i = 0; i < args.length; i++) {
 if (!options.out) throw new Error('--out <new-external-directory> is required');
 const checkout = path.resolve(import.meta.dirname, '../../../..');
 const out = resolveStudyOutput({ checkout, output: options.out });
-if (options.live && (!Object.hasOwn(PROVIDERS, options.provider) || !options.model || options.model.toLowerCase() === 'auto')) throw new Error('live runs require an explicit provider and an exact available model; no fallback is selected');
+if (options.live && (!Object.hasOwn(PROVIDERS, options.provider) || !options.model)) throw new Error('live runs require an explicit provider and model; no fallback is selected');
+if (options.live && options.model.trim().toLowerCase() === 'auto') {
+  if (!options.allowAuto) throw new Error('Auto diagnostics require explicit --allow-auto; results cannot qualify policy promotion');
+  if (options.provider !== 'github-copilot') throw new Error('--allow-auto supports native GitHub Copilot Auto only');
+  options.model = 'auto';
+}
 const split = options.split || 'all';
 if (!['all', 'development', 'held-out'].includes(split)) throw new Error('split must be all, development or held-out');
 const catalog = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'cases.json'), 'utf8'));
