@@ -13,8 +13,8 @@ The packed checkout must install and upgrade into a matching CLI, hooks, schemas
 
 ## How to get to it (user POV)
 
-- Bind `verify-installed-release` as a required behavior check in the accepted release plan, then run `harness verify --plan <plan> --json`.
-- Run `harness checks run verify-installed-release --json` for a focused drive before full plan verification.
+- Bind `verify-installed-release` as a required behavior check in the accepted release plan, then run `ae verify --plan <plan> --json`.
+- Run `ae checks run verify-installed-release --json` for a focused drive before full plan verification.
 - Read the captured `installed-release.json` and its referenced `build/` and `drive/` files after the disposable homes are removed.
 
 ## Driving it with prove-installed-release.mjs
@@ -26,7 +26,7 @@ Preconditions:
 - The check runs on macOS, the supported experiment sandbox host. The Windows pilot was waived; it is not reported as verified.
 - The checkout's check configuration is trusted. The verification controller creates `HARNESS_CHECK_ARTIFACT_DIR`.
 
-- **Drive.** Run `node packages/harness/bin/harness.mjs checks run verify-installed-release --json` from the checkout. Require exit `0`, check status `passed`, and the captured `installed-release.json` artifact.
+- **Drive.** Run `node packages/ae/bin/ae.mjs checks run verify-installed-release --json` from the checkout. Require exit `0`, check status `passed`, and the captured `installed-release.json` artifact.
 - **Installation.** Read that artifact. `freshInstall.matchedPackage`, `freshInstall.schema4`, `upgrade.lockUpdated`, and `upgrade.newReferenceHydrated` are `true`; the package and upgrade versions match the source version.
 - **Measurement.** Read `measurements` and the eight archived `measurement.json` artifacts. The four observed losses are `2`, `1`, `0`, and `0.5`; correctness is `true`, `true`, `false`, and `true`. Each attempt has one score and one guard artifact.
 - **Retention.** Read `final` and `preservation`. The experiment is `target-reached`, spent invocations are `8`, retained weights are `[1.5, 1.5]`, and index, HEAD, unrelated bytes, and staged diff preservation assertions passed.

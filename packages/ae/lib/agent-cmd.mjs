@@ -1,0 +1,532 @@
+/**
+ * `ae agent "<task>"` — CLI surface for the headless turn loop.
+ */
+import path from 'node:path';
+import { buildTaskContext, CONTEXT_POLICIES } from './context-policy.mjs';
+import { createHash } from 'node:crypto';
+import { parseFlags } from './flags.mjs';
+import { createStyle, keyWidthFor, EXIT } from './style.mjs';
+import { redactedJson, createRedactor } from './redact.mjs';
+import { inertLine } from './knowledge/store.mjs';
+import { resolveCopilotHome } from './paths.mjs';
+import { runOrient } from './orient.mjs';
+import { AGENT_LIMITS, resolveConfig } from './config.mjs';
+import { isProjectTrusted } from './trust.mjs';
+import { readModelCache } from './model-cache.mjs';
+import {
+  DEFAULT_PROVIDER,
+  PROVIDERS,
+  resolveRequestedModel,
+  startProvider,
+  normalizeEnabledProviders,
+} from './provider.mjs';
+import {
+  AGENT_VALUE_FLAGS,
+  AGENT_ADDON_DISCLAIMER,
+  DEFAULT_MAX_SECONDS,
+  DEFAULT_MAX_TURNS,
+  DEFAULT_PERSONA,
+  DEFAULT_PROFILE_ID,
+  AUTONOMOUS_SYSTEM_MAX_BYTES,
+  buildSystemPrompt,
+  orientForTask,
+  resolvePersona,
+  resolveProfile,
+  listProfileIds,
+  runAgentLoop,
+} from './agent-loop.mjs';
+
+const ui = createStyle({ argv: process.argv.slice(2) });
+
+function usageError(message, hint) {
+  return Object.assign(new Error(message), { code: 'E_USAGE', exit: EXIT.usage, hint });
+}
+
+function agentConfig({ argv = [] } = {}) {
+  try {
+    const flags = parseFlags(argv);
+    const workspace = path.resolve(flags.workspace);
+    const copilotHome = resolveCopilotHome(flags.copilotHome);
+    const values = resolveConfig({
+      copilotHome,
+      workspace,
+      projectTrusted: isProjectTrusted({ workspace, copilotHome }),
+    })?.values ?? {};
+    return {
+      provider: values['agent.provider'] || '',
+      model: values['agent.model'] || '',
+      maxTurns: values['agent.max_turns'] ?? null,
+      maxSeconds: values['agent.max_seconds'] ?? null,
+      enabled: values['agent.enabled'] === true,
+      providers: normalizeEnabledProviders(values['agent.providers']),
+      profile: values['agent.profile'] || DEFAULT_PROFILE_ID,
+    };
+  } catch {
+    return {
+      provider: '',
+      model: '',
+      maxTurns: null,
+      maxSeconds: null,
+      enabled: false,
+      providers: [DEFAULT_PROVIDER],
+      profile: DEFAULT_PROFILE_ID,
+    };
+  }
+}
+
+function boundedNumber(argv, name, { min, max, fallback }) {
+  let raw = null;
+  let seen = 0;
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (a === name) {
+      seen += 1;
+      raw = argv[i + 1] === undefined || argv[i + 1].startsWith('--') ? '' : argv[i += 1];
+    } else if (a.startsWith(`${name}=`)) {
+      seen += 1;
+      raw = a.slice(name.length + 1);
+    }
+  }
+  if (seen === 0) return fallback;
+  if (seen > 1) throw usageError(`${name} was given more than once`, `pass ${name} at most once`);
+  const value = Number(raw);
+  if (raw === '' || !Number.isFinite(value) || !Number.isInteger(value) || value < min || value > max) {
+    throw usageError(
+      `${name} must be a whole number between ${min} and ${max} (got ${JSON.stringify(raw)})`,
+      `${name} ${fallback}`,
+    );
+  }
+  return value;
+}
+
+function stringFlag(argv, name) {
+  let raw = null;
+  let seen = 0;
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (a === name) {
+      seen += 1;
+      raw = argv[i + 1] === undefined || argv[i + 1].startsWith('--') ? '' : argv[i += 1];
+    } else if (a.startsWith(`${name}=`)) {
+      seen += 1;
+      raw = a.slice(name.length + 1);
+    }
+  }
+  if (seen === 0) return null;
+  if (seen > 1) throw usageError(`${name} was given more than once`, `pass ${name} at most once`);
+  if (!raw) throw usageError(`${name} needs a value`, `${name} <value>`);
+  return raw;
+}
+
+/**
+ * Parse `--verify-cmd` as either:
+ * - `--verify-cmd 'node test.js'` (single string, split on spaces carefully via shell words — we use simple split)
+ * - or remaining after `--verify-cmd -- node test.js` is awkward; prefer one string value.
+ * Also supports repeated form: values joined then split with a minimal argv parser.
+ *
+ * Prefer: `--verify-cmd node --verify-cmd test.js` is wrong.
+ * Use: `--verify-cmd "node ./verify.mjs"` → ['node', './verify.mjs'] via shell-like split.
+ */
+export function parseVerifyCmd(argv) {
+  const raw = stringFlag(argv, '--verify-cmd');
+  if (raw === null) return null;
+  // Minimal word split: respects double quotes.
+  const out = [];
+  let cur = '';
+  let inQuote = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === '"') {
+      inQuote = !inQuote;
+      continue;
+    }
+    if (!inQuote && /\s/.test(ch)) {
+      if (cur) out.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  if (!out.length) throw usageError('--verify-cmd needs a program argv', '--verify-cmd "node ./task/verify.mjs"');
+  return out;
+}
+
+/** Task = bare positionals joined (shell quote loss still yields the full task). */
+export function taskFromArgv(argv) {
+  const words = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (a.startsWith('-')) {
+      if (!a.includes('=') && AGENT_VALUE_FLAGS.includes(a) && argv[i + 1] !== undefined) i += 1;
+      continue;
+    }
+    words.push(a);
+  }
+  return words.join(' ').trim();
+}
+
+/** Journal argv: flags kept, task replaced by length+digest (never the transcript). */
+export function agentJournalArgv(argv) {
+  const out = [];
+  const task = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--') break;
+    if (a.startsWith('-')) {
+      out.push(a);
+      if (!a.includes('=') && AGENT_VALUE_FLAGS.includes(a) && argv[i + 1] !== undefined) out.push(argv[i += 1]);
+      continue;
+    }
+    task.push(a);
+  }
+  if (!task.length) return out;
+  const text = task.join(' ');
+  const digest = createHash('sha256').update(text).digest('hex').slice(0, 12);
+  return [`<task:${Buffer.byteLength(text, 'utf8')}b:${digest}>`, ...out];
+}
+
+export function planAgent(argv) {
+  const flags = parseFlags(argv);
+  const workspace = path.resolve(flags.workspace);
+  const copilotHome = resolveCopilotHome(flags.copilotHome);
+  const task = taskFromArgv(argv);
+  if (!task) throw usageError('agent needs a task, e.g. ae agent "make the failing test pass"');
+
+  const personaName = stringFlag(argv, '--agent') || DEFAULT_PERSONA;
+  const configured = agentConfig({ argv });
+  const providerFlag = stringFlag(argv, '--provider');
+  const providerId = providerFlag || configured.provider || DEFAULT_PROVIDER;
+  if (!(providerId in PROVIDERS)) {
+    throw usageError(`unknown provider: ${providerId}`, `known providers: ${Object.keys(PROVIDERS).join(', ')}`);
+  }
+  if (!providerFlag && !configured.providers.includes(providerId)) {
+    throw usageError(
+      `provider ${providerId} is disabled`,
+      `ae config set agent.providers ${[...configured.providers, providerId].join(',')} --scope user`,
+    );
+  }
+
+  const explicitModel = stringFlag(argv, '--model') || configured.model || null;
+  const model = resolveRequestedModel(providerId, explicitModel, readModelCache(copilotHome));
+
+  const profileName = stringFlag(argv, '--profile') || configured.profile || DEFAULT_PROFILE_ID;
+  const profile = resolveProfile(profileName);
+  const verifyCmd = parseVerifyCmd(argv);
+  const retentionPolicy = stringFlag(argv, '--retention-policy') || 'legacy';
+  if (!['legacy', 'structured'].includes(retentionPolicy)) throw usageError('--retention-policy must be legacy or structured');
+  const contextPolicy = stringFlag(argv, '--context-policy') || 'legacy';
+  if (!CONTEXT_POLICIES.includes(contextPolicy)) throw usageError('--context-policy must be legacy, selective or subsystem');
+
+  const maxTurnsFallback = configured.maxTurns
+    ?? profile.maxTurnsDefault
+    ?? DEFAULT_MAX_TURNS;
+  const maxSecondsFallback = configured.maxSeconds
+    ?? profile.maxSecondsDefault
+    ?? DEFAULT_MAX_SECONDS;
+
+  return {
+    flags,
+    workspace,
+    copilotHome,
+    task,
+    personaName,
+    providerId,
+    model,
+    enabledProviders: configured.providers,
+    profile,
+    verifyCmd,
+    retentionPolicy,
+    contextPolicy,
+    maxTurns: boundedNumber(argv, '--max-turns', { ...AGENT_LIMITS.maxTurns, fallback: maxTurnsFallback }),
+    maxSeconds: boundedNumber(argv, '--max-seconds', { ...AGENT_LIMITS.maxSeconds, fallback: maxSecondsFallback }),
+    toolTimeoutSeconds: boundedNumber(argv, '--tool-timeout', { ...AGENT_LIMITS.toolTimeout, fallback: null }),
+  };
+}
+
+function assertAgentEnabled({ workspace, copilotHome }) {
+  const home = resolveCopilotHome(copilotHome);
+  const trusted = isProjectTrusted({ workspace, copilotHome: home });
+  const resolved = resolveConfig({ copilotHome: home, workspace, projectTrusted: trusted });
+  if (resolved?.values?.['agent.enabled'] === true) return;
+  throw Object.assign(new Error('agent mode is off'), {
+    code: 'E_DENIED',
+    exit: EXIT.needsApproval,
+    hint: 'ae config set agent.enabled true --scope user  (or shift+tab in the ledger)',
+  });
+}
+
+export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, runOrientFn = runOrient } = {}) {
+  const p = planAgent(argv);
+  const persona = resolvePersona(p.copilotHome, p.personaName);
+  const hasVerifier = Array.isArray(p.verifyCmd) && p.verifyCmd.length > 0;
+  const contextProvider = p.contextPolicy === 'legacy' ? null : () => buildTaskContext({ workspace: p.workspace, copilotHome: p.copilotHome, task: p.task, files: p.flags.files || [], home: p.flags.harnessHome || process.env.HARNESS_HOME, policy: p.contextPolicy });
+
+  if (p.flags.dryRun) {
+    const orientation = await orientForTask({
+      workspace: p.workspace,
+      copilotHome: p.copilotHome,
+      task: p.task,
+      runOrientFn,
+      dryRun: true,
+      flags: p.flags,
+    });
+    const systemPrompt = buildSystemPrompt({
+      persona,
+      profile: p.profile,
+      orientation: orientation.pack,
+      hasVerifier,
+    });
+    const context = contextProvider?.();
+    return {
+      schema: 1,
+      dryRun: true,
+      contextPolicy: p.contextPolicy,
+      context: context ? { files: context.files, coverage: context.coverage, bytes: Buffer.byteLength(context.body) } : null,
+      runtime: 'optional-addon',
+      disclaimer: AGENT_ADDON_DISCLAIMER,
+      task: p.task,
+      persona: { name: persona.name, hydrated: persona.hydrated, source: persona.source },
+      profile: {
+        id: p.profile.id,
+        track: p.profile.track,
+        testOnly: Boolean(p.profile.testOnly),
+        keeps: [...p.profile.keeps],
+        drops: p.profile.drops.map((d) => ({ ...d })),
+      },
+      verifyCmd: p.verifyCmd,
+      orientation: {
+        available: orientation.available,
+        materialized: orientation.materialized === true,
+        contextPack: orientation.contextPack ?? null,
+        reason: orientation.reason,
+      },
+      provider: p.providerId,
+      model: p.model || PROVIDERS[p.providerId].defaultModel,
+      systemPromptBytes: Buffer.byteLength(systemPrompt, 'utf8'),
+      systemPromptCap: p.profile.shortCard ? AUTONOMOUS_SYSTEM_MAX_BYTES : null,
+      maxTurns: p.maxTurns,
+      maxSeconds: p.maxSeconds,
+      status: 'ok',
+      exitCode: EXIT.ok,
+      turns: [],
+      turnCount: 0,
+    };
+  }
+
+  const startedAt = Date.now();
+  const orientation = await orientForTask({
+    workspace: p.workspace,
+    copilotHome: p.copilotHome,
+    task: p.task,
+    runOrientFn,
+    flags: p.flags,
+  });
+  const spent = Math.floor((Date.now() - startedAt) / 1000);
+
+  const loopResult = await runAgentLoop({
+    task: p.task,
+    workspace: p.workspace,
+    copilotHome: p.copilotHome,
+    persona,
+    profile: p.profile,
+    orientation,
+    verifyCmd: p.verifyCmd,
+    harnessHome: p.flags.harnessHome || process.env.HARNESS_HOME || null,
+    maxTurns: p.maxTurns,
+    maxSeconds: Math.max(1, p.maxSeconds - spent),
+    toolTimeoutSeconds: p.toolTimeoutSeconds,
+    retentionPolicy: p.retentionPolicy,
+    contextPolicy: p.contextPolicy,
+    contextProvider,
+    ctx,
+    signal: ctx.signal ?? null,
+    startProviderFn:
+      startProviderFn || (() => {
+        assertAgentEnabled({ workspace: p.workspace, copilotHome: p.copilotHome });
+        return startProvider({
+          provider: p.providerId,
+          model: p.model,
+          timeoutMs: p.maxSeconds * 1000,
+          copilotHome: p.copilotHome,
+        });
+      }),
+    onTurn: (turn, { text }) => emitTurn(ctx, p, turn, text),
+    onContext: contextAccounting => {
+      const sink = ctx.events?.withCommand?.('agent') || ctx.events;
+      sink?.emit?.('context.accounting', { contextAccounting });
+    },
+  });
+  return {
+    ...loopResult,
+    runtime: 'optional-addon',
+    disclaimer: AGENT_ADDON_DISCLAIMER,
+    verifyCmd: p.verifyCmd,
+    profile: {
+      ...(loopResult.profile || {}),
+      testOnly: Boolean(p.profile.testOnly),
+    },
+  };
+}
+
+function emitTurn(ctx, p, turn, text) {
+  const events = ctx?.events;
+  const sink = typeof events?.withCommand === 'function' ? events.withCommand('agent') : events;
+  sink?.emit?.('agent.turn', {
+    result: turn.tools.every((t) => t.dispatched && t.status === 'ok') ? 'pass' : 'fail',
+    durationMs: turn.durationMs,
+    agent: {
+      turn: turn.turn,
+      persona: p.personaName,
+      provider: p.providerId,
+      profile: p.profile?.id,
+      ended: turn.ended,
+      tools: turn.tools.map((t) => ({
+        tool: t.tool,
+        dispatched: t.dispatched,
+        status: t.status ?? null,
+        exitCode: t.exitCode ?? null,
+      })),
+      inputTokens: turn.usage?.inputTokens ?? null,
+      outputTokens: turn.usage?.outputTokens ?? null,
+      textBytes: typeof text === 'string' ? Buffer.byteLength(text, 'utf8') : 0,
+    },
+  });
+}
+
+function renderDisclaimer(result, keyWidth) {
+  console.log(ui.line({
+    state: 'warn',
+    key: 'runtime',
+    value: result.runtime || 'optional-addon',
+    note: result.disclaimer || AGENT_ADDON_DISCLAIMER,
+    keyWidth,
+  }));
+}
+
+function renderDryRun(result, flags) {
+  const keyWidth = keyWidthFor(['runtime', 'orientation', 'persona', 'profile', 'budget', 'verifier']);
+  console.log(ui.line({ state: 'ok', key: 'agent', value: result.task, note: 'dry run — nothing was called', keyWidth }));
+  renderDisclaimer(result, keyWidth);
+  console.log(ui.line({ key: 'persona', value: result.persona.name, note: result.persona.hydrated ? result.persona.source : 'not hydrated — built-in fallback', keyWidth }));
+  console.log(ui.line({ key: 'provider', value: `${result.provider} · ${result.model}`, note: `system prompt ${result.systemPromptBytes} bytes`, keyWidth }));
+  console.log(ui.line({
+    state: result.orientation.available ? 'ok' : 'warn',
+    key: 'orientation',
+    value: result.orientation.available ? result.orientation.contextPack : 'unavailable',
+    note: result.orientation.reason || (result.orientation.materialized ? undefined : 'would be written'),
+    keyWidth,
+  }));
+  const profileNote = result.profile.testOnly
+    ? `test fixture · keeps ${(result.profile.keeps || []).join(', ')}`
+    : `track ${result.profile.track || result.profile.id}`;
+  console.log(ui.line({
+    key: 'profile',
+    value: result.profile.id,
+    note: profileNote,
+    keyWidth,
+  }));
+  for (const drop of result.profile.drops || []) {
+    console.log(ui.line({ state: 'warn', key: 'dropped', value: drop.step, note: `needs ${drop.precondition}`, keyWidth }));
+  }
+  if (result.verifyCmd?.length) {
+    console.log(ui.line({ key: 'verifier', value: result.verifyCmd.join(' '), keyWidth }));
+  }
+  console.log(ui.line({ key: 'budget', value: `${result.maxTurns} turns`, note: `${result.maxSeconds}s wall clock`, keyWidth }));
+  if (flags.json) console.log(redactedJson(result, { pretty: flags.verbose }));
+}
+
+function render(result, flags) {
+  if (flags.json) {
+    console.log(redactedJson(result, { pretty: flags.verbose }));
+    return;
+  }
+  if (result.dryRun) {
+    renderDryRun(result, flags);
+    return;
+  }
+  const keyWidth = keyWidthFor(['runtime', 'orientation', 'persona', 'profile', 'stopped', 'turns', 'metrics']);
+  console.log(ui.line({ state: 'ok', key: 'agent', value: result.task, keyWidth }));
+  renderDisclaimer(result, keyWidth);
+  console.log(ui.line({
+    key: 'persona',
+    value: result.persona.name,
+    note: result.persona.hydrated ? `${result.provider} · ${result.model}` : `not hydrated · ${result.provider} · ${result.model}`,
+    keyWidth,
+  }));
+  console.log(ui.line({
+    key: 'profile',
+    value: result.profile?.id || '—',
+    note: result.profile?.track ? `track ${result.profile.track}` : undefined,
+    keyWidth,
+  }));
+  console.log(ui.line({
+    state: result.orientation.available ? 'ok' : 'warn',
+    key: 'orientation',
+    value: result.orientation.available ? result.orientation.contextPack : 'unavailable',
+    note: result.orientation.reason || undefined,
+    keyWidth,
+  }));
+  for (const drop of result.profile?.drops || []) {
+    console.log(ui.line({
+      state: 'warn',
+      key: 'not run',
+      value: drop.step,
+      note: `${result.profile?.testOnly ? 'test fixture · ' : ''}needs ${drop.precondition}`,
+      keyWidth,
+    }));
+  }
+  for (const turn of result.turns) {
+    const state = turn.ended ? 'ok' : turn.tools.every((t) => t.dispatched && t.status === 'ok') ? 'ok' : 'warn';
+    const value = turn.ended && !turn.tools.length
+      ? 'finished'
+      : turn.tools.map((t) => (t.dispatched ? `${t.tool}:${t.exitCode ?? t.status}` : `${t.tool}:refused`)).join(' ');
+    console.log(ui.line({ state, key: `turn ${turn.turn}`, value, note: `${turn.durationMs}ms`, keyWidth }));
+  }
+  if (result.text) {
+    const { redactText } = createRedactor();
+    for (const line of redactText(result.text).split('\n')) console.log(inertLine(line));
+  }
+  if (result.verifier) {
+    console.log(ui.line({
+      state: result.verifier.ok ? 'ok' : 'warn',
+      key: 'verifier',
+      value: result.verifier.ok ? 'pass' : 'fail',
+      note: result.verifier.reason || `exit ${result.verifier.exitCode ?? 'n/a'}`,
+      keyWidth,
+    }));
+  }
+  if (result.metrics) {
+    console.log(ui.line({
+      key: 'metrics',
+      value: result.metrics.pass ? 'pass' : 'fail',
+      note: `${result.metrics.steps} steps · ${result.metrics.inputTokens}+${result.metrics.outputTokens} tokens · ${result.metrics.durationMs}ms`,
+      keyWidth,
+    }));
+  }
+  const state = result.status === 'ok' ? 'ok' : result.status === 'failed' ? 'error' : 'warn';
+  console.log(ui.line({
+    state,
+    key: 'stopped',
+    value: result.stopReason,
+    note: result.stopDetail || `${result.turnCount} turns · ${result.usage.inputTokens}+${result.usage.outputTokens} tokens · ${result.durationMs}ms`,
+    keyWidth,
+  }));
+}
+
+export function agentExitFor(result) {
+  return result?.exitCode ?? 1;
+}
+
+export async function cmdAgent(argv, ctx = {}) {
+  const result = await agentResultOf(argv, ctx);
+  render(result, parseFlags(argv));
+  ctx.reportStatus?.(result.status);
+  return agentExitFor(result);
+}
+
+// re-export for tests / dry-run docs
+export { listProfileIds, resolveProfile };

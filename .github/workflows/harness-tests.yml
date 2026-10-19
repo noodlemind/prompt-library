@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: packages/harness/package-lock.json
+          cache-dependency-path: packages/ae/package-lock.json
 
       # optionalDependencies are installed (npm ci's default). The suite is
       # green either way for the four NATIVE tree-sitter-* grammar packages —
@@ -46,13 +46,13 @@ jobs:
       # integrity mismatch" case asserts on the runtime rather than skipping);
       # it is pure WASM/JS with no install script, so it resolves everywhere.
       - name: Install harness dependencies
-        run: npm ci --prefix packages/harness
+        run: npm ci --prefix packages/ae
 
       - name: Harness test suite
-        run: npm --prefix packages/harness test
+        run: npm --prefix packages/ae test
 
       - name: Prompt library contracts
-        run: node --test packages/harness/test/prompt-library-contracts.test.mjs
+        run: node --test packages/ae/test/prompt-library-contracts.test.mjs
 
   delivery-contracts:
     strategy:
@@ -67,16 +67,16 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
-      - run: npm ci --prefix packages/harness
+      - run: npm ci --prefix packages/ae
       - name: Worktree and platform contracts
-        run: node --test packages/harness/test/issue-intake.test.mjs packages/harness/test/corpus-home.test.mjs packages/harness/test/provider-adapters.test.mjs packages/harness/test/resources-plugins.test.mjs packages/harness/test/unchanged-retry.test.mjs packages/harness/test/windows-workflow.test.mjs packages/harness/test/fs-copy.test.mjs packages/harness/test/vscode-lm-bridge.test.mjs packages/harness/test/storage-aliases.test.mjs
+        run: node --test packages/ae/test/issue-intake.test.mjs packages/ae/test/corpus-home.test.mjs packages/ae/test/provider-adapters.test.mjs packages/ae/test/resources-plugins.test.mjs packages/ae/test/unchanged-retry.test.mjs packages/ae/test/windows-workflow.test.mjs packages/ae/test/fs-copy.test.mjs packages/ae/test/vscode-lm-bridge.test.mjs packages/ae/test/storage-aliases.test.mjs
       - name: CLI and installed delivery contracts
         id: proof
         continue-on-error: true
         shell: bash
         env:
           HARNESS_PROOF_LOG: delivery-transcripts.jsonl
-        run: node --test packages/harness/test/deterministic-delivery.test.mjs packages/harness/test/insight-compound.test.mjs > delivery-proof.log 2>&1
+        run: node --test packages/ae/test/deterministic-delivery.test.mjs packages/ae/test/insight-compound.test.mjs > delivery-proof.log 2>&1
       - name: Preserve proof output
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -103,7 +103,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
-      - run: npm ci --prefix packages/harness
+      - run: npm ci --prefix packages/ae
       - name: Native Windows authority, discovery and cleanup contracts
         id: adaptive
         continue-on-error: true
@@ -113,31 +113,31 @@ jobs:
           HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-focus
         run: |
           preload_root="${GITHUB_WORKSPACE//\\//}"
-          export NODE_OPTIONS="--require=\"$preload_root/packages/harness/test/helpers/domain-parent-profile.cjs\""
+          export NODE_OPTIONS="--require=\"$preload_root/packages/ae/test/helpers/domain-parent-profile.cjs\""
           node --test \
-          packages/harness/test/cli-compound-telemetry.test.mjs \
-          packages/harness/test/windows-authority.test.mjs \
-          packages/harness/test/domain-contract.test.mjs \
-          packages/harness/test/domain-context.test.mjs \
-          packages/harness/test/domain-bindings.test.mjs \
-          packages/harness/test/domain-delivery.test.mjs \
-          packages/harness/test/domain-commands.test.mjs \
-          packages/harness/test/domain-plans.test.mjs \
-          packages/harness/test/experiment-state.test.mjs \
-          packages/harness/test/experiment-snapshots.test.mjs \
-          packages/harness/test/adaptive-intent.test.mjs \
-          packages/harness/test/caffeinated.test.mjs \
-          packages/harness/test/inventory.test.mjs \
-          packages/harness/test/inventory-editors.test.mjs \
-          packages/harness/test/diagnostic-commands.test.mjs \
-          packages/harness/test/runner.test.mjs \
-          packages/harness/test/verification-recipes.test.mjs \
-          packages/harness/test/hook-runtime.test.mjs \
-          packages/harness/test/project-layout.test.mjs \
-          packages/harness/test/external-plan-review.test.mjs \
-          packages/harness/test/cli-evidence-verify.test.mjs \
-          packages/harness/test/agent-delivery.test.mjs \
-          packages/harness/test/plan-operations.test.mjs \
+          packages/ae/test/cli-compound-telemetry.test.mjs \
+          packages/ae/test/windows-authority.test.mjs \
+          packages/ae/test/domain-contract.test.mjs \
+          packages/ae/test/domain-context.test.mjs \
+          packages/ae/test/domain-bindings.test.mjs \
+          packages/ae/test/domain-delivery.test.mjs \
+          packages/ae/test/domain-commands.test.mjs \
+          packages/ae/test/domain-plans.test.mjs \
+          packages/ae/test/experiment-state.test.mjs \
+          packages/ae/test/experiment-snapshots.test.mjs \
+          packages/ae/test/adaptive-intent.test.mjs \
+          packages/ae/test/caffeinated.test.mjs \
+          packages/ae/test/inventory.test.mjs \
+          packages/ae/test/inventory-editors.test.mjs \
+          packages/ae/test/diagnostic-commands.test.mjs \
+          packages/ae/test/runner.test.mjs \
+          packages/ae/test/verification-recipes.test.mjs \
+          packages/ae/test/hook-runtime.test.mjs \
+          packages/ae/test/project-layout.test.mjs \
+          packages/ae/test/external-plan-review.test.mjs \
+          packages/ae/test/cli-evidence-verify.test.mjs \
+          packages/ae/test/agent-delivery.test.mjs \
+          packages/ae/test/plan-operations.test.mjs \
           > windows-adaptive-proof.log 2>&1
       - name: Preserve native Windows proof
         if: always()

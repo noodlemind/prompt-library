@@ -1,0 +1,486 @@
+import { gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
+import { planRecordRoot, planHome, planTrustHome, validateDomainContext } from './domain-context.mjs';
+import fs from 'fs';
+import path from 'path';
+import { spawnSync } from 'node:child_process';
+import { runIndexKnowledge, withKnowledgeIndexLock } from './index-knowledge.mjs';
+import { resolveIndexDir } from './recall-config.mjs';
+import { readSession, writeSession } from './session.mjs';
+import { readEvidence, validateEvidence } from './evidence.mjs';
+import { selectPlan } from './plan-parse.mjs';
+import { loadPolicy } from './policy.mjs';
+import { resolveCopilotHome } from './paths.mjs';
+import { recordSkillUsage } from './telemetry.mjs';
+import { scanSecrets } from './secret-scan.mjs';
+import { readStoreConfig } from './knowledge/store.mjs';
+import { deriveGitContext } from './git-context.mjs';
+import { assertNoSymlinkAncestors, writeFileContainedExclusive, readFileNoFollow, readBoundedInput } from './fs-safe.mjs';
+import { withPlanUpdateLock } from './plan-update.mjs';
+import { proofPrerequisites } from './completion.mjs';
+import { recordHash, readReviewRecord, publishReviewRecord } from './review.mjs';
+import { learningPointerRel, publicationTarget, learningPublicationCurrent } from './learning-record.mjs';
+
+import { buildStructuralIndex } from './repo-map/structural-index.mjs';
+import { createTreesitterExtract } from './repo-map/treesitter-extractor.mjs';
+
+function snapshotFile(p) {
+  try {
+    return fs.readFileSync(p);
+  } catch {
+    return null;
+  }
+}
+function restoreFile(p, snap) {
+  try {
+    if (snap === null) fs.rmSync(p, { force: true });
+    else fs.writeFileSync(p, snap);
+  } catch {
+    // best effort — `ae index` reconciles retrieval state on the next run
+  }
+}
+
+function snapshotRestored(p, snap) {
+  try {
+    if (snap === null) return !fs.existsSync(p);
+    return fs.readFileSync(p).equals(snap);
+  } catch {
+    return false;
+  }
+}
+
+function reserveEpisodePath(baseRoot, dirRel, base, doc, { replay = false } = {}) {
+  const dirFull = assertNoSymlinkAncestors(baseRoot, dirRel);
+  if (!dirFull) return { ok: false };
+  fs.mkdirSync(dirFull, { recursive: true });
+  let candidate = `${base}.md`;
+  let n = 2;
+  for (let attempt = 0; attempt < 100000; attempt++) {
+    const rel = path.join(dirRel, candidate);
+    const full = assertNoSymlinkAncestors(baseRoot, rel);
+    if (!full) return { ok: false };
+    if (writeFileContainedExclusive(baseRoot, rel, doc)) return { ok: true, rel };
+    if (fs.existsSync(full)) {
+      if (replay) return readFileNoFollow(full, { root: baseRoot }) === doc ? { ok: true, rel, replayed: true } : { ok: false, error: new Error('Learning operation conflicts with existing episode bytes') };
+      candidate = `${base}-${n}.md`;
+      n += 1;
+      continue;
+    }
+    return { ok: false, error: new Error('Atomic episode publication failed before the final file was published') };
+  }
+  return { ok: false };
+}
+
+function slugify(text) {
+  return (
+    String(text)
+      .toLowerCase()
+      .normalize('NFC')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'insight'
+  );
+}
+
+function yamlQuote(value) {
+  return `"${String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')}"`;
+}
+
+/**
+ * Insight lane: evidence-free capture of investigation learnings. The quality
+ * gate on the verified lane is untouched — insights are a separate episode
+ * kind, ranked below verified fixes and barred from promotion.
+ */
+export function runInsightCompound({ workspace, copilotHome, flags, log = () => {}, kind = 'insight', home, domainContext = null, authorizedPlan = null }) {
+  let verifiedProof = null;
+  let publicationPlan = authorizedPlan;
+  if (kind === 'fix') {
+    const selected = authorizedPlan ? { plan: authorizedPlan } : selectPlan(workspace, { planPath: flags.plan, home, domainContext, requireUnique: true });
+    if (!selected.plan) return { pass: false, exitCode: 2, kind, path: null, blockedReason: 'Verified fix requires a selected plan' };
+    const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
+    if (!checked.pass) return { pass: false, exitCode: 2, kind, path: null, blockedReason: checked.message };
+    verifiedProof = checked.value;
+    publicationPlan = selected.plan;
+  }
+  // Kill switch: only the fully-off mode blocks insight capture — freeze and
+  // capture-only both keep this lane open (the mode matrix, Task 4).
+  const { mode } = readStoreConfig(workspace, { home });
+  if (mode === 'off') {
+    return {
+      pass: false,
+      exitCode: 2,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: `knowledge mode is ${mode} — run: ae knowledge on`,
+      nextTools: ['ae knowledge on'],
+    };
+  }
+  // The one-liner form is the contract the approved TUI mock shows in its own
+  // composer example: `compound --insight "windows taskkill needs its own
+  // probe"`. When the insight text is all there is, it IS the title and the
+  // body — demanding both separately for a one-sentence observation turned a
+  // capture affordance into a form.
+  const insightText = typeof flags.insight === 'string' ? flags.insight.trim() : '';
+  const title = flags.title || (insightText.length > 3 ? insightText.slice(0, 96) : '');
+  const body = flags.body
+    || (flags.bodyFile ? fs.readFileSync(path.resolve(flags.bodyFile), 'utf8') : '')
+    || (flags.title ? '' : insightText);
+  if (!title || !body.trim()) {
+    return {
+      pass: false,
+      exitCode: 2,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: 'insight capture needs --title and --body (or --body-file)',
+      nextTools: ['ae compound --insight --title "..." --body "..."'],
+    };
+  }
+  const date = flags.captureDate || new Date().toISOString().slice(0, 10);
+  // Category is one safe path segment — never a traversal vector.
+  const category = slugify(flags.category || 'insights');
+  const tags = flags.tags
+    ? flags.tags
+        .split(',')
+        .map((t) => t.replace(/[^\w. -]/g, '').trim())
+        .filter(Boolean)
+        .join(',')
+    : '';
+  const fmLines = [`title: ${yamlQuote(title)}`, `kind: ${kind}`, `date: ${date}`];
+  if (verifiedProof) fmLines.push(`verification: ${yamlQuote(verifiedProof.evidencePath)}`, `work_contract: ${verifiedProof.binding.planDigest}`, `proof_identity: ${verifiedProof.verificationIdentity}`);
+  if (tags) fmLines.push(`tags: ${tags}`);
+  if (flags.trigger) fmLines.push(`trigger: ${yamlQuote(flags.trigger)}`);
+  if (flags.claim) fmLines.push(`claim: ${yamlQuote(flags.claim)}`);
+  // Git provenance (blueprint P1/P9): optional commit/branch/base stamped at
+  // capture time from the CURRENT workspace HEAD. This is the sole CLI
+  // episode writer — `compound --insight` (kind: insight) and
+  // `ae remember` (kind: human-teaching) both land here — so every
+  // CLI-captured episode carries provenance; skill-authored fix episodes stay
+  // reader-tolerant (absent fields are fine everywhere). Shas are stamped
+  // bare; the branch name is attacker-influenced text on fork checkouts, so
+  // it rides through yamlQuote like every other quoted field here.
+  const gitContext = deriveGitContext({ workspace, home });
+  if (gitContext.headSha) fmLines.push(`commit: ${gitContext.headSha}`);
+  if (gitContext.branch) fmLines.push(`branch: ${yamlQuote(gitContext.branch)}`);
+  if (gitContext.baseSha) fmLines.push(`base: ${gitContext.baseSha}`);
+  const doc = `---\n${fmLines.join('\n')}\n---\n\n${body.trim()}\n`;
+  const secrets = scanSecrets(doc);
+  if (secrets.length) {
+    return {
+      pass: false,
+      exitCode: 1,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: `secret-shaped content blocked capture: ${secrets
+        .map((s) => `${s.id}@${s.line}`)
+        .join(', ')}`,
+      nextTools: ['redact the credential and re-run'],
+    };
+  }
+  // Never silently overwrite an earlier capture: same-day same-title collisions
+  // get a deterministic numeric suffix.
+  const base = `${date}-${slugify(title)}${flags.operationSuffix ? `-${flags.operationSuffix}` : ''}`;
+  const scope = flags.publicationScope || 'private';
+  const target = publicationTarget({ workspace, copilotHome, home, scope, plan: publicationPlan });
+  const dirRel = path.join(target.dirRel, category);
+  // Physical containment: a symlinked docs/solutions (or category) directory
+  // must never let the write land outside the chosen base (workspace or the
+  // user-level project store).
+  if (!assertNoSymlinkAncestors(target.base, dirRel)) {
+    return {
+      pass: false,
+      exitCode: 1,
+      kind,
+      path: null,
+      indexed: null,
+      blockedReason: 'episode path escapes the workspace (symlinked docs/solutions?)',
+      nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+    };
+  }
+  const privateParent = publicationPlan?.fm?.domain_parent && scope === 'private' ? publicationPlan : null;
+  const knowledgeRoot = privateParent ? path.join(planRecordRoot(workspace, privateParent), '.harness/knowledge') : copilotHome ? path.join(copilotHome, 'knowledge') : null;
+  return withKnowledgeIndexLock({ knowledgeRoot, workspace, copilotHome, flags, log, home, plan: privateParent }, rebuild => {
+    let rel;
+    let replayed = false;
+    if (flags.dryRun) {
+      // Dry run writes nothing, so a plain existence probe is enough to report a
+      // representative would-be name (no reservation, no file created).
+      rel = path.join(dirRel, `${base}.md`);
+      let n = 2;
+      while (fs.existsSync(path.join(target.base, rel))) {
+        rel = path.join(dirRel, `${base}-${n}.md`);
+        n += 1;
+      }
+    } else {
+      const reserved = reserveEpisodePath(target.base, dirRel, base, doc, { replay: Boolean(flags.operationSuffix) });
+      if (!reserved.ok) {
+        return {
+          pass: false,
+          exitCode: 1,
+          kind,
+          path: null,
+          indexed: null,
+          blockedReason: reserved.error
+            ? `could not write episode file: ${reserved.error.message}`
+            : 'episode path escapes the workspace (symlinked docs/solutions?)',
+          nextTools: ['remove or replace the symlinked docs/solutions directory and re-run'],
+        };
+      }
+      rel = reserved.rel;
+      replayed = Boolean(reserved.replayed);
+    }
+    // Under dryRun nothing was actually written (the write above is skipped), so
+    // the log line must not claim otherwise.
+    log(`${flags.dryRun ? 'would write' : 'wrote'} ${rel}`);
+    const publication = { publicationVersion: 1, scope, publishedPath: path.resolve(target.base, rel), publishedHash: recordHash(doc) };
+    if (scope === 'ship-set-proposal') return { pass: true, exitCode: 0, kind, path: rel.split(path.sep).join('/'), ...publication, indexed: null, proposal: true, activated: false, blockedReason: null, nextTools: ['Review the proposal before requesting a shipped-corpus change'] };
+    // runIndexKnowledge can throw (a duplicate manifest id, an fs error). An
+    // unhandled throw here would leave the episode we JUST wrote orphaned on disk
+    // and, for the `remember` caller, skip its rollback path entirely (the throw
+    // never reaches `if (!episode.pass)`). Snapshot the ENTIRE retrieval state it
+    // writes — the manifest AND the postings (index-knowledge writes manifest
+    // then postings.json/meta.json, so a throw between them can leave postings
+    // referencing the rolled-back episode) — and on any index failure delete the
+    // just-written episode and restore all of it so retrieval state is exactly
+    // pre-write, then return a clean, recoverable failure the caller handles.
+    const manifestPath = path.join(knowledgeRoot || path.join(workspace, 'knowledge'), 'manifest.yaml');
+    const indexDir = privateParent ? path.join(planRecordRoot(workspace, privateParent), '.harness/knowledge-index') : resolveIndexDir(copilotHome || '', workspace, home);
+    const snapshots = [
+      [manifestPath, snapshotFile(manifestPath)],
+      [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
+      [path.join(indexDir, 'meta.json'), snapshotFile(path.join(indexDir, 'meta.json'))],
+    ];
+    let indexed;
+    try {
+      indexed = rebuild();
+    } catch (err) {
+      // Rollback WITH verified postconditions (P2): the prior code swallowed
+      // every recovery error yet always reported "episode rolled back" /
+      // `path: null` — so a rollback that left the episode on disk or failed to
+      // restore retrieval state was indistinguishable from a clean one. Now each
+      // step is verified against disk and any residue is named in the result.
+      const episodeFull = path.join(target.base, rel);
+      let episodeRemains = false;
+      const unrestored = [];
+      if (!flags.dryRun) {
+        try {
+          if (!replayed) fs.rmSync(episodeFull, { force: true });
+        } catch {
+          // best effort — verified below regardless of whether rmSync threw
+        }
+        episodeRemains = fs.existsSync(episodeFull);
+        // Restore manifest + postings + meta to exactly pre-write (write back the
+        // snapshot, or delete if it was absent), then confirm each landed.
+        for (const [p, snap] of snapshots) {
+          restoreFile(p, snap);
+          if (!snapshotRestored(p, snap)) unrestored.push(p);
+        }
+      }
+      const recovered = !episodeRemains && unrestored.length === 0;
+      let blockedReason;
+      if (recovered) {
+        blockedReason = `knowledge index rebuild failed, episode rolled back: ${err.message}`;
+      } else {
+        const residue = [];
+        if (episodeRemains) residue.push(`episode still on disk at ${rel.split(path.sep).join('/')}`);
+        if (unrestored.length) residue.push(`retrieval state not restored: ${unrestored.join(', ')}`);
+        blockedReason = `knowledge index rebuild failed AND rollback incomplete (${residue.join('; ')}) — run: ae index. Original error: ${err.message}`;
+      }
+      return {
+        pass: false,
+        exitCode: 1,
+        kind,
+        path: null,
+        indexed: null,
+        blockedReason,
+        // Name the residue explicitly so a caller never treats a partial
+        // recovery as a clean one.
+        ...(recovered ? {} : { partialRecovery: { episodeRemains, unrestored } }),
+        nextTools: ['ae index'],
+      };
+    }
+    return {
+      pass: true,
+      exitCode: 0,
+      kind,
+      path: rel.split(path.sep).join('/'),
+      ...publication,
+      indexed,
+      blockedReason: null,
+      nextTools: ['ae consolidate --status'],
+    };
+  });
+}
+
+async function runLearningDecision({ workspace, copilotHome, flags, log, domainContext = null }) {
+  if (flags.insight) throw new Error('A verified learning decision cannot be combined with --insight');
+  const text = flags.learningDecision === '-' ? readBoundedInput() : readFileNoFollow(path.resolve(workspace, flags.learningDecision), { maxBytes: 1024 * 1024 });
+  if (!text || Buffer.byteLength(text) > 1024 * 1024) throw new Error('Learning decision is missing, unreadable, or too large');
+  const decision = JSON.parse(text);
+  if (!decision || typeof decision !== 'object' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(decision.operation || '') || !['no-learning', 'publish'].includes(decision.decision)
+    || typeof decision.rationale !== 'string' || !decision.rationale.trim() || (decision.scope && !['private', 'global', 'ship-set-proposal'].includes(decision.scope)) || Object.keys(decision).some(key => !['operation', 'decision', 'rationale', 'scope', 'title', 'body', 'category', 'tags', 'trigger', 'claim'].includes(key))) throw new Error('Learning decision requires operation, decision, rationale, and a supported publication scope');
+  if (decision.decision === 'publish' && (typeof decision.title !== 'string' || !decision.title.trim() || typeof decision.body !== 'string' || !decision.body.trim() || decision.tags !== undefined && (!Array.isArray(decision.tags) || !decision.tags.every(tag => typeof tag === 'string')))) throw new Error('Publication requires authored title, body and optional text tags');
+  const selected = selectPlan(workspace, { planPath: flags.plan, session: readSession(workspace), requireUnique: true, home: flags.harnessHome, domainContext });
+  if (!selected.plan) throw new Error('Learning decision requires an unambiguous plan');
+  const recordRoot = planRecordRoot(workspace, selected.plan);
+  const home = planHome(workspace, selected.plan, flags.harnessHome || process.env.HARNESS_HOME);
+  const checked = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
+  if (!checked.pass) return { pass: false, exitCode: 2, blockedReason: checked.message, plan: selected.plan.path, path: null };
+  const operation = recordHash(decision.operation);
+  const target = decision.decision === 'publish' ? publicationTarget({ workspace, copilotHome, home, plan: selected.plan, scope: decision.scope || 'private' }) : null;
+  const destination = target ? { base: path.resolve(target.base), dirRel: target.dirRel.replace(/\\/g, '/') } : null;
+  const digest = recordHash({ decision, proof: checked.value.verificationIdentity, ...(destination ? { destination } : {}) });
+  const compatible = record => {
+    if (!record) return;
+    if (record.destination && JSON.stringify(record.destination) !== JSON.stringify(destination)) throw new Error('Learning operation destination conflicts with the accepted destination');
+    if (!record.destination && record.result?.publishedPath && (!destination || record.result.publishedPath !== path.resolve(destination.base, record.result.path))) throw new Error('Learning operation destination conflicts with the accepted destination');
+    const legacy = !record.destination && record.digest === recordHash({ decision, proof: checked.value.verificationIdentity });
+    if (record.digest !== digest && !legacy) throw new Error('Learning operation identity conflicts with a different decision, destination or proof');
+  };
+  const rel = `.harness/learning/${operation}.json`;
+  const existing = readReviewRecord(recordRoot, rel);
+  compatible(existing);
+  const publish = captureDate => runInsightCompound({ workspace, copilotHome, flags: { ...flags, plan: selected.plan.path, title: decision.title, body: decision.body, category: decision.category, tags: Array.isArray(decision.tags) ? decision.tags.join(',') : '', trigger: decision.trigger, claim: decision.claim, captureDate, operationSuffix: operation.slice(0, 16), publicationScope: decision.scope || 'private' }, log, kind: 'fix', home, domainContext, authorizedPlan: selected.plan });
+  if (flags.dryRun) return decision.decision === 'publish' ? { ...publish(existing?.captureDate), dryRun: true } : { pass: true, exitCode: 0, dryRun: true, decision: decision.decision, path: null, indexed: null };
+  publishReviewRecord(recordRoot, '.harness/learning/.ready.json', { version: 1 });
+  const pointer = learningPointerRel(selected.plan.path);
+  return withPlanUpdateLock(path.join(recordRoot, pointer), () => withPlanUpdateLock(path.join(recordRoot, rel), () => {
+    const prior = readReviewRecord(recordRoot, rel);
+    compatible(prior);
+    const priorPublicationCurrent = !prior || learningPublicationCurrent(recordRoot, prior, { workspace, copilotHome, home, plan: selected.plan });
+    if (prior?.state === 'done' && priorPublicationCurrent) {
+      publishReviewRecord(recordRoot, pointer, { version: 1, operation, record: rel });
+      return { ...prior.result, learningRecord: rel, replayed: true };
+    }
+    const pending = prior ? { ...prior, digest, ...(destination ? { destination } : {}) } : { version: 1, operation, digest, decision, ...(destination ? { destination } : {}), proof: checked.value, captureDate: new Date().toISOString().slice(0, 10), state: 'pending' };
+    const fresh = proofPrerequisites({ workspace, plan: selected.plan, copilotHome });
+    if (!fresh.pass || fresh.id !== checked.id) throw new Error('Work changed before learning publication');
+    publishReviewRecord(recordRoot, pointer, { version: 1, operation, record: rel });
+    publishReviewRecord(recordRoot, rel, pending);
+    const result = decision.decision === 'no-learning'
+      ? { pass: true, exitCode: 0, decision: 'no-learning', path: null, indexed: null, plan: selected.plan.path, verificationEvidence: checked.value.evidencePath }
+      : publish(pending.captureDate);
+    publishReviewRecord(recordRoot, rel, { ...pending, state: result.pass ? 'done' : result.partialRecovery ? 'blocked' : 'pending', result });
+    return { ...result, learningRecord: rel };
+  }));
+}
+
+export async function runCompound({ workspace, copilotHome, flags, log = () => {}, domainContext = null }) {
+  if (flags.learningDecision) return runLearningDecision({ workspace, copilotHome, flags, log, domainContext });
+  if (domainContext && flags.insight) throw new Error('Domain learning requires a selected verified parent and an authored learning decision');
+  if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log, home: flags.home });
+  const session = readSession(domainContext ? validateDomainContext(domainContext, workspace).root : workspace);
+  const selected = selectPlan(workspace, { planPath: flags.plan, session, requireUnique: true, home: flags.harnessHome, domainContext });
+  if (!selected.plan) {
+    return {
+      pass: false,
+      exitCode: 2,
+      plan: null,
+      verificationEvidence: null,
+      indexed: null,
+      blockedReason: selected.error || 'No unambiguous plan; pass --plan explicitly',
+      nextTools: ['ae verify --plan <path>', '/auto-compound'],
+    };
+  }
+
+  const evidence = readEvidence(planRecordRoot(workspace, selected.plan), selected.plan.path);
+  const freshness = validateEvidence({
+    workspace,
+    plan: selected.plan,
+    evidence,
+    maxAgeHours: loadPolicy(workspace, flags.enforcement, { copilotHome: resolveCopilotHome(flags.copilotHome), home: planTrustHome(workspace, selected.plan) }).evidenceTtlHours,
+    copilotHome,
+  });
+  if (!freshness.pass) {
+    return {
+      pass: false,
+      exitCode: evidence?.outcome === 'failed' ? 1 : 2,
+      plan: selected.plan.path,
+      verificationEvidence: evidence,
+      indexed: null,
+      blockedReason: freshness.message,
+      nextTools: [`ae verify --plan ${selected.plan.path}`, '/auto-compound'],
+    };
+  }
+
+  const knowledgeRoot = selected.plan.fm.domain_parent ? path.join(planRecordRoot(workspace, selected.plan), '.harness/knowledge') : copilotHome ? path.join(copilotHome, 'knowledge') : null;
+
+  const indexed = runIndexKnowledge({
+    knowledgeRoot,
+    workspace,
+    copilotHome,
+    flags,
+    log,
+    home: planHome(workspace, selected.plan, flags.harnessHome || flags.home),
+    plan: selected.plan,
+  });
+
+  let codeIndex = null;
+  if (!flags.dryRun) {
+    try {
+      const extractor = await createTreesitterExtract();
+      codeIndex = await buildStructuralIndex({
+        workspace,
+        home: flags?.home || process.env.HARNESS_HOME,
+        extractor,
+        log,
+      });
+      if (!codeIndex.written) log('code index was not published');
+    } catch (error) {
+      codeIndex = { written: false, error: error.message };
+      log(`code index refresh failed: ${error.message}`);
+    }
+  }
+
+  const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 4000, env: gitMetadataEnvironment() });
+  if (!flags.dryRun && head.status === 0 && codeIndex && !codeIndex.written) {
+    return {
+      pass: false,
+      exitCode: 1,
+      plan: selected.plan.path,
+      verificationEvidence: evidence,
+      indexed,
+      codeIndex,
+      blockedReason: codeIndex.error || 'code index was not published',
+      nextTools: ['ae index --structural'],
+    };
+  }
+
+  const telemetry = recordSkillUsage({
+    copilotHome,
+    plan: selected.plan,
+    evidence,
+    dryRun: flags.dryRun,
+  });
+
+  const recordRoot = planRecordRoot(workspace, selected.plan);
+  const sessionState = readSession(recordRoot) || {};
+  writeSession(
+    recordRoot,
+    {
+      ...sessionState,
+      lastCompoundAt: new Date().toISOString(),
+      lastIndexEntries: indexed.entries,
+    },
+    flags.dryRun
+  );
+
+  return {
+    pass: true,
+    exitCode: 0,
+    plan: selected.plan.path,
+    verificationEvidence: evidence,
+    learning: selected.plan.fm.learning || null,
+    telemetry,
+    indexed,
+    codeIndex,
+    blockedReason: null,
+    nextTools: ['/compound-learnings', '/auto-compound'],
+  };
+}

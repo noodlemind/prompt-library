@@ -5,14 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { approveProject } from '../../../../packages/harness/lib/trust.mjs';
-import { runProcess } from '../../../../packages/harness/lib/runner.mjs';
+import { approveProject } from '../../../../packages/ae/lib/trust.mjs';
+import { runProcess } from '../../../../packages/ae/lib/runner.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const skillRoot = path.resolve(here, '..');
 export const repoRoot = path.resolve(skillRoot, '../../..');
-export const packageRoot = path.join(repoRoot, 'packages/harness');
-export const binPath = path.join(packageRoot, 'bin/harness.mjs');
+export const packageRoot = path.join(repoRoot, 'packages/ae');
+export const binPath = path.join(packageRoot, 'bin/ae.mjs');
 
 const requireYaml = createRequire(path.join(packageRoot, 'package.json'));
 export const YAML = requireYaml('yaml');

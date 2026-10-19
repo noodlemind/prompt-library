@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runPerformancePilot } from '../../../../packages/harness/test/helpers/performance-pilot.mjs';
+import { runPerformancePilot } from '../../../../packages/ae/test/helpers/performance-pilot.mjs';
 
 const doctor = spawnSync(process.execPath, [path.join(import.meta.dirname, 'doctor.mjs')], { encoding: 'utf8', timeout: 30_000 });
 assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr);

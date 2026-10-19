@@ -1,0 +1,26 @@
+{
+  "name": "ae-copilot-bridge",
+  "displayName": "AE Copilot Bridge",
+  "description": "Routes Adaptive Engineering model discovery and requests through the signed-in VS Code language model API.",
+  "version": "0.2.0",
+  "publisher": "harness",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.cjs",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  }
+}

@@ -6,7 +6,7 @@
       "type": "shell",
       "command": "node",
       "args": [
-        "${workspaceFolder}/packages/harness/bin/harness.mjs",
+        "${workspaceFolder}/packages/ae/bin/ae.mjs",
         "install",
         "--configure-vscode",
         "--configure-path",
@@ -22,7 +22,7 @@
       "label": "Dev Kit: Upgrade Harness",
       "type": "shell",
       "command": "node",
-      "args": ["${workspaceFolder}/packages/harness/bin/harness.mjs", "upgrade", "--configure-vscode"],
+      "args": ["${workspaceFolder}/packages/ae/bin/ae.mjs", "upgrade", "--configure-vscode"],
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -32,7 +32,7 @@
       "label": "Dev Kit: Harness Doctor",
       "type": "shell",
       "command": "node",
-      "args": ["${workspaceFolder}/packages/harness/bin/harness.mjs", "doctor"],
+      "args": ["${workspaceFolder}/packages/ae/bin/ae.mjs", "doctor"],
       "options": {
         "cwd": "${workspaceFolder}"
       },

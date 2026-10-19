@@ -30,8 +30,8 @@ try {
   assertEqual(hinted.status, 0, `orient hint exit (${hinted.stderr})`);
   const hintBody = parseJson(hinted, 'orient-hint');
   assertEqual((hintBody.intentSources || []).length, 0, 'orient intentSources before prepare');
-  if (!(hintBody.nextTools || []).includes('harness prepare')) {
-    throw new Error(`nextTools missing harness prepare: ${JSON.stringify(hintBody.nextTools)}`);
+  if (!(hintBody.nextTools || []).includes('ae prepare')) {
+    throw new Error(`nextTools missing ae prepare: ${JSON.stringify(hintBody.nextTools)}`);
   }
 
   const prepared = await runHarness(['prepare'], ctx);
@@ -81,7 +81,7 @@ try {
   const ignoredOrient = await runHarness(['orient', '--query', 'architecture'], ignoredCtx);
   assertEqual(ignoredOrient.status, 0, `orient ignore exit (${ignoredOrient.stderr})`);
   const ignoredOrientBody = parseJson(ignoredOrient, 'orient-ignore');
-  if (!(ignoredOrientBody.nextTools || []).includes('un-ignore docs/specs and docs/adr, then harness prepare')) {
+  if (!(ignoredOrientBody.nextTools || []).includes('un-ignore docs/specs and docs/adr, then ae prepare')) {
     throw new Error(`nextTools missing un-ignore hint: ${JSON.stringify(ignoredOrientBody.nextTools)}`);
   }
 

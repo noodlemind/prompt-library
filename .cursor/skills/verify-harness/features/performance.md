@@ -12,16 +12,16 @@ Performance analysis links declared architecture flows, selected source dependen
 
 ## How to get to it (user POV)
 
-- Author `.github/harness/performance.json` using the [performance reference](../../../../packages/harness/corpus/skills/engineer/references/performance-engineering.md).
-- Run `harness performance analyze --json`, or select another relative profile with `--file` and an existing domain with `--domain`.
+- Author `.github/harness/performance.json` using the [performance reference](../../../../packages/ae/corpus/skills/engineer/references/performance-engineering.md).
+- Run `ae performance analyze --json`, or select another relative profile with `--file` and an existing domain with `--domain`.
 - Open the returned HTML path. Select a journey, service, source or finding to inspect the linked evidence.
-- Use `harness orient --read --file <path> --json` before editing and `harness review prepare --file <path> --json` before review.
+- Use `ae orient --read --file <path> --json` before editing and `ae review prepare --file <path> --json` before review.
 
 ## Driving it with prove-performance.mjs
 
 Preconditions: Node 20+, Git and installed package dependencies; doctor exits zero. Use disposable workspaces and a separate Harness home.
 
-- Run `harness checks run verify-performance --json` from a trusted checkout. The helper runs doctor before the pilot.
+- Run `ae checks run verify-performance --json` from a trusted checkout. The helper runs doctor before the pilot.
 - The helper creates two Git repositories and an existing domain descriptor. It invokes analysis, rereads written JSON/HTML, exercises dry-run, retrieves orientation/review context, edits a foreign source, observes stale measurements, and then reruns the corrected fixture.
 - Require the missing completion and forbidden package diagnostics before repair, a stale goal after the dirty edit, and a met cost goal after recapture. The deterministic operation count is 12 → 1 database calls for the same twelve-item synthetic journey.
 - Require `performance.json` under the runner's artifact directory and `cleanup: true`. The receipt includes actual CLI arguments, exit statuses and stdout. HTML and JSON snapshots remain beside it after disposable repositories are removed.

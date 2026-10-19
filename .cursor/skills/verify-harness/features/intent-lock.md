@@ -14,7 +14,7 @@ Content-v1 plans bind selected specs to accepted file bytes. Changed, missing, o
 
 ## How a person reaches it
 
-Run `harness orient --query <task> --json`. Read selected sources. Create the plan with `harness plan-new`, start accepted work with `harness plan-update --file`, and run `harness gate --phase implement --plan <path> --json`.
+Run `ae orient --query <task> --json`. Read selected sources. Create the plan with `ae plan-new`, start accepted work with `ae plan-update --file`, and run `ae gate --phase implement --plan <path> --json`.
 
 Accept reviewed byte changes through an amend decision with plan-intent authority and the observed revision. Run the gate again before editing.
 

@@ -1,6 +1,6 @@
 # Issue worktree
 
-Issue worktree keeps automatic issue work off the default branch of the primary checkout. `harness worktree --slug` opens a linked worktree on `harness/<slug>` under `.worktrees/<slug>`. The implement gate accepts that linked checkout.
+Issue worktree keeps automatic issue work off the default branch of the primary checkout. `ae worktree --slug` opens a linked worktree on `harness/<slug>` under `.worktrees/<slug>`. The implement gate accepts that linked checkout.
 
 ## Sub-features
 
@@ -11,9 +11,9 @@ Issue worktree keeps automatic issue work off the default branch of the primary 
 
 ## How to get to it (user POV)
 
-- Run `harness orient --json` and read `worktree.blocked`.
-- When blocked, run `harness worktree --slug <issue-slug>` and continue with `--workspace` on the printed path.
-- Run `harness gate --phase implement` from that worktree, or pass `--allow-inplace` in CI.
+- Run `ae orient --json` and read `worktree.blocked`.
+- When blocked, run `ae worktree --slug <issue-slug>` and continue with `--workspace` on the printed path.
+- Run `ae gate --phase implement` from that worktree, or pass `--allow-inplace` in CI.
 
 ## Driving it with prove-issue-worktree.mjs
 
@@ -22,8 +22,8 @@ Preconditions:
 - Doctor exited `0`.
 - The temp workspace has `refs/remotes/origin/HEAD`.
 
-- **Block.** On the default branch of the primary checkout, run `harness gate --phase implement --plan <path> --workspace <ws> --json`. Exit code is `1` and `C-worktree` has `pass: false`.
-- **Add.** Run `harness worktree --slug checkout-retry --workspace <ws> --json`. `created` is `true`, `branch` is `harness/checkout-retry`, `isolated` is `true`, and `<path>/.git` is a file.
+- **Block.** On the default branch of the primary checkout, run `ae gate --phase implement --plan <path> --workspace <ws> --json`. Exit code is `1` and `C-worktree` has `pass: false`.
+- **Add.** Run `ae worktree --slug checkout-retry --workspace <ws> --json`. `created` is `true`, `branch` is `harness/checkout-retry`, `isolated` is `true`, and `<path>/.git` is a file.
 - **Accept.** Copy `.github` into the worktree if needed. The uncommitted plan is not in the new checkout. Run the same gate with the original `--plan` and `--workspace` set to the worktree path. Exit code is `0` and `C-worktree` has `pass: true`.
 - **Skip.** On a fresh primary checkout, set `CI=true` and rerun the gate. Exit code is `0`.
 - **Proof.** Run `node .cursor/skills/verify-harness/scripts/prove-issue-worktree.mjs`. Exit `0`. The evidence JSON records the blocked gate, the created worktree, and the accepted gate.
