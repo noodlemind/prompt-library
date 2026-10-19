@@ -43,12 +43,12 @@ export function runGet({ workspace, copilotHome, flags, home }) {
   const relPath = flags.path ? reference.path : null;
   const maxLines = flags.lines || GET_DEFAULT_LINES;
   const maxBytes = flags.maxBytes || GET_DEFAULT_MAX_BYTES;
-    const offset = Math.max(1, Math.floor(flags.offset || 1));
+  const offset = Math.max(1, Math.floor(flags.offset || 1));
   const workspaceResolved = path.resolve(workspace);
 
   let entry = null;
   let fullPath = null;
-    let readRoot = null;
+  let readRoot = null;
 
   if (docid) {
     entry = findEntryByDocid(copilotHome, workspace, docid);
@@ -97,7 +97,7 @@ export function runGet({ workspace, copilotHome, flags, home }) {
     excerpt = truncateUtf8(excerpt, maxBytes);
   }
   const sourceExcerpt = wasRedacted ? selectedText : clipped ? excerpt.split('\n…(truncated)')[0] : excerpt;
-    const truncated = clipped || start > 0 || start + lines.length < allLines.length;
+  const truncated = clipped || start > 0 || start + lines.length < allLines.length;
 
   return {
     docid: entry.docid || entry.id || docid || null,
@@ -105,8 +105,8 @@ export function runGet({ workspace, copilotHome, flags, home }) {
     title: entry.title || path.basename(fullPath),
     excerpt,
     bytes: Buffer.byteLength(excerpt, 'utf8'),
-        lines: excerpt === '' ? 0 : excerpt.split('\n').length,
-        offset,
+    lines: excerpt === '' ? 0 : excerpt.split('\n').length,
+    offset,
     totalLines: allLines.length,
     sha256,
     truncated,

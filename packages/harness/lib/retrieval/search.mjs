@@ -732,7 +732,7 @@ export function runSearch({
       result.partial = true;
       result.nextCursor = null;
       const code = result.sources.find(source => source.source === 'code');
-      if (code) { code.status = 'failed'; code.reason = 'working sources changed during search; retry'; code.count = 0; }
+      if (code) { code.status = 'failed'; code.reason = sourceSnapshot.reason || after.reason || 'working sources changed during search; retry'; code.count = 0; }
     }
     result.contextVersion = 2;
     result.coverage = { candidateLimitPerSource: SOURCE_CANDIDATE_CAP, matchedLineLimitPerFile: MATCHED_LINE_CAP, sourceState: sourceSnapshot?.state || null, semanticCompleteness: 'unverified', unavailableReferences: result.results.filter(row => row.evidence?.state === 'unavailable').map(row => ({ source: row.source, id: row.id })) };

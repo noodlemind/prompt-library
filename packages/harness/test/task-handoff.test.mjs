@@ -76,3 +76,15 @@ test('a large task produces an explicit bounded handoff barrier', (t) => {
   assert.equal(result.taskInput, null);
   assert.ok(Buffer.byteLength(JSON.stringify(result)) < 8000);
 });
+
+test('a changed dependency invalidates a target whose own bytes are unchanged', (t) => {
+  const { workspace, copilotHome } = makeScopes();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  for (const file of ['a.mjs', 'b.mjs']) fs.writeFileSync(path.join(workspace, file), 'export const item = 1;');
+  const evidence = ['a.mjs', 'b.mjs'].map(location => ({ location, state: 'readable', sha256: runGet({ workspace, copilotHome, flags: { path: location } }).sha256 }));
+  const snapshot = { version: 2, state: 'validated', policyDigest: policyDigest(workspace), evidence };
+  assert.equal(validateContextSnapshot({ workspace, snapshot, targets: ['a.mjs'] }).pass, true);
+  fs.writeFileSync(path.join(workspace, 'b.mjs'), 'export const item = 2;');
+  assert.equal(validateContextSnapshot({ workspace, snapshot, targets: ['a.mjs'] }).pass, false);
+});

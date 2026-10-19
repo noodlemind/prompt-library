@@ -47,10 +47,12 @@ export function buildTaskContext({ workspace, copilotHome, task, files = [], pol
   const manifest = buildContextRecord({ workspace, query: task, facts });
   const changed = included.some(row => readSourceFile(workspace, row.location).hash !== row.sha256);
   coverage.sourceState = changed ? 'changed-or-unavailable' : manifest.coverage.sourceState;
+  coverage.renderBarrier = manifest.coverage.renderBarrier;
+  coverage.validationReason = manifest.coverage.validationReason;
   coverage.omittedFiles = paths.length - included.length;
   coverage.unavailableFiles = unavailable;
   coverage.truncatedFiles = included.filter(row => row.truncated).length;
-  const payload = coverage.sourceState === 'validated' ? included : [];
+  const payload = coverage.sourceState === 'validated' && !coverage.renderBarrier ? included : [];
   return {
     policy,
     contextId: sourceHash(JSON.stringify([manifest.contextId, serialize(payload)])),

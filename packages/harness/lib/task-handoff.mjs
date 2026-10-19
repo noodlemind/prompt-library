@@ -17,8 +17,8 @@ export function validateContextSnapshot({ workspace, snapshot, targets }) {
     if (!plan || planDigest(plan.text) !== snapshot.contractDigest) return { pass: false, reason: 'context-stale: reload the current task contract' };
   }
   const entries = new Map((snapshot.evidence || []).map(item => [item.location, item]));
-  for (const target of targets) {
-    const location = path.isAbsolute(target) ? path.relative(workspace, target) : target;
+  const locations = new Set([...entries.keys(), ...targets.map(target => (path.isAbsolute(target) ? path.relative(workspace, target) : target).replaceAll('\\', '/'))]);
+  for (const location of locations) {
     const expected = entries.get(location);
     const current = readSourceFile(workspace, location);
     if (expected?.state === 'missing' && current.state === 'missing') continue;
