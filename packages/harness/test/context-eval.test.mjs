@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { prepareCase, resolveStudyOutput, runChecks, runStudy, summarizeStudy } from '../eval/context/study.mjs';
 
@@ -25,6 +26,24 @@ test('study output cannot enter the checkout through a linked parent', (t) => {
   fs.symlinkSync(checkout, linked, process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => resolveStudyOutput({ checkout, output: path.join(linked, 'receipts') }), /outside/);
   assert.equal(resolveStudyOutput({ checkout, output: path.join(root, 'receipts') }), path.join(fs.realpathSync(root), 'receipts'));
+});
+
+test('the study CLI rejects a linked output before publishing receipts', (t) => {
+  const root = directory(t), checkout = path.join(root, 'clone');
+  const packageRoot = path.join(checkout, 'packages/harness');
+  fs.mkdirSync(packageRoot, { recursive: true });
+  fs.cpSync(path.resolve(import.meta.dirname, '../lib'), path.join(packageRoot, 'lib'), { recursive: true });
+  fs.cpSync(path.resolve(import.meta.dirname, '../corpus'), path.join(packageRoot, 'corpus'), { recursive: true });
+  fs.cpSync(path.resolve(import.meta.dirname, '../config'), path.join(packageRoot, 'config'), { recursive: true });
+  fs.copyFileSync(path.resolve(import.meta.dirname, '../package.json'), path.join(packageRoot, 'package.json'));
+  fs.cpSync(path.resolve(import.meta.dirname, '../eval/context'), path.join(packageRoot, 'eval/context'), { recursive: true });
+  fs.symlinkSync(path.resolve(import.meta.dirname, '../node_modules'), path.join(packageRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  const linked = path.join(root, 'linked');
+  fs.symlinkSync(checkout, linked, process.platform === 'win32' ? 'junction' : 'dir');
+  const result = spawnSync(process.execPath, [path.join(packageRoot, 'eval/context/run.mjs'), '--out', path.join(linked, 'receipts')], { encoding: 'utf8', timeout: 15000 });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--out must be a new directory outside/);
+  assert.equal(fs.existsSync(path.join(checkout, 'receipts')), false);
 });
 
 test('independent checks reject baseline and accept repair outside the editable workspace', async (t) => {
