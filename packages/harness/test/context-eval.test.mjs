@@ -9,6 +9,7 @@ import { agentResultOf } from '../lib/agent-cmd.mjs';
 import { buildTaskHandoff, validateContextSnapshot } from '../lib/task-handoff.mjs';
 import { readSession } from '../lib/session.mjs';
 import { readOrientSlice } from '../lib/orient-read.mjs';
+import { buildChildEnv } from '../lib/exec-policy.mjs';
 
 const simple = {
   id: 'example', split: 'development', family: 'known-file',
@@ -29,6 +30,42 @@ function directory(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+test('fixture subprocesses resolve the candidate CLI and keep private homes after environment filtering', async t => {
+  const root = directory(t), stale = path.join(root, 'stale-bin');
+  fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}\n');
+  fs.mkdirSync(stale);
+  fs.writeFileSync(path.join(stale, 'harness'), "#!/usr/bin/env node\nprocess.stdout.write('stale-runtime\\n');\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(stale, 'harness.cmd'), '@echo stale-runtime\r\n');
+  const previous = process.env.PATH;
+  process.env.PATH = `${stale}${path.delimiter}${previous || ''}`;
+  t.after(() => { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; });
+  const fixture = await prepareCase({ task: publicTask, root, id: 'pinned-runtime' });
+  const env = buildChildEnv({ parentEnv: fixture.env || process.env }).env;
+  assert.equal(env.COPILOT_HOME, undefined);
+  const run = args => process.platform === 'win32'
+    ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'harness', ...args], { cwd: fixture.workspace, env, encoding: 'utf8', timeout: 15000 })
+    : spawnSync('harness', args, { cwd: fixture.workspace, env, encoding: 'utf8', timeout: 15000 });
+  const version = run(['--version']);
+  assert.ifError(version.error);
+  assert.equal(version.status, 0, version.stderr);
+  const expected = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url))).version;
+  assert.match(version.stdout, new RegExp(expected.replaceAll('.', '\\.')));
+  const orient = run(['orient', '--read', '--json']);
+  assert.ifError(orient.error);
+  assert.equal(orient.status, 0, orient.stderr);
+  assert.equal(Object.keys(JSON.parse(orient.stdout)).length, 16);
+  assert.equal(fs.existsSync(path.join(fixture.workspace, '.harness/events.jsonl')), false);
+  assert.equal(fs.existsSync(path.join(fixture.workspace, '.harness/runs.jsonl')), false);
+  const configured = run(['config', 'set', 'agent.enabled', 'true', '--scope', 'user', '--json']);
+  assert.ifError(configured.error);
+  assert.equal(configured.status, 0, configured.stderr);
+  assert.equal(fs.existsSync(path.join(fixture.copilotHome, 'harness/config.yaml')), true);
+  const indexed = run(['index', '--structural', '--json']);
+  assert.ifError(indexed.error);
+  assert.equal(indexed.status, 0, indexed.stderr);
+  assert.equal(fs.existsSync(path.join(fixture.harnessHome, 'index')), true);
+});
 
 function repairProvider(content, original = simple.files['src/value.mjs']) {
   let used = false;
@@ -63,23 +100,24 @@ test('a public verifier pass cannot override private preservation checks', async
 });
 
 test('public verifier tampering and unregistered undo files remain outside scope', async t => {
-  for (const tamper of ['public-checks', 'fake-undo']) {
+  for (const tamper of ['public-checks', 'fake-undo', 'fake-events']) {
     const result = await runStudy({ root: directory(t), cases: [publicTask], repeats: 1, policies: ['legacy'], host: 'scripted-test', execute: async ({ workspace }) => {
       fs.writeFileSync(path.join(workspace, 'src/value.mjs'), 'export const value = 2;\nexport const version = 1;\n');
       if (tamper === 'public-checks') {
         const file = path.join(workspace, '.harness/context-public-checks.json');
         fs.chmodSync(file, 0o600);
         fs.writeFileSync(file, '{"checks":[]}');
-      } else {
+      } else if (tamper === 'fake-undo') {
         fs.mkdirSync(path.join(workspace, '.harness/undo'), { recursive: true });
         fs.writeFileSync(path.join(workspace, '.harness/undo/abc123-1234abcd.bak'), 'hidden implementation');
-      }
+      } else fs.writeFileSync(path.join(workspace, '.harness/events.jsonl'), '{"unregistered":true}\n');
       return { status: 'ok', turns: [] };
     } });
     const attempt = result.attempts[0];
     assert.equal(attempt.checks.pass, true);
     assert.equal(attempt.pass, false);
-    assert.ok(attempt.scope.unexpected.includes(tamper === 'public-checks' ? '.harness/context-public-checks.json' : '.harness/undo/abc123-1234abcd.bak'));
+    const unexpected = { 'public-checks': '.harness/context-public-checks.json', 'fake-undo': '.harness/undo/abc123-1234abcd.bak', 'fake-events': '.harness/events.jsonl' };
+    assert.ok(attempt.scope.unexpected.includes(unexpected[tamper]));
   }
 });
 

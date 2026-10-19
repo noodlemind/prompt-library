@@ -33,7 +33,7 @@ const bin = path.resolve(import.meta.dirname, '../../bin/harness.mjs');
 
 function execute(fixture) {
   const { workspace, copilotHome, harnessHome, protocol } = fixture;
-  const env = { ...process.env, COPILOT_HOME: copilotHome, HARNESS_HOME: harnessHome };
+  const env = fixture.env;
   const common = ['--workspace', workspace, '--copilot-home', copilotHome, '--harness-home', harnessHome, '--no-events', '--json'];
   const setup = spawnSync(process.execPath, [bin, 'config', 'set', 'agent.enabled', 'true', '--scope', 'user', ...common], { env, encoding: 'utf8', timeout: 15_000 });
   if (setup.error || setup.status !== 0) throw new Error(`fixture configuration failed: ${setup.error?.code || setup.stderr?.slice(0, 1000)}`);

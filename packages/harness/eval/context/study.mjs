@@ -48,6 +48,23 @@ function writeFiles(workspace, files = {}) {
   }
 }
 
+function trialEnvironment({ trial, copilotHome, harnessHome }) {
+  const bin = path.resolve(here, '../../bin/harness.mjs');
+  const directory = path.join(trial, 'runtime-bin');
+  fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, 'package.json'), '{"private":true,"type":"commonjs"}\n');
+  const pinned = { COPILOT_HOME: copilotHome, HARNESS_HOME: harnessHome, HARNESS_BIN: bin, HARNESS_NO_EVENTS: '1' };
+  const source = `#!/usr/bin/env node\nconst { spawnSync } = require('node:child_process');\nconst child = spawnSync(process.execPath, [${JSON.stringify(bin)}, ...process.argv.slice(2)], { cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, ...${JSON.stringify(pinned)} } });\nif (child.error) throw child.error;\nprocess.exit(child.status ?? 1);\n`;
+  fs.writeFileSync(path.join(directory, 'harness'), source, { mode: 0o755 });
+  fs.writeFileSync(path.join(directory, 'harness.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0harness" %*\r\n`);
+  const env = { ...process.env, ...pinned };
+  const pathKey = Object.keys(env).find(key => key.toUpperCase() === 'PATH');
+  const inheritedPath = pathKey ? env[pathKey] : '';
+  for (const key of Object.keys(env)) if (key.toUpperCase() === 'PATH') delete env[key];
+  env.PATH = `${directory}${path.delimiter}${inheritedPath}`;
+  return env;
+}
+
 function snapshot(workspace) {
   const files = {};
   const walk = dir => {
@@ -106,7 +123,7 @@ export async function prepareCase({ task, root, id }) {
   const checkFile = path.join(trial, 'checks.json');
   const checkText = JSON.stringify({ checks: task.checks });
   fs.writeFileSync(checkFile, checkText, { mode: 0o444 });
-  return { task, workspace, copilotHome, harnessHome, verifyCmd, checkFile, checkHash: hash(checkText), checkerHash: hash(fs.readFileSync(checker)), before: snapshot(workspace), trial };
+  return { task, workspace, copilotHome, harnessHome, env: trialEnvironment({ trial, copilotHome, harnessHome }), verifyCmd, checkFile, checkHash: hash(checkText), checkerHash: hash(fs.readFileSync(checker)), before: snapshot(workspace), trial };
 }
 
 function integrity(fixture) {
@@ -186,6 +203,7 @@ export async function runStudy({ root, cases, repeats = PROTOCOL.repeats, polici
     corpusHash: hash(JSON.stringify(cases)), checkerHash: hash(fs.readFileSync(checker)), protocolHash: hash(fs.readFileSync(protocolFile)),
     runtime: process.version, platform: process.platform, arch: process.arch, host, model,
     modelSelection: model?.trim().toLowerCase() === 'auto' ? 'automatic' : 'fixed',
+    runtimeIsolation: 'candidate-cli-v1',
     revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: here, encoding: 'utf8' }).trim(),
     sourceDirty: Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: here, encoding: 'utf8' }).trim()),
     profile: PROTOCOL.profile, publicVerifier: PROTOCOL.publicVerifier,
