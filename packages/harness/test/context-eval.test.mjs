@@ -87,3 +87,17 @@ test('usage aggregates all attempts while incomplete coverage and evidence stay 
   assert.equal(result.arms.legacy.failed, 2);
   assert.equal(result.arms.legacy.evidenceCoverage, 'unavailable');
 });
+
+test('development improvements cannot conceal a held-out quality regression', () => {
+  const attempts = [];
+  for (const policy of ['legacy', 'selective', 'subsystem']) {
+    for (let i = 0; i < 40; i++) attempts.push({ policy, kind: 'live', actualModel: 'exact', split: i < 30 ? 'held-out' : 'development',
+      pass: policy === 'selective' ? i >= 3 : i >= 2 && i !== 30 && i !== 31,
+      accounting: [{ boundary: 'headless-request', modelUsage: { measurement: 'observed', inputTokens: policy === 'selective' ? 50 : 100, outputTokens: 10 } }],
+    });
+  }
+  const result = summarizeStudy(attempts, { policies: ['legacy', 'selective', 'subsystem'], model: 'exact' });
+  assert.ok(result.arms.selective.failed < result.arms.legacy.failed);
+  assert.ok(result.arms.selective.heldOutFailed > result.arms.legacy.heldOutFailed);
+  assert.equal(result.comparison, 'no-candidate');
+});

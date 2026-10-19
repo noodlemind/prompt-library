@@ -9,6 +9,7 @@
   "promotion": {
     "minimumHeldOutAttemptsPerArm": 30,
     "maximumAdditionalFailures": 0,
+    "minimumBaselinePassRate": 0.9,
     "minimumInputTokenReduction": 0.1,
     "requireCompleteObservedUsage": true
   },

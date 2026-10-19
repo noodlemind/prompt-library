@@ -132,11 +132,15 @@ export async function runStudy({ root, cases, repeats = PROTOCOL.repeats, polici
         const checks = await runChecks(fixture);
         const scope = scopeResult(fixture);
         const kind = dryRun || result.dryRun ? 'dry-run' : error ? 'runtime-error' : host === 'scripted-test' ? 'scripted' : 'live';
+        const requests = (result.contextAccounting || []).filter(record => record.boundary === 'headless-request');
+        const models = [...new Set(requests.map(record => record.model).filter(Boolean))];
         const attempt = {
           id, case: task.id, split: task.split, family: task.family, repeat: repeat + 1, policy, kind,
           pass: ['live', 'scripted'].includes(kind) && result.status === 'ok' && checks.pass && scope.pass,
           baseline, checks, scope, error, durationMs: Date.now() - startedAt, stopReason: result.stopReason ?? null,
-          actualModel: result.model ?? null, provider: result.provider ?? null,
+          requestedModel: result.model ?? model, observedModels: models,
+          actualModel: requests.length && requests.every(record => record.model) && models.length === 1 ? models[0] : null,
+          provider: result.provider ?? null,
           accounting: result.contextAccounting || [], evidenceBeforeEdit: evidenceResult(task, result),
           context: result.context ? { files: result.context.files, coverage: result.context.coverage } : null,
         };
@@ -176,8 +180,10 @@ export function summarizeStudy(attempts, provenance) {
   }
   const limits = PROTOCOL.promotion;
   const eligible = attempts.length && attempts.every(row => row.kind === 'live' && row.actualModel === provenance.model)
-    && ['legacy', 'selective', 'subsystem'].every(policy => arms[policy]?.heldOutAttempts >= limits.minimumHeldOutAttemptsPerArm && arms[policy].usageCoverage === 'complete');
+    && ['legacy', 'selective', 'subsystem'].every(policy => arms[policy]?.heldOutAttempts >= limits.minimumHeldOutAttemptsPerArm && arms[policy].usageCoverage === 'complete')
+    && arms.legacy.passed / arms.legacy.attempts >= limits.minimumBaselinePassRate;
   const candidates = eligible ? ['selective', 'subsystem'].filter(policy => arms[policy].failed <= arms.legacy.failed + limits.maximumAdditionalFailures
+    && arms[policy].heldOutFailed <= arms.legacy.heldOutFailed + limits.maximumAdditionalFailures
     && arms[policy].inputTokens <= arms.legacy.inputTokens * (1 - limits.minimumInputTokenReduction)) : [];
   return { arms, comparison: eligible ? candidates.length ? 'candidate-requires-review' : 'no-candidate' : 'inconclusive', candidates,
     cost: null, costReason: 'No versioned price schedule supplied. Unknown usage is never zero cost.',

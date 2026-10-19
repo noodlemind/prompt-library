@@ -147,6 +147,16 @@ test('selective context refreshes source data before each model request', async 
   assert.doesNotMatch(evidence[0].text, /return 1/);
 });
 
+test('request receipts distinguish a reported model identity from the requested model', async (t) => {
+  const { ws, home } = scaffold('agent-model-receipt');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const provider = scriptedProvider([{ ...say('finished'), model: 'reported-model-revision' }]);
+  const result = await agentResultOf(argvFor(ws, home, 'answer'), {}, { startProviderFn: provider.start });
+  assert.equal(result.model, 'scripted-1');
+  assert.equal(result.contextAccounting[0].model, 'reported-model-revision');
+});
+
 test('a tool timeout above exec\'s maximum clamps to the maximum instead of killing the run', async () => {
   const { ws } = (() => {
     const dir = tempDir('agent-timeout-clamp-');

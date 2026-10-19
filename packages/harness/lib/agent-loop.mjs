@@ -976,6 +976,7 @@ export async function runAgentLoop({
           { timeout },
         );
         contextRequests[requestIndex] = accountContext({ boundary: 'headless-request', components, reads: readIdentities, usage: completion?.usage ?? null });
+        contextRequests[requestIndex].model = typeof completion?.model === 'string' ? completion.model.slice(0, 256) : null;
         contextRequests[requestIndex].outcome = 'completed';
         onContext?.(contextRequests[requestIndex]);
         completionRetries = 0;
