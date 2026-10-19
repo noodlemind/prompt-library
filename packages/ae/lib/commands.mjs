@@ -19,6 +19,7 @@ import { approvedBundleNames, syncBundles } from './bundle-sync.mjs';
 import { runDoctor } from './doctor.mjs';
 import { runInitRepo } from './init-repo.mjs';
 import { leftoverWorkspaceArtifacts, runMigrateLayout } from './migrate-layout.mjs';
+import { migrateHome } from './migrate-home.mjs';
 import { selectIntent, intentSourcesCheck } from './intent-sources.mjs';
 import { runGate, publishGateSession } from './gate.mjs';
 import { prepareNextTool } from './prepare.mjs';
@@ -415,6 +416,16 @@ export async function cmdStatus(argv) {
 
 export async function cmdMigrate(argv) {
   const flags = parseFlags(argv);
+  if (flags.fromHome) {
+    if (!flags.home) throw Object.assign(new Error('home migration requires an explicit --ae-home destination'), { code: 'E_USAGE', exit: 2 });
+    const result = migrateHome({ from: flags.fromHome, to: flags.home, dryRun: flags.dryRun });
+    if (flags.json) emitJson(flags, result);
+    else {
+      console.log(ui.line({ state: 'ok', key: 'migrate', value: `${result.dryRun ? 'would copy' : result.unchanged ? 'already copied' : 'copied'} ${result.files} files; original backup: ${result.backup}` }));
+      for (const next of result.next) printNext(next);
+    }
+    return 0;
+  }
   const workspace = path.resolve(flags.workspace);
   const logger = (m) => log(flags, m);
   const result = runMigrateLayout({

@@ -9,7 +9,7 @@ const fail = message => { throw new Error(message); };
 const authored = (value, max) => typeof value === 'string' && value.trim() && !/^TODO\b/i.test(value) && value.length <= max;
 
 function argumentsOf(argv) {
-  const names = new Set(['--workspace', '--copilot-home', '--plan', '--map', '--stage', '--harness-home']);
+  const names = new Set(['--workspace', '--copilot-home', '--plan', '--map', '--stage', '--ae-home', '--harness-home']);
   const flags = {};
   for (let i = 0; i < argv.length; i++) {
     if (!names.has(argv[i]) || !argv[i + 1] || argv[i + 1].startsWith('--') || flags[argv[i]]) fail('Use --workspace, --copilot-home, --plan, --map and --stage broken|fixed; optional --harness-home');
@@ -27,7 +27,9 @@ function main() {
   const bin = path.join(copilotHome, '.ae-bin/bin/ae.mjs'), hook = path.join(copilotHome, 'hooks/require-verification.mjs');
   for (const file of [bin, hook]) if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) fail('Install the built Harness package into the selected home first');
   const env = { ...process.env, COPILOT_HOME: copilotHome };
-  if (flags['--harness-home']) env.HARNESS_HOME = path.resolve(flags['--harness-home']);
+  if (flags['--ae-home'] && flags['--harness-home'] && path.resolve(flags['--ae-home']) !== path.resolve(flags['--harness-home'])) fail('Conflicting home flags');
+  const selectedHome = flags['--ae-home'] || flags['--harness-home'];
+  if (selectedHome) env.AE_HOME = env.HARNESS_HOME = path.resolve(selectedHome);
   delete env.HARNESS_BIN;
   const observations = [];
   const run = (family, args = [], input) => {

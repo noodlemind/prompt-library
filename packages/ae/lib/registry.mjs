@@ -822,11 +822,13 @@ registerCommand({
 
 registerCommand({
   name: 'migrate',
-  summary: 'move gitignored docs/plans and docs/solutions out of a product tree',
+  summary: 'migrate a saved state home, or move gitignored product plans and solutions',
   group: 'workspace',
   sideEffect: 'mutate',
   surfaces: ['cli', 'tui'],
-  args: { positionals: [], flags: [] },
+  args: { positionals: [], flags: [
+    { name: '--from-home', type: 'string', valueName: 'path', description: 'copy the complete old home into explicit --ae-home; original stays as backup', tui: 'cli-only' },
+  ] },
   handler: cmdMigrate,
 });
 

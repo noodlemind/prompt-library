@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeRuntimeEnvironment } from './runtime-identity.mjs';
+import { preToolDenyOutput, stopBlockOutput } from './hook-output.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SLICE_KEYS = ['neighborhood', 'learnings', 'skills', 'instructions', 'contacts', 'index', 'gateStatus', 'activePlan'];
@@ -90,6 +92,12 @@ function parseLastJson(text) {
 
 export function runHostAdapter() {
   const event = process.argv[2];
+  try { normalizeRuntimeEnvironment(); }
+  catch (error) {
+    const reason = `Invalid runtime configuration: ${error.message}`;
+    process.stdout.write(JSON.stringify(event === 'stop' ? stopBlockOutput(reason) : preToolDenyOutput(reason)) + '\n');
+    process.exit(2);
+  }
   const workspace = process.cwd();
   const query = takeFlag(process.argv.slice(3), '--query')[0] || '';
   const files = takeFlag(process.argv.slice(3), '--file');

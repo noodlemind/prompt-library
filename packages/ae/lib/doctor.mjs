@@ -705,7 +705,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
       ? 'Run install or upgrade'
       : lockCurrent
         ? `hydrated from ${lock.package}@${lock.version}`
-        : `harness ${installedVersion} is installed but the Copilot home was hydrated from ${lock.version} — run: ae upgrade`,
+        : `ae ${installedVersion} is installed but the Copilot home was hydrated from ${lock.version} — run: ae upgrade`,
     optional: true,
   });
 

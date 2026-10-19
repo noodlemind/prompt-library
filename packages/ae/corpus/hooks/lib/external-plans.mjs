@@ -6,7 +6,10 @@ import { runtimeHome } from './runtime-identity.mjs';
 
 let layout = null;
 let planLoader = null;
-for (const bin of new Set([authorityBin(), authorityBin({ includeOverride: false })].filter(Boolean))) {
+let candidates = [];
+try { candidates = [authorityBin(), authorityBin({ includeOverride: false })].filter(Boolean); }
+catch { /* Gate entry points return the configuration failure in their host protocol. */ }
+for (const bin of new Set(candidates)) {
   try {
     layout = await import(pathToFileURL(path.resolve(path.dirname(bin), '../lib/project-layout.mjs')).href);
     planLoader = await import(pathToFileURL(path.resolve(path.dirname(bin), '../lib/plan-parse.mjs')).href);

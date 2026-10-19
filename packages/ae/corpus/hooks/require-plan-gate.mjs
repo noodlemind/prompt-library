@@ -318,10 +318,12 @@ try {
   deny('invalid-hook-payload', error.message, 'invalid');
 }
 
-normalized = normalizeToolPayload(payload);
+try {
+  normalized = normalizeToolPayload(payload);
+  policy = loadHookPolicy(normalized.workspace, { ttlKey: 'gate_ttl_minutes', ttlDefault: 30 });
+} catch (error) { deny('invalid-runtime-configuration', error.message, 'invalid'); }
 try { syncSessionIdentity(normalized.workspace, normalized.sessionId); }
 catch (error) { deny('invalid-session-identity', error.message, 'invalid'); }
-policy = loadHookPolicy(normalized.workspace, { ttlKey: 'gate_ttl_minutes', ttlDefault: 30 });
 if (normalized.command) {
     const sessionPath = path.join(normalized.workspace, '.harness', 'session.json');
     try {
@@ -380,7 +382,7 @@ for (const relative of relatives) {
   }
 }
 const mutatesPlan = relatives.some((relative) => isPlanRelative(relative));
-if (mutatesPlan && /\bharness\s+(?:validate-plan|gate)\b/.test(normalized.command || '')) {
+if (mutatesPlan && /\b(?:ae|harness)\s+(?:validate-plan|gate)\b/.test(normalized.command || '')) {
   deny(
     'mixed-plan-command',
     'Create or lock only the canonical plan in this mutation. After it succeeds, run validate-plan and the implement gate as separate non-mutating tool calls',

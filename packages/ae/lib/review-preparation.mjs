@@ -163,7 +163,7 @@ export function discoverReviewChecks(workspace, files) {
         if (typeof fm.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(fm.name)) throw new Error('Check needs a valid name');
         if (fm.globs !== undefined && typeof fm.globs !== 'string' && !(Array.isArray(fm.globs) && fm.globs.every(g => typeof g === 'string'))) throw new Error('Check globs must be strings');
         const patterns = fm.globs === undefined ? [] : (Array.isArray(fm.globs) ? fm.globs : [fm.globs]).flatMap(expandPatterns).map(globRegex);
-        const mapped = files.map(f => f.replace(/^packages\/harness\/corpus\/(agents|skills|instructions)\//, '.github/$1/'));
+        const mapped = files.map(f => f.replace(/^packages\/(?:ae|harness)\/corpus\/(agents|skills|instructions)\//, '.github/$1/'));
         const matched = patterns.length === 0 || mapped.some(f => patterns.some(pattern => pattern.test(f)));
         checks.push({ name: fm.name, ref, globs: fm.globs ?? null, matched, severityDefault: fm['severity-default'] || 'P2' });
       } catch (error) { failures.push(`${origin}:${ref.path}: ${error.message}`); checks.push({ name: null, ref, matched: false, invalid: true }); }

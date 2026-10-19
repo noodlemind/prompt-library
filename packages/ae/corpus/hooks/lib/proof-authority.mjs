@@ -5,7 +5,7 @@ import { authorityBin } from './authority-bin.mjs';
 export function callProofAuthority(workspace, args, { timeout = 2500, spawnFn = spawnSync } = {}) {
   const bin = authorityBin();
   const started = Date.now();
-  const result = spawnFn(bin ? process.execPath : 'harness', [...(bin ? [bin] : []), 'status', ...args, '--json', '--no-events', '--workspace', workspace], {
+  const result = spawnFn(bin ? process.execPath : 'ae', [...(bin ? [bin] : []), 'status', ...args, '--json', '--no-events', '--workspace', workspace], {
     cwd: workspace, encoding: 'utf8', timeout, maxBuffer: 256 * 1024,
   });
   const failure = (reason, message) => {

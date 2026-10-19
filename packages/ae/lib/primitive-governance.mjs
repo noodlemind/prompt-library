@@ -117,7 +117,7 @@ export function verifyPrimitiveGovernance(plan, changedFiles, availableChecks = 
   if (changedPrimitives.length === 0) return { required: false, pass: true, message: 'No primitive paths changed' };
   const planGovernance = primitivePlanGovernance(plan);
   const missingPlan = planGovernance.checks.filter((check) => !check.pass).map((check) => check.id);
-  const skillChanged = changedPrimitives.some((file) => /^packages\/harness\/corpus\/(?:skills\/|enterprise\/skills\/)/.test(file));
+  const skillChanged = changedPrimitives.some((file) => /^packages\/(?:ae|harness)\/corpus\/(?:skills\/|enterprise\/skills\/)/.test(file));
   const named = new Set(Array.isArray(plan.fm.verification?.required) ? plan.fm.verification.required : []);
   const configured = new Set(availableChecks);
   const applicableEvidence = SKILL_EVIDENCE.filter((check) => configured.has(check));

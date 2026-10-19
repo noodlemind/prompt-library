@@ -32,7 +32,7 @@ export function renderHeader({
   if (branch) where.push(ui.paint('muted', commit ? `${branch} @ ${commit}` : branch));
 
   const what = [];
-  if (version) what.push(ui.paint('muted', `harness ${version}`));
+  if (version) what.push(ui.paint('muted', `ae ${version}`));
   if (plan) what.push(`${ui.paint('muted', 'plan')} ${ui.paint('info', plan)}`);
   if (gate) {
     const [token] = GATE_GLYPH[gate] || ['warn'];
@@ -147,7 +147,7 @@ export function renderFooter(snapshot = {}, {
   if (snapshot.learnings) right.push(ui.paint('muted', snapshot.learnings));
   if (snapshot.generation) right.push(ui.paint('muted', `gen ${snapshot.generation}`));
   if (snapshot.model) right.push(ui.paint('info', snapshot.model));
-  if (snapshot.version) right.push(ui.paint('muted', `harness ${snapshot.version}`));
+  if (snapshot.version) right.push(ui.paint('muted', `ae ${snapshot.version}`));
 
   if (!fixed.length && !lifecycle.length && !right.length) return '';
   const compose = (life) => `  ${[...fixed, ...life].join(sep)}`;

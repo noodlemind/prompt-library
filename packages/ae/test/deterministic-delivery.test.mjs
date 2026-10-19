@@ -39,7 +39,7 @@ function installPackage(t) {
   const packed = npmStep('pack', ['pack', '--json', '--pack-destination', dir], root);
   const archive = path.join(dir, JSON.parse(packed.stdout)[0].filename);
   npmStep('offline-install', ['install', '--prefix', dir, '--offline', '--ignore-scripts', '--omit=optional', archive], dir);
-  return path.join(dir, 'node_modules/harness');
+  return path.join(dir, 'node_modules/ae-harness');
 }
 
 test('installed product proof entry rejects placeholders and proves broken/fixed stages through actual checks', t => {

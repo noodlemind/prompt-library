@@ -29,7 +29,12 @@ function readPayload() {
 
 const input = readPayload();
 const workspace = resolveHookWorkspace(input);
-const policy = loadHookPolicy(workspace, { ttlKey: 'evidence_ttl_hours', ttlDefault: 24, rule: 'completion' });
+let policy;
+try { policy = loadHookPolicy(workspace, { ttlKey: 'evidence_ttl_hours', ttlDefault: 24, rule: 'completion' }); }
+catch (error) {
+  console.log(JSON.stringify(stopBlockOutput(`Invalid runtime configuration: ${error.message}`)));
+  process.exit(0);
+}
 const sessionPath = path.join(workspace, '.harness', 'session.json');
 let session = null;
 
@@ -87,7 +92,7 @@ try {
 
 function refreshVerification(current) {
   const bin = authorityBin();
-  const command = bin ? process.execPath : 'harness';
+  const command = bin ? process.execPath : 'ae';
   const args = [...(bin ? [bin] : []), 'verify', '--json', '--no-events', '--workspace', workspace];
   if (current?.activePlan) args.push('--plan', current.activePlan);
   const result = spawnSync(command, args, {

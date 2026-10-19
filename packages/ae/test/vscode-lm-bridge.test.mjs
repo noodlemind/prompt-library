@@ -147,11 +147,11 @@ test('VS Code extension installation refuses to overwrite an unowned directory',
 
 test('VS Code extension installation removes the legacy dev-kit bridge directory', () => {
   const extensionsDir = tempDir('bridge-legacy-extensions-');
-  const legacy = path.join(extensionsDir, 'dev-kit.ae-copilot-bridge');
+  const legacy = path.join(extensionsDir, 'dev-kit.harness-copilot-bridge');
   fs.mkdirSync(legacy, { recursive: true });
   fs.writeFileSync(path.join(legacy, 'package.json'), JSON.stringify({
     publisher: 'dev-kit',
-    name: 'ae-copilot-bridge',
+    name: 'harness-copilot-bridge',
   }));
 
   installVSCodeBridge({ packageRoot, extensionsDir, dryRun: false });

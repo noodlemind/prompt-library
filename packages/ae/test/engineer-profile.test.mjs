@@ -33,7 +33,7 @@ test('every harness command in the profile is registered', () => {
   const registered = new Set(listCommands());
   for (const host of HOSTS) {
     const text = renderEngineerProfile(host);
-    const names = [...text.matchAll(/\bharness ([a-z][a-z0-9-]*)\b/g)].map((match) => match[1]);
+    const names = [...text.matchAll(/\bae ([a-z][a-z0-9-]*)\b/g)].map((match) => match[1]);
     assert.notEqual(names.length, 0, `${host} profile names no harness command`);
     for (const name of names) {
       assert.equal(registered.has(name), true, `${host} names unregistered command ${name}`);

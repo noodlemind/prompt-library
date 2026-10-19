@@ -28,7 +28,7 @@ function emptyOrientSlice() {
 
 function orientSlice(workspace) {
   const bin = process.env.HARNESS_BIN;
-  const command = bin ? process.execPath : 'harness';
+  const command = bin ? process.execPath : 'ae';
   const args = [
     ...(bin ? [bin] : []),
     'orient',

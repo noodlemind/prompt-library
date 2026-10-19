@@ -94,6 +94,21 @@ test('the public Engineer keeps its identity and invokes ae', () => {
   assert.equal(fs.existsSync(path.join(root, 'corpus/agents/ae.agent.md')), false);
 });
 
+test('conflicting home settings produce explicit hook denials', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-hook-config-'));
+  try {
+    for (const script of ['require-plan-gate.mjs', 'require-verification.mjs']) {
+      const result = spawnSync(process.execPath, [path.join(root, 'corpus/hooks', script)], {
+        cwd: workspace, encoding: 'utf8', input: JSON.stringify({ cwd: workspace, tool_name: 'create_file', tool_input: { filePath: path.join(workspace, 'work.js') } }),
+        env: { ...process.env, AE_HOME: path.join(workspace, 'one'), HARNESS_HOME: path.join(workspace, 'two') },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout);
+      assert.equal(script === 'require-plan-gate.mjs' ? output.permissionDecision : output.decision, script === 'require-plan-gate.mjs' ? 'deny' : 'block');
+    }
+  } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
+});
+
 test('fresh CLI and hook processes select the same default state authority', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-default-home-'));
   try {

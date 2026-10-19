@@ -139,6 +139,8 @@ try {
   assert.equal(fs.existsSync(path.join(copilotHome, '.harness-bin/config/plan-schema.v4.yaml')), false);
   assert.equal(fs.existsSync(path.join(copilotHome, 'skills/caffeinated/references/experiment-workflow.md')), false);
   run(process.execPath, [path.join(copilotHome, '.harness-bin/bin/harness.mjs'), 'experiment', 'status', '--json', '--no-events'], { expected: 'nonzero' });
+  const installBackup = path.join(root, 'predecessor-install-backup');
+  fs.cpSync(copilotHome, installBackup, { recursive: true });
   bin = finalPackageBin;
   raw(['upgrade', '--target', 'cli']);
   assert.equal(json(path.join(copilotHome, '.harness-lock.json')).version, manifest.version);
@@ -256,6 +258,16 @@ try {
   summary.measurements = measurements.map(measurement => ({ attempt: measurement.attempt, value: measurement.metric.value, correctness: measurement.correctness.passed, isolation: measurement.isolation, artifacts: measurement.checks.flatMap(check => check.artifacts) }));
   summary.artifacts = artifacts.map(file => ({ sourcePath: file, archivedPath: path.join('harness-records', path.relative(home, file)), sha256: sha(fs.readFileSync(file)), bytes: fs.statSync(file).size }));
   summary.final = { experimentStatus: settled.status, spent: settled.spent, targetAttempt: target, planStatus: 'done', evidenceVersion: 7, outcome: proof.outcome, retainedWeights: weights(), headUnchanged: git(workspace, 'rev-parse', 'HEAD') === head, indexUnchanged: fs.readFileSync(indexPath).equals(cleanIndex), namedProof: proof.checks.filter(check => check.id.startsWith('experiment-')).map(check => ({ id: check.id, status: check.status })) };
+  const migratedHome = path.join(root, 'migrated-home');
+  const migration = JSON.parse(run(process.execPath, [bin, 'migrate', '--from-home', home, '--ae-home', migratedHome, '--json', '--no-events']).stdout);
+  const migratedPlan = path.join(migratedHome, path.relative(home, plan));
+  assert.equal(sha(fs.readFileSync(migratedPlan)), sha(fs.readFileSync(plan)));
+  assert.ok(migration.files > 0); assert.equal(migration.backup, home);
+  assert.equal(JSON.parse(run(process.execPath, [bin, 'migrate', '--from-home', home, '--ae-home', migratedHome, '--json', '--no-events']).stdout).unchanged, true);
+  summary.homeMigration = { files: migration.files, bytes: migration.bytes, sourcePreserved: true, completedPlanUnchanged: true, replayUnchanged: true };
+  fs.rmSync(copilotHome, { recursive: true }); fs.cpSync(installBackup, copilotHome, { recursive: true });
+  assert.equal(run(process.execPath, [path.join(copilotHome, 'bin/harness'), '--version']).stdout.trim(), '0.10.0');
+  summary.installRollback = { restoredSnapshot: true, version: '0.10.0' };
   summary.outcome = 'passed';
 } catch (error) {
   summary.outcome = 'failed'; summary.error = { name: error.name, message: String(error.message).slice(0, 4096), stack: String(error.stack).slice(0, 16 * 1024) };

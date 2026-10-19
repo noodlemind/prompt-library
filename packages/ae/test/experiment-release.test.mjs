@@ -19,7 +19,7 @@ function priorPackage(t) {
   assert.equal(hash(fs.readFileSync(fixture)), '05c60c4deaab44e9da70a9143385ef2f96679cc582f7e525b58a38c7685f2205');
   assert.equal(spawnSync('tar', ['-xzf', fixture, '-C', root]).status, 0);
   const workspace = path.join(root, 'product'); fs.mkdirSync(workspace); initGit(workspace);
-  const bin = path.join(root, 'package/bin/ae.mjs');
+  const bin = path.join(root, 'package/bin/harness.mjs');
   const env = { ...process.env, HARNESS_HOME: path.join(root, 'home'), COPILOT_HOME: path.join(root, 'copilot'), HARNESS_NO_EVENTS: '1' };
   const cli = (...args) => spawnSync(process.execPath, [bin, ...args, '--workspace', workspace, '--json', '--no-events'], { env, cwd: workspace, encoding: 'utf8', timeout: 20_000 });
   assert.equal(cli('--version').stdout.trim(), '0.10.0');

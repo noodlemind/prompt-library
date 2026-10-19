@@ -18,7 +18,7 @@ export function loadHookPolicy(workspace, { ttlKey = 'gate_ttl_minutes', ttlDefa
   } catch { /* A cold or invalid cache must be refreshed by the authority. */ }
   if (!validPolicySnapshot(snapshot, binding)) {
     const bin = authorityBin();
-    const result = spawnSync(bin ? process.execPath : 'harness', [...(bin ? [bin] : []), 'status', '--effective-policy', '--json', '--no-events', '--workspace', workspace], {
+    const result = spawnSync(bin ? process.execPath : 'ae', [...(bin ? [bin] : []), 'status', '--effective-policy', '--json', '--no-events', '--workspace', workspace], {
       cwd: workspace, encoding: 'utf8', timeout: 2500, maxBuffer: 128 * 1024,
     });
     if (result.error || result.status !== 0) return safe;
@@ -38,7 +38,7 @@ export function enforcementExitCode(enforcement) {
 
 export function projectTrustIsCurrent(workspace) {
   const bin = authorityBin();
-  const result = spawnSync(bin ? process.execPath : 'harness', [...(bin ? [bin] : []), 'trust', 'status', '--json', '--no-events', '--workspace', workspace], {
+  const result = spawnSync(bin ? process.execPath : 'ae', [...(bin ? [bin] : []), 'trust', 'status', '--json', '--no-events', '--workspace', workspace], {
     cwd: workspace, encoding: 'utf8', timeout: 2500, maxBuffer: 128 * 1024,
   });
   if (result.error || result.status !== 0) return false;

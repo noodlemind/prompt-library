@@ -183,6 +183,11 @@ export function parseFlags(argv) {
     else if (a === '--autonomy') flags.autonomy = scan[++i];
     else if (a.startsWith('--copilot-home=')) flags.copilotHome = a.split('=')[1];
     else if (a === '--copilot-home') flags.copilotHome = scan[++i];
+    else if (a.startsWith('--from-home=') || a === '--from-home') {
+      const value = a === '--from-home' ? scan[++i] : a.slice('--from-home='.length);
+      if (!value || value.startsWith('--')) invalidFlag('--from-home', value, 'requires a directory path');
+      flags.fromHome = value;
+    }
     else if (a.startsWith('--from-id=') || a === '--from-id') {
       const value = a === '--from-id' ? scan[++i] : a.slice('--from-id='.length);
       if (!validStorageSourceId(value)) invalidFlag('--from-id', value, 'requires local-<12 hex digits> or a canonical remote storage ID');

@@ -55,8 +55,8 @@ test('help works from a clean repo checkout without installed package deps', () 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Usage:/);
   assert.match(result.stdout, /^setup\s+install · upgrade/m);
-  assert.match(result.stdout, /\bharness · VS Code/);
-  assert.match(result.stdout, /^harness /);
+  assert.match(result.stdout, /\bae · VS Code/);
+  assert.match(result.stdout, /^ae /);
 });
 
 test('HELP_COMMAND_ORDER covers exactly the registered commands — nothing silently vanishes from help', () => {

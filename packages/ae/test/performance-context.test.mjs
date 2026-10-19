@@ -71,7 +71,7 @@ test('oversized journey context exposes omissions and retrieves every constraint
   assert.ok(Buffer.byteLength(JSON.stringify(oriented.performance)) <= 4096);
   const pack = fs.readFileSync(path.join(f.workspace, oriented.contextPack), 'utf8');
   assert.match(pack, /1 journey\(s\) omitted[^\n]+Read full declared goals and constraints from \.github\/harness\/performance\.json/);
-  const command = pack.match(/Retrieve all current goals and constraints: `(harness [^`]+)`/)?.[1];
+  const command = pack.match(/Retrieve all current goals and constraints: `(ae [^`]+)`/)?.[1];
   assert.equal(command, 'ae performance analyze --dry-run --json');
   const result = spawnSync(process.execPath, [path.resolve(import.meta.dirname, '../bin/ae.mjs'), ...command.split(' ').slice(1), '--workspace', f.workspace, '--harness-home', f.home, '--no-events'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr + result.stdout);

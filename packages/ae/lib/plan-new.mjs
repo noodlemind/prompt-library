@@ -66,12 +66,12 @@ function scalar(value, name, { multiline = false, required = false } = {}) {
 
 function classify(primitivePath) {
   const normalized = String(primitivePath || '').replace(/\\/g, '/');
-  if (/^packages\/harness\/corpus\/skills\//.test(normalized)) return 'skill';
-  if (/^packages\/harness\/corpus\/agents\//.test(normalized)) return 'agent';
-  if (/^packages\/harness\/corpus\/instructions\//.test(normalized)) return 'instruction';
+  if (/^packages\/(?:ae|harness)\/corpus\/skills\//.test(normalized)) return 'skill';
+  if (/^packages\/(?:ae|harness)\/corpus\/agents\//.test(normalized)) return 'agent';
+  if (/^packages\/(?:ae|harness)\/corpus\/instructions\//.test(normalized)) return 'instruction';
   if (/^\.github\/checks\//.test(normalized)) return 'check';
   if (normalized === 'packages/ae/corpus/knowledge/capability-registry.yaml') return 'capability registry';
-  if (/^packages\/harness\/corpus\/enterprise\//.test(normalized)) return 'enterprise';
+  if (/^packages\/(?:ae|harness)\/corpus\/enterprise\//.test(normalized)) return 'enterprise';
   return 'primitive';
 }
 

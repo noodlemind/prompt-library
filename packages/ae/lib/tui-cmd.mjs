@@ -1423,7 +1423,7 @@ export async function ensureFirstRunInstall({
   ];
   const exit = await runInstall(command, args);
   if (exit !== 0) {
-    throw Object.assign(new Error(`automatic harness ${command} failed with exit ${exit}`), { code: 'E_INSTALL', exit });
+    throw Object.assign(new Error(`automatic ae ${command} failed with exit ${exit}`), { code: 'E_INSTALL', exit });
   }
   return !dryRun;
 }

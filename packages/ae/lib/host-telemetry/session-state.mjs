@@ -269,7 +269,7 @@ function eventFromSession(file, sessionId, workspace) {
       case 'tool.execution_start': {
         toolCalls += 1;
         const text = JSON.stringify(record.data?.arguments ?? '');
-        for (const match of text.matchAll(/\bharness(?:\.(?:mjs|cmd|exe))?\s+([a-z][a-z0-9-]{1,32})\b/g)) {
+        for (const match of text.matchAll(/\b(?:ae|harness)(?:\.(?:mjs|cmd|exe))?\s+([a-z][a-z0-9-]{1,32})\b/g)) {
           harnessCliCalls += 1;
           harnessCliCommands[match[1]] = (harnessCliCommands[match[1]] ?? 0) + 1;
         }

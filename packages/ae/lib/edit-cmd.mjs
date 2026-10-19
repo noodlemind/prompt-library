@@ -566,7 +566,7 @@ function emitAudit(ctx, result) {
 
 function requirePath(relPath, mode) {
   if (typeof relPath === 'string' && relPath.trim()) return;
-  throw usageError(`${mode} requires --path <relative-path>`, `harness ${mode} --path <file> …`);
+  throw usageError(`${mode} requires --path <relative-path>`, `ae ${mode} --path <file> …`);
 }
 
 /** Every flag whose value is arbitrary text on this surface. One list, because

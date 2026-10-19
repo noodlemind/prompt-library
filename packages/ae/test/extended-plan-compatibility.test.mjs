@@ -20,7 +20,7 @@ function priorPackage(t) {
   assert.equal(metadata.packageVersion, '0.10.0');
   assert.equal(digest(fs.readFileSync(artifact)), '4fd0e5075a18e53a02c45a59347ccb24a6ce4853808831e46c70f78dd3bd2bb9');
   assert.equal(spawnSync('tar', ['-xzf', artifact, '-C', root]).status, 0);
-  const bin = path.join(root, 'package/bin/ae.mjs');
+  const bin = path.join(root, 'package/bin/harness.mjs');
   const workspace = path.join(root, 'product');
   fs.mkdirSync(workspace);
   initGit(workspace);

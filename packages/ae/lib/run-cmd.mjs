@@ -111,7 +111,7 @@ export function resumePlanFor(run, { sideEffect = 'execute' } = {}) {
       resumable: false,
       boundary: null,
       reason: `${run.command} is ${sideEffect === 'execute' ? 'an' : 'a'} ${sideEffect}-class command, so re-running it is not a safe boundary`,
-      guidance: `re-run it deliberately if that is what you want: harness ${run.command} ${(run.argv || []).join(' ')}`.trim(),
+      guidance: `re-run it deliberately if that is what you want: ae ${run.command} ${(run.argv || []).join(' ')}`.trim(),
     };
   }
   return {
@@ -250,7 +250,7 @@ export async function cmdRun(argv, ctx = {}) {
       keyWidth,
     }));
     if (result.resume.guidance) console.log(ui.paint('muted', `  ${inertLine(String(result.resume.guidance))}`));
-    if (result.resume.resumable) console.log(ui.paint('muted', `  harness ${inertLine(result.resume.argv.join(' '))}`));
+    if (result.resume.resumable) console.log(ui.paint('muted', `  ae ${inertLine(result.resume.argv.join(' '))}`));
   }
 
     if (result.verb === 'resume' && !result.resume.resumable) return EXIT.needsApproval;
