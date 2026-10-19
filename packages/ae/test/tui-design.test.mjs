@@ -169,7 +169,7 @@ test('DESIGN: the header is a two-line identity block printed once', () => {
   assert.equal(rows.length, 3, 'two lines and a blank');
   assert.match(rows[0], /~\/repo/);
   assert.match(rows[0], /main @ 9f2c1e4/);
-  assert.match(rows[1], /harness 2\.0\.0/);
+  assert.match(rows[1], /ae 2\.0\.0/);
   assert.match(rows[1], /plan phase1-core\.md/);
   assert.match(rows[1], /gate blocked/);
   assert.equal(rows[2], '');
@@ -864,7 +864,7 @@ test('REVIEW-8: the top hairline carries the mode label, Claude Code’s shape',
 
 test('REVIEW-6: the version sits bottom-right in the footer', () => {
   const row = renderFooter({ workspace: '~/repo', version: '0.5.0' }, { ui, width: 100 });
-  assert.match(row, /harness 0\.5\.0\s*$/, 'OpenCode’s and Grok’s home for it');
+  assert.match(row, /ae 0\.5\.0\s*$/, 'OpenCode’s and Grok’s home for it');
 });
 
 test('REVIEW-4: a blocked gate gets one actionable warning at open', async () => {
