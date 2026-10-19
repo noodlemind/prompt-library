@@ -9,6 +9,7 @@ import { lookupEntity } from '../lib/retrieval/lookup.mjs';
 import { runSearch } from '../lib/retrieval/search.mjs';
 import { createRetrievalResult, federate } from '../lib/retrieval/kernel.mjs';
 import { dispatchToolCall, renderToolResult } from '../lib/agent-loop.mjs';
+import { projectStoreDir } from '../lib/project-layout.mjs';
 
 function fixture(t) {
   const f = makeScopes();
@@ -95,3 +96,53 @@ test('the read tool exposes the same source-bound context to the model', async (
   assert.equal(outcome.result.context.declaration.text, 'export function alpha() {');
   assert.match(renderToolResult(outcome.result), /export function alpha/);
 });
+
+for (const contextVersion of [1, 2]) {
+  test(`agent search pages visit every match once with context version ${contextVersion}`, async (t) => {
+    const f = fixture(t);
+    for (let index = 0; index < 25; index++) f.write(`page-${index}.mjs`, 'export const paginationMarker = 1;\n');
+    initGit(f.workspace);
+    const expected = Array.from({ length: 25 }, (_, index) => `page-${index}.mjs`).sort();
+    const seen = [];
+    let cursor;
+    for (let page = 0; page < 10; page++) {
+      const outcome = await dispatchToolCall({ id: `search-${page}`, name: 'search', input: { query: 'paginationMarker', contextVersion, cursor, limit: 20 } }, { workspace: f.workspace, copilotHome: f.copilotHome });
+      assert.equal(outcome.dispatched, true, outcome.reason);
+      assert.equal(outcome.result.status, 'ok', JSON.stringify(outcome.result));
+      seen.push(...outcome.result.search.results.map(row => row.id));
+      cursor = outcome.result.search.nextCursor;
+      if (!cursor) break;
+    }
+    assert.equal(cursor, null);
+    assert.deepEqual(seen.sort(), expected);
+  });
+}
+
+for (const scope of ['product', 'global', 'product-user']) {
+  test(`knowledge references expand through path readers for ${scope} documents`, async (t) => {
+    const f = fixture(t);
+    const home = path.join(f.copilotHome, 'control');
+    const root = scope === 'global' ? path.join(f.copilotHome, 'knowledge') : scope === 'product-user' ? projectStoreDir(f.workspace, { home }) : f.workspace;
+    const document = path.join(root, 'docs/solutions/lesson.md');
+    fs.mkdirSync(path.dirname(document), { recursive: true });
+    fs.writeFileSync(document, '# Reference lesson\n\nA scope-specific body.\n');
+    fs.mkdirSync(path.join(f.copilotHome, 'knowledge'), { recursive: true });
+    fs.writeFileSync(path.join(f.copilotHome, 'knowledge/manifest.yaml'), `entries:\n  - id: lesson-id\n    path: docs/solutions/lesson.md\n    title: reference lesson\n    scope: ${scope}\n`);
+    const result = runSearch({ workspace: f.workspace, copilotHome: f.copilotHome, home, query: 'reference lesson', sources: ['knowledge'], contextVersion: 2 });
+    assert.equal(result.results.length, 1);
+    const reference = result.results[0].evidence.reference;
+    assert.equal(typeof reference, 'string');
+    const expanded = runGet({ workspace: f.workspace, copilotHome: f.copilotHome, home, flags: { path: reference, contextVersion: 2 } });
+    assert.equal(expanded.excerpt, '# Reference lesson\n\nA scope-specific body.\n');
+    const read = () => dispatchToolCall({ id: 'knowledge-read', name: 'read', input: { path: reference, contextVersion: 2 } }, { workspace: f.workspace, copilotHome: f.copilotHome, harnessHome: home });
+    const outcome = await read();
+    assert.equal(outcome.dispatched, true, outcome.reason);
+    assert.equal(outcome.result.status, 'ok', JSON.stringify(outcome.result));
+    assert.equal(outcome.result.evidence.sha256, expanded.sha256);
+    assert.match(renderToolResult(outcome.result), /A scope-specific body/);
+    fs.writeFileSync(document, '# Changed lesson\n');
+    assert.throws(() => runGet({ workspace: f.workspace, copilotHome: f.copilotHome, home, flags: { path: reference } }), error => error.code === 'E_SOURCE_CHANGED');
+    const stale = await read();
+    assert.match(stale.reason, /source changed/);
+  });
+}

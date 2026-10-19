@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 
-test('clean installed package expands current context and rejects stale source references', (t) => {
+test('clean installed package expands current context and rejects stale source references', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'installed-context-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const packageRoot = path.resolve(import.meta.dirname, '..');
@@ -75,4 +75,27 @@ test('clean installed package expands current context and rejects stale source r
   assert.equal(ok('get', '--path', largeEvidence.reference, '--context-version', '2').evidence.sha256, largeEvidence.sha256);
   fs.writeFileSync(path.join(workspace, 'large.mjs'), largeBody.replace('marker = 1', 'marker = 2'));
   assert.notEqual(cli('get', '--path', largeEvidence.reference, '--context-version', '2').status, 0);
+  const lock = path.join(runtime, 'lib/repo-map/grammars.lock');
+  const lockBytes = fs.readFileSync(lock);
+  for (const state of ['missing', 'unreadable']) {
+    await t.test(`${state} grammar lock preserves CLI startup and the integrity diagnostic`, () => {
+      fs.rmSync(lock);
+      if (state === 'unreadable') fs.mkdirSync(lock);
+      try {
+        assert.equal(cli('help').status, 0);
+        const index = ok('index', '--structural');
+        assert.equal(index.tier, 'lexical');
+        assert.ok(index.integrityFailures.some(row => row.language === 'lock'));
+        const doctor = cli('doctor');
+        assert.notEqual(doctor.status, 0);
+        const check = JSON.parse(doctor.stdout).checks.find(row => row.id === 'S1');
+        assert.equal(check.pass, false);
+        assert.notEqual(check.optional, true);
+        assert.match(check.hint, /grammars.lock missing or unreadable/);
+      } finally {
+        fs.rmSync(lock, { recursive: true, force: true });
+        fs.writeFileSync(lock, lockBytes);
+      }
+    });
+  }
 });
