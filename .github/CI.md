@@ -18,7 +18,8 @@ the same workflow and ref, including package candidate runs.
 | Package installation on Linux and Windows | The exact Node 24 archive installs offline and hydrates a runnable `ae` | Archive, checksum and source metadata |
 | Documentation | Canonical pages build with Jekyll | Pages artifact |
 
-The former delivery and adaptive jobs repeated files already in the full suites.
+The former delivery and adaptive jobs and separate Linux prompt-contract step
+repeated files already in the full suites.
 Their evidence now comes from those suites. Uploads run after failure. Linux and
 Windows log capture preserve the real test process's exit code. The final Windows
 gate rejects failed, cancelled or missing shard/probe verdicts and missing,

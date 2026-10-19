@@ -1,8 +1,4 @@
-# Runs the harness's own trusted checks on every pull request, by the SAME
-# names a local run uses — so "green locally" and "green in CI" mean the same
-# thing. Until this existed, every reported pass came from one developer's
-# machine, and two consecutive review rounds each found a regression the
-# previous round's fix had introduced.
+# Runs the complete source suite, including prompt contracts, on every PR.
 name: Harness Tests
 
 on:
@@ -53,9 +49,6 @@ jobs:
         env:
           HARNESS_PROOF_LOG: ${{ github.workspace }}/delivery-transcripts.jsonl
         run: npm --prefix packages/ae test 2>&1 | tee harness-tests.log
-
-      - name: Prompt library contracts
-        run: node --test packages/ae/test/prompt-library-contracts.test.mjs
 
       - name: Preserve test and installed-delivery output
         if: always()

@@ -26,6 +26,7 @@ test('full suites retain discovery and replace the repeated delivery and adaptiv
   assert.equal(linux.on.pull_request?.paths, undefined);
   assert.equal(windows.on.pull_request?.paths, undefined);
   assert.match(suite(linux.jobs.test).run, /npm --prefix packages\/ae test/);
+  assert.equal(linux.jobs.test.steps.some(step => /node --test .*prompt-library-contracts\.test\.mjs/.test(step.run || '')), false);
   assert.deepEqual(windows.jobs.tests.strategy.matrix.shard, [1, 2, 3, 4]);
   assert.equal(windows.jobs.tests.strategy['fail-fast'], false);
   assert.match(suite(windows.jobs.tests).run, /node scripts\/ci-tests\.mjs --shard \$\{\{ matrix.shard \}\} --shards 4/);
