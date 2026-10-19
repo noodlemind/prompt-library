@@ -80,19 +80,12 @@ test('every provenance field the status computes reaches the rendered output', (
   assert.match(rendered, new RegExp(json.catalogAge), 'and so does the age');
 });
 
-test('auto is resolved to the provider default, never sent as a model id', () => {
-  const spawned = [];
-  const handle = startProvider({
-    provider: 'github-copilot',
-    model: 'auto',
-    spawnFn: (cmd, args, opts) => {
-      spawned.push({ cmd, args, opts });
-      return fakeChild();
-    },
-  });
-  assert.equal(handle.model, 'gpt-4.1', 'auto means the provider chooses, and it chose its default');
-  assert.notEqual(handle.model, 'auto', 'the literal word must not survive into a request');
-  handle.close();
+test('native Copilot Auto stays explicit while other providers choose their defaults', () => {
+  for (const [provider, expected] of [['github-copilot', 'auto'], ['openai', 'gpt-5']]) {
+    const handle = startProvider({ provider, model: 'auto', parentEnv: { PATH: process.env.PATH, OPENAI_API_KEY: 'not-a-real-key' }, spawnFn: () => fakeChild() });
+    assert.equal(handle.model, expected);
+    handle.close();
+  }
 });
 
 test('auto is recognised however it is typed', () => {
