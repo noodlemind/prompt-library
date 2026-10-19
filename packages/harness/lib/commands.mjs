@@ -774,6 +774,7 @@ export async function cmdOrient(argv) {
     usage: usageFields({ input: query, output: orientPack }),
         learnings: result.deliveredLearnings || (result.learnings || []).map((l) => l.id),
     learningsBytes: result.learningsBytes,
+    contextAccounting: result.contextAccounting,
         ...((result.learnings || []).some((l) => l.layer)
       ? { learningLayers: (result.learnings || []).map((l) => ({ id: l.id, layer: l.layer === 'branch' ? 'branch' : 'golden' })) }
       : {}),

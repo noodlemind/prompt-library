@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { accountContext } from './token-meter.mjs';
 import path from 'node:path';
 import { EXIT } from './style.mjs';
 import { CONFIG_SCHEMA } from './config.mjs';
@@ -846,6 +847,7 @@ export async function runAgentLoop({
   ctx = {},
   signal = null,
   onTurn = null,
+  onContext = null,
   now = () => Date.now(),
 }) {
   const resolvedProfile = profile?.id ? profile : resolveProfile(profile);
@@ -861,6 +863,9 @@ export async function runAgentLoop({
   });
   let messages = [{ role: 'user', text: task }];
   const turns = [];
+  const contextRequests = [];
+  const readIdentities = [];
+  const recordContextTurn = args => recordTurn({ ...args, contextAccounting: contextRequests.at(-1) });
 
   const provider = startProviderFn();
   let stop = null;
@@ -910,6 +915,14 @@ export async function runAgentLoop({
       const turnIndex = turns.length + 1;
       const turnStartedAt = now();
       let completion;
+      const request = { system, messages: [...messages], tools: resolvedProfile.id === 'deliver' ? DELIVER_AGENT_TOOLS : AGENT_TOOLS };
+      const components = [
+        { category: 'instructions', id: 'system', content: request.system },
+        { category: 'capabilities', id: 'tools', content: request.tools },
+        ...request.messages.map((message, index) => ({ category: message.toolResults ? 'toolResults' : 'history', id: `message-${index}`, content: message })),
+      ];
+      const requestIndex = contextRequests.length;
+      contextRequests.push(accountContext({ boundary: 'headless-request', components, reads: readIdentities }));
       try {
         const remainingMs = deadline - now();
         const timeout = Math.max(
@@ -917,11 +930,16 @@ export async function runAgentLoop({
           Math.min(remainingMs, AGENT_COMPLETION_TIMEOUT_MS, PROVIDER_TIMEOUT_MS),
         );
         completion = await provider.complete(
-          { system, messages: [...messages], tools: resolvedProfile.id === 'deliver' ? DELIVER_AGENT_TOOLS : AGENT_TOOLS },
+          request,
           { timeout },
         );
+        contextRequests[requestIndex] = accountContext({ boundary: 'headless-request', components, reads: readIdentities, usage: completion?.usage ?? null });
+        contextRequests[requestIndex].outcome = 'completed';
+        onContext?.(contextRequests[requestIndex]);
         completionRetries = 0;
       } catch (error) {
+        contextRequests[requestIndex].outcome = 'failed';
+        onContext?.(contextRequests[requestIndex]);
         const timedOut = /timed out/i.test(String(error?.message || ''));
         if (timedOut && completionRetries < AGENT_COMPLETION_RETRIES && now() < deadline) {
           completionRetries += 1;
@@ -944,7 +962,7 @@ export async function runAgentLoop({
       const calls = normalizeCalls(completion);
 
       if (now() >= deadline) {
-        turns.push(recordTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: false }));
+        turns.push(recordContextTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: false }));
         onTurn?.(turns[turns.length - 1], { text: finalText });
         stop = 'time-budget';
         break;
@@ -953,7 +971,7 @@ export async function runAgentLoop({
       messages.push({ role: 'assistant', blocks: completion?.blocks ?? [], text: finalText });
 
       if (!calls.length) {
-        turns.push(recordTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: true }));
+        turns.push(recordContextTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: true }));
         onTurn?.(turns[turns.length - 1], { text: finalText });
 
         // Autonomous with verifier: model "done" is not success unless verifier is green.
@@ -1005,7 +1023,7 @@ export async function runAgentLoop({
           output: 'output-token limit hit — tool arguments may be truncated; none were run; re-issue the calls',
           isError: true,
         }));
-        turns.push(recordTurn({
+        turns.push(recordContextTurn({
           turnIndex,
           turnStartedAt,
           now,
@@ -1065,6 +1083,7 @@ export async function runAgentLoop({
           toolRecords.push({ tool: call.name, dispatched: false, reason: outcome.reason });
           continue;
         }
+        if (call.name === 'read') readIdentities.push(String(call.input?.path || 'unknown'));
         let output = renderToolResult(outcome.result);
         const failedAction = (call.name === 'bash' || call.name === 'exec')
           && (outcome.result.status !== 'ok' || (Number.isFinite(outcome.result.exitCode) && outcome.result.exitCode !== 0));
@@ -1097,7 +1116,7 @@ export async function runAgentLoop({
         }
       }
 
-      const turn = recordTurn({ turnIndex, turnStartedAt, now, tools: toolRecords, usage: completion?.usage ?? null, ended: false });
+      const turn = recordContextTurn({ turnIndex, turnStartedAt, now, tools: toolRecords, usage: completion?.usage ?? null, ended: false });
       turns.push(turn);
       onTurn?.(turn, { text: finalText });
 
@@ -1163,6 +1182,7 @@ export async function runAgentLoop({
     exitCode: reason.exit,
     turns,
     turnCount: turns.length,
+    contextAccounting: contextRequests,
     maxTurns,
     maxSeconds,
     usage,
@@ -1180,9 +1200,10 @@ export async function runAgentLoop({
   };
 }
 
-function recordTurn({ turnIndex, turnStartedAt, now, tools, usage, ended }) {
+function recordTurn({ turnIndex, turnStartedAt, now, tools, usage, ended, contextAccounting }) {
   return {
     turn: turnIndex,
+    contextAccounting,
     tools,
     toolCount: tools.length,
     ended,

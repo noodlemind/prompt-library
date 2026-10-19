@@ -101,6 +101,21 @@ test('P5AC9: the loop orients, acts through a tool, and stops when the model ask
   assert.equal(result.usage.outputTokens, 10, 'usage accumulates across turns');
 });
 
+test('context accounting records actual runtime requests and repeated reads without storing payload content', async (t) => {
+  const { ws, home } = scaffold('agent-context-accounting');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(ws, 'target.txt'), 'private payload marker');
+  const provider = scriptedProvider([callTool('r1', 'read', { path: 'target.txt' }), callTool('r2', 'read', { path: 'target.txt' }), say('finished')]);
+  const result = await agentResultOf(argvFor(ws, home, 'inspect target'), {}, { startProviderFn: provider.start });
+  assert.equal(result.contextAccounting.length, 3);
+  assert.equal(result.contextAccounting[2].reads, 2);
+  assert.equal(result.contextAccounting[2].repeatedReads, 1);
+  assert.equal(result.contextAccounting[2].modelUsage.inputTokens, 5);
+  assert.equal(result.contextAccounting[2].modelInputCoverage, 'runtime-request-only');
+  assert.equal(JSON.stringify(result.contextAccounting).includes('private payload marker'), false);
+});
+
 test('a tool timeout above exec\'s maximum clamps to the maximum instead of killing the run', async () => {
   const { ws } = (() => {
     const dir = tempDir('agent-timeout-clamp-');

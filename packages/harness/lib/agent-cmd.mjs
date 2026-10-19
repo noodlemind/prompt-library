@@ -344,6 +344,10 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
         });
       }),
     onTurn: (turn, { text }) => emitTurn(ctx, p, turn, text),
+    onContext: contextAccounting => {
+      const sink = ctx.events?.withCommand?.('agent') || ctx.events;
+      sink?.emit?.('context.accounting', { contextAccounting });
+    },
   });
   return {
     ...loopResult,

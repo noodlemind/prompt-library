@@ -18,6 +18,7 @@ import { prepareNextTool } from './prepare.mjs';
 import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
 import { collectOrientationFacts } from './orientation-facts.mjs';
 import { buildContextRecord } from './context-record.mjs';
+import { accountContext } from './token-meter.mjs';
 
 const ORIENT_BRANCH_CAP = 80;
 function jsonGitContext(gitContext) {
@@ -218,6 +219,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
       : null,
     contextPack: packRel,
     repoMap: repoMapRef,
+    contextAccounting: accountContext({ boundary: 'orientation-output', components: [{ category: 'pack', id: packRel, content: packBody }] }),
     knowledgeDebt,
     gitContext: jsonGitContext(gitContext),
     worktree: {

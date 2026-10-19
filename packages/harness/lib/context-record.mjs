@@ -4,6 +4,7 @@ import { MAX_FILES_SCANNED, MAX_FILE_BYTES } from './repo-map/scan.mjs';
 import { planDigest } from './evidence.mjs';
 import { worktreeId } from './structural/shape.mjs';
 import { loadPlan } from './plan-parse.mjs';
+import { accountContext } from './token-meter.mjs';
 
 const EVIDENCE_LIMIT = 80;
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
@@ -54,5 +55,6 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
       limitations: ['Import relationships are heuristic and limited to one hop.', 'Unsaved editor buffers are unavailable through filesystem reads.'],
     },
     expansion: { command: 'harness orient --read --context-version 2', sourceChanged: changed },
+    accounting: accountContext({ boundary: 'orientation-output', components: [{ category: 'evidence', id: 'orientation-facts', content: facts.slice }] }),
   };
 }
