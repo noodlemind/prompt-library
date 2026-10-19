@@ -87,6 +87,32 @@ test('the canonical terminal command retains bounded control admission', () => {
   } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
 });
 
+for (const command of ['plan-update', 'inventory', 'resources', 'domain', 'performance', 'graph', 'lookup']) {
+  test(`canonical home flag reaches the ${command} command parser`, () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-home-parser-'));
+    try {
+      const invoke = flag => spawnSync(process.execPath, [path.join(root, 'bin/ae.mjs'), command,
+        flag, path.join(workspace, 'state'), '--workspace', workspace, '--json', '--no-events',
+        ...(command === 'plan-update' ? [] : ['bogus'])], { encoding: 'utf8' });
+      const legacy = invoke('--harness-home'), canonical = invoke('--ae-home');
+      assert.notEqual(legacy.status, 0, 'the invalid operation must reject before mutation');
+      assert.equal(canonical.status, legacy.status);
+      assert.equal(canonical.stderr, legacy.stderr);
+      assert.equal(canonical.stdout, legacy.stdout);
+    } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
+  });
+}
+
+test('canonical home flags retain admission for bounded diagnostic controls', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-home-controls-'));
+  try {
+    for (const command of ['performance analyze --dry-run', 'experiment status', 'domain show --name sample', 'inventory show', 'todo list']) {
+      const result = analyzeTerminalEffects(`ae ${command} --ae-home /tmp/ae-state --workspace '${workspace.replaceAll("'", "'\\''")}'`, workspace);
+      assert.equal(result.opaqueInvocations.length, 0, `${command}: ${JSON.stringify(result)}`);
+    }
+  } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
+});
+
 test('the public Engineer keeps its identity and invokes ae', () => {
   const agent = fs.readFileSync(path.join(root, 'corpus/agents/engineer.agent.md'), 'utf8');
   assert.match(agent, /ae orient --read/);

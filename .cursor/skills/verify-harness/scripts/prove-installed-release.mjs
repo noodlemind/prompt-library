@@ -55,7 +55,7 @@ function run(executable, args, { cwd = root, timeout = 60_000, expected = 0, inp
 }
 
 const git = (cwd, ...args) => run('git', ['-c', 'core.fsmonitor=false', ...args], { cwd }).stdout.trim();
-const raw = (args, { at = workspace, ...options } = {}) => run(process.execPath, [bin, ...args, '--workspace', at, '--harness-home', home, '--copilot-home', copilotHome, '--json', '--no-events'], { cwd: at, ...options });
+const raw = (args, { at = workspace, ...options } = {}) => run(process.execPath, [bin, ...args, '--workspace', at, path.basename(bin) === 'harness.mjs' ? '--harness-home' : '--ae-home', home, '--copilot-home', copilotHome, '--json', '--no-events'], { cwd: at, ...options });
 const invoke = (...args) => JSON.parse(raw(args).stdout);
 const decision = value => {
   const file = path.join(root, 'decision.json');
@@ -117,7 +117,7 @@ try {
   assert.equal(run(process.execPath, [bin, '--version']).stdout.trim(), manifest.version);
   fs.mkdirSync(workspace);
   const freshCopilot = path.join(root, 'fresh-copilot'), freshHarness = path.join(root, 'fresh-harness');
-  run(process.execPath, [bin, 'install', '--target', 'cli', '--workspace', workspace, '--copilot-home', freshCopilot, '--harness-home', freshHarness, '--json', '--no-events'], { cwd: workspace });
+  run(process.execPath, [bin, 'install', '--target', 'cli', '--workspace', workspace, '--copilot-home', freshCopilot, '--ae-home', freshHarness, '--json', '--no-events'], { cwd: workspace });
   assert.equal(run(process.execPath, [path.join(freshCopilot, '.ae-bin/bin/ae.mjs'), '--version']).stdout.trim(), manifest.version);
   assert.equal(json(path.join(freshCopilot, '.harness-lock.json')).version, manifest.version);
   assert.match(fs.readFileSync(path.join(freshCopilot, '.ae-bin/config/plan-schema.v4.yaml'), 'utf8'), /^version: 4\s/m);

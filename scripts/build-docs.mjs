@@ -22,5 +22,5 @@ for (const [input, destination, permalink, title] of pages) {
     .replaceAll('(../packages/', `(${source}/packages/`);
   fs.writeFileSync(path.join(output, destination), `---\nlayout: default\ntitle: ${title}\npermalink: ${permalink}\n---\n\n${content}`);
 }
-fs.writeFileSync(path.join(output, '_config.yml'), `title: Adaptive Engineering\nrepository: ${repository}\nmarkdown: kramdown\nexclude: [README.md]\n`);
+fs.writeFileSync(path.join(output, '_config.yml'), `title: Adaptive Engineering\nrepository: ${repository}\nbaseurl: /${repository.split('/')[1]}\nmarkdown: kramdown\nexclude: [README.md]\n`);
 console.log(output);

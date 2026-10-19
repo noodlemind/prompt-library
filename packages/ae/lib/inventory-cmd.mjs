@@ -4,7 +4,7 @@ import { redactedJson } from './redact.mjs';
 import { runInventory } from './inventory.mjs';
 
 export const INVENTORY_VERBS = Object.freeze(['show', 'refresh']);
-const VALUE_OPTIONS = { '--editor': 'editor', '--profile': 'profile', '--installation': 'installation', '--launcher': 'launcher', '--user-data': 'userData', '--config-root': 'configRoot', '--plugins-root': 'pluginsRoot', '--harness-home': 'home', '--workspace': 'workspace', '--copilot-home': 'copilotHome' };
+const VALUE_OPTIONS = { '--editor': 'editor', '--profile': 'profile', '--installation': 'installation', '--launcher': 'launcher', '--user-data': 'userData', '--config-root': 'configRoot', '--plugins-root': 'pluginsRoot', '--ae-home': 'home', '--harness-home': 'home', '--workspace': 'workspace', '--copilot-home': 'copilotHome' };
 
 function parseInventoryArgs(argv, ctx) {
   const options = { home: ctx.harnessHome, verb: null, json: false, dryRun: false };

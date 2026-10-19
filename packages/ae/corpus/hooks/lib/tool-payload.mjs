@@ -578,7 +578,7 @@ export function harnessControlCommand(tokens, workspace) {
   if (args[0] === 'performance') {
     if (args[1] !== 'analyze') return null;
     const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
-    const valued = new Set(['--file', '--domain', '--workspace', '--harness-home', '--copilot-home']), seen = new Set(), values = new Map();
+    const valued = new Set(['--file', '--domain', '--workspace', '--ae-home', '--harness-home', '--copilot-home']), seen = new Set(), values = new Map();
     for (let index = 2; index < args.length; index++) {
       const token = args[index], split = token.indexOf('='), name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
       if (seen.has(key)) return null;
@@ -599,7 +599,7 @@ export function harnessControlCommand(tokens, workspace) {
     const verb = args[1], options = { begin: ['--plan', '--file'], evaluate: ['--plan', '--attempt'], resolve: ['--plan', '--file'], status: ['--plan', '--attempt'] };
     if (!Object.hasOwn(options, verb)) return null;
     const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
-    const valued = new Set(['--workspace', '--harness-home', '--copilot-home', ...options[verb]]), seen = new Set(), values = new Map();
+    const valued = new Set(['--workspace', '--ae-home', '--harness-home', '--copilot-home', ...options[verb]]), seen = new Set(), values = new Map();
     for (let index = 2; index < args.length; index++) {
       const token = args[index], split = token.indexOf('='), name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
       if (seen.has(key)) return null;
@@ -626,7 +626,7 @@ export function harnessControlCommand(tokens, workspace) {
     };
     if (!Object.hasOwn(options, verb) || (verb === 'review' && !['prepare', 'assemble'].includes(reviewVerb))) return null;
     const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v', ...(verb === 'status' ? ['--validate-completion'] : [])]);
-    const valued = new Set(['--workspace', '--harness-home', '--copilot-home', '--name', ...options[verb]]);
+    const valued = new Set(['--workspace', '--ae-home', '--harness-home', '--copilot-home', '--name', ...options[verb]]);
     const values = new Map(), seen = new Set();
     for (let index = verb === 'review' ? 3 : 2; index < args.length; index++) {
       const token = args[index], split = token.indexOf('=');
@@ -656,7 +656,7 @@ export function harnessControlCommand(tokens, workspace) {
     const inventory = args[0] === 'inventory', verb = args[1];
     if (!(inventory ? ['show', 'refresh'].includes(verb) : verb === 'show')) return null;
     const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
-    const valued = new Set(['--workspace', '--harness-home', '--copilot-home',
+    const valued = new Set(['--workspace', '--ae-home', '--harness-home', '--copilot-home',
       ...(inventory && verb === 'refresh' ? ['--editor', '--profile', '--installation', '--launcher', '--user-data', '--config-root', '--plugins-root'] : []),
       ...(!inventory ? ['--name'] : [])]);
     const values = new Map(), seen = new Set();
@@ -681,7 +681,7 @@ export function harnessControlCommand(tokens, workspace) {
     if (!['list', 'sync', 'complete'].includes(verb)) return null;
     const values = new Map();
     const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
-    const valued = new Set(['--plan', '--id', '--workspace', '--harness-home', '--copilot-home']);
+    const valued = new Set(['--plan', '--id', '--workspace', '--ae-home', '--harness-home', '--copilot-home']);
     for (let index = hasVerb ? 2 : 1; index < args.length; index++) {
       const token = args[index], split = token.indexOf('=');
       const name = split < 0 ? token : token.slice(0, split);

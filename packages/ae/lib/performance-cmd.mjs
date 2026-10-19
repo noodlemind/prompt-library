@@ -10,7 +10,7 @@ export const PERFORMANCE_VERBS = Object.freeze(['analyze']);
 const DEFAULT_PROFILE = '.github/harness/performance.json';
 const MAX_REPORT_BYTES = 16 * 1024 * 1024;
 const BOOLEAN = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
-const VALUED = new Set(['--file', '--domain', '--workspace', '--harness-home', '--copilot-home']);
+const VALUED = new Set(['--file', '--domain', '--workspace', '--ae-home', '--harness-home', '--copilot-home']);
 const usage = message => Object.assign(new Error(`performance: ${message}`), { code: 'E_USAGE', exit: 2, hint: 'ae help performance' });
 
 export function parsePerformanceArguments(argv) {

@@ -593,7 +593,7 @@ export async function cmdPlanUpdate(argv) {
       workspace = path.resolve(workspace);
     } else if (token === '--json') json = true;
     else if (token === '--dry-run') dryRun = true;
-    else if (token === '--harness-home' || token === '--copilot-home' || token === '--no-events' || token === '--verbose' || token === '--no-color') {
+    else if (token === '--ae-home' || token === '--harness-home' || token === '--copilot-home' || token === '--no-events' || token === '--verbose' || token === '--no-color') {
       if (token !== '--no-events' && token !== '--verbose' && token !== '--no-color') i += 1;
     } else if (token.startsWith('-')) throw usage(`plan-update: unknown flag ${token}`);
     else throw usage(`plan-update: unexpected argument ${token}`);

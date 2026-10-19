@@ -34,7 +34,7 @@ function usage(message) {
 export function parseDomainArguments(argv) {
   const positionals = [], values = new Map(), seen = new Set();
   const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v', '--validate-completion']);
-  const allValued = new Set(['--workspace', '--harness-home', '--copilot-home', '--name', ...Object.values(OPTIONS).flat()]);
+  const allValued = new Set(['--workspace', '--ae-home', '--harness-home', '--copilot-home', '--name', ...Object.values(OPTIONS).flat()]);
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
     if (token === '--') {
@@ -57,7 +57,7 @@ export function parseDomainArguments(argv) {
   const [verb, reviewVerb] = positionals;
   if (!DOMAIN_VERBS.includes(verb) || positionals.length !== (verb === 'review' ? 2 : 1) || (verb === 'review' && !['prepare', 'assemble'].includes(reviewVerb))) throw usage('unsupported verb or unexpected positional argument');
   if (seen.has('--validate-completion') && verb !== 'status') throw usage('--validate-completion is supported only for status');
-  const allowed = new Set(['--workspace', '--harness-home', '--copilot-home', '--name', ...OPTIONS[verb]]);
+  const allowed = new Set(['--workspace', '--ae-home', '--harness-home', '--copilot-home', '--name', ...OPTIONS[verb]]);
   for (const [key, entries] of values) {
     if (!allowed.has(key)) throw usage(`${key} is unsupported for ${verb}`);
     if (entries.length > 1 && !(verb === 'review' && reviewVerb === 'prepare' && ['--reviewer', '--file'].includes(key))) throw usage(`duplicate option ${key}`);

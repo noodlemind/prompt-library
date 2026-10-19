@@ -8,7 +8,7 @@ import { EXIT } from './style.mjs';
 export function parseGraphArguments(argv) {
   const positionals = [];
   const values = {};
-  const valueFlags = new Set(['--workspace', '--copilot-home', '--harness-home', '--output', '--limit', '--depth']);
+  const valueFlags = new Set(['--workspace', '--copilot-home', '--ae-home', '--harness-home', '--output', '--limit', '--depth']);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--') { positionals.push(...argv.slice(i + 1)); break; }
