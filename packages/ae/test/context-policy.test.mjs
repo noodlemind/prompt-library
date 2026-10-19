@@ -41,6 +41,22 @@ test('policy evidence refreshes changed bytes and reports omitted content', (t) 
   assert.equal(limited.coverage.omittedFiles, 3);
 });
 
+test('selective context retains an explicit large new file and refreshes its identity', t => {
+  const f = fixture(t);
+  const file = path.join(f.workspace, 'src/large.mjs');
+  const content = `export const marker = 1;\n${' '.repeat(200_000)}`;
+  fs.writeFileSync(file, content);
+  const before = f.build({ policy: 'selective', files: ['src/large.mjs'] });
+  assert.equal(before.coverage.sourceState, 'validated');
+  assert.deepEqual(before.files.map(row => row.location), ['src/large.mjs']);
+  assert.match(before.body, /marker = 1/);
+  fs.writeFileSync(file, content.replace('marker = 1', 'marker = 2'));
+  const after = f.build({ policy: 'selective', files: ['src/large.mjs'] });
+  assert.equal(after.coverage.sourceState, 'validated');
+  assert.notEqual(after.files[0].sha256, before.files[0].sha256);
+  assert.match(after.body, /marker = 2/);
+});
+
 test('context preparation cannot start a model request after the deadline', async (t) => {
   const f = fixture(t);
   let clock = 0, calls = 0;

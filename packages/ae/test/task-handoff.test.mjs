@@ -50,6 +50,19 @@ test('explicit task evidence retains the file read size limit', t => {
   assert.throws(() => runGet({ workspace, copilotHome, flags: { path: 'oversized.mjs' } }), /file not found/);
 });
 
+test('large ignored task files remain excluded from fresh evidence', t => {
+  const { workspace, copilotHome } = makeScopes();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(workspace, '.gitignore'), 'ignored.mjs\n');
+  initGit(workspace);
+  fs.writeFileSync(path.join(workspace, 'ignored.mjs'), ' '.repeat(MAX_FILE_BYTES + 1));
+  const result = readOrientSlice({ workspace, copilotHome, flags: { contextVersion: 2 }, query: 'Inspect the ignored file', files: ['ignored.mjs'] });
+  assert.equal(result.evidence[0].state, 'excluded');
+  assert.equal(result.evidence[0].sha256, null);
+  assert.equal(validateContextSnapshot({ workspace, snapshot: readSession(workspace).contextSnapshot, targets: ['ignored.mjs'] }).pass, false);
+});
+
 test('equivalent relative and absolute edit targets share current evidence', t => {
   const { workspace, copilotHome } = makeScopes();
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
