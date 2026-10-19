@@ -20,6 +20,40 @@ function fixture(t) {
   return { workspace, write };
 }
 
+for (const [directory, tracked] of [['.harness/decisions', false], ['.harness/decisions', true], ['.HARNESS/DECISIONS', false]]) {
+  test(`managed decision payloads are not automatic intent (${directory}, ${tracked ? 'tracked' : 'untracked'})`, t => {
+    const { workspace, write } = fixture(t);
+    const decision = write(`${directory}/start.json`, '{"version":1,"action":"start"}\n');
+    write(`${directory}/nested/spec.md`);
+    if (tracked) assert.equal(spawnSync('git', ['-C', workspace, 'add', '--', decision]).status, 0);
+    assert.deepEqual(discoverIntent(workspace), { paths: [], metadata: { candidateCount: 0, selectedCount: 0, omittedCount: 0, bytes: 0, truncated: false } });
+    assert.deepEqual(intentPage(workspace).paths, []);
+    const plan = { fm: { intent_source_policy: 'content-v1', intent_sources: [] } };
+    assert.equal(intentSourcesCheck(plan, workspace).pass, true);
+
+    const sources = ['docs/decisions/catalog.md', 'docs/specs/product.md', `${directory.split('/')[0]}/specs/contract.md`, 'product/.harness/decisions/domain.md'].map(rel => write(rel));
+    const discovered = discoverIntent(workspace);
+    assert.deepEqual(new Set(discovered.paths.map(source => source.path)), new Set(sources));
+    assert.equal(discovered.metadata.candidateCount, 4);
+    assert.equal(intentPage(workspace).metadata.candidateCount, 4);
+    assert.equal(intentSourcesCheck(plan, workspace).pass, false, 'genuine product intent still requires acceptance');
+  });
+}
+
+test('previously selected managed decision bytes stay frozen', t => {
+  const { workspace, write } = fixture(t);
+  const rel = write('.harness/decisions/accepted.json', '{"version":1}\n');
+  const accepted = bindLockedIntentSources(workspace, [rel]);
+  const before = accepted.map(source => ({ ...source }));
+  const plan = { fm: { intent_source_policy: 'content-v1', intent_sources: accepted } };
+  assert.equal(intentSourcesCheck(plan, workspace).pass, true);
+  write(rel, '{"version":2}\n');
+  assert.equal(intentSourcesCheck(plan, workspace).pass, false);
+  fs.unlinkSync(path.join(workspace, rel));
+  assert.equal(intentSourcesCheck(plan, workspace).pass, false);
+  assert.deepEqual(plan.fm.intent_sources, before);
+});
+
 test('compact intent discovery reports the ninth omitted source', t => {
   const { workspace, write } = fixture(t);
   const paths = Array.from({ length: 9 }, (_, index) => write(`docs/specs/${index + 1}.md`));

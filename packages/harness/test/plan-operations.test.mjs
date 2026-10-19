@@ -413,6 +413,33 @@ function fixture(t, { checkCommand } = {}) {
   return { ws, full, plan, source, text, cli, op, decision };
 }
 
+for (const format of ['full', 'short']) test(`${format} creation and start decisions do not become their own product intent`, t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.ws, '.gitignore'), '.harness/*\n!.harness/decisions/\ndocs/specs/\n');
+  for (const args of [['add', '--', '.gitignore'], ['commit', '-qm', 'Expose managed decisions in fixture']]) {
+    const committed = spawnSync('git', ['-C', f.ws, ...args], { encoding: 'utf8' });
+    assert.equal(committed.status, 0, committed.stderr);
+  }
+  const directory = path.join(f.ws, '.harness/decisions');
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, 'create.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, format, slug: `managed-${format}`, goal: 'Return two.', acceptance: ['Returns two.'], constraints: ['Preserve the API.'], scope: ['src/example.js'], check: 'unit-tests' }));
+  const created = f.cli('plan-new', '--file', file);
+  assert.equal(created.status, 0, created.stdout + created.stderr);
+  const plan = JSON.parse(created.stdout).path;
+  const text = fs.readFileSync(plan, 'utf8');
+  assert.deepEqual(YAML.parse(text.split('---')[1]).intent_sources ?? [], []);
+  const start = path.join(directory, 'start.json');
+  fs.writeFileSync(start, JSON.stringify({ version: 1, id: 'start-with-managed-decisions', action: 'start', expect: hash(text) }));
+  const listed = spawnSync('git', ['-C', f.ws, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' });
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.match(listed.stdout, /\.harness\/decisions\/start\.json/);
+  const started = f.cli('plan-update', '--plan', plan, '--file', start);
+  assert.equal(started.status, 0, started.stdout + started.stderr);
+  assert.deepEqual(YAML.parse(fs.readFileSync(plan, 'utf8').split('---')[1]).intent_sources ?? [], []);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.ws, '.harness/session.json'))).gateStatus, 'pass');
+});
+
 test('start owns readiness, state and gate, with replay and interrupted gate recovery', t => {
   const f = fixture(t), input = f.decision('start');
   const first = f.op(input);
