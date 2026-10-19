@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "note": "Six development and six held-out JavaScript tasks. This pilot does not establish statistical power or cross-language quality. Checks remain outside agent workspaces.",
+  "note": "Six development and six held-out JavaScript tasks. This pilot does not establish statistical power or cross-language quality. Public task verifiers run inside the workspace. Private acceptance checks stay outside it.",
   "cases": [
     {
       "id": "greeting",
@@ -35,6 +35,16 @@
             "Lin"
           ],
           "expected": "hello Lin"
+        }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/greet.mjs",
+          "export": "greet",
+          "args": [
+            "Tess"
+          ],
+          "expected": "hello Tess"
         }
       ]
     },
@@ -77,6 +87,16 @@
           "export": "version",
           "expected": 1
         }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/math.mjs",
+          "export": "double",
+          "args": [
+            2
+          ],
+          "expected": 4
+        }
       ]
     },
     {
@@ -117,6 +137,20 @@
           "args": [],
           "expected": 42
         }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/a.mjs",
+          "export": "newName",
+          "args": [],
+          "expected": 42
+        },
+        {
+          "module": "src/b.mjs",
+          "export": "useIt",
+          "args": [],
+          "expected": 42
+        }
       ]
     },
     {
@@ -147,6 +181,13 @@
         {
           "module": "config.mjs",
           "export": "LIMIT",
+          "expected": 25
+        }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/client.mjs",
+          "export": "limit",
           "expected": 25
         }
       ]
@@ -193,6 +234,32 @@
           ],
           "throws": "invalid"
         }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/units.mjs",
+          "export": "parseUnits",
+          "args": [
+            " "
+          ],
+          "throws": "invalid"
+        },
+        {
+          "module": "src/units.mjs",
+          "export": "parseUnits",
+          "args": [
+            "-2"
+          ],
+          "throws": "invalid"
+        },
+        {
+          "module": "src/units.mjs",
+          "export": "parseUnits",
+          "args": [
+            "3"
+          ],
+          "expected": 3
+        }
       ]
     },
     {
@@ -234,7 +301,17 @@
       "workingEdits": {
         "src/a.mjs": "import { convert } from './new.mjs';\nexport function read() { return convert(2); }\n"
       },
-      "indexBeforeEdits": true
+      "indexBeforeEdits": true,
+      "publicChecks": [
+        {
+          "module": "src/new.mjs",
+          "export": "convert",
+          "args": [
+            4
+          ],
+          "expected": 12
+        }
+      ]
     },
     {
       "id": "new-fee",
@@ -275,7 +352,25 @@
       ],
       "newFiles": {
         "src/fee.mjs": "export function fee(n) { return 0; }\n"
-      }
+      },
+      "publicChecks": [
+        {
+          "module": "src/use.mjs",
+          "export": "total",
+          "args": [
+            5
+          ],
+          "expected": 6
+        },
+        {
+          "module": "src/use.mjs",
+          "export": "total",
+          "args": [
+            200
+          ],
+          "expected": 204
+        }
+      ]
     },
     {
       "id": "dynamic-consumer",
@@ -308,6 +403,20 @@
           "module": "src/service.mjs",
           "export": "oldValue",
           "absent": true
+        },
+        {
+          "module": "client/adapter.mjs",
+          "export": "publicValue",
+          "args": [],
+          "expected": 7
+        }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/service.mjs",
+          "export": "currentValue",
+          "args": [],
+          "expected": 7
         },
         {
           "module": "client/adapter.mjs",
@@ -363,6 +472,24 @@
           ],
           "expected": 0.1
         }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/money.mjs",
+          "export": "roundMoney",
+          "args": [
+            2.345
+          ],
+          "expected": 2.35
+        },
+        {
+          "module": "src/money.mjs",
+          "export": "roundMoney",
+          "args": [
+            -2.345
+          ],
+          "expected": -2.35
+        }
       ]
     },
     {
@@ -398,6 +525,16 @@
           "module": "src/us/rate.mjs",
           "export": "rate",
           "expected": 0.1
+        }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/order.mjs",
+          "export": "total",
+          "args": [
+            50
+          ],
+          "expected": 61
         }
       ]
     },
@@ -461,6 +598,28 @@
           ],
           "expected": null
         }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/cache.mjs",
+          "export": "readOrNull",
+          "args": [
+            {
+              "v": 0
+            },
+            "v"
+          ],
+          "expected": 0
+        },
+        {
+          "module": "src/cache.mjs",
+          "export": "readOrNull",
+          "args": [
+            {},
+            "v"
+          ],
+          "expected": null
+        }
       ]
     },
     {
@@ -511,6 +670,37 @@
           "expected": {
             "status": 200,
             "key": "abc"
+          }
+        }
+      ],
+      "publicChecks": [
+        {
+          "module": "src/ids.mjs",
+          "export": "normalize",
+          "args": [
+            "\t"
+          ],
+          "throws": "invalid"
+        },
+        {
+          "module": "src/api.mjs",
+          "export": "resolve",
+          "args": [
+            ""
+          ],
+          "expected": {
+            "status": 400
+          }
+        },
+        {
+          "module": "src/api.mjs",
+          "export": "resolve",
+          "args": [
+            " user "
+          ],
+          "expected": {
+            "status": 200,
+            "key": "user"
           }
         }
       ]

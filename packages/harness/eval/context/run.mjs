@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { resolveStudyOutput, runStudy } from './study.mjs';
+import { contextAgentArgs, resolveStudyOutput, runStudy } from './study.mjs';
 import { PROVIDERS } from '../../lib/provider.mjs';
 
 const args = process.argv.slice(2);
@@ -22,17 +22,16 @@ const split = options.split || 'all';
 if (!['all', 'development', 'held-out'].includes(split)) throw new Error('split must be all, development or held-out');
 const catalog = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'cases.json'), 'utf8'));
 const cases = catalog.cases.filter(task => split === 'all' || task.split === split);
+if (options.live && cases.some(task => !task.publicChecks?.length)) throw new Error('live cases require public task verifiers');
 const bin = path.resolve(import.meta.dirname, '../../bin/harness.mjs');
 
-function execute({ task, workspace, copilotHome, harnessHome, policy, model, protocol }) {
+function execute(fixture) {
+  const { workspace, copilotHome, harnessHome, protocol } = fixture;
   const env = { ...process.env, COPILOT_HOME: copilotHome, HARNESS_HOME: harnessHome };
   const common = ['--workspace', workspace, '--copilot-home', copilotHome, '--harness-home', harnessHome, '--no-events', '--json'];
   const setup = spawnSync(process.execPath, [bin, 'config', 'set', 'agent.enabled', 'true', '--scope', 'user', ...common], { env, encoding: 'utf8', timeout: 15_000 });
   if (setup.error || setup.status !== 0) throw new Error(`fixture configuration failed: ${setup.error?.code || setup.stderr?.slice(0, 1000)}`);
-  const prompt = `${task.prompt}\nAllowed changed files: ${task.editable.join(', ')}. Preserve all other files. Independently check your changes before finishing.`;
-  const result = spawnSync(process.execPath, [bin, 'agent', prompt, '--profile', 'autonomous', '--provider', options.provider, '--model', model,
-    '--max-turns', String(protocol.maxTurns), '--max-seconds', String(protocol.maxSeconds), '--context-policy', policy, '--retention-policy', protocol.retentionPolicy,
-    ...task.seeds.flatMap(file => ['--file', file]), ...common], { cwd: workspace, env, encoding: 'utf8', timeout: (protocol.maxSeconds + 30) * 1000, maxBuffer: 20 * 1024 * 1024 });
+  const result = spawnSync(process.execPath, [bin, 'agent', ...contextAgentArgs({ ...fixture, provider: options.provider })], { cwd: workspace, env, encoding: 'utf8', timeout: (protocol.maxSeconds + 30) * 1000, maxBuffer: 20 * 1024 * 1024 });
   if (result.error) throw new Error(`agent process failed: ${result.error.code}`);
   let parsed;
   try { parsed = JSON.parse(result.stdout); }

@@ -2,9 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { buildTaskContext } from '../../lib/context-policy.mjs';
 import { buildStructuralIndex } from '../../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../../lib/repo-map/treesitter-extractor.mjs';
+import { ensureHarnessDir } from '../../lib/session.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const here = import.meta.dirname;
@@ -12,6 +14,14 @@ const protocolFile = path.join(here, 'protocol.json');
 const checker = path.join(here, 'check.mjs');
 const GENERATED_METADATA = new Set(['.harness/context-pack.md', '.harness/repo-map.md', '.harness/session.json', '.harness/todo.json']);
 export const PROTOCOL = Object.freeze(JSON.parse(fs.readFileSync(protocolFile, 'utf8')));
+
+export function contextAgentArgs({ task, workspace, copilotHome, harnessHome, policy, model, provider, verifyCmd, protocol = PROTOCOL }) {
+  if (!verifyCmd) throw new TypeError('case needs a public task verifier before an autonomous run');
+  const prompt = `${task.prompt}\nAllowed changed files: ${task.editable.join(', ')}. Preserve all other files. Independently check your changes before finishing.`;
+  return [prompt, '--profile', protocol.profile, '--verify-cmd', verifyCmd, '--provider', provider, '--model', model,
+    '--max-turns', String(protocol.maxTurns), '--max-seconds', String(protocol.maxSeconds), '--context-policy', policy, '--retention-policy', protocol.retentionPolicy,
+    ...task.seeds.flatMap(file => ['--file', file]), '--workspace', workspace, '--copilot-home', copilotHome, '--harness-home', harnessHome, '--no-events', '--json'];
+}
 
 export function resolveStudyOutput({ checkout, output }) {
   const requested = path.resolve(output);
@@ -56,7 +66,8 @@ function snapshot(workspace) {
 export async function prepareCase({ task, root, id }) {
   if (!/^[a-z0-9-]+$/.test(id)) throw new TypeError('invalid trial id');
   if (!task.checks?.length) throw new TypeError('case needs independent checks');
-  for (const file of [...task.editable, ...task.seeds, ...task.requiredEvidence, ...task.checks.map(check => check.module)]) safePath(file);
+  if (task.publicChecks !== undefined && (!Array.isArray(task.publicChecks) || !task.publicChecks.length)) throw new TypeError('publicChecks must be a nonempty array');
+  for (const file of [...task.editable, ...task.seeds, ...task.requiredEvidence, ...task.checks.map(check => check.module), ...(task.publicChecks || []).map(check => check.module)]) safePath(file);
   const trial = path.join(root, id);
   fs.mkdirSync(trial, { recursive: false });
   const workspace = path.join(trial, 'workspace');
@@ -70,10 +81,20 @@ export async function prepareCase({ task, root, id }) {
   if (task.indexBeforeEdits) await buildStructuralIndex({ workspace, home: harnessHome, extractor: { tier: 'lexical', extract: lexicalV2 } });
   writeFiles(workspace, task.workingEdits);
   writeFiles(workspace, task.newFiles);
+  ensureHarnessDir(workspace, false);
+  let verifyCmd = null;
+  if (task.publicChecks) {
+    const control = path.join(workspace, '.harness');
+    fs.mkdirSync(control, { recursive: true });
+    fs.writeFileSync(path.join(control, 'context-public-checks.json'), JSON.stringify({ checks: task.publicChecks }), { mode: 0o444 });
+    const source = `import fs from 'node:fs';\nimport { checkCases } from ${JSON.stringify(pathToFileURL(checker).href)};\nconst task = JSON.parse(fs.readFileSync(new URL('./context-public-checks.json', import.meta.url), 'utf8'));\nawait checkCases(process.cwd(), task.checks);\n`;
+    fs.writeFileSync(path.join(control, 'context-verify.mjs'), source, { mode: 0o444 });
+    verifyCmd = `"${process.execPath}" .harness/context-verify.mjs`;
+  }
   const checkFile = path.join(trial, 'checks.json');
   const checkText = JSON.stringify({ checks: task.checks });
   fs.writeFileSync(checkFile, checkText, { mode: 0o444 });
-  return { task, workspace, copilotHome, harnessHome, checkFile, checkHash: hash(checkText), checkerHash: hash(fs.readFileSync(checker)), before: snapshot(workspace), trial };
+  return { task, workspace, copilotHome, harnessHome, verifyCmd, checkFile, checkHash: hash(checkText), checkerHash: hash(fs.readFileSync(checker)), before: snapshot(workspace), trial };
 }
 
 function integrity(fixture) {
@@ -90,11 +111,43 @@ export async function runChecks(fixture) {
   return { pass: intact && !result.error && result.status === 0 && completed, integrity: intact, completed, exitCode: result.status, signal: result.signal, error: result.error?.code ?? null, diagnostic: result.stderr?.slice(0, 2000) || (!completed ? 'Checker did not report completed assertions.' : null) };
 }
 
+function runPublicChecks(fixture) {
+  if (!fixture.verifyCmd) return null;
+  const result = spawnSync(process.execPath, ['.harness/context-verify.mjs'], { cwd: fixture.workspace, encoding: 'utf8', timeout: PROTOCOL.checkerTimeoutMs, maxBuffer: 64_000 });
+  return { pass: !result.error && result.status === 0, exitCode: result.status, error: result.error?.code ?? null, diagnostic: result.stderr?.slice(0, 2000) || null };
+}
+
+function undoMetadata(fixture, after) {
+  const log = '.harness/undo.jsonl';
+  if (!/^[a-f0-9]{64}$/.test(after[log] || '')) return [];
+  try {
+    const entries = fs.readFileSync(path.join(fixture.workspace, log), 'utf8').split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    if (!entries.length) return [];
+    const ids = new Set(), files = [log];
+    for (const entry of entries) {
+      if (entry.type === 'undone' && ids.has(entry.ref)) continue;
+      if (entry.type !== 'mutation' || !/^[a-z0-9]+-[a-f0-9]{8}$/.test(entry.id || '') || ids.has(entry.id)
+        || !['edit', 'write'].includes(entry.mode) || !fixture.task.editable.includes(entry.path)
+        || typeof entry.existedBefore !== 'boolean' || !/^[a-f0-9]{64}$/.test(entry.sha256After || '')) return [];
+      ids.add(entry.id);
+      if (entry.existedBefore) {
+        const backup = `.harness/undo/${entry.id}.bak`;
+        if (!/^[a-f0-9]{64}$/.test(after[backup] || '')) return [];
+        files.push(backup);
+      }
+    }
+    return files;
+  } catch {
+    return [];
+  }
+}
+
 function scopeResult(fixture) {
   const after = snapshot(fixture.workspace);
-  const changed = [...new Set([...Object.keys(fixture.before), ...Object.keys(after)])].filter(file => fixture.before[file] !== after[file]);
+  const metadata = new Set(undoMetadata(fixture, after));
+  const changed = [...new Set([...Object.keys(fixture.before), ...Object.keys(after)])].filter(file => !metadata.has(file) && fixture.before[file] !== after[file]);
   const unexpected = changed.filter(file => !fixture.task.editable.includes(file));
-  return { pass: unexpected.length === 0, changed, unexpected, metadataExcluded: [...GENERATED_METADATA] };
+  return { pass: unexpected.length === 0, changed, unexpected, metadataExcluded: [...GENERATED_METADATA, ...metadata] };
 }
 
 function evidenceResult(task, result) {
@@ -122,6 +175,7 @@ export async function runStudy({ root, cases, repeats = PROTOCOL.repeats, polici
     runtime: process.version, platform: process.platform, arch: process.arch, host, model,
     revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: here, encoding: 'utf8' }).trim(),
     sourceDirty: Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: here, encoding: 'utf8' }).trim()),
+    profile: PROTOCOL.profile, publicVerifier: PROTOCOL.publicVerifier,
     retentionPolicy, maxTurns: PROTOCOL.maxTurns, maxSeconds: PROTOCOL.maxSeconds, repeats, policies,
   };
   provenance.configHash = hash(JSON.stringify(provenance));
@@ -136,7 +190,8 @@ export async function runStudy({ root, cases, repeats = PROTOCOL.repeats, polici
         const id = `${task.id}-${repeat + 1}-${policy}`;
         const fixture = await prepareCase({ task, root, id });
         const baseline = await runChecks(fixture);
-        if (baseline.pass || !baseline.integrity) throw new Error(`invalid broken baseline: ${id}`);
+        const publicBaseline = runPublicChecks(fixture);
+        if (baseline.pass || !baseline.integrity || baseline.error || publicBaseline?.pass || publicBaseline?.error) throw new Error(`invalid broken baseline: ${id}`);
         const startedAt = Date.now();
         let result = {}, error = null;
         try {
@@ -150,7 +205,7 @@ export async function runStudy({ root, cases, repeats = PROTOCOL.repeats, polici
         const attempt = {
           id, case: task.id, split: task.split, family: task.family, repeat: repeat + 1, policy, kind,
           pass: ['live', 'scripted'].includes(kind) && result.status === 'ok' && checks.pass && scope.pass,
-          baseline, checks, scope, error, durationMs: Date.now() - startedAt, stopReason: result.stopReason ?? null,
+          baseline, publicBaseline, checks, scope, error, durationMs: Date.now() - startedAt, stopReason: result.stopReason ?? null,
           requestedModel: result.model ?? model, observedModels: models,
           actualModel: requests.length && requests.every(record => record.model) && models.length === 1 ? models[0] : null,
           provider: result.provider ?? null,

@@ -1,5 +1,7 @@
 {
   "schema": 1,
+  "profile": "autonomous",
+  "publicVerifier": "fixture-public-checks-v1",
   "policies": ["legacy", "selective", "subsystem"],
   "retentionPolicy": "legacy",
   "repeats": 3,

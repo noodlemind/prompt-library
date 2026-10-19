@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { prepareCase, resolveStudyOutput, runChecks, runStudy, summarizeStudy } from '../eval/context/study.mjs';
+import { contextAgentArgs, prepareCase, resolveStudyOutput, runChecks, runStudy, summarizeStudy } from '../eval/context/study.mjs';
+import { agentResultOf } from '../lib/agent-cmd.mjs';
 
 const simple = {
   id: 'example', split: 'development', family: 'known-file',
@@ -13,11 +14,71 @@ const simple = {
   checks: [{ module: 'src/value.mjs', export: 'value', expected: 2 }],
 };
 
+const publicTask = {
+  ...simple,
+  files: { 'src/value.mjs': 'export const value = 1;\nexport const version = 1;\n' },
+  publicChecks: simple.checks,
+  checks: [...simple.checks, { module: 'src/value.mjs', export: 'version', expected: 1 }],
+};
+
 function directory(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'context-study-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+function repairProvider(content, original = simple.files['src/value.mjs']) {
+  let used = false;
+  return () => ({
+    provider: 'scripted', model: 'scripted-test', alive: true, logs: [], close() {},
+    async complete() {
+      if (used) return { text: 'finished', toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } };
+      used = true;
+      const call = { id: 'repair', name: 'edit', input: { path: 'src/value.mjs', old: original, new: content } };
+      return { text: '', toolCalls: [call], blocks: [{ type: 'tool_use', ...call }], usage: { inputTokens: 1, outputTokens: 1 } };
+    },
+  });
+}
+
+test('a complete repair finishes the autonomous verifier and passes independent acceptance', async t => {
+  let runtime;
+  const result = await runStudy({ root: directory(t), cases: [publicTask], repeats: 1, policies: ['legacy'], model: 'scripted-test', host: 'scripted-test',
+    execute: async fixture => runtime = await agentResultOf(contextAgentArgs({ ...fixture, provider: 'github-copilot' }), {}, { startProviderFn: repairProvider('export const value = 2;\nexport const version = 1;\n', publicTask.files['src/value.mjs']) }),
+  });
+  assert.equal(result.attempts[0].stopReason, 'verifier-pass', JSON.stringify(runtime?.verifier));
+  assert.equal(result.attempts[0].pass, true, JSON.stringify({ checks: result.attempts[0].checks, scope: result.attempts[0].scope, error: result.attempts[0].error }));
+});
+
+test('a public verifier pass cannot override private preservation checks', async t => {
+  const result = await runStudy({ root: directory(t), cases: [publicTask], repeats: 1, policies: ['legacy'], model: 'scripted-test', host: 'scripted-test',
+    execute: fixture => agentResultOf(contextAgentArgs({ ...fixture, provider: 'github-copilot' }), {}, { startProviderFn: repairProvider('export const value = 2;\nexport const version = 0;\n', publicTask.files['src/value.mjs']) }),
+  });
+  assert.equal(result.attempts[0].stopReason, 'verifier-pass');
+  assert.equal(result.attempts[0].checks.pass, false);
+  assert.equal(result.attempts[0].scope.pass, true);
+  assert.equal(result.attempts[0].pass, false);
+});
+
+test('public verifier tampering and unregistered undo files remain outside scope', async t => {
+  for (const tamper of ['public-checks', 'fake-undo']) {
+    const result = await runStudy({ root: directory(t), cases: [publicTask], repeats: 1, policies: ['legacy'], host: 'scripted-test', execute: async ({ workspace }) => {
+      fs.writeFileSync(path.join(workspace, 'src/value.mjs'), 'export const value = 2;\nexport const version = 1;\n');
+      if (tamper === 'public-checks') {
+        const file = path.join(workspace, '.harness/context-public-checks.json');
+        fs.chmodSync(file, 0o600);
+        fs.writeFileSync(file, '{"checks":[]}');
+      } else {
+        fs.mkdirSync(path.join(workspace, '.harness/undo'), { recursive: true });
+        fs.writeFileSync(path.join(workspace, '.harness/undo/abc123-1234abcd.bak'), 'hidden implementation');
+      }
+      return { status: 'ok', turns: [] };
+    } });
+    const attempt = result.attempts[0];
+    assert.equal(attempt.checks.pass, true);
+    assert.equal(attempt.pass, false);
+    assert.ok(attempt.scope.unexpected.includes(tamper === 'public-checks' ? '.harness/context-public-checks.json' : '.harness/undo/abc123-1234abcd.bak'));
+  }
+});
 
 test('study output cannot enter the checkout through a linked parent', (t) => {
   const root = directory(t), checkout = path.join(root, 'repo');
@@ -83,9 +144,37 @@ test('source cannot pass acceptance by exiting before the assertions run', async
 test('all frozen cases have failing acceptance baselines in every policy arm', async (t) => {
   const cases = JSON.parse(fs.readFileSync(new URL('../eval/context/cases.json', import.meta.url))).cases;
   const result = await runStudy({ root: directory(t), cases, repeats: 1, dryRun: true });
-  assert.equal(result.attempts.length, 36);
+  assert.deepEqual(result.attempts.map(row => [row.case, row.policy]).sort(), cases.flatMap(task => ['legacy', 'selective', 'subsystem'].map(policy => [task.id, policy])).sort());
   assert.ok(result.attempts.every(row => row.baseline.pass === false && row.baseline.integrity));
+  assert.ok(result.attempts.every(row => row.publicBaseline?.pass === false && row.publicBaseline.error === null));
   assert.equal(result.summary.comparison, 'inconclusive');
+});
+
+test('known repairs pass public verification and private acceptance for each frozen case', async t => {
+  const cases = JSON.parse(fs.readFileSync(new URL('../eval/context/cases.json', import.meta.url))).cases;
+  const repairs = {
+    greeting: { 'src/greet.mjs': "export function greet(name) { return 'hello ' + name; }\n" },
+    double: { 'src/math.mjs': 'export const version = 1;\nexport function double(n) { return n * 2; }\n' },
+    rename: { 'src/a.mjs': 'export function newName() { return 42; }\n', 'src/b.mjs': "import { newName } from './a.mjs';\nexport function useIt() { return newName(); }\n" },
+    configuration: { 'config.mjs': 'export const LIMIT = 25;\n' },
+    units: { 'src/units.mjs': "export function parseUnits(value) { if (String(value).trim() === '' || Number(value) < 0) throw new Error('invalid'); return Number(value); }\n" },
+    'dirty-import': { 'src/new.mjs': 'export function convert(n) { return n * 3; }\n' },
+    'new-fee': { 'src/fee.mjs': 'export function fee(n) { return Math.max(1, n * 0.02); }\n' },
+    'dynamic-consumer': { 'src/service.mjs': 'export function currentValue() { return 7; }\n', 'client/adapter.mjs': "const route = '../src/' + 'service.mjs';\nexport async function publicValue() { const m = await import(route); return m.currentValue(); }\n" },
+    'versioned-contract': { 'src/money.mjs': 'export function roundMoney(n) { return Math.sign(n) * Math.round((Math.abs(n) + Number.EPSILON) * 100) / 100; }\n' },
+    'regional-rate': { 'src/eu/rate.mjs': 'export const rate = 0.22;\n' },
+    'falsey-values': { 'src/cache.mjs': 'export function readOrNull(record, key) { return record[key] ?? null; }\n' },
+    'public-validation': { 'src/ids.mjs': "export function normalize(id) { const value = String(id).trim(); if (!value) throw new Error('invalid'); return value; }\n", 'src/api.mjs': "import { normalize } from './ids.mjs';\nexport function resolve(raw) { try { return { status: 200, key: normalize(raw) }; } catch { return { status: 400 }; } }\n" },
+  };
+  const result = await runStudy({ root: directory(t), cases, repeats: 1, policies: ['legacy'], host: 'scripted-test', execute: async fixture => {
+    assert.ok(repairs[fixture.task.id], fixture.task.id);
+    for (const [file, content] of Object.entries(repairs[fixture.task.id])) fs.writeFileSync(path.join(fixture.workspace, file), content);
+    const verified = spawnSync(process.execPath, ['.harness/context-verify.mjs'], { cwd: fixture.workspace, encoding: 'utf8', timeout: 15000 });
+    assert.ifError(verified.error);
+    assert.equal(verified.status, 0, `${fixture.task.id}: ${verified.stderr}`);
+    return { status: 'ok', turns: [] };
+  } });
+  assert.deepEqual(result.attempts.map(row => [row.case, row.pass]), cases.map(task => [task.id, true]));
 });
 
 test('study counts failures and scope violations across fresh arm workspaces', async (t) => {
@@ -98,7 +187,7 @@ test('study counts failures and scope violations across fresh arm workspaces', a
       fs.writeFileSync(path.join(workspace, 'src/value.mjs'), 'export const value = 2;\n');
       if (policy === 'selective') {
         fs.writeFileSync(path.join(workspace, 'extra.txt'), 'out of scope');
-        fs.mkdirSync(path.join(workspace, '.harness'));
+        fs.mkdirSync(path.join(workspace, '.harness'), { recursive: true });
         fs.writeFileSync(path.join(workspace, '.harness/hidden.mjs'), 'export const value = 2;');
       }
       return { status: 'ok', stopReason: 'end-turn', contextAccounting: [], turns: [] };
