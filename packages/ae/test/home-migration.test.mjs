@@ -92,3 +92,17 @@ test('home migration refuses active locks and a later divergent source', t => {
   assert.notEqual(f.run().status, 0);
   assert.equal(fs.readFileSync(path.join(f.target, 'trust.yaml'), 'utf8'), entries['trust.yaml']);
 });
+
+for (const relative of ['projects/repo/plans/.accepted.md.lock', 'projects/repo/.snapshot-lock']) {
+  test(`home migration refuses the runtime writer lock ${relative}`, t => {
+    const f = fixture(t);
+    fs.mkdirSync(path.join(f.source, relative), { recursive: true });
+    for (const args of [[], ['--dry-run']]) {
+      const result = f.run(...args);
+      assert.notEqual(result.status, 0, result.stdout);
+      assert.match(result.stderr, /possible active writer/);
+      assert.equal(fs.existsSync(f.target), false);
+    }
+    assert.equal(fs.readFileSync(path.join(f.source, 'trust.yaml'), 'utf8'), entries['trust.yaml']);
+  });
+}

@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { installHarnessBin } from '../lib/install-harness-bin.mjs';
 import { installGlobalHarnessShim } from '../lib/global-bin.mjs';
 import { installVSCodeBridge } from '../lib/install-vscode-bridge.mjs';
 import { adoptStorageAlias, storageIdForRepo } from '../lib/storage-aliases.mjs';
@@ -12,6 +15,47 @@ function fixture(run) {
   try { return run(root); }
   finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
+
+test('an owned legacy runtime override executes the upgraded CLI', () => fixture(home => {
+  const relative = '.harness-bin/bin/harness.mjs';
+  const legacy = path.join(home, relative);
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, "console.log('0.10.0');\n");
+  fs.writeFileSync(path.join(home, '.harness-lock.json'), JSON.stringify({ package: 'harness', files: [relative] }));
+  const packageRoot = fileURLToPath(new URL('../', import.meta.url));
+  const result = installHarnessBin(packageRoot, home, {}, () => {});
+  const run = spawnSync(process.execPath, [legacy, '--version'], {
+    encoding: 'utf8', env: { ...process.env, HARNESS_BIN: legacy, AE_BIN: legacy },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout.trim(), JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'))).version);
+  assert.ok(result.files.includes(relative));
+}));
+
+test('runtime hydration preserves an unowned legacy entry and owned dry-runs', () => fixture(home => {
+  const relative = '.harness-bin/bin/harness.mjs', legacy = path.join(home, relative);
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  const original = "console.log('user-owned');\n";
+  fs.writeFileSync(legacy, original);
+  const packageRoot = fileURLToPath(new URL('../', import.meta.url));
+  installHarnessBin(packageRoot, home, {}, () => {});
+  assert.equal(fs.readFileSync(legacy, 'utf8'), original);
+  fs.writeFileSync(path.join(home, '.harness-lock.json'), JSON.stringify({ package: 'harness', files: [relative] }));
+  const result = installHarnessBin(packageRoot, home, { dryRun: true }, () => {});
+  assert.equal(fs.readFileSync(legacy, 'utf8'), original);
+  assert.ok(result.files.includes(relative));
+}));
+
+test('runtime hydration does not follow an owned legacy directory symlink', { skip: process.platform === 'win32' ? 'symlink creation needs Windows privilege' : false }, () => fixture(root => {
+  const home = path.join(root, 'copilot'), outside = path.join(root, 'outside');
+  fs.mkdirSync(home); fs.mkdirSync(path.join(outside, 'bin'), { recursive: true });
+  const legacy = path.join(outside, 'bin/harness.mjs'), original = 'unrelated runtime\n';
+  fs.writeFileSync(legacy, original);
+  fs.symlinkSync(outside, path.join(home, '.harness-bin'));
+  fs.writeFileSync(path.join(home, '.harness-lock.json'), JSON.stringify({ package: 'harness', files: ['.harness-bin/bin/harness.mjs'] }));
+  installHarnessBin(fileURLToPath(new URL('../', import.meta.url)), home, {}, () => {});
+  assert.equal(fs.readFileSync(legacy, 'utf8'), original);
+}));
 
 test('a managed legacy command is retargeted to the canonical runtime', () => fixture(home => {
   fs.mkdirSync(path.join(home, 'bin'));

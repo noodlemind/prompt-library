@@ -144,10 +144,12 @@ try {
   bin = finalPackageBin;
   raw(['upgrade', '--target', 'cli']);
   assert.equal(json(path.join(copilotHome, '.harness-lock.json')).version, manifest.version);
+  const legacyRuntimeVersion = run(process.execPath, [path.join(copilotHome, '.harness-bin/bin/harness.mjs'), '--version']).stdout.trim();
+  assert.equal(legacyRuntimeVersion, manifest.version);
   assert.equal(json(path.join(copilotHome, '.harness-lock.json')).command, 'upgrade');
   assert.match(fs.readFileSync(path.join(copilotHome, 'skills/caffeinated/references/experiment-workflow.md'), 'utf8'), /ae experiment status/);
   assert.match(fs.readFileSync(path.join(copilotHome, 'skills/caffeinated/SKILL.md'), 'utf8'), /experiment-workflow\.md/);
-  summary.upgrade = { predecessor: { sourceCommit: predecessor.sourceCommit, version: predecessor.packageVersion, sha256: predecessor.sha256, provenance: 'Exact pre-experiment source-package fixture, not a published release.' }, finalVersion: manifest.version, lockUpdated: true, newReferenceHydrated: true };
+  summary.upgrade = { predecessor: { sourceCommit: predecessor.sourceCommit, version: predecessor.packageVersion, sha256: predecessor.sha256, provenance: 'Exact pre-experiment source-package fixture, not a published release.' }, finalVersion: manifest.version, legacyRuntimeVersion, lockUpdated: true, newReferenceHydrated: true };
   fs.rmSync(workspace, { recursive: true });
   bin = path.join(copilotHome, '.ae-bin/bin/ae.mjs');
   env.AE_BIN = bin; env.HARNESS_BIN = bin;

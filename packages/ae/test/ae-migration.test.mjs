@@ -154,7 +154,7 @@ test('conflicting home settings produce explicit hook denials', () => {
 test('fresh CLI and hook processes select the same default state authority', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-default-home-'));
   try {
-    withEnvironment({ HOME: home, AE_HOME: undefined, HARNESS_HOME: undefined }, () => {
+    withEnvironment({ HOME: home, USERPROFILE: home, AE_HOME: undefined, HARNESS_HOME: undefined }, () => {
       assert.equal(harnessGlobalHome(), path.join(home, '.ae'));
       assert.equal(hookHome(), harnessGlobalHome());
       fs.mkdirSync(path.join(home, '.harness'));

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'node:module';
+import { readLock } from './lock.mjs';
 
 const require = createRequire(import.meta.url);
 const COPY_DIRS = ['bin', 'lib', 'config', 'corpus', 'vscode-extension'];
@@ -41,6 +42,22 @@ export function installHarnessBin(pkgRoot, copilotHome, flags, log) {
     const src = resolveDependencyRoot(dependency);
     const dest = path.join(destRoot, 'node_modules', dependency);
     copyDirRecursive(src, dest, destRoot, flags, log, stats);
+  }
+
+  const legacyRel = '.harness-bin/bin/harness.mjs';
+  const previous = readLock(copilotHome);
+  if (['harness', 'ae-harness'].includes(previous?.package) && previous.files?.includes(legacyRel)) {
+    const segments = ['.harness-bin', '.harness-bin/bin', legacyRel];
+    const managed = segments.every((relative, index) => {
+      const stat = fs.lstatSync(path.join(copilotHome, relative), { throwIfNoEntry: false });
+      return stat && !stat.isSymbolicLink() && (index === segments.length - 1 ? stat.isFile() : stat.isDirectory());
+    });
+    if (managed) {
+      if (!flags.dryRun) fs.writeFileSync(path.join(copilotHome, legacyRel), "#!/usr/bin/env node\nimport { main } from '../../.ae-bin/bin/ae.mjs';\n\nawait main();\n");
+      stats.updated++;
+      stats.files.push(legacyRel);
+      log(`${flags.dryRun ? 'would update' : 'updated'} owned legacy runtime: ${legacyRel}`);
+    }
   }
 
   return stats;

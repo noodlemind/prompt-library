@@ -27,7 +27,8 @@ function inventory(root) {
     const full = path.join(root, rel), stat = fs.lstatSync(full);
     if (stat.isSymbolicLink()) throw fail(`symlinks are not migrated: ${rel || root}`);
     if (stat.isDirectory()) {
-      if (path.basename(rel) === '.lock' || path.basename(rel) === 'locks' && fs.readdirSync(full).length) throw fail(`possible active writer at ${rel}; stop writers and release locks first`);
+      const name = path.basename(rel);
+      if (/^\..*\.lock$/.test(name) || name === '.lock' || name === '.snapshot-lock' || name === 'locks' && fs.readdirSync(full).length) throw fail(`possible active writer at ${rel}; stop writers and release locks first`);
       directories.push(rel);
       for (const name of fs.readdirSync(full).sort()) walk(path.join(rel, name));
     } else if (stat.isFile()) files.push({ path: rel, ...fileDigest(full) });

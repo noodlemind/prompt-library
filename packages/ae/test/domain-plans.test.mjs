@@ -128,7 +128,12 @@ function priorCli(f) {
   fs.copyFileSync(artifact, path.join(root, path.basename(artifact)));
   const extracted = spawnSync('tar', ['-xzf', path.basename(artifact)], { cwd: root, encoding: 'utf8', timeout: 15000 });
   assert.equal(extracted.status, 0, JSON.stringify({ status: extracted.status, signal: extracted.signal, error: extracted.error?.code, stderr: extracted.stderr }));
-  return (...args) => spawnSync(process.execPath, [path.join(root, 'package/bin/ae.mjs'), ...args, '--workspace', f.workspace, '--json', '--no-events'], { cwd: f.workspace, encoding: 'utf8', timeout: 15000, env: { ...process.env, HARNESS_HOME: f.home, COPILOT_HOME: path.join(root, 'copilot') } });
+  const run = (...args) => spawnSync(process.execPath, [path.join(root, 'package/bin/harness.mjs'), ...args, '--workspace', f.workspace, '--json', '--no-events'], { cwd: f.workspace, encoding: 'utf8', timeout: 15000, env: { ...process.env, HARNESS_HOME: f.home, COPILOT_HOME: path.join(root, 'copilot') } });
+  const version = run('--version');
+  assert.equal(version.error, undefined, version.error?.message);
+  assert.equal(version.status, 0, version.stderr);
+  assert.equal(version.stdout.trim(), '0.10.0');
+  return run;
 }
 
 test('child conversion preserves UUID, rejects stale decisions and retires Markdown before publication', t => {
@@ -225,7 +230,8 @@ test('a published pending conversion has no Markdown path for the real prior CLI
   assert.equal(fs.existsSync(f.next), true);
   const before = fs.readFileSync(f.next);
   const prior = runPrior('plan-update', '--plan', f.old, '--activity', 'Prior CLI must not mutate a surviving copy.');
-  assert.notEqual(prior.status, 0, prior.stdout + prior.stderr);
+  assert.equal(prior.error, undefined, prior.error?.message);
+  assert.ok(Number.isInteger(prior.status) && prior.status > 0, prior.stdout + prior.stderr);
   assert.equal(fs.existsSync(f.old), false);
   assert.deepEqual(fs.readFileSync(f.next), before);
   assert.equal(loadPlan(f.workspace, f.next, { home: f.home }), null);

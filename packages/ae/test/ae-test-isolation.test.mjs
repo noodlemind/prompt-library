@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 test('source-test bootstrap keeps fixture approvals out of the caller state home', t => {
@@ -13,7 +12,7 @@ test('source-test bootstrap keeps fixture approvals out of the caller state home
   fs.mkdirSync(caller); fs.mkdirSync(fixture);
   const marker = 'leave caller trust untouched\n';
   fs.writeFileSync(path.join(caller, 'trust.yaml'), marker);
-  const bootstrap = fileURLToPath(new URL('./helpers/isolate-runtime-env.mjs', import.meta.url));
+  const bootstrap = new URL('./helpers/isolate-runtime-env.mjs', import.meta.url).href;
   const trustModule = new URL('../lib/trust.mjs', import.meta.url).href;
   const script = `import { approveProject } from ${JSON.stringify(trustModule)}; approveProject({workspace:${JSON.stringify(root)},copilotHome:${JSON.stringify(fixture)}});`;
   const result = spawnSync(process.execPath, ['--import', bootstrap, '--input-type=module', '-e', script], {

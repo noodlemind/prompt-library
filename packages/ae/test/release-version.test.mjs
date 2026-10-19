@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import YAML from 'yaml';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const readJson = rel => JSON.parse(fs.readFileSync(path.join(packageRoot, rel), 'utf8'));
@@ -27,6 +28,13 @@ test('the independently versioned bridge declares a valid release', () => {
   const bridge = readJson('vscode-extension/package.json');
   assert.match(bridge.version, semver);
   assert.equal(bridge.name, 'ae-copilot-bridge');
+});
+
+test('the downstream verification workflow installs the distribution that provides ae', () => {
+  const template = YAML.parse(fs.readFileSync(path.join(packageRoot, '../../.github/workflow-templates/harness-plan-verification.yml'), 'utf8'));
+  const install = template.jobs['harness-verification'].steps.find(step => step.run?.includes('npm install --global'));
+  const distribution = /npm install --global "([^@"]+)@/.exec(install.run)?.[1];
+  assert.equal(distribution, readJson('package.json').name);
 });
 
 test('release corpus validates agent authority, guardrails and references', () => {

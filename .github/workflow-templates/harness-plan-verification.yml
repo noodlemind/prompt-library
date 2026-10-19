@@ -31,11 +31,12 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install pinned harness
+      - name: Install pinned AE
         run: |
           set -euo pipefail
           : "${HARNESS_VERSION:?Harness version must be configured in the HARNESS_VERSION repository variable}"
-          npm install --global "harness@${HARNESS_VERSION}"
+          npm install --global "ae-harness@${HARNESS_VERSION}"
+          test "$(ae --version)" = "$HARNESS_VERSION"
         env:
           HARNESS_VERSION: ${{ vars.HARNESS_VERSION }}
 
