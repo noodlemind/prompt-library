@@ -76,6 +76,15 @@ test('bare version two expansion restores selected files and accepts the equals 
   assert.equal(expanded.coverage.sourceState, 'validated');
 });
 
+test('an explicit version two read records source identities for later edit checks', (t) => {
+  const f = fixture(t);
+  const record = f.invoke('--read', '--context-version', '2', '--query', 'alpha', '--file', 'a.mjs');
+  const session = JSON.parse(fs.readFileSync(path.join(f.workspace, '.harness/session.json'), 'utf8'));
+  assert.equal(session.contextSnapshot.version, 2);
+  assert.equal(session.contextSnapshot.state, 'validated');
+  assert.equal(session.contextSnapshot.evidence[0].sha256, record.evidence[0].sha256);
+});
+
 test('a crowded contract keeps a complete expansion reference or returns a barrier', () => {
   const body = buildContextPack({
     query: 'repair', recall: [], plans: [],

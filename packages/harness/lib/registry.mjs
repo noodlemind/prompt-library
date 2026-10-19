@@ -1305,6 +1305,7 @@ registerCommand({
     flags: [
       { name: '--profile', type: 'string', valueName: 'name', description: `deliver | autonomous | bench | benchmark (default ${DEFAULT_PROFILE_ID})`, required: false, default: DEFAULT_PROFILE_ID, tui: 'prompt' },
       { name: '--verify-cmd', type: 'string', valueName: 'argv', description: 'task verifier argv for autonomous success (e.g. "node ./verify.mjs"); green is terminal success', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
+      { name: '--retention-policy', type: 'string', valueName: 'legacy|structured', description: 'opt into task handoff and source references during compaction', required: false, default: 'legacy', tui: 'cli-only' },
       { name: '--agent', type: 'string', valueName: 'persona', description: `which hydrated persona to run as (default ${DEFAULT_PERSONA})`, required: false, default: DEFAULT_PERSONA, tui: 'prompt' },
       { name: '--provider', type: 'string', valueName: 'id', description: `which provider answers the model call: ${Object.keys(PROVIDERS).join('|')} (default ${DEFAULT_PROVIDER})`, required: false, default: DEFAULT_PROVIDER, tui: 'prompt' },
       { name: '--model', type: 'string', valueName: 'id', description: "the model to call; the provider's default when omitted", required: false, default: null, tui: 'prompt' },

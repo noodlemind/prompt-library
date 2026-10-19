@@ -116,6 +116,17 @@ test('context accounting records actual runtime requests and repeated reads with
   assert.equal(JSON.stringify(result.contextAccounting).includes('private payload marker'), false);
 });
 
+test('structured retention is opt-in and sends a current handoff to the provider', async (t) => {
+  const { ws, home } = scaffold('agent-structured-retention');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const provider = scriptedProvider([say('finished')]);
+  const result = await agentResultOf(argvFor(ws, home, 'continue accepted work', ['--retention-policy', 'structured']), {}, { startProviderFn: provider.start });
+  assert.equal(result.task, 'continue accepted work');
+  assert.equal(result.retentionPolicy, 'structured');
+  assert.ok(provider.requests[0].messages.some(message => message.contextCategory === 'handoff' && message.text.includes('continue accepted work')));
+});
+
 test('a tool timeout above exec\'s maximum clamps to the maximum instead of killing the run', async () => {
   const { ws } = (() => {
     const dir = tempDir('agent-timeout-clamp-');

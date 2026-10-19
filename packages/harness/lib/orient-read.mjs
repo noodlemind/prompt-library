@@ -5,12 +5,17 @@ import { writeSession } from './session.mjs';
 export function readOrientSlice({ workspace, copilotHome, flags = {}, query = '', files } = {}) {
   const facts = collectOrientationFacts({ workspace, copilotHome, flags, query, files });
   const q = query || flags.query || '';
+  const record = flags.contextVersion === 2 ? buildContextRecord({ workspace, flags, query: q, facts }) : null;
   if (String(q).trim() && !flags.dryRun) {
     try {
-      writeSession(workspace, { ...facts.session, lastQuery: q, lastOrientReadAt: new Date().toISOString(), files: facts.namedFiles });
+      writeSession(workspace, {
+        ...facts.session, lastQuery: q, lastOrientReadAt: new Date().toISOString(), files: facts.namedFiles,
+        ...(facts.active ? { activePlan: facts.active.path } : {}),
+        contextSnapshot: record ? { version: 2, state: record.coverage.sourceState, plan: record.task.plan, contractDigest: record.task.contractDigest, policyDigest: record.policyDigest, evidence: record.evidence } : null,
+      });
     } catch {
       process.stderr.write('repeat check was not armed\n');
     }
   }
-  return flags.contextVersion === 2 ? buildContextRecord({ workspace, flags, query: q, facts }) : facts.slice;
+  return record || facts.slice;
 }

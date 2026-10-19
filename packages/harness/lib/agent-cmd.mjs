@@ -218,6 +218,8 @@ export function planAgent(argv) {
   const profileName = stringFlag(argv, '--profile') || configured.profile || DEFAULT_PROFILE_ID;
   const profile = resolveProfile(profileName);
   const verifyCmd = parseVerifyCmd(argv);
+  const retentionPolicy = stringFlag(argv, '--retention-policy') || 'legacy';
+  if (!['legacy', 'structured'].includes(retentionPolicy)) throw usageError('--retention-policy must be legacy or structured');
 
   const maxTurnsFallback = configured.maxTurns
     ?? profile.maxTurnsDefault
@@ -237,6 +239,7 @@ export function planAgent(argv) {
     enabledProviders: configured.providers,
     profile,
     verifyCmd,
+    retentionPolicy,
     maxTurns: boundedNumber(argv, '--max-turns', { ...AGENT_LIMITS.maxTurns, fallback: maxTurnsFallback }),
     maxSeconds: boundedNumber(argv, '--max-seconds', { ...AGENT_LIMITS.maxSeconds, fallback: maxSecondsFallback }),
     toolTimeoutSeconds: boundedNumber(argv, '--tool-timeout', { ...AGENT_LIMITS.toolTimeout, fallback: null }),
@@ -331,6 +334,7 @@ export async function agentResultOf(argv, ctx = {}, { startProviderFn = null, ru
     maxTurns: p.maxTurns,
     maxSeconds: Math.max(1, p.maxSeconds - spent),
     toolTimeoutSeconds: p.toolTimeoutSeconds,
+    retentionPolicy: p.retentionPolicy,
     ctx,
     signal: ctx.signal ?? null,
     startProviderFn:

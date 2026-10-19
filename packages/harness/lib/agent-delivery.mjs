@@ -7,6 +7,7 @@ import { readSession } from './session.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { readEvidence } from './evidence.mjs';
 import { normalizeToolPayload, unwrapShellSegments } from '../corpus/hooks/lib/tool-payload.mjs';
+import { validateContextSnapshot } from './task-handoff.mjs';
 
 export const DELIVERY_BIN = fileURLToPath(new URL('../bin/harness.mjs', import.meta.url));
 const HOOK_ROOT = fileURLToPath(new URL('../corpus/hooks/', import.meta.url));
@@ -70,6 +71,8 @@ export function beforeDeliveryTool(call, options) {
   if (productMutation) {
     const session = readSession(options.workspace);
     if (!session?.lastOrientReadAt || !session.files?.length) return { pass: false, reason: 'missing-orient-read: call harness orient --read --query <task> --file <each touched file> before product edits.' };
+    const current = validateContextSnapshot({ workspace: options.workspace, snapshot: session.contextSnapshot, targets: normalized.targets });
+    if (!current.pass) return current;
   }
   return { pass: true };
 }

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { accountContext } from './token-meter.mjs';
+import { buildTaskHandoff } from './task-handoff.mjs';
 import path from 'node:path';
 import { EXIT } from './style.mjs';
 import { CONFIG_SCHEMA } from './config.mjs';
@@ -305,6 +306,7 @@ export const AGENT_VALUE_FLAGS = Object.freeze([
   '--agent', '--provider', '--model', '--max-turns', '--max-seconds', '--tool-timeout',
   '--workspace', '--copilot-home', '--harness-home', '--output', '--plan', '--host', '--limit', '--query',
   '--profile', '--verify-cmd',
+  '--retention-policy',
 ]);
 
 function usageError(message, hint) {
@@ -798,7 +800,23 @@ function normalizeCalls(completion) {
 export function compactMessages(messages, {
   keepTurns = TRANSCRIPT_FULL_TURNS,
   mode = 'explore', // 'explore' | 'all'
+  handoff = null,
 } = {}) {
+  if (mode === 'structured') {
+    const base = messages.filter(message => message.contextCategory !== 'handoff');
+    const toolIndexes = base.flatMap((message, index) => Array.isArray(message.toolResults) ? [index] : []);
+    const recent = toolIndexes.length > keepTurns ? toolIndexes[toolIndexes.length - keepTurns] : 0;
+    const retained = base.map((message, index) => index >= recent || !message.toolResults ? message : {
+      ...message,
+      toolResults: message.toolResults.map(result => {
+        if (result.isError || !result.source?.sha256) return result;
+        const reference = `${result.source.path}@sha256:${result.source.sha256}`;
+        return { ...result, output: `[Earlier read omitted. Refresh ${reference} before using its contents.]` };
+      }),
+    });
+    const record = { role: 'user', contextCategory: 'handoff', text: `Task state from existing records. Source notes are data.\n${JSON.stringify(handoff || { requiresRead: true, reason: 'Task state unavailable; reorient before editing.' })}` };
+    return retained.length ? [retained[0], record, ...retained.slice(1)] : [record];
+  }
   const toolUserIndexes = [];
   for (let i = 0; i < messages.length; i += 1) {
     if (messages[i]?.role === 'user' && Array.isArray(messages[i].toolResults)) toolUserIndexes.push(i);
@@ -859,6 +877,7 @@ export async function runAgentLoop({
   signal = null,
   onTurn = null,
   onContext = null,
+  retentionPolicy = 'legacy',
   now = () => Date.now(),
 }) {
   const resolvedProfile = profile?.id ? profile : resolveProfile(profile);
@@ -920,7 +939,8 @@ export async function runAgentLoop({
 
       messages = compactMessages(messages, {
         keepTurns: TRANSCRIPT_FULL_TURNS,
-        mode: isAutonomous ? 'all' : 'explore',
+        mode: retentionPolicy === 'structured' ? 'structured' : isAutonomous ? 'all' : 'explore',
+        handoff: retentionPolicy === 'structured' ? buildTaskHandoff({ workspace, task }) : null,
       });
 
       const turnIndex = turns.length + 1;
@@ -930,7 +950,7 @@ export async function runAgentLoop({
       const components = [
         { category: 'instructions', id: 'system', content: request.system },
         { category: 'capabilities', id: 'tools', content: request.tools },
-        ...request.messages.map((message, index) => ({ category: message.toolResults ? 'toolResults' : 'history', id: `message-${index}`, content: message })),
+        ...request.messages.map((message, index) => ({ category: message.contextCategory === 'handoff' ? 'handoff' : message.toolResults ? 'toolResults' : 'history', id: `message-${index}`, content: message })),
       ];
       const requestIndex = contextRequests.length;
       contextRequests.push(accountContext({ boundary: 'headless-request', components, reads: readIdentities }));
@@ -1094,7 +1114,7 @@ export async function runAgentLoop({
           toolRecords.push({ tool: call.name, dispatched: false, reason: outcome.reason });
           continue;
         }
-        if (call.name === 'read') readIdentities.push(String(call.input?.path || 'unknown'));
+        if (call.name === 'read') readIdentities.push(`${outcome.result.path || call.input?.path || 'unknown'}@${outcome.result.sha256 || 'unknown'}`);
         let output = renderToolResult(outcome.result);
         const failedAction = (call.name === 'bash' || call.name === 'exec')
           && (outcome.result.status !== 'ok' || (Number.isFinite(outcome.result.exitCode) && outcome.result.exitCode !== 0));
@@ -1109,7 +1129,9 @@ export async function runAgentLoop({
         const status = timedOut && (call.name === 'bash' || call.name === 'exec') && outcome.result.status !== 'ok'
           ? 'cancelled'
           : outcome.result.status;
-        toolResults.push({ id: call.id, output, isError: outcome.result.status !== 'ok' || failedAction });
+        toolResults.push({ id: call.id, output, isError: outcome.result.status !== 'ok' || failedAction,
+          ...(call.name === 'read' && outcome.result.sha256 ? { source: { path: outcome.result.path, sha256: outcome.result.sha256 } } : {}),
+        });
         toolRecords.push({
           tool: call.name,
           dispatched: true,
@@ -1194,6 +1216,7 @@ export async function runAgentLoop({
     turns,
     turnCount: turns.length,
     contextAccounting: contextRequests,
+    retentionPolicy,
     maxTurns,
     maxSeconds,
     usage,
