@@ -15,14 +15,14 @@ const digest = (value) => crypto.createHash('sha256').update(value).digest('hex'
 export function buildContextRecord({ workspace, flags = {}, query = '', facts }) {
   const snapshot = facts.sourceSnapshot || captureWorkingSources(workspace);
   const neighborhood = facts.slice.neighborhood;
-  const selected = new Set(neighborhood?.requested || facts.namedFiles);
-  const paths = [...new Set([...(neighborhood?.inputs || facts.namedFiles.map(rel => ({ rel }))).map(input => input.rel), ...(neighborhood?.files || []).map(file => file.rel)])];
+  const inputs = new Map((neighborhood?.inputs || facts.namedFiles.map(rel => ({ rel }))).map(input => [input.rel, input]));
+  const paths = [...new Set([...inputs.keys(), ...(neighborhood?.files || []).map(file => file.rel)])];
   const evidence = paths.slice(0, EVIDENCE_LIMIT).map((location) => {
-    const input = inspectSourceFile(workspace, location);
+    const input = inputs.get(location)?.state === 'excluded' ? { state: 'excluded' } : inspectSourceFile(workspace, location);
     return {
       source: 'code', location, state: input.state,
       sha256: input.hash || null, bytes: input.size ?? null,
-      reason: selected.has(location) ? 'declared task file' : 'import neighborhood',
+      reason: inputs.has(location) ? 'declared task file' : 'import neighborhood',
       reference: input.hash ? `${location}@sha256:${input.hash}` : null,
     };
   });

@@ -52,6 +52,19 @@ test('unknown context versions fail explicitly', (t) => {
   assert.match(r.stdout + r.stderr, /context.version|version.*1.*2/i);
 });
 
+test('version two preserves exclusion and selection reasons for requested inputs', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.workspace, '.gitignore'), 'ignored.mjs\n');
+  fs.writeFileSync(path.join(f.workspace, 'ignored.mjs'), 'export const ignored = 1;\n');
+  const result = f.invoke('--read', '--context-version', '2', '--file', 'ignored.mjs');
+  const evidence = result.evidence.find(row => row.location === 'ignored.mjs');
+  assert.equal(evidence.state, 'excluded');
+  assert.equal(evidence.sha256, null);
+  assert.equal(evidence.reference, null);
+  assert.equal(evidence.reason, 'declared task file');
+  assert.deepEqual(result.coverage.unavailable, [evidence]);
+});
+
 test('the shared parser rejects missing or unsupported context versions', () => {
   assert.throws(() => parseFlags(['--context-version']), /invalid --context-version/);
   assert.throws(() => parseFlags(['--context-version', '9']), /invalid --context-version/);
