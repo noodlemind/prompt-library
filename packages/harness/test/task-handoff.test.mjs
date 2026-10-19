@@ -8,6 +8,7 @@ import { runGet } from '../lib/get-cmd.mjs';
 import { compactMessages } from '../lib/agent-loop.mjs';
 import { buildTaskHandoff, validateContextSnapshot } from '../lib/task-handoff.mjs';
 import { policyDigest } from '../lib/trust.mjs';
+import { captureWorkingSources } from '../lib/repo-map/working-sources.mjs';
 
 test('handoff reloads the plan and marks changed evidence for refresh', (t) => {
   const { workspace, copilotHome } = makeScopes();
@@ -87,6 +88,8 @@ test('a changed dependency invalidates a target whose own bytes are unchanged', 
   assert.equal(validateContextSnapshot({ workspace, snapshot, targets: ['a.mjs'] }).pass, true);
   fs.writeFileSync(path.join(workspace, 'b.mjs'), 'export const item = 2;');
   assert.equal(validateContextSnapshot({ workspace, snapshot, targets: ['a.mjs'] }).pass, false);
+  writeSession(workspace, { contextSnapshot: snapshot });
+  assert.equal(buildTaskHandoff({ workspace, task: 'Continue' }).requiresRead, true);
 });
 
 test('domain recovery cannot substitute a local plan for the selected coordinator contract', (t) => {
@@ -97,4 +100,20 @@ test('domain recovery cannot substitute a local plan for the selected coordinato
   assert.equal(result.contract, null);
   assert.equal(result.requiresRead, true);
   assert.deepEqual(result.next.slice(0, 3), ['harness', 'domain', 'status']);
+});
+
+test('the source generation catches a dependency omitted from the bounded evidence list', (t) => {
+  const { workspace, copilotHome } = makeScopes();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  for (const file of ['a.mjs', 'b.mjs']) fs.writeFileSync(path.join(workspace, file), 'export const item = 1;');
+  initGit(workspace);
+  const snapshot = { version: 2, state: 'validated', policyDigest: policyDigest(workspace), sourceState: captureWorkingSources(workspace).state,
+    evidence: [{ location: 'a.mjs', state: 'readable', sha256: runGet({ workspace, copilotHome, flags: { path: 'a.mjs' } }).sha256 }],
+  };
+  assert.equal(validateContextSnapshot({ workspace, snapshot, targets: ['a.mjs'] }).pass, true);
+  fs.writeFileSync(path.join(workspace, 'b.mjs'), 'export const item = 2;');
+  assert.equal(validateContextSnapshot({ workspace, snapshot, targets: ['a.mjs'] }).pass, false);
+  writeSession(workspace, { contextSnapshot: snapshot });
+  assert.equal(buildTaskHandoff({ workspace, task: 'Continue' }).requiresRead, true);
 });

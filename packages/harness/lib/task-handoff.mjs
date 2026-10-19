@@ -8,10 +8,15 @@ import { planDigest, readEvidence } from './evidence.mjs';
 import { inspectSourceFile } from './repo-map/scan.mjs';
 import { redactSecrets } from './secret-scan.mjs';
 import { policyDigest } from './trust.mjs';
+import { captureWorkingSources } from './repo-map/working-sources.mjs';
 
 export function validateContextSnapshot({ workspace, snapshot, targets }) {
   if (snapshot?.version !== 2) return { pass: true };
   if (snapshot.state !== 'validated' || snapshot.policyDigest !== policyDigest(workspace)) return { pass: false, reason: 'context-stale: reorient after source or policy changes' };
+  if (snapshot.sourceState?.digest) {
+    const current = captureWorkingSources(workspace);
+    if (!current.valid || current.state.digest !== snapshot.sourceState.digest) return { pass: false, reason: 'context-stale: reload the current source generation' };
+  }
   if (snapshot.plan) {
     const plan = loadPlan(workspace, snapshot.plan);
     if (!plan || planDigest(plan.text) !== snapshot.contractDigest) return { pass: false, reason: 'context-stale: reload the current task contract' };
@@ -34,6 +39,8 @@ export function buildTaskHandoff({ workspace, task = '', domainPlan = null }) {
     next: ['harness', 'domain', 'status', '--name', domainPlan.name, '--plan', domainPlan.path, '--json'],
   };
   const session = readSession(workspace) || {};
+  const source = session.contextSnapshot?.sourceState?.digest ? captureWorkingSources(workspace) : null;
+  const generationChanged = source && (!source.valid || source.state.digest !== session.contextSnapshot.sourceState.digest);
   const plan = session.activePlan ? loadPlan(workspace, session.activePlan) : null;
   const contract = plan ? extractGoalFromPlan(plan) : { intent: task, constraints: [] };
   const references = session.contextSnapshot?.evidence || (session.files || []).map(location => ({ location }));
@@ -58,9 +65,9 @@ export function buildTaskHandoff({ workspace, task = '', domainPlan = null }) {
     progress: plan ? buildPlanView(plan)?.body || null : null,
     verification: proof ? { outcome: proof.outcome, currentness: 'not-validated' } : null,
     evidence,
-    evidenceOmitted: Math.max(0, references.length - 40),
-    requiresRead: Boolean((session.activePlan && !plan) || !contract || oversized || evidence.some(item => !['current', 'missing'].includes(item.state)) || references.length > 40),
-    reason: oversized ? 'Task input, contract or notes exceed the handoff budget; read the original task and source plan.' : null,
+    evidenceOmitted: Math.max(0, references.length - 40) + (session.contextSnapshot?.evidenceOmitted || 0),
+    requiresRead: Boolean(generationChanged || (session.activePlan && !plan) || !contract || oversized || evidence.some(item => !['current', 'missing'].includes(item.state)) || references.length > 40 || session.contextSnapshot?.evidenceOmitted),
+    reason: oversized ? 'Task input, contract or notes exceed the handoff budget; read the original task and source plan.' : generationChanged ? 'Source generation changed; reorient before using prior evidence.' : null,
     next: plan ? ['harness', 'orient', '--read', '--context-version', '2', '--plan', plan.path] : ['harness', 'orient', '--read', '--context-version', '2'],
     authority: 'Derived from existing task and plan records. Current gates and proof still govern edits and completion.',
   };

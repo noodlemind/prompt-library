@@ -63,7 +63,9 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
     expansion: { command: 'harness orient --read --context-version 2', sourceChanged: changed },
     accounting: accountContext({ boundary: 'orientation-output', components: [{ category: 'evidence', id: 'orientation-facts', content: facts.slice }] }),
   };
-  if (Buffer.byteLength(JSON.stringify(record)) <= MAX_RECORD_BYTES) return record;
+  const represented = new Set(evidence.map(item => item.location));
+  const omittedNewFile = neighborhood?.inputs?.some(input => input.state === 'new' && !represented.has(input.rel));
+  if (!omittedNewFile && Buffer.byteLength(JSON.stringify(record)) <= MAX_RECORD_BYTES) return record;
   const barrier = {
     schema: record.schema, contextId: record.contextId, worktree: record.worktree,
     task: record.task, policyDigest: record.policyDigest,

@@ -11,7 +11,7 @@ export function readOrientSlice({ workspace, copilotHome, flags = {}, query = ''
       writeSession(workspace, {
         ...facts.session, lastQuery: q, lastOrientReadAt: new Date().toISOString(), files: facts.namedFiles,
         ...(facts.active ? { activePlan: facts.active.path } : {}),
-        contextSnapshot: record ? { version: 2, state: record.coverage.sourceState, plan: record.task.plan, contractDigest: record.task.contractDigest, policyDigest: record.policyDigest, evidence: record.evidence } : null,
+        contextSnapshot: record ? { version: 2, state: record.coverage.sourceState, sourceState: record.sourceState, plan: record.task.plan, contractDigest: record.task.contractDigest, policyDigest: record.policyDigest, evidence: record.evidence, evidenceOmitted: record.coverage.evidenceOmitted } : null,
       });
     } catch {
       process.stderr.write('repeat check was not armed\n');
