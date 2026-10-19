@@ -1,0 +1,52 @@
+name: AE package candidate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - run: npm ci --prefix packages/ae
+      - name: Pack and identify candidate
+        run: |
+          mkdir artifacts
+          npm pack ./packages/ae --pack-destination artifacts --json > artifacts/pack.json
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const [pack] = JSON.parse(fs.readFileSync('artifacts/pack.json', 'utf8'));
+          if (pack.name !== 'ae-harness' || !/^ae-harness-[0-9A-Za-z.-]+\.tgz$/.test(pack.filename)) throw new Error('Unexpected package');
+          const sha = crypto.createHash('sha256').update(fs.readFileSync(`artifacts/${pack.filename}`)).digest('hex');
+          fs.writeFileSync('artifacts/SHA256SUMS', `${sha}  ${pack.filename}\n`);
+          fs.writeFileSync('artifacts/candidate.json', JSON.stringify({ sourceRepository: process.env.GITHUB_REPOSITORY, sourceCommit: process.env.GITHUB_SHA, package: pack.name, version: pack.version, archive: pack.filename, sha256: sha, integrity: pack.integrity, platform: process.platform, qualification: 'Archive installation only; native editor acceptance is separate.' }, null, 2) + '\n');
+          fs.appendFileSync(process.env.GITHUB_ENV, `AE_ARCHIVE=${pack.filename}\nAE_VERSION=${pack.version}\n`);
+          JS
+      - name: Install the exact archive and drive its runtime
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ae-installed" --offline --ignore-scripts --omit=optional --no-audit --no-fund "$GITHUB_WORKSPACE/artifacts/$AE_ARCHIVE"
+          installed="$RUNNER_TEMP/ae-installed/node_modules"
+          test "$("$installed/.bin/ae" --version)" = "$AE_VERSION"
+          node "$installed/ae-harness/bin/ae.mjs" install --target cli --copilot-home "$RUNNER_TEMP/ae-copilot" --ae-home "$RUNNER_TEMP/ae-state" --json
+          test "$(node "$RUNNER_TEMP/ae-copilot/.ae-bin/bin/ae.mjs" --version)" = "$AE_VERSION"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ae-candidate-${{ matrix.os }}-${{ github.sha }}
+          path: artifacts/

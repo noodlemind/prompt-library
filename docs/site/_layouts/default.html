@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page.title | escape }} · Adaptive Engineering</title>
+  <style>
+    :root { color-scheme: light dark; font: 17px/1.65 system-ui, sans-serif; }
+    body { max-width: 820px; margin: auto; padding: 2rem 1.25rem 5rem; }
+    nav { display: flex; flex-wrap: wrap; gap: 1.25rem; padding-bottom: 2rem; border-bottom: 1px solid #8885; }
+    a { color: light-dark(#1752a2, #9fc5ff); text-underline-offset: .2em; }
+    h1, h2, h3 { line-height: 1.25; margin-top: 2rem; }
+    pre { overflow: auto; padding: 1rem; background: #8881; border: 1px solid #8883; }
+    code { font-size: .88em; }
+    table { display: block; overflow: auto; border-collapse: collapse; }
+    td, th { padding: .5rem .75rem; border: 1px solid #8884; text-align: left; }
+    :focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+    footer { margin-top: 4rem; font-size: .9em; border-top: 1px solid #8885; padding-top: 1rem; }
+  </style>
+</head>
+<body>
+  <nav aria-label="Documentation">
+    <a href="{{ '/' | relative_url }}">Adaptive Engineering</a>
+    <a href="{{ '/concept/' | relative_url }}">How it works</a>
+    <a href="{{ '/migration/' | relative_url }}">Migration</a>
+    <a href="https://github.com/{{ site.repository }}">Source</a>
+  </nav>
+  <main>{{ content }}</main>
+  <footer>Documentation is maintained in the repository. The Wiki links to these same sources.</footer>
+</body>
+</html>

@@ -1,5 +1,7 @@
 # Adaptive Engineering
 
+The executable is `ae`, distributed as `ae-harness`. `@engineer` and `/engineer` remain the entry points. Fresh state uses `~/.ae`; existing populated `~/.harness` homes are discovered in place. An explicit `ae migrate --from-home <old-home> --ae-home <new-home>` copies the complete state with the original retained as backup. See [the migration guide](migration/ae.md) before switching homes or renaming a remote.
+
 You start with two parts. The Engineer decides what to do. The Harness checks the work and keeps the record.
 
 The Engineer is the only entry. It answers a question, investigates a system, delivers a change, or reviews a result. The Harness orients the work, locks a plan, gates edits, runs the named checks, and stores the evidence. A change is done when current verification passes, required review results are collected, and Harness records completion.
