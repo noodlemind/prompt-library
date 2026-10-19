@@ -4,6 +4,9 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { makeScopes, initGit, runHarness } from './helpers/index.mjs';
 import { buildContextPack } from '../lib/context-pack.mjs';
+import { parseFlags } from '../lib/flags.mjs';
+import { collectOrientationFacts } from '../lib/orientation-facts.mjs';
+import { buildContextRecord } from '../lib/context-record.mjs';
 
 function fixture(t) {
   const f = makeScopes();
@@ -47,6 +50,20 @@ test('unknown context versions fail explicitly', (t) => {
   const r = runHarness(['orient', '--read', '--context-version', '9', '--workspace', f.workspace, '--json']);
   assert.notEqual(r.status, 0);
   assert.match(r.stdout + r.stderr, /context.version|version.*1.*2/i);
+});
+
+test('the shared parser rejects missing or unsupported context versions', () => {
+  assert.throws(() => parseFlags(['--context-version']), /invalid --context-version/);
+  assert.throws(() => parseFlags(['--context-version', '9']), /invalid --context-version/);
+});
+
+test('policy changes during context assembly invalidate the record', (t) => {
+  const f = fixture(t);
+  const facts = collectOrientationFacts({ workspace: f.workspace, copilotHome: f.copilotHome, flags: { contextVersion: 2 }, files: ['a.mjs'] });
+  fs.mkdirSync(path.join(f.workspace, '.github/harness'), { recursive: true });
+  fs.writeFileSync(path.join(f.workspace, '.github/harness/policy.yaml'), 'version: 1\n');
+  const result = buildContextRecord({ workspace: f.workspace, facts });
+  assert.equal(result.coverage.sourceState, 'changed-or-unavailable');
 });
 
 test('bare version two expansion restores selected files and accepts the equals spelling', (t) => {

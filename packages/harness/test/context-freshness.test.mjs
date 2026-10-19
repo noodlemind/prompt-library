@@ -44,6 +44,7 @@ test('dirty bytes invalidate current readers, status and symbol search while his
   f.write('a.mjs', "import { c } from './c.mjs';\nexport function newName() { return c; }\n");
   assert.equal(readStructuralIndexIfCurrent(f.workspace, { home: f.home }), null);
   assert.equal(structuralIndexStatus(f.workspace, { home: f.home }).stale, true);
+  assert.match(structuralIndexStatus(f.workspace, { home: f.home }).recommendation, /source.*changed/i);
   assert.equal(readStructuralIndex(f.workspace, { home: f.home, requireCurrent: true }).present, false);
   assert.equal(readStructuralIndex(f.workspace, { home: f.home }).present, true);
   const result = runSearch({ workspace: f.workspace, copilotHome: f.home, home: f.home, query: 'oldName', mode: 'symbol', sources: ['code'] });

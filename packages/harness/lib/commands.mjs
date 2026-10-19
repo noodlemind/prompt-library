@@ -738,7 +738,6 @@ export async function cmdIndex(argv) {
 
 export async function computeOrientResult(argv) {
   const flags = parseFlags(argv);
-  if (![1, 2].includes(flags.contextVersion)) throw Object.assign(new Error('--context-version must be 1 or 2'), { code: 'E_USAGE', exit: 2 });
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);

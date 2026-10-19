@@ -5,6 +5,7 @@ import { planDigest } from './evidence.mjs';
 import { worktreeId } from './structural/shape.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { accountContext } from './token-meter.mjs';
+import { policyDigest } from './trust.mjs';
 
 const EVIDENCE_LIMIT = 80;
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
@@ -36,7 +37,7 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
   const factHashes = new Map((facts.slice.neighborhood?.files || []).filter(file => file.sha256).map(file => [file.rel, file.sha256]));
   const currentPlan = facts.active ? loadPlan(workspace, facts.active.path) : null;
   const planChanged = facts.active && (!currentPlan || planDigest(currentPlan.text) !== identity.task.contractDigest);
-  const changed = Boolean(planChanged || !snapshot.valid || !after.valid || snapshot.state.digest !== after.state.digest || evidence.some((record) =>
+  const changed = Boolean(planChanged || policyDigest(workspace) !== identity.policyDigest || !snapshot.valid || !after.valid || snapshot.state.digest !== after.state.digest || evidence.some((record) =>
     (record.sha256 && readSourceFile(workspace, record.location).hash !== record.sha256) ||
     (factHashes.has(record.location) && factHashes.get(record.location) !== record.sha256)));
   const stableFacts = { ...facts.slice, trust: { state: facts.slice.trust.state, digest: facts.slice.trust.digest } };

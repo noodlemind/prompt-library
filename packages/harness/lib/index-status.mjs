@@ -192,7 +192,7 @@ export function structuralIndexStatus(workspace, { home } = {}) {
     freshnessReason: freshness.reason,
     unreadable: null,
     recommendation: stale
-      ? `${commitsSince ?? '?'} commits / ${filesChanged ?? '?'} files since last code index — run \`harness index --structural\``
+      ? `${commitsSince === null ? freshness.reason : `${commitsSince} commits / ${filesChanged ?? '?'} files since last code index`} — run \`harness index --structural\``
       : `code symbol index current${filesIndexed != null ? ` · ${filesIndexed} files` : ''}${tier ? ` · tier ${tier}` : ''}`,
     next: stale ? 'harness index --structural' : null,
   };
@@ -215,7 +215,7 @@ export function indexStatus({ workspace, copilotHome, home } = {}) {
 
   if (!structural.indexed) parts.push('code: not built — run `harness index --structural`');
   else if (structural.unreadable?.length) parts.push('code: unreadable — run `harness index --structural`');
-  else if (structural.stale) parts.push(`code: stale (${structural.commitsSince ?? '?'} commits)`);
+  else if (structural.stale) parts.push(`code: stale (${structural.commitsSince === null ? structural.freshnessReason : `${structural.commitsSince} commits`})`);
   else parts.push('code: current');
 
   return {

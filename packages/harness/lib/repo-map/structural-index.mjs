@@ -234,7 +234,7 @@ function buildGraph(files, symbols, truncation) {
         if (calls.length < MAX_CALL_EDGES) calls.push({ from: rel, symbol: r.name, to });
         else truncation.callEdges = true;
       } else if (!entry) {
-        const key = `${rel} ${r.name}`;
+        const key = `${rel}\u0000${r.name}`;
         if (seenUnresolved.has(key)) continue;
         if (unresolvedCalls.length < MAX_UNRESOLVED) {
           seenUnresolved.add(key);
@@ -388,7 +388,7 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   }
   if (sinceIgnored) log(`${sinceIgnored} — running a full incremental pass instead`);
   const extractorKey = sha256(JSON.stringify([extractor.tier || 'lexical', extractor.webTreeSitter || null, extractor.grammarVersions || {}, extractor.missingGrammars || [], extractor.integrityFailures || []]));
-  const canReuse = prior?.meta?.extractorKey === extractorKey && prior?.meta?.sourceState?.configDigest === snapshot.state?.configDigest;
+  const canReuse = prior?.meta?.extractorKey === extractorKey && prior?.meta?.sourceState?.configDigest === snapshot.state?.configDigest && prior?.meta?.sourceState?.extractorRevision === snapshot.state?.extractorRevision;
 
   const nextFiles = {};
   let reparsed = 0;

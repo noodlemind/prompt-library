@@ -34,6 +34,11 @@ function parsePhase(raw) {
   return raw;
 }
 
+function parseContextVersion(raw) {
+  if (!['1', '2'].includes(raw)) invalidFlag('--context-version', raw, 'must be 1 or 2');
+  return Number(raw);
+}
+
 function parseLayer(raw) {
   if (!['golden', 'branch'].includes(raw)) {
     invalidFlag('--layer', raw, 'must be golden or branch');
@@ -140,8 +145,8 @@ export function parseFlags(argv) {
     else if (a === '--learning-decision') flags.learningDecision = scan[++i];
     else if (a === '--explain') flags.explain = true;
     else if (a === '--read') flags.read = true;
-    else if (a === '--context-version') flags.contextVersion = Number(scan[++i]);
-    else if (a.startsWith('--context-version=')) flags.contextVersion = Number(a.slice('--context-version='.length));
+    else if (a === '--context-version') flags.contextVersion = parseContextVersion(scan[++i]);
+    else if (a.startsWith('--context-version=')) flags.contextVersion = parseContextVersion(a.slice('--context-version='.length));
     else if (a === '--refresh') flags.refresh = true;
     else if (a === '--semantic') flags.semantic = true;
     else if (a === '--include-plans') flags.includePlans = true;
