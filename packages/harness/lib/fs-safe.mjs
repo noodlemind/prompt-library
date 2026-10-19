@@ -20,7 +20,7 @@ export function readBoundedInput(fd = 0, { maxBytes = 1024 * 1024 } = {}) {
   } catch { return null; }
 }
 
-function canonicalPath(p) {
+export function canonicalPath(p) {
   try {
     return fs.realpathSync.native(p);
   } catch {

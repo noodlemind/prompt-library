@@ -181,5 +181,5 @@ test('the edit hook denies when the current diff cannot be read', () => {
     env: unavailableGitEnv,
   }));
   assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /^unreadable-diff\b/);
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /^unreadable-plan-authority\b/);
 });

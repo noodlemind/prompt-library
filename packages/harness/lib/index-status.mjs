@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { resolveIndexDir } from './recall-config.mjs';
-import { structuralIndexDir, readStructuralIndex } from './repo-map/structural-index.mjs';
+import { structuralIndexDir, readStructuralIndex, structuralIndexIsCurrent } from './repo-map/structural-index.mjs';
 import { POSTINGS_INDEX_VERSION } from './postings-index.mjs';
 import { structuralCurrentness } from './repo-map/working-sources.mjs';
 
@@ -174,7 +174,8 @@ export function structuralIndexStatus(workspace, { home } = {}) {
   const indexedHead = meta.sha || meta.headSha || meta.baseSha || null;
   const { head, commitsSince, filesChanged } = driftFromHead(workspace, indexedHead);
   const freshness = structuralCurrentness(workspace, meta);
-  const stale = !freshness.current;
+  const stale = !freshness.current || !structuralIndexIsCurrent(workspace, index);
+  const freshnessReason = freshness.reason || (stale ? 'source or index changed during validation' : null);
   const filesIndexed = Number.isFinite(meta.filesIndexed) ? meta.filesIndexed : null;
   const tier = meta.extractorTier || null;
 
@@ -183,16 +184,16 @@ export function structuralIndexStatus(workspace, { home } = {}) {
     indexed: true,
     filesIndexed,
     tier,
-    updated: meta.updated || meta.builtAt || null,
+    updated: meta.updated || meta.builtAt || meta.generatedAt || null,
     indexedHead,
     currentHead: head || null,
     commitsSince,
     filesChanged,
     stale,
-    freshnessReason: freshness.reason,
+    freshnessReason,
     unreadable: null,
     recommendation: stale
-      ? `${commitsSince === null ? freshness.reason : `${commitsSince} commits / ${filesChanged ?? '?'} files since last code index`} — run \`harness index --structural\``
+      ? `${commitsSince === null ? freshnessReason : `${commitsSince} commits / ${filesChanged ?? '?'} files since last code index`} — run \`harness index --structural\``
       : `code symbol index current${filesIndexed != null ? ` · ${filesIndexed} files` : ''}${tier ? ` · tier ${tier}` : ''}`,
     next: stale ? 'harness index --structural' : null,
   };
@@ -231,6 +232,6 @@ export function indexStatus({ workspace, copilotHome, home } = {}) {
     recommendation: parts.join(' · '),
     knowledge,
     structural,
-    structuralDir: structural.indexed ? structuralIndexDir(workspace) : null,
+    structuralDir: structural.indexed ? structuralIndexDir(workspace, { home }) : null,
   };
 }

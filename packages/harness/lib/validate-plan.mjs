@@ -1,3 +1,4 @@
+import { resolveCopilotHome } from './paths.mjs';
 import { readSession } from './session.mjs';
 import { loadPlan, pickActivePlan, listPlanRels } from './plan-parse.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
@@ -51,7 +52,7 @@ export function runValidatePlan({ workspace, flags, planPath = null }) {
   });
   if (!schema.pass) pass = false;
 
-  const readiness = validatePlanReadiness(workspace, plan);
+  const readiness = validatePlanReadiness(workspace, plan, { copilotHome: resolveCopilotHome(flags.copilotHome) });
   for (const check of readiness.checks) {
     addCheck(checks, {
       id: `P-${check.id}`,

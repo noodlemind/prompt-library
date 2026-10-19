@@ -200,7 +200,7 @@ test('S1: an unreadable index table is surfaced, not silently read as empty', as
   const check = structuralChecks({ workspace: ws, grammarRoots: roots })[0];
   assert.equal(check.pass, false);
   assert.equal(check.optional, true);
-  assert.match(check.hint, /files\.json is not valid JSON/);
+  assert.match(check.hint, /files\.json integrity mismatch/);
 });
 
 test('S1: parse-failure rate over 20% degrades to advisory failure', async (t) => {

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { captureWorkingSources, readSourceFile } from './repo-map/working-sources.mjs';
+import { captureWorkingSources } from './repo-map/working-sources.mjs';
+import { inspectSourceFile } from './repo-map/scan.mjs';
 import { MAX_FILES_SCANNED, MAX_FILE_BYTES } from './repo-map/scan.mjs';
 import { planDigest } from './evidence.mjs';
 import { worktreeId } from './structural/shape.mjs';
@@ -17,7 +18,7 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
   const selected = new Set(neighborhood?.requested || facts.namedFiles);
   const paths = [...new Set([...(neighborhood?.inputs || facts.namedFiles.map(rel => ({ rel }))).map(input => input.rel), ...(neighborhood?.files || []).map(file => file.rel)])];
   const evidence = paths.slice(0, EVIDENCE_LIMIT).map((location) => {
-    const input = readSourceFile(workspace, location);
+    const input = inspectSourceFile(workspace, location);
     return {
       source: 'code', location, state: input.state,
       sha256: input.hash || null, bytes: input.size ?? null,
@@ -39,7 +40,7 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
   const currentPlan = facts.active ? loadPlan(workspace, facts.active.path) : null;
   const planChanged = facts.active && (!currentPlan || planDigest(currentPlan.text) !== identity.task.contractDigest);
   const changed = Boolean(planChanged || policyDigest(workspace) !== identity.policyDigest || !snapshot.valid || !after.valid || snapshot.state.digest !== after.state.digest || evidence.some((record) =>
-    (record.sha256 && readSourceFile(workspace, record.location).hash !== record.sha256) ||
+    (record.sha256 && inspectSourceFile(workspace, record.location).hash !== record.sha256) ||
     (factHashes.has(record.location) && factHashes.get(record.location) !== record.sha256)));
   const stableFacts = { ...facts.slice, trust: { state: facts.slice.trust.state, digest: facts.slice.trust.digest } };
   const record = {

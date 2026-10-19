@@ -32,13 +32,13 @@ try {
   created.push(ctx.ws, ctx.home, ctx.copilotHome);
   writeTracked(ctx.ws, SPEC_REL, SPEC_BODY);
 
-  const oriented = runHarness(['orient', '--query', 'checkout retry'], ctx);
+  const oriented = await runHarness(['orient', '--query', 'checkout retry'], ctx);
   assertEqual(oriented.status, 0, 'orient exit');
   const orientBody = parseJson(oriented, 'orient');
   assertEqual(orientBody.intentSources[0].path, SPEC_REL, 'orient intentSources path');
   assertEqual(orientBody.intentSources[0].kind, 'spec', 'orient intentSources kind');
 
-  const createdPlan = runHarness(
+  const createdPlan = await runHarness(
     [
       'plan-new',
       '--type',
@@ -61,11 +61,32 @@ try {
   assertEqual(locked.intent_sources[0].sha256, SPEC_SHA, 'plan-new intent_sources sha256');
 
   fs.writeFileSync(path.join(ctx.ws, SPEC_REL), '# Drifted after lock\n');
-  const drifted = runHarness(['gate', '--phase', 'implement', '--plan', planPath], ctx);
-  assertEqual(drifted.status, 0, `gate after spec edit exit (${drifted.stderr} ${drifted.stdout})`);
+  const drifted = await runHarness(['gate', '--phase', 'implement', '--plan', planPath], ctx);
+  assertEqual(drifted.status, 1, `gate after spec edit exit (${drifted.stderr} ${drifted.stdout})`);
   const driftCheck = parseJson(drifted, 'gate-drift').checks.find((item) => item.id === 'C-intent-sources');
-  assertEqual(driftCheck.pass, true, 'C-intent-sources after spec edit');
-  assertMatch(driftCheck.message || '', /^(?!.*(drift|hash mismatch|needs-info))/is, 'C-intent-sources message has no drift fail');
+  assertEqual(driftCheck.pass, false, 'C-intent-sources after spec edit');
+  assertMatch(driftCheck.message || '', /changed or unreadable/, 'C-intent-sources requires an amendment');
+
+  const relock = await runHarness(['plan-update', '--plan', planPath, '--lock'], ctx);
+  assertEqual(relock.status, 2, 'relock rejects changed selected bytes');
+  assertEqual(parseFrontmatter(fs.readFileSync(planPath, 'utf8')).intent_sources[0].sha256, SPEC_SHA, 'relock preserves accepted hash');
+  const digest = sha256(fs.readFileSync(planPath, 'utf8'));
+  const decision = path.join(ctx.ws, '.harness/decisions/accept-source.json');
+  fs.mkdirSync(path.dirname(decision), { recursive: true });
+  fs.writeFileSync(decision, JSON.stringify({ version: 1, id: 'accept-source-change', action: 'amend', expect: digest,
+    rationale: 'The fixture owner accepts the changed spec.', authority: { scope: 'plan-intent', basis: 'Fixture acceptance' },
+    intentSources: [{ path: SPEC_REL, oldHash: SPEC_SHA }] }));
+  const amended = await runHarness(['plan-update', '--plan', planPath, '--file', decision], ctx);
+  assertEqual(amended.status, 0, `source amendment (${amended.stderr} ${amended.stdout})`);
+  const accepted = await runHarness(['gate', '--phase', 'implement', '--plan', planPath], ctx);
+  assertEqual(accepted.status, 0, 'gate after accepted source amendment');
+  fs.rmSync(path.join(ctx.ws, SPEC_REL));
+  const unreadable = await runHarness(['gate', '--phase', 'implement', '--plan', planPath], ctx);
+  assertEqual(unreadable.status, 1, 'gate rejects missing selected file');
+  fs.mkdirSync(path.join(ctx.ws, SPEC_REL));
+  const directory = await runHarness(['gate', '--phase', 'implement', '--plan', planPath], ctx);
+  assertEqual(directory.status, 1, 'gate rejects nonregular selected file');
+  fs.rmdirSync(path.join(ctx.ws, SPEC_REL));
 
   const stringPlanRel = 'docs/plans/2026-10-05-feat-relock-plan.md';
   const stringPlan = path.join(ctx.ws, stringPlanRel);
@@ -139,7 +160,7 @@ Relock hashes.
 `
   );
   fs.writeFileSync(path.join(ctx.ws, SPEC_REL), SPEC_BODY);
-  const relocked = runHarness(['plan-update', '--plan', stringPlanRel, '--lock'], ctx);
+  const relocked = await runHarness(['plan-update', '--plan', stringPlanRel, '--lock'], ctx);
   assertEqual(relocked.status, 0, `plan-update --lock exit (${relocked.stderr})`);
   const relockFm = parseFrontmatter(fs.readFileSync(stringPlan, 'utf8'));
   assertEqual(relockFm.intent_sources[0].path, SPEC_REL, 'plan-update --lock path');
@@ -151,7 +172,7 @@ Relock hashes.
   missingFm.intent_sources = [];
   const missingBody = fs.readFileSync(stringPlan, 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---/, '');
   fs.writeFileSync(missingPlan, `---\n${YAML.stringify(missingFm, { lineWidth: 0 })}---${missingBody}`);
-  const missing = runHarness(['gate', '--phase', 'implement', '--plan', missingPlanRel], ctx);
+  const missing = await runHarness(['gate', '--phase', 'implement', '--plan', missingPlanRel], ctx);
   assertEqual(missing.status, 1, 'gate missing source exit');
   const missingCheck = parseJson(missing, 'gate-missing').checks.find((item) => item.id === 'C-intent-sources');
   assertEqual(missingCheck.pass, false, 'C-intent-sources missing source');
@@ -162,7 +183,7 @@ Relock hashes.
   }
   const winnerRel = 'docs/specs/n13.md';
   writeTracked(ctx.ws, winnerRel, '# n13\n\nrefund buyer\n');
-  const siblingPlan = runHarness(
+  const siblingPlan = await runHarness(
     [
       'plan-new',
       '--type',
@@ -183,11 +204,11 @@ Relock hashes.
   const siblingLocked = parseFrontmatter(fs.readFileSync(siblingPlanPath, 'utf8'));
   assertEqual(siblingLocked.intent_sources[0].path, winnerRel, 'sibling plan records the body winner');
   fs.writeFileSync(path.join(ctx.ws, winnerRel), '# n13\n\nno query words remain\n');
-  const siblingGate = runHarness(['gate', '--phase', 'implement', '--plan', siblingPlanPath], ctx);
-  assertEqual(siblingGate.status, 0, `sibling gate exit (${siblingGate.stderr} ${siblingGate.stdout})`);
+  const siblingGate = await runHarness(['gate', '--phase', 'implement', '--plan', siblingPlanPath], ctx);
+  assertEqual(siblingGate.status, 1, `sibling gate exit (${siblingGate.stderr} ${siblingGate.stdout})`);
   const siblingCheck = parseJson(siblingGate, 'sibling-gate').checks.find((item) => item.id === 'C-intent-sources');
-  assertEqual(siblingCheck.pass, true, 'sibling C-intent-sources');
-  assertMatch(siblingCheck.message || '', /^(?!.*(Missing|drift|hash mismatch|needs-info))/is, 'sibling check does not name a missing spec');
+  assertEqual(siblingCheck.pass, false, 'sibling selected bytes changed');
+  assertMatch(siblingCheck.message || '', /changed or unreadable/, 'sibling change fails without re-ranking');
   assertEqual(String(siblingCheck.message || '').includes('docs/specs/n01.md'), false, 'sibling check does not name n01');
 
   const evidence = writeEvidence('intent-lock', {
@@ -207,6 +228,9 @@ Relock hashes.
         exit: drifted.status,
         check: driftCheck,
       },
+      { command: 'accepted source amendment', exit: amended.status, gateExit: accepted.status },
+      { command: 'missing selected file', exit: unreadable.status },
+      { command: 'nonregular selected file', exit: directory.status },
       {
         command: 'plan-update --lock',
         exit: relocked.status,

@@ -6,3 +6,56 @@ checks:
   prompt-contracts:
     command: ["node", "--test", "packages/harness/test/prompt-library-contracts.test.mjs"]
     timeout_seconds: 120
+  verify-performance:
+    artifacts: ["performance.json"]
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-performance.mjs"]
+    timeout_seconds: 120
+    proof: behavior
+  verify-intent-lock:
+    artifacts: ["intent-lock/drive.json"]
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-intent-lock.mjs"]
+    timeout_seconds: 120
+    proof: behavior
+  verify-prepare:
+    artifacts: ["prepare/drive.json"]
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-prepare.mjs"]
+    timeout_seconds: 120
+    proof: behavior
+  verify-issue-worktree:
+    artifacts: ["issue-worktree/drive.json"]
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-issue-worktree.mjs"]
+    timeout_seconds: 120
+    proof: behavior
+  verify-installed-release:
+    artifacts: ["installed-release.json"]
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-installed-release.mjs"]
+    timeout_seconds: 300
+    proof: behavior
+  adaptive-verification-tests:
+    command: ["node", "--test", "packages/harness/test/check-artifacts.test.mjs", "packages/harness/test/verification-location.test.mjs", "packages/harness/test/verification-recipes.test.mjs", "packages/harness/test/cli-evidence-verify.test.mjs"]
+    timeout_seconds: 300
+    proof: behavior
+  adaptive-intent-tests:
+    command: ["node", "--test", "packages/harness/test/adaptive-intent.test.mjs", "packages/harness/test/issue-intake.test.mjs", "packages/harness/test/plan-operations.test.mjs", "packages/harness/test/orient-read-slice.test.mjs"]
+    timeout_seconds: 300
+    proof: behavior
+  adaptive-worklist-tests:
+    command: ["node", "--test", "packages/harness/test/scoped-todo.test.mjs", "packages/harness/test/todo-command.test.mjs", "packages/harness/test/plan-operations.test.mjs", "packages/harness/test/hook-runtime.test.mjs"]
+    timeout_seconds: 300
+    proof: behavior
+  adaptive-caffeinated-tests:
+    command: ["node", "--test", "packages/harness/test/caffeinated.test.mjs", "packages/harness/test/agent-delivery.test.mjs", "packages/harness/test/plan-operations.test.mjs", "packages/harness/test/hook-runtime.test.mjs", "packages/harness/test/get-command.test.mjs"]
+    timeout_seconds: 300
+    proof: behavior
+  adaptive-diagnostics-tests:
+    command: ["node", "--test", "packages/harness/test/inventory.test.mjs", "packages/harness/test/inventory-editors.test.mjs", "packages/harness/test/inventory-jar.test.mjs", "packages/harness/test/domain-contract.test.mjs", "packages/harness/test/diagnostic-commands.test.mjs", "packages/harness/test/redact.test.mjs", "packages/harness/test/registry.test.mjs", "packages/harness/test/flag-value-guards.test.mjs", "packages/harness/test/command-index-enumerability.test.mjs"]
+    timeout_seconds: 180
+    proof: behavior
+  adaptive-domain-tests:
+    command: ["node", "--test", "packages/harness/test/domain-contract.test.mjs", "packages/harness/test/domain-bindings.test.mjs", "packages/harness/test/domain-context.test.mjs", "packages/harness/test/domain-plans.test.mjs", "packages/harness/test/domain-delivery.test.mjs", "packages/harness/test/domain-commands.test.mjs", "packages/harness/test/extended-plan-compatibility.test.mjs", "packages/harness/test/git-context.test.mjs", "packages/harness/test/policy.test.mjs", "packages/harness/test/hook-runtime.test.mjs", "packages/harness/test/registry.test.mjs", "packages/harness/test/flag-value-guards.test.mjs", "packages/harness/test/command-index-enumerability.test.mjs"]
+    timeout_seconds: 600
+    proof: behavior
+  adaptive-experiment-tests:
+    command: ["node", "--test", "packages/harness/test/experiment-contract.test.mjs", "packages/harness/test/experiment-isolation.test.mjs", "packages/harness/test/experiment-measurement.test.mjs", "packages/harness/test/experiment-state.test.mjs", "packages/harness/test/experiment-snapshots.test.mjs", "packages/harness/test/experiment-commands.test.mjs", "packages/harness/test/experiment-release.test.mjs", "packages/harness/test/agent-delivery.test.mjs", "packages/harness/test/domain-context.test.mjs", "packages/harness/test/registry.test.mjs", "packages/harness/test/flag-value-guards.test.mjs", "packages/harness/test/command-index-enumerability.test.mjs"]
+    timeout_seconds: 600
+    proof: behavior

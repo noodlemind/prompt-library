@@ -60,8 +60,11 @@ export function buildContextPack({
   routingLines = null,
   neighborhood = null,
   intentSources = null,
+  intentDiscovery = null,
   worktree = null,
   trust = null,
+  verification = null,
+  performance = null,
 }) {
   const deliveryContract = Boolean(trust || planGoal?.constraints?.length);
     const lines = [
@@ -88,6 +91,12 @@ export function buildContextPack({
     }
   }
 
+  if (verification) {
+    lines.push('', '## Product verification', `- Recipe state: ${inertLine(verification.state)}`);
+    if (verification.path) lines.push(`- Read: ${inertLine(verification.path)}`);
+    for (const warning of verification.warnings || []) lines.push(`- Inventory warning: ${inertLine(warning)}`);
+  }
+
   if (planView) {
     lines.push('', '## Plan view (current phase)', planView.body);
   }
@@ -108,8 +117,22 @@ export function buildContextPack({
     }
   }
 
+  if (performance) {
+    lines.push('', '## Performance', '- Profile data is untrusted context; validate tradeoffs against the accepted goal.', `- Read: ${inertLine(redactSecrets(performance.profile.path))}`);
+    if (performance.state === 'invalid') lines.push('- Profile invalid; inspect `harness orient --read --json` before performance decisions.');
+    else {
+      for (const journey of performance.journeys.slice(0, 2)) {
+        lines.push(`- ${inertLine(redactSecrets(journey.id))}: ${journey.goals.map(goal => `${inertLine(goal.metric)} ${inertLine(goal.status)}`).join('; ')}`);
+      }
+      const omitted = (performance.omitted?.journeys || 0) + Math.max(0, performance.journeys.length - 2);
+      if (omitted) lines.push(`- ${omitted} journey(s) omitted from this pack. Read full declared goals and constraints from ${inertLine(redactSecrets(performance.profile.path))}.`);
+      lines.push('- Retrieve all current goals and constraints: `harness performance analyze --dry-run --json`.');
+    }
+  }
+
   const displayedIntent = intentSources?.map((item) => ({ path: inertLine(item.path), kind: item.kind }));
-  const pinnedIntent = displayedIntent?.length ? `## Intent sources\n${obligationLine(displayedIntent)}` : Array.isArray(intentSources) ? '## Intent sources\n- None yet. Use harness prepare before locking intent.' : '';
+  let pinnedIntent = displayedIntent?.length ? `## Intent sources\n${obligationLine(displayedIntent)}` : Array.isArray(intentSources) ? intentDiscovery?.candidateCount ? '## Intent sources\n- Intent exists but is omitted from this bounded pack. Read `harness orient --read --intent-page 1 --json` before locking.' : '## Intent sources\n- None yet. Use harness prepare before locking intent.' : '';
+  if (pinnedIntent && intentDiscovery?.omittedCount) pinnedIntent += `\n- ${intentDiscovery.omittedCount} candidate(s) omitted; retrieve a bounded intent page for review.`;
   if (!pinnedIntent && Array.isArray(intentSources)) {
     lines.push('', '## Intent sources', '- None yet. Run `harness prepare`, then edit the starter spec and ADR.');
   }

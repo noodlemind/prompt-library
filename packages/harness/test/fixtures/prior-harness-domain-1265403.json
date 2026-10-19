@@ -1,0 +1,8 @@
+{
+  "sourceCommit": "1265403577e2782ef56defb1dbe5b74021d95956",
+  "packageVersion": "0.10.0",
+  "sha256": "05c60c4deaab44e9da70a9143385ef2f96679cc582f7e525b58a38c7685f2205",
+  "bytes": 861503,
+  "bundledYamlVersion": "2.9.0",
+  "purpose": "Offline package of the exact pre-experiment schema-3-capable source commit; not a published release. Proves refusal of schema-4 .hplan mutation lanes and unknown experiment authoring fields."
+}

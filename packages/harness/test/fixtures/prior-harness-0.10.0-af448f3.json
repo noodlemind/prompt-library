@@ -1,0 +1,8 @@
+{
+  "sourceCommit": "af448f395493eb5ef5cc20c84221e67d0f4fc0ae",
+  "packageVersion": "0.10.0",
+  "sha256": "4fd0e5075a18e53a02c45a59347ccb24a6ce4853808831e46c70f78dd3bd2bb9",
+  "bytes": 795510,
+  "bundledYamlVersion": "2.9.0",
+  "purpose": "Prior packaged CLI must refuse extended .hplan plans before every legacy and structured mutation; bundled yaml is its only hard runtime dependency."
+}

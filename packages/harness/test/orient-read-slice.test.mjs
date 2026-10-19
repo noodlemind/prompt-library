@@ -17,6 +17,11 @@ const readOnlySkip = process.platform === 'win32'
     : false;
 const SLICE_KEYS = [
   'neighborhood',
+  'graph',
+  'intentSources',
+  'intentDiscovery',
+  'intentDetail',
+  'verification',
   'planGoal',
   'trust',
   'reviewCoverage',
@@ -257,4 +262,25 @@ test('orient --read on a read-only workspace still returns the slice', { skip: r
     fs.chmodSync(c.ws, 0o755);
     removeRepo(c);
   }
+});
+
+test('intent detail retrieves an omitted long path and orientation does not prepare over it', t => {
+  const c = coldRepo();
+  t.after(() => removeRepo(c));
+  const rel = ['specs', ...Array.from({ length: 3 }, () => '界'.repeat(60)), 'spec.md'].join('/');
+  fs.mkdirSync(path.dirname(path.join(c.ws, rel)), { recursive: true });
+  fs.writeFileSync(path.join(c.ws, rel), '# Accepted intent\nKeep the public contract.\n');
+  const compact = orient(c);
+  assert.equal(compact.status, 0, compact.stderr);
+  const current = JSON.parse(compact.stdout);
+  assert.deepEqual(current.intentSources, []);
+  assert.equal(current.intentDiscovery.candidateCount, 1);
+  assert.equal(current.intentDiscovery.omittedCount, 1);
+  assert.equal(current.nextTools.some(tool => tool.startsWith('harness prepare')), false);
+  const priorSession = fs.readFileSync(path.join(c.ws, '.harness/session.json'), 'utf8');
+  const page = orient(c, ['--read', '--intent-page', '1', '--intent-page-size', '1']);
+  assert.equal(page.status, 0, page.stderr);
+  assert.equal(JSON.parse(page.stdout).intentDetail.paths[0].path, rel);
+  assert.equal(fs.readFileSync(path.join(c.ws, '.harness/session.json'), 'utf8'), priorSession);
+  for (const bad of [['--intent-page', '0'], ['--intent-page-size', '33']]) assert.equal(orient(c, ['--read', ...bad]).status, 2);
 });

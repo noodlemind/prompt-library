@@ -355,6 +355,9 @@ test('readStructuralIndex requires meta.json with a valid sha and skips on malfo
   assert.match(readStructuralIndex(workspace, { home }).reason, /unreadable structural index/);
 
   fs.writeFileSync(path.join(dir, 'files.json'), JSON.stringify({ version: 1, files: {} }));
+  assert.equal(readStructuralIndex(workspace, { home }).present, false);
+  fs.writeFileSync(path.join(dir, 'symbols.json'), JSON.stringify({ version: 1, symbols: [] }));
+  fs.writeFileSync(path.join(dir, 'graph.json'), JSON.stringify({ version: 1, calls: [], modules: [], unresolved: [] }));
   const index = readStructuralIndex(workspace, { home });
   assert.equal(index.present, true);
   assert.deepEqual(index.symbols, []);

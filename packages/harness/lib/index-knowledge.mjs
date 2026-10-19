@@ -1,3 +1,4 @@
+import { planRecordRoot } from './domain-context.mjs';
 import fs from 'fs';
 import path from 'path';
 import { runBuildPostingsIndex } from './postings-index.mjs';
@@ -101,6 +102,12 @@ function collectSolutions(dir, scope, base) {
 }
 
 export function withKnowledgeIndexLock(options, action) {
+  if (options.plan?.fm?.domain_parent) {
+    const root = planRecordRoot(options.workspace, options.plan);
+    for (const rel of ['.harness/knowledge', '.harness/knowledge/manifest.yaml', '.harness/knowledge-index', '.harness/knowledge-index/postings.json', '.harness/knowledge-index/meta.json']) {
+      if (!assertNoSymlinkAncestors(root, rel)) throw new Error('Private domain index store is unsafe or symlinked');
+    }
+  }
   const rebuild = () => rebuildKnowledgeIndex(options);
   const manifestRoot = options.knowledgeRoot || (options.copilotHome ? path.join(options.copilotHome, 'knowledge') : null);
   if (options.flags.dryRun || !manifestRoot) return action(rebuild);
@@ -113,7 +120,7 @@ export function runIndexKnowledge(options) {
   return withKnowledgeIndexLock(options, rebuild => rebuild());
 }
 
-function rebuildKnowledgeIndex({ knowledgeRoot, workspace, copilotHome, flags, log, home }) {
+function rebuildKnowledgeIndex({ knowledgeRoot, workspace, copilotHome, flags, log, home, plan = null }) {
   const roots = [];
   const manifestRoot = knowledgeRoot || (copilotHome ? path.join(copilotHome, 'knowledge') : null);
   if (manifestRoot) {
@@ -131,6 +138,11 @@ function rebuildKnowledgeIndex({ knowledgeRoot, workspace, copilotHome, flags, l
     });
   }
 
+  if (plan?.fm?.domain_parent) {
+    const base = planRecordRoot(workspace, plan);
+    roots.push({ dir: path.join(base, 'docs/solutions'), scope: `domain-${plan.fm.domain_parent.name}`, base });
+  }
+  const selectedIndexDir = plan?.fm?.domain_parent ? path.join(planRecordRoot(workspace, plan), '.harness/knowledge-index') : null;
   let entries = [];
   for (const { dir, scope, base } of roots) {
     entries = entries.concat(collectSolutions(dir, scope, base));
@@ -179,7 +191,7 @@ function rebuildKnowledgeIndex({ knowledgeRoot, workspace, copilotHome, flags, l
   const body = lines.join('\n') + '\n';
   if (flags.dryRun) {
     log(`would write ${manifestPath} (${entries.length} entries)`);
-    const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
+    const indexDir = selectedIndexDir || resolveIndexDir(copilotHome || '', workspace, home);
     runBuildPostingsIndex({ entries, indexDir, manifestUpdated: today, flags });
     log(`would write ${indexDir} (${entries.length} postings)`);
     return { entries: entries.length, manifestPath, indexDir };
@@ -188,7 +200,7 @@ function rebuildKnowledgeIndex({ knowledgeRoot, workspace, copilotHome, flags, l
   writeManifestAtomic(manifestPath, body);
   log(`wrote ${manifestPath} (${entries.length} entries)`);
 
-  const indexDir = resolveIndexDir(copilotHome || '', workspace, home);
+  const indexDir = selectedIndexDir || resolveIndexDir(copilotHome || '', workspace, home);
   let indexResult;
   try {
     indexResult = runBuildPostingsIndex({

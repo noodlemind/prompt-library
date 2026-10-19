@@ -1,3 +1,4 @@
+import { harnessControlCommand } from '../corpus/hooks/lib/tool-payload.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,6 +10,7 @@ import { test } from 'node:test';
 import YAML from 'yaml';
 import { planContractText } from '../lib/evidence.mjs';
 import { externalPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
+import { callProofAuthority } from '../corpus/hooks/lib/proof-authority.mjs';
 import {
   activatedSkillFromPayload,
   analyzeShellMutation,
@@ -20,6 +22,21 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const hooksRoot = path.join(repoRoot, 'packages', 'harness', 'corpus', 'hooks');
 const binPath = path.join(repoRoot, 'packages', 'harness', 'bin', 'harness.mjs');
+
+test('proof authority retains bounded failure cause without command output or credentials', () => {
+  const timedOut = callProofAuthority(repoRoot, [], { spawnFn: () => ({ status: null, signal: 'SIGTERM', error: { code: 'ETIMEDOUT' }, stderr: 'token=private-value' }), timeout: 2500 });
+  assert.equal(timedOut.pass, false);
+  assert.equal(timedOut.authority.reason, 'timeout');
+  assert.equal(timedOut.authority.timeoutMs, 2500);
+  assert.equal(timedOut.authority.errorCode, 'ETIMEDOUT');
+  assert.equal(timedOut.authority.signalName, 'SIGTERM');
+  const failed = callProofAuthority(repoRoot, [], { spawnFn: () => ({ status: 3, signal: null, stdout: '', stderr: 'token=private-value' }) });
+  assert.equal(failed.authority.reason, 'exit-error');
+  assert.equal(failed.authority.exitCode, 3);
+  assert.match(failed.message, /exit=3/);
+  assert.ok(!JSON.stringify([timedOut, failed]).includes('private-value'));
+  assert.ok(Buffer.byteLength(JSON.stringify([timedOut, failed])) < 2048);
+});
 
 function tempWorkspace() {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-hook-fixture-'));
@@ -212,6 +229,24 @@ function outputJson(result) {
   return line ? JSON.parse(line) : {};
 }
 
+test('unreadable plan authority denies mutation with the exact safe process failure', t => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const plan = writePlan(workspace);
+  writePassedGate(workspace, plan);
+  const failingBin = path.join(workspace, '.harness', 'failed-authority.mjs');
+  fs.writeFileSync(failingBin, "process.stderr.write('token=private-authority-value'); process.exit(3);\n");
+  const result = spawnSync(process.execPath, [path.join(hooksRoot, 'require-plan-gate.mjs')], {
+    cwd: workspace, input: JSON.stringify({ cwd: workspace, tool_name: 'replace_string_in_file', tool_input: { filePath: 'src/schema.json' } }),
+    encoding: 'utf8', env: { ...process.env, HARNESS_BIN: failingBin, HARNESS_ENFORCEMENT: 'enforce' },
+  });
+  const output = outputJson(result);
+  assert.equal(output.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(output.hookSpecificOutput.permissionDecisionReason, /unreadable-plan-authority/);
+  assert.match(output.hookSpecificOutput.permissionDecisionReason, /reason=exit-error, exit=3/);
+  assert.ok(!JSON.stringify(output).includes('private-authority-value'));
+});
+
 test('normalizes observed VS Code and compatible mutation payloads', () => {
   const cases = [
     ['multi_replace_string_in_file', { files: [{ filePath: 'src/a.json' }, { file_path: 'src/b.json' }] }, ['src/a.json', 'src/b.json']],
@@ -380,6 +415,71 @@ test('recognizes successful native skill reads without treating them as mutation
   assert.equal(activatedSkillFromPayload({ tool_name: 'read_file', tool_input: { filePath: 'src/example.js' } }), null);
 });
 
+test('explicitly truncated native skill reads cannot establish activation', t => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const payload = {
+    tool_name: 'read_file',
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
+  };
+  for (const metadata of [{ truncated: true }, { tool_response: { truncated: true } }]) {
+    assert.equal(activatedSkillFromPayload({ ...payload, ...metadata }), null);
+    assert.equal(runHook('record-successful-edit.mjs', workspace, { ...payload, ...metadata }).status, 0);
+    assert.equal(fs.existsSync(path.join(workspace, '.harness/session.json')), false);
+  }
+  assert.equal(activatedSkillFromPayload({ ...payload, tool_response: { truncated: false } }), 'create-primitive');
+});
+
+test('native skill read updates current session identity while preserving prior lifecycle and activation state', t => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const plan = writePlan(workspace, { createPrimitive: true });
+  writePassedGate(workspace, plan);
+  const sessionPath = path.join(workspace, '.harness/session.json');
+  const previous = JSON.parse(fs.readFileSync(sessionPath));
+  previous.sessionStartedAt = '2000-01-01T00:00:00.000Z';
+  previous.activatedSkills = { prior: { sessionId: previous.sessionId, activatedAt: previous.lastGateAt } };
+  fs.writeFileSync(sessionPath, JSON.stringify(previous));
+  const result = runHook('record-successful-edit.mjs', workspace, {
+    session_id: 'new-native-session',
+    tool_name: 'read_file',
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
+    tool_response: { truncated: false },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const current = JSON.parse(fs.readFileSync(sessionPath));
+  assert.equal(current.sessionId, 'new-native-session');
+  assert.equal(current.activatedSkills['create-primitive'].sessionId, current.sessionId);
+  assert.equal(current.sessionStartedAt, current.activatedSkills['create-primitive'].activatedAt);
+  assert.deepEqual(current.activatedSkills.prior, previous.activatedSkills.prior);
+  for (const field of ['activePlan', 'gatedPlan', 'gatedPlanDigest', 'gateStatus', 'lastGateAt']) {
+    assert.deepEqual(current[field], previous[field], field);
+  }
+});
+
+test('native skill reads without a host session id retain only TTL activation evidence', t => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const plan = writePlan(workspace, { createPrimitive: true });
+  writePassedGate(workspace, plan);
+  const read = runHook('record-successful-edit.mjs', workspace, {
+    session_id: null,
+    tool_name: 'read_file',
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
+    tool_response: { truncated: false },
+  });
+  assert.equal(read.status, 0, read.stderr);
+  const current = JSON.parse(fs.readFileSync(path.join(workspace, '.harness/session.json')));
+  assert.equal(current.sessionId, 'fixture-session');
+  assert.equal(current.activatedSkills['create-primitive'].sessionId, null);
+  const mutation = runHook('require-plan-gate.mjs', workspace, {
+    session_id: null,
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'packages/harness/corpus/skills/example/SKILL.md' },
+  });
+  assert.notEqual(outputJson(mutation).hookSpecificOutput?.permissionDecision, 'deny');
+});
+
 test('workspace normalization resolves host path aliases before scope checks', () => {
   const workspace = tempWorkspace();
   const aliasRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-hook-alias-'));
@@ -537,11 +637,20 @@ test('passed gate allows scoped mutation and primitive target requires current-s
   assert.match(outputJson(notActivated).hookSpecificOutput.permissionDecisionReason, /create-primitive-activation/i);
   assert.match(outputJson(notActivated).hookSpecificOutput.permissionDecisionReason, /create-primitive\/SKILL\.md/i);
 
+  runHook('record-successful-edit.mjs', workspace, {
+    tool_name: 'read_file', tool_input: { filePath: skillFixturePath(workspace, 'create-primitive'), startLine: 1, endLine: 1 },
+    tool_response: { content: '---' },
+  });
+  const partial = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file', tool_input: { filePath: 'packages/harness/corpus/skills/example/SKILL.md' },
+  });
+  assert.match(outputJson(partial).hookSpecificOutput.permissionDecisionReason, /create-primitive-activation/i);
+
   const activation = runHook('record-successful-edit.mjs', workspace, {
     hook_event_name: 'PostToolUse',
     tool_name: 'read_file',
     tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
-    tool_response: 'Skill loaded',
+    tool_response: { content: 'Skill loaded', truncated: false },
   });
   assert.equal(activation.status, 0, activation.stderr);
   const recorded = JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8'));
@@ -564,7 +673,7 @@ test('scoped shell creation permits only ancestor directories of planned files',
     hook_event_name: 'PostToolUse',
     tool_name: 'read_file',
     tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
-    tool_response: 'Skill loaded',
+    tool_response: { content: 'Skill loaded', truncated: false },
   });
 
   const allowed = runHook('require-plan-gate.mjs', workspace, {
@@ -1418,4 +1527,12 @@ test('every enforcement denial names an actionable next command', () => {
   });
   const stop = runHook('require-verification.mjs', workspace, { hook_event_name: 'Stop', stop_hook_active: false });
   assert.match(outputJson(stop).hookSpecificOutput?.reason || '', /next: run `harness verify/, 'Stop denial must carry a verify recipe');
+});
+
+test('scoped todo controls recognize only exact supported metadata operations', () => {
+  assert.equal(harnessControlCommand(['harness', 'todo', 'list'], process.cwd()), 'todo');
+  assert.equal(harnessControlCommand(['harness', 'todo', '--json', '--plan', 'accepted.md'], process.cwd()), 'todo');
+  assert.equal(harnessControlCommand(['harness', 'todo', 'sync', '--plan', 'docs/plans/accepted.md', '--json'], process.cwd()), 'todo');
+  assert.equal(harnessControlCommand(['harness', 'todo', 'complete', '--plan=docs/plans/accepted.md', '--id', `${'a'.repeat(64)}:S1`], process.cwd()), 'todo');
+  for (const args of [['sync'], ['clear'], ['add', '--text', 'opaque'], ['sync', '--plan', 'accepted.md', '--unknown'], ['complete', '--id', 't1'], ['list', '--plan'], ['sync', '--plan', 'a', '--plan', 'b']]) assert.equal(harnessControlCommand(['harness', 'todo', ...args], process.cwd()), null);
 });

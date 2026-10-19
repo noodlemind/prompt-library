@@ -88,3 +88,13 @@ test('a changed dependency invalidates a target whose own bytes are unchanged', 
   fs.writeFileSync(path.join(workspace, 'b.mjs'), 'export const item = 2;');
   assert.equal(validateContextSnapshot({ workspace, snapshot, targets: ['a.mjs'] }).pass, false);
 });
+
+test('domain recovery cannot substitute a local plan for the selected coordinator contract', (t) => {
+  const { workspace, copilotHome } = makeScopes();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  const result = buildTaskHandoff({ workspace, task: 'Continue domain delivery', domainPlan: { name: 'example', path: 'coordinator.hplan' } });
+  assert.equal(result.contract, null);
+  assert.equal(result.requiresRead, true);
+  assert.deepEqual(result.next.slice(0, 3), ['harness', 'domain', 'status']);
+});

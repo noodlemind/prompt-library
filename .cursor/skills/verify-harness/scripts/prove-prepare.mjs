@@ -26,7 +26,7 @@ try {
   const ctx = initWorkspace();
   created.push(ctx.ws, ctx.home, ctx.copilotHome);
 
-  const hinted = runHarness(['orient', '--query', 'architecture'], ctx);
+  const hinted = await runHarness(['orient', '--query', 'architecture'], ctx);
   assertEqual(hinted.status, 0, `orient hint exit (${hinted.stderr})`);
   const hintBody = parseJson(hinted, 'orient-hint');
   assertEqual((hintBody.intentSources || []).length, 0, 'orient intentSources before prepare');
@@ -34,7 +34,7 @@ try {
     throw new Error(`nextTools missing harness prepare: ${JSON.stringify(hintBody.nextTools)}`);
   }
 
-  const prepared = runHarness(['prepare'], ctx);
+  const prepared = await runHarness(['prepare'], ctx);
   assertEqual(prepared.status, 0, `prepare exit (${prepared.stderr})`);
   const preparedBody = parseJson(prepared, 'prepare');
   assertEqual(preparedBody.created, 2, 'prepare created');
@@ -47,7 +47,7 @@ try {
     throw new Error('starter files are missing TODO');
   }
 
-  const seen = runHarness(['orient', '--query', 'architecture'], ctx);
+  const seen = await runHarness(['orient', '--query', 'architecture'], ctx);
   assertEqual(seen.status, 0, `orient after prepare exit (${seen.stderr})`);
   const seenBody = parseJson(seen, 'orient-seen');
   const paths = (seenBody.intentSources || []).map((source) => source.path).sort();
@@ -57,7 +57,7 @@ try {
 
   const edited = '# Edited overview\n\nPO owns this file now.\n';
   fs.writeFileSync(specPath, edited);
-  const skipped = runHarness(['prepare'], ctx);
+  const skipped = await runHarness(['prepare'], ctx);
   assertEqual(skipped.status, 0, `prepare skip exit (${skipped.stderr})`);
   const skippedBody = parseJson(skipped, 'prepare-skip');
   assertEqual(skippedBody.files.find((file) => file.path === SPEC_REL).status, 'skipped', 'spec skipped');
@@ -68,7 +68,7 @@ try {
   fs.writeFileSync(path.join(ignoredCtx.ws, '.gitignore'), 'docs/\n');
   git(ignoredCtx.ws, ['add', '--', '.gitignore']);
   git(ignoredCtx.ws, ['commit', '-qm', 'ignore docs']);
-  const ignored = runHarness(['prepare'], ignoredCtx);
+  const ignored = await runHarness(['prepare'], ignoredCtx);
   assertEqual(ignored.status, 0, `prepare ignore exit (${ignored.stderr})`);
   const ignoredBody = parseJson(ignored, 'prepare-ignore');
   assertEqual(ignoredBody.created, 0, 'ignored created');
@@ -78,7 +78,7 @@ try {
   if (fs.existsSync(path.join(ignoredCtx.ws, SPEC_REL)) || fs.existsSync(path.join(ignoredCtx.ws, ADR_REL))) {
     throw new Error('gitignored prepare wrote a starter file');
   }
-  const ignoredOrient = runHarness(['orient', '--query', 'architecture'], ignoredCtx);
+  const ignoredOrient = await runHarness(['orient', '--query', 'architecture'], ignoredCtx);
   assertEqual(ignoredOrient.status, 0, `orient ignore exit (${ignoredOrient.stderr})`);
   const ignoredOrientBody = parseJson(ignoredOrient, 'orient-ignore');
   if (!(ignoredOrientBody.nextTools || []).includes('un-ignore docs/specs and docs/adr, then harness prepare')) {

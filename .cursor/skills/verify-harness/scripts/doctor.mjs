@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { binPath, packageRoot, repoRoot } from './lib.mjs';
 
 const problems = [];
@@ -17,7 +18,6 @@ note(fs.existsSync(binPath), `harness bin at ${binPath}`);
 note(fs.existsSync(path.join(packageRoot, 'package.json')), `harness package at ${packageRoot}`);
 
 try {
-  const { createRequire } = await import('node:module');
   const requireYaml = createRequire(path.join(packageRoot, 'package.json'));
   requireYaml('yaml');
   note(true, 'yaml package loads');

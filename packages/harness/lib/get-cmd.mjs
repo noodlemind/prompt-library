@@ -6,11 +6,13 @@ import { readFileNoFollow } from './fs-safe.mjs';
 import { getCorpusRoot } from './assets.mjs';
 import { assertSourceCurrent, parseSourceReference, sourceContext, sourceHash } from './retrieval/source-evidence.mjs';
 import { redactSecrets } from './secret-scan.mjs';
+import { externalPlansDir } from './project-layout.mjs';
+import { domainContextOf, planRecordRoot } from './domain-context.mjs';
 
 const PACKAGED_REL = /^(skills|agents|instructions)\//;
 
 function resolvePackagedRel(relPath, copilotHome) {
-  const normalized = String(relPath).replace(/\\/g, '/');
+  const normalized = path.posix.normalize(String(relPath).replace(/\\/g, '/'));
   if (!PACKAGED_REL.test(normalized)) return null;
   const roots = [];
   if (copilotHome) roots.push(path.resolve(copilotHome));
@@ -26,6 +28,22 @@ function resolvePackagedRel(relPath, copilotHome) {
   return null;
 }
 
+function resolveReadPointer(fullPath, workspace, copilotHome, home) {
+  if (!path.isAbsolute(fullPath)) return null;
+  const roots = [{ root: workspace, allow: () => true },
+    { root: copilotHome, allow: rel => PACKAGED_REL.test(rel) },
+    { root: getCorpusRoot(), allow: rel => PACKAGED_REL.test(rel) },
+    { root: externalPlansDir(workspace, { home }), allow: rel => !rel.includes('/') && /\.(?:md|hplan)$/.test(rel) }];
+  for (const { root, allow } of roots) {
+    if (!root) continue;
+    const rel = path.relative(root, fullPath).replace(/\\/g, '/');
+    if (!rel || !allow(rel)) continue;
+    const safe = safeResolveUnderRoot(root, rel);
+    if (safe) return { fullPath: safe, readRoot: root };
+  }
+  return null;
+}
+
 export const GET_DEFAULT_LINES = 40;
 export const GET_DEFAULT_MAX_BYTES = 2048;
 
@@ -37,7 +55,7 @@ function truncateUtf8(text, maxBytes) {
   return prefix + marker;
 }
 
-export function runGet({ workspace, copilotHome, flags, home }) {
+export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = null }) {
   const reference = parseSourceReference(flags.docid || flags.path);
   const docid = flags.docid ? reference.path : null;
   const relPath = flags.path ? reference.path : null;
@@ -59,7 +77,11 @@ export function runGet({ workspace, copilotHome, flags, home }) {
     fullPath = resolved?.full ?? null;
     readRoot = resolved?.root ?? null;
   } else if (relPath) {
-    const packaged = resolvePackagedRel(relPath, copilotHome);
+    let authorized = null;
+    if (authorizedPlan && domainContextOf(authorizedPlan) && path.resolve(relPath) === authorizedPlan.fullPath) {
+      authorized = { fullPath: authorizedPlan.fullPath, readRoot: planRecordRoot(workspaceResolved, authorizedPlan) };
+    }
+    const packaged = authorized || resolveReadPointer(relPath, workspaceResolved, copilotHome, home || flags.home) || resolvePackagedRel(relPath, copilotHome);
     if (packaged) {
       fullPath = packaged.fullPath;
       readRoot = packaged.readRoot;

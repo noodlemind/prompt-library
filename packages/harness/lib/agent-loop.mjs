@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { accountContext } from './token-meter.mjs';
 import { buildTaskHandoff } from './task-handoff.mjs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { EXIT } from './style.mjs';
 import { CONFIG_SCHEMA } from './config.mjs';
 import { PROVIDER_TIMEOUT_MS } from './provider.mjs';
@@ -13,6 +14,7 @@ import { searchResultOf } from './retrieval/search-cmd.mjs';
 import { todoResultOf } from './todo-cmd.mjs';
 import { applyResultOf } from './apply-cmd.mjs';
 import { afterDeliveryTool, beforeDeliveryTool, deliveryCompletion, DELIVERY_BIN, runDeliveryCommand } from './agent-delivery.mjs';
+import { readSession, writeSession } from './session.mjs';
 
 export const AGENT_SCHEMA = 1;
 
@@ -155,7 +157,7 @@ const ACT_TOOLS = new Set(['edit', 'write', 'apply', 'bash', 'exec']);
 const READ_ONLY_TOOLS = new Set(['search', 'read']);
 const MUTATE_TOOLS = new Set(['edit', 'write', 'apply', 'todo']);
 
-/** todo list is read-only; add/complete/clear mutate and must stay serial. */
+/** todo list is read-only; worklist mutations must stay serial. */
 function isReadOnlyCall(call) {
   if (!call?.name) return false;
   if (READ_ONLY_TOOLS.has(call.name)) return true;
@@ -245,12 +247,13 @@ export const AGENT_TOOLS = Object.freeze([
   Object.freeze({
     name: 'todo',
     description:
-      'Durable worklist for long-horizon tasks. verb: list|add|complete|clear. '
-      + 'Use add to track steps; complete when done. State lives under .harness/todo.json.',
+      'Durable worklist for long-horizon tasks. With plan, use sync to reconcile its accepted procedure, list to inspect, '
+      + 'and complete to record a performed step. Without plan, add/list/complete/clear use .harness/todo.json.',
     schema: {
       type: 'object',
       properties: {
-        verb: { type: 'string', description: 'list | add | complete | clear' },
+        verb: { type: 'string', enum: ['list', 'add', 'complete', 'clear', 'sync'], description: 'list | add | complete | clear | sync' },
+        plan: { type: 'string', description: 'accepted plan path for its scoped procedure worklist; required for sync' },
         text: { type: 'string', description: 'item text for add' },
         id: { type: 'string', description: 'item id for complete' },
       },
@@ -295,7 +298,7 @@ export const DELIVER_AGENT_TOOLS = Object.freeze([
   ...AGENT_TOOLS,
   Object.freeze({
     name: 'harness',
-    description: 'Deliver lifecycle command. argv starts with orient, plan-new, plan-update, gate, review, verify, compound, report, status or trust status. Optional decision stages JSON for --file (compound uses --learning-decision). Workspace and homes stay bound to this run.',
+    description: 'Deliver lifecycle command. argv starts with orient, graph, plan-new, plan-update, gate, review, verify, compound, domain, experiment, report, status or trust status. Graph reads current file dependencies, dependents or a directed path; use graph deps <file>, graph dependents <file> or graph path <file> <target>. Optional decision stages JSON for --file (compound and domain compound use --learning-decision). Domain requires an explicit name; experiment begin and resolve require authored decisions and preserve charged one-shot measurement authority. Workspace and homes stay bound to this run.',
     schema: { type: 'object', properties: { argv: { type: 'array', items: { type: 'string' } }, decision: { type: 'object' } }, required: ['argv'] },
   }),
 ]);
@@ -571,6 +574,8 @@ export async function dispatchToolCall(call, {
   turns = [],
   profile = null,
   harnessHome = null,
+  sessionId = null,
+  deliveryState = null,
 } = {}) {
   if (!TOOL_NAMES.has(call.name)) {
     return { dispatched: false, reason: `unknown tool: ${call.name}`, fatal: false };
@@ -583,7 +588,8 @@ export async function dispatchToolCall(call, {
 
   const input = call.input && typeof call.input === 'object' ? call.input : {};
   const delivery = profile?.id === 'deliver';
-  const deliveryOptions = { workspace, copilotHome, harnessHome, remainingSeconds };
+  const runHarnessHome = harnessHome || ctx.harnessHome || process.env.HARNESS_HOME || null;
+  const deliveryOptions = { workspace, copilotHome, harnessHome: runHarnessHome, remainingSeconds, sessionId, deliveryState };
   if (call.name === 'harness' && !delivery) return { dispatched: false, reason: 'harness lifecycle tool requires the deliver profile', fatal: false };
   if (delivery) {
     const permission = beforeDeliveryTool(call, deliveryOptions);
@@ -591,6 +597,7 @@ export async function dispatchToolCall(call, {
   }
   const base = ['--workspace', workspace];
   if (copilotHome) base.push('--copilot-home', copilotHome);
+  if (runHarnessHome) base.push('--harness-home', runHarnessHome);
 
   let argv;
   let run;
@@ -602,7 +609,9 @@ export async function dispatchToolCall(call, {
     run = (_argv, runCtx) => runDeliveryCommand(input, command => execResultOf([
       ...base, ...(timeout === null ? [] : ['--timeout', String(timeout)]), '--', process.execPath, DELIVERY_BIN, ...command,
       '--workspace', workspace, ...(copilotHome ? ['--copilot-home', copilotHome] : []),
-      ...(harnessHome || process.env.HARNESS_HOME ? ['--harness-home', harnessHome || process.env.HARNESS_HOME] : []), '--json', '--no-events',
+      ...(runHarnessHome ? ['--harness-home', runHarnessHome] : []),
+      ...(command.includes('--json') ? [] : ['--json']), ...(command.includes('--no-events') ? [] : ['--no-events']),
+      ...(command[0] === 'todo' ? ['--verbose'] : []),
     ], runCtx));
     fatalOnThrow = false;
   } else if (call.name === 'bash' || call.name === 'exec') {
@@ -631,11 +640,15 @@ export async function dispatchToolCall(call, {
     run = searchToolResultOf;
   } else if (call.name === 'todo') {
     fatalOnThrow = false;
-    const verb = typeof input.verb === 'string' ? input.verb.trim() : 'list';
-    if (!['list', 'add', 'complete', 'clear'].includes(verb)) {
-      return { dispatched: false, reason: 'todo verb must be list | add | complete | clear', fatal: false };
+    const verb = input.verb === undefined ? 'list' : typeof input.verb === 'string' ? input.verb.trim() : '';
+    if (!['list', 'add', 'complete', 'clear', 'sync'].includes(verb)) {
+      return { dispatched: false, reason: 'todo verb must be list | add | complete | clear | sync', fatal: false };
+    }
+    if (input.plan !== undefined && (typeof input.plan !== 'string' || !input.plan.trim() || input.plan.startsWith('-'))) {
+      return { dispatched: false, reason: 'todo plan requires a non-empty accepted plan path', fatal: false };
     }
     argv = [...base, verb];
+    if (input.plan !== undefined) argv.push('--plan', input.plan);
     if (typeof input.text === 'string' && input.text) argv.push('--text', input.text);
     if (typeof input.id === 'string' && input.id) argv.push('--id', input.id);
     run = todoResultOf;
@@ -762,7 +775,7 @@ async function readResultOf(argv, ctx = {}) {
   const header = total > to || from > 1
     ? `${result.path} — lines ${from}-${to} of ${total}. Call read again with \`offset\` to see more.`
     : `${result.path} — ${total} lines, complete.`;
-  return {
+  const response = {
     schema: 1,
     mode: 'read',
     path: result.path,
@@ -779,6 +792,8 @@ async function readResultOf(argv, ctx = {}) {
       { line: result.excerpt },
     ],
   };
+  response.truncated ||= Buffer.byteLength(renderToolResult(response, { maxBytes: Infinity }), 'utf8') > TOOL_RESULT_MAX_BYTES;
+  return response;
 }
 
 export function renderToolResult(result, { maxBytes = TOOL_RESULT_MAX_BYTES } = {}) {
@@ -884,10 +899,19 @@ export async function runAgentLoop({
   now = () => Date.now(),
 }) {
   const resolvedProfile = profile?.id ? profile : resolveProfile(profile);
+  const runHarnessHome = harnessHome || ctx.harnessHome || process.env.HARNESS_HOME || null;
   const isAutonomous = resolvedProfile.track === 'autonomous' || resolvedProfile.testOnly;
   const hasVerifier = Array.isArray(verifyCmd) && verifyCmd.length > 0;
   const startedAt = now();
   const deadline = startedAt + maxSeconds * 1000;
+  const session = resolvedProfile.id === 'deliver' ? writeSession(workspace, {
+    ...(readSession(workspace) || {}),
+    sessionId: randomUUID(),
+    sessionStartedAt: new Date(startedAt).toISOString(),
+  }) : null;
+  if (resolvedProfile.id === 'deliver' && !session) {
+    throw new Error('Deliver could not establish a current workspace session.');
+  }
   const system = buildSystemPrompt({
     persona,
     profile: resolvedProfile,
@@ -900,6 +924,7 @@ export async function runAgentLoop({
   const contextRequests = [];
   const readIdentities = [];
   const recordContextTurn = args => ({ ...recordTurn({ ...args, contextAccounting: contextRequests.at(-1) }), contextEvidence: contextSummary?.files || [] });
+  const deliveryState = { domainPlan: null };
 
   const provider = startProviderFn();
   let stop = null;
@@ -950,7 +975,7 @@ export async function runAgentLoop({
       messages = compactMessages(messages, {
         keepTurns: TRANSCRIPT_FULL_TURNS,
         mode: retentionPolicy === 'structured' ? 'structured' : isAutonomous ? 'all' : 'explore',
-        handoff: retentionPolicy === 'structured' ? buildTaskHandoff({ workspace, task }) : null,
+        handoff: retentionPolicy === 'structured' ? buildTaskHandoff({ workspace, task, domainPlan: deliveryState.domainPlan }) : null,
       });
       if (now() >= deadline) { stop = 'time-budget'; break; }
 
@@ -1044,7 +1069,7 @@ export async function runAgentLoop({
           stop = 'verifier-missing';
           detail = 'pass --verify-cmd <argv...> for verifier-shaped success';
         } else if (resolvedProfile.id === 'deliver') {
-          const completed = deliveryCompletion({ workspace, copilotHome, harnessHome, remainingSeconds: (deadline - now()) / 1000 });
+          const completed = deliveryCompletion({ workspace, copilotHome, harnessHome: runHarnessHome, remainingSeconds: (deadline - now()) / 1000, domainPlan: deliveryState.domainPlan });
           if (completed.pass) stop = 'done';
           else if (turns.length >= maxTurns || completionBlocked) {
             stop = 'delivery-incomplete';
@@ -1087,7 +1112,9 @@ export async function runAgentLoop({
         remainingSeconds: (deadline - now()) / 1000,
         turns,
         profile: resolvedProfile,
-        harnessHome,
+        harnessHome: runHarnessHome,
+        sessionId: session?.sessionId || null,
+        deliveryState,
       });
 
       const toolResults = [];

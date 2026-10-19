@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
 import { storageIdForRepo } from '../storage-aliases.mjs';
 import { assertNoSymlinkAncestors, assertRealpathContained, readFileNoFollow } from '../fs-safe.mjs';
+import { gitMetadataEnvironment } from '../../corpus/hooks/lib/product-diff.mjs';
 import {
   readLearningFile,
   readStoreFile,
@@ -23,7 +24,7 @@ _Rebuilt by \`harness consolidate --apply\`. One line per active learning._
 `;
 
 function gitOut(cwd, args) {
-  const res = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const res = spawnSync('git', args, { cwd, encoding: 'utf8', env: gitMetadataEnvironment() });
   return res.status === 0 ? res.stdout.trim() : null;
 }
 
@@ -53,7 +54,10 @@ export function linkedPrimaryCheckout(workspace) {
 }
 
 export function localRepoId(workspace) {
-  const basis = linkedPrimaryCheckout(workspace) || workspace;
+  return localIdForRoot(linkedPrimaryCheckout(workspace) || workspace);
+}
+
+function localIdForRoot(basis) {
   let real = basis;
   try {
     real = fs.realpathSync.native(basis);
@@ -65,7 +69,10 @@ export function localRepoId(workspace) {
 
 export function legacyLocalRepoIds(workspace) {
   if (process.platform !== 'win32') return [];
-  const primary = linkedPrimaryCheckout(workspace) || workspace;
+  return legacyIdsForRoot(workspace, linkedPrimaryCheckout(workspace) || workspace);
+}
+
+function legacyIdsForRoot(workspace, primary) {
   const candidates = [primary];
   try {
     candidates.push(path.resolve(workspace, path.relative(fs.realpathSync.native(workspace), fs.realpathSync.native(primary))));
@@ -78,11 +85,17 @@ export function legacyLocalRepoIds(workspace) {
 }
 
 export function workspaceStorageId(workspace, { home } = {}) {
-  const id = repoId(workspace);
-  return storageIdForRepo(id, { home, legacyIds: id.startsWith('local-') ? legacyLocalRepoIds(workspace) : [] });
+  const { id, primary } = observeRepoIdentity(workspace);
+  const legacyIds = process.platform === 'win32' && id.startsWith('local-')
+    ? legacyIdsForRoot(workspace, primary || linkedPrimaryCheckout(workspace) || workspace) : [];
+  return storageIdForRepo(id, { home, legacyIds });
 }
 
 export function repoId(workspace) {
+  return observeRepoIdentity(workspace).id;
+}
+
+function observeRepoIdentity(workspace) {
   const remote = gitOut(workspace, ['remote', 'get-url', 'origin']);
   if (remote) {
     const canonical = remote
@@ -95,10 +108,11 @@ export function repoId(workspace) {
     const slug = canonical.replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
     if (slug) {
       const suffix = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 8);
-      return `${slug}-${suffix}`;
+      return { id: `${slug}-${suffix}`, primary: null };
     }
   }
-    return localRepoId(workspace);
+  const primary = linkedPrimaryCheckout(workspace) || workspace;
+  return { id: localIdForRoot(primary), primary };
 }
 
 export function storeDirForId(id, { home } = {}) {
@@ -162,11 +176,11 @@ export function ensureStore(workspace, { home, dryRun = false } = {}) {
   fs.mkdirSync(path.join(dir, 'learnings'), { recursive: true });
   let gitOk = fs.existsSync(path.join(dir, '.git'));
   if (!gitOk) {
-    gitOk = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' }).status === 0;
+    gitOk = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8', env: gitMetadataEnvironment() }).status === 0;
   }
   if (gitOk) {
-        spawnSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir, encoding: 'utf8' });
-    spawnSync('git', ['config', 'core.eol', 'lf'], { cwd: dir, encoding: 'utf8' });
+        spawnSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir, encoding: 'utf8', env: gitMetadataEnvironment() });
+    spawnSync('git', ['config', 'core.eol', 'lf'], { cwd: dir, encoding: 'utf8', env: gitMetadataEnvironment() });
   }
     const seed = (file, content) => {
     const state = storeFileState(file);
@@ -633,11 +647,11 @@ export function commitStore(dir, message) {
       stderr: `refusing to stage the store: a symlink stands at store-owned director${plantedDirs.length > 1 ? 'ies' : 'y'} ${plantedDirs.join(', ')} — staging it would commit the link into store history and hide every learning under it`,
     };
   }
-  const addRes = spawnSync('git', ['add', '-A'], { cwd: dir, encoding: 'utf8' });
+  const addRes = spawnSync('git', ['add', '-A'], { cwd: dir, encoding: 'utf8', env: gitMetadataEnvironment() });
   if (addRes.status !== 0) {
     return { committed: false, ok: false, stderr: addRes.stderr || `git add exited ${addRes.status}` };
   }
-  const statusRes = spawnSync('git', ['status', '--porcelain', '-z'], { cwd: dir, encoding: 'utf8' });
+  const statusRes = spawnSync('git', ['status', '--porcelain', '-z'], { cwd: dir, encoding: 'utf8', env: gitMetadataEnvironment() });
   if (statusRes.status !== 0) {
     return { committed: false, ok: false, stderr: statusRes.stderr || `git status exited ${statusRes.status}` };
   }
@@ -647,7 +661,7 @@ export function commitStore(dir, message) {
   const commitRes = spawnSync(
     'git',
     ['-c', 'user.name=harness', '-c', 'user.email=harness@local', 'commit', '-q', '-m', message],
-    { cwd: dir, encoding: 'utf8', timeout: 15000 }
+    { cwd: dir, encoding: 'utf8', timeout: 15000, env: gitMetadataEnvironment() }
   );
   if (commitRes.status !== 0) {
     return { committed: false, ok: false, stderr: commitRes.stderr || `git commit exited ${commitRes.status}` };
@@ -988,11 +1002,11 @@ export function acquireStoreLock(lockPath) {
  * caller acts on it; none may ignore it.
  */
 export function rollbackStore(dir, targetSha) {
-  const reset = spawnSync('git', targetSha ? ['reset', '--hard', targetSha] : ['reset', '--hard'], { cwd: dir, encoding: 'utf8' });
+  const reset = spawnSync('git', targetSha ? ['reset', '--hard', targetSha] : ['reset', '--hard'], { cwd: dir, encoding: 'utf8', env: gitMetadataEnvironment() });
   if (reset.error || reset.status !== 0) {
     return { ok: false, stderr: reset.error ? reset.error.message : reset.stderr || `git reset exited ${reset.status}` };
   }
-  const clean = spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8' });
+  const clean = spawnSync('git', ['clean', '-fd'], { cwd: dir, encoding: 'utf8', env: gitMetadataEnvironment() });
   if (clean.error || clean.status !== 0) {
     return { ok: false, stderr: clean.error ? clean.error.message : clean.stderr || `git clean exited ${clean.status}` };
   }

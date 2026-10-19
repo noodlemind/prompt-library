@@ -25,6 +25,11 @@ import {
 
 const SLICE_KEYS = [
   'neighborhood',
+  'graph',
+  'intentSources',
+  'intentDiscovery',
+  'intentDetail',
+  'verification',
   'planGoal',
   'trust',
   'reviewCoverage',
@@ -382,7 +387,7 @@ const RUNGS = [
       assert(body.outcome === 'passed', 'clean verify did not pass', body);
       const evidence = JSON.parse(fs.readFileSync(path.join(fx.workspace, body.evidencePath), 'utf8'));
       const current = head(fx);
-      assert(evidence.version === 4, 'evidence version is not 4', evidence);
+      assert(evidence.version === 5, 'evidence version is not 5', evidence);
       assert(evidence.binding?.head === current, 'evidence head does not match git HEAD', { bound: evidence.binding?.head, current });
       return { version: evidence.version, head: current };
     },

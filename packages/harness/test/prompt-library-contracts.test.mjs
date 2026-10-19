@@ -13,6 +13,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 
 const ENGINEER_AGENT_MAX_TOKENS = 900;
 const SKILL_BODY_MAX_LINES = 300;
+const AGENT_BODY_MAX_LINES = 20;
+const SPECIALIST_AGENT_MAX_TOKENS = 600;
 const architecturePath = 'docs/adaptive-engineering.md';
 const supersededArchitectureDocs = [
   'architecture/engineer-harness.md',
@@ -524,6 +526,18 @@ test('token budget: engineer agent and context pack stay within their caps', () 
 
   // The context pack has a hard byte cap; assert the constant is enforced and small.
   assert.ok(CONTEXT_PACK_MAX_BYTES <= 4096, 'context pack byte budget must stay small');
+});
+
+test('agent bodies stay concise without hiding their prompt cost in long lines', () => {
+  const agentsDir = path.join(repoRoot, 'packages/harness/corpus/agents');
+  for (const name of fs.readdirSync(agentsDir).filter(name => name.endsWith('.agent.md'))) {
+    const source = read(`packages/harness/corpus/agents/${name}`);
+    const body = source.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+    const lines = body.split('\n').length;
+    assert.ok(lines <= AGENT_BODY_MAX_LINES, `${name}: ${lines} body lines exceed ${AGENT_BODY_MAX_LINES}`);
+    const cap = name === 'engineer.agent.md' ? ENGINEER_AGENT_MAX_TOKENS : SPECIALIST_AGENT_MAX_TOKENS;
+    assert.ok(estimateTokens(source) <= cap, `${name}: prompt exceeds ${cap} estimated tokens including metadata`);
+  }
 });
 
 test('deterministic retrieval: repo map, tokenizer, and staleness require no model', () => {

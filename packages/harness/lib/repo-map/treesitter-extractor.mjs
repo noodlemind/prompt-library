@@ -73,7 +73,7 @@ function firstLines(text, names) {
 }
 
 export function lexicalV2(rel, content) {
-  const { symbols, imports, exported, references } = lexicalExtract(rel, content);
+  const { symbols, imports, exported, references, limitsReached } = lexicalExtract(rel, content);
   const kept = symbols.slice(0, MAX_DEFS_PER_FILE);
   const referenced = (references || []).slice(0, MAX_REFS_PER_FILE);
   const exportedSet = new Set(exported || []);
@@ -86,7 +86,8 @@ export function lexicalV2(rel, content) {
   }));
   return {
     symbols: kept.map(capName),
-    imports: imports.slice(0, MAX_IMPORTS_PER_FILE).map(capName),
+    imports: imports.slice(0, MAX_IMPORTS_PER_FILE),
+    limitsReached,
     defs,
     refs: referenced.map((name) => ({ name: capName(name), line: lines.get(name) ?? 0 })),
     complexity: branchComplexity(content),
@@ -259,8 +260,8 @@ function walkJs(root) {
     if (refs.length >= MAX_REFS_PER_FILE) break;
     const target = node.childForFieldName(node.type === 'new_expression' ? 'constructor' : 'function');
     if (!target) continue;
-    if (target.type === 'identifier') {
-      if (target.text === 'require') {
+    if (target.type === 'import' || target.type === 'identifier') {
+      if (target.type === 'import' || target.text === 'require') {
         const args = node.childForFieldName('arguments');
         const arg = args?.namedChildren?.[0];
         if (arg && arg.type === 'string' && imports.length < MAX_IMPORTS_PER_FILE) {
@@ -369,10 +370,10 @@ const WALKERS = {
 
 function capResult(walked) {
   const defs = walked.defs.slice(0, MAX_DEFS_PER_FILE).map((d) => ({ ...d, name: capName(d.name) }));
-  const imports = [...new Set(walked.imports.map(capName))].slice(0, MAX_IMPORTS_PER_FILE);
+  const imports = [...new Set(walked.imports)].slice(0, MAX_IMPORTS_PER_FILE);
   const refs = walked.refs.slice(0, MAX_REFS_PER_FILE).map((r) => ({ ...r, name: capName(r.name) }));
   const symbols = [...new Set(defs.map((d) => d.name))];
-  return { symbols, imports, defs, refs };
+  return { symbols, imports, defs, refs, limitsReached: { defs: walked.defs.length >= MAX_DEFS_PER_FILE, refs: walked.refs.length >= MAX_REFS_PER_FILE, imports: walked.imports.length >= MAX_IMPORTS_PER_FILE } };
 }
 
 export function makeStructuralExtract({ parseForLanguage, counters = { parseFailures: 0, parsed: 0, errorFiles: 0 } }) {

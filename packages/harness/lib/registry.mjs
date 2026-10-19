@@ -75,6 +75,11 @@ import { EVENT_TYPE, summarizeArgFlags } from './event-registry.mjs';
 import { createRedactor, redactedJson } from './redact.mjs';
 import { cmdModel, modelResultOf, MODEL_VERBS } from './model-cmd.mjs';
 import { cmdInspect, inspectResultOf, inspectExitFor, INSPECT_VERBS } from './inspect-cmd.mjs';
+import { cmdDomain, domainResultOf, parseDomainArguments, DOMAIN_VERBS } from './domain-cmd.mjs';
+import { cmdExperiment, experimentResultOf, parseExperimentArguments, EXPERIMENT_VERBS } from './experiment-cmd.mjs';
+import { cmdInventory, inventoryResultOf, INVENTORY_VERBS } from './inventory-cmd.mjs';
+import { cmdPerformance, performanceResultOf, PERFORMANCE_VERBS } from './performance-cmd.mjs';
+import { cmdGraph, graphResultOf, GRAPH_OPERATIONS } from './graph-cmd.mjs';
 
 const REGISTRY = new Map();
 
@@ -336,7 +341,7 @@ export async function dispatch(argv, ctx = {}) {
     if (message) throw usageError(message);
   }
     ctx.onRunStart?.();
-    const instrumented = entry.instrument !== false;
+    const instrumented = typeof entry.instrument === 'function' ? entry.instrument(rest) : entry.instrument !== false;
   const events = instrumented && ctx.events && typeof ctx.events.withCommand === 'function' ? ctx.events.withCommand(entry.name) : null;
     if (lane === 'json' || lane === 'agent') {
     return dispatchLane(entry, rest, ctx, lane, events);
@@ -621,6 +626,8 @@ registerCommand({
       },
     ],
     flags: [
+      { name: '--intent-page', type: 'number', valueName: 'n', description: 'read a bounded page of ranked intent candidates', required: false, default: null },
+      { name: '--intent-page-size', type: 'number', valueName: 'n', description: 'intent paths per page, 1 to 32', required: false, default: 8 },
       { name: '--plan', type: 'string', valueName: 'path', description: 'orient the selected plan instead of ranking active plans', required: false, default: null },
       { name: '--query', type: 'string', valueName: 'text', description: 'agent/internal task summary', required: false, default: null, tui: 'prompt' },
       { name: '--limit', type: 'number', valueName: 'n', description: 'recall result count (default 3)', required: false, default: 3, tui: 'prompt' },
@@ -637,7 +644,7 @@ registerCommand({
       { name: '--min-score', type: 'number', valueName: 'n', description: 'minimum score (default 0.15)', required: false, default: 0.15, tui: 'prompt' },
             { name: '--explain', type: 'boolean', description: 'decompose learning ranking (deterministic)', required: false, default: false, tui: 'verb' },
       { name: '--file', type: 'string', valueName: 'path', description: 'one file to place in the change neighborhood (repeatable)', required: false, default: null, tui: 'prompt' },
-      { name: '--read', type: 'boolean', description: 'print the eleven-field session slice and write no context pack', required: false, default: false, tui: 'cli-only' },
+      { name: '--read', type: 'boolean', description: 'print the bounded session slice and write no context pack', required: false, default: false, tui: 'cli-only' },
       { name: '--context-version', type: 'number', valueName: '1|2', description: 'select legacy facts or source-bound context evidence', required: false, default: 1, tui: 'cli-only' },
     ],
   },
@@ -821,6 +828,31 @@ registerCommand({
   surfaces: ['cli', 'tui'],
   args: { positionals: [], flags: [] },
   handler: cmdMigrate,
+});
+
+registerCommand({
+  name: 'graph',
+  summary: 'bounded file dependencies, dependents and directed paths from current worktree facts',
+  group: 'workspace',
+  sideEffect: 'read',
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<deps|dependents> <file> [--depth <n>] [--limit <n>] | path <file> <target>',
+  verbs: GRAPH_OPERATIONS.map(verb => ({ verb, summary: verb === 'path' ? 'find a bounded directed dependency path' : `read file ${verb}`, sideEffect: 'read', positionals: verb === 'path' ? ['file', 'target'] : ['file'] })),
+  args: {
+    positionals: [
+      { name: 'operation', description: GRAPH_OPERATIONS.join('|'), required: true },
+      { name: 'file', description: 'repository file path', required: true },
+      { name: 'target', description: 'target path for the path operation', required: false },
+    ],
+    flags: [
+      { name: '--depth', type: 'number', valueName: 'n', description: 'traversal depth, 1 to 32; default 1, or 8 for path', required: false, default: null, tui: 'prompt' },
+      { name: '--limit', type: 'number', valueName: 'n', description: 'maximum returned edges and unresolved imports, 1 to 200', required: false, default: 50, tui: 'prompt' },
+    ],
+  },
+  handler: cmdGraph,
+  resultOf: graphResultOf,
 });
 
 registerCommand({
@@ -1144,15 +1176,17 @@ registerCommand({
 
 registerCommand({
   name: 'todo',
-  summary: 'durable worklist for long-horizon tasks (list/add/complete/clear)',
+  bareSideEffect: 'read',
+  summary: 'durable workspace or accepted plan worklist',
   group: 'engineer loop',
   sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
   surfaces: ['cli', 'tui', 'agent'],
-  usage: '<list|add|complete|clear> [--text <item>] [--id <id>]',
+  usage: '<list|sync|add|complete|clear> [--plan <path>] [--text <item>] [--id <id>]',
   verbs: [
     { verb: 'list', summary: 'show open and completed items', sideEffect: 'read' },
+    { verb: 'sync', summary: 'reconcile an accepted plan playbook into its durable worklist' },
     { verb: 'add', summary: 'append a work item' },
     { verb: 'complete', summary: 'mark an item done' },
     { verb: 'clear', summary: 'remove all items' },
@@ -1162,6 +1196,7 @@ registerCommand({
       { name: 'verb', description: TODO_VERBS.join('|'), required: false, default: 'list' },
     ],
     flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'accepted plan identity for scoped list, sync or complete', required: false, default: null, verbs: ['list', 'sync', 'complete'] },
       // Mutate flags are only offered on mutating verb rows (not on list / bare read paths).
       { name: '--text', type: 'string', valueName: 'item', description: 'work item text for add', required: false, default: null, tui: 'prompt', valueIsLiteral: true, verbs: ['add'] },
       { name: '--id', type: 'string', valueName: 'id', description: 'item id for complete', required: false, default: null, tui: 'prompt', verbs: ['complete'] },
@@ -1170,6 +1205,134 @@ registerCommand({
   handler: cmdTodo,
   resultOf: todoResultOf,
   exitOf: todoExitFor,
+});
+
+registerCommand({
+  name: 'domain',
+  summary: 'observe domains and coordinate accepted work through the existing lifecycle',
+  group: 'engineer loop',
+  sideEffect: 'execute',
+  instrument: argv => parseDomainArguments(argv).verb !== 'show',
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<show|status|get|plan-new|plan-update|gate|review|verify|compound> --name <name> [--plan <path>]',
+  verbs: [
+    { verb: 'show', summary: 'observe existing membership without creating execution authority', sideEffect: 'read' },
+    { verb: 'status', summary: 'read current child and joint proof status', sideEffect: 'read' },
+    { verb: 'get', summary: 'read a bounded parent plan through its explicit domain context', sideEffect: 'read' },
+    { verb: 'plan-new', summary: 'accept one parent and reserved per-repository plans', sideEffect: 'mutate' },
+    { verb: 'plan-update', summary: 'apply a revision-bound authored parent decision', sideEffect: 'mutate' },
+    { verb: 'gate', summary: 'publish coordination-only gate authority', sideEffect: 'mutate' },
+    { verb: 'review', summary: 'prepare or assemble existing bound review records', sideEffect: 'mutate' },
+    { verb: 'verify', summary: 'verify current children and the actual revision-set contract', sideEffect: 'execute' },
+    { verb: 'compound', summary: 'record the parent learning decision through passed evidence', sideEffect: 'mutate' },
+  ],
+  args: {
+    positionals: [{ name: 'verb', description: DOMAIN_VERBS.join('|'), required: true }, { name: 'review-verb', description: 'prepare|assemble for review', required: false }],
+    flags: [
+      { name: '--name', type: 'string', valueName: 'name', description: 'existing local domain name', required: true, tui: 'prompt' },
+      { name: '--plan', type: 'string', valueName: 'path', description: 'parent plan in the selected domain store', tui: 'prompt' },
+      { name: '--file', type: 'string', valueName: 'path', description: 'authored JSON decision, review input or selected review source', repeatable: true, tui: 'prompt' },
+      { name: '--base', type: 'string', valueName: 'ref', description: 'captured comparison revision', tui: 'prompt' },
+      { name: '--phase', type: 'string', valueName: 'name', description: 'implement|verify coordination gate', tui: 'prompt' },
+      { name: '--enforcement', type: 'string', valueName: 'mode', description: 'observe|warn|enforce', tui: 'prompt' },
+      { name: '--domain', type: 'string', valueName: 'kind', description: 'code|document review criteria', tui: 'prompt' },
+      { name: '--reviewer', type: 'string', valueName: 'id', description: 'additional review perspective', repeatable: true, tui: 'prompt' },
+      { name: '--max-bytes', type: 'string', valueName: 'bytes', description: 'bounded review excerpt budget', tui: 'prompt' },
+      { name: '--offset', type: 'string', valueName: 'line', description: 'first parent-plan line to read', tui: 'prompt' },
+      { name: '--lines', type: 'string', valueName: 'count', description: 'bounded parent-plan line count', tui: 'prompt' },
+      { name: '--packet', type: 'string', valueName: 'id', description: 'prepared review packet identity', tui: 'prompt' },
+      { name: '--learning-decision', type: 'string', valueName: 'path', description: 'verified learning or no-learning JSON decision', tui: 'prompt' },
+      { name: '--validate-completion', type: 'boolean', description: 'validate the current bound parent completion receipt', appliesToVerbs: ['status'], tui: 'cli-only' },
+    ],
+  },
+  handler: cmdDomain,
+  resultOf: domainResultOf,
+  exitOf: result => result.exitCode,
+});
+
+registerCommand({
+  name: 'experiment',
+  summary: 'reserve, measure and retain a bounded accepted numerical experiment',
+  group: 'engineer loop',
+  sideEffect: 'execute',
+  instrument: argv => parseExperimentArguments(argv).verb !== 'status',
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<begin|evaluate|resolve|status> [--plan <path>]',
+  verbs: [
+    { verb: 'begin', summary: 'reserve a charged baseline, candidate or repair pair', sideEffect: 'mutate' },
+    { verb: 'evaluate', summary: 'execute one reserved pair once through trusted isolated checks', sideEffect: 'execute' },
+    { verb: 'resolve', summary: 'keep, discard or cancel the observed candidate', sideEffect: 'mutate' },
+    { verb: 'status', summary: 'read setup or current durable experiment state', sideEffect: 'read' },
+  ],
+  args: {
+    positionals: [{ name: 'verb', description: EXPERIMENT_VERBS.join('|'), required: true }],
+    flags: [
+      { name: '--plan', type: 'string', valueName: 'path', description: 'accepted full experiment plan', tui: 'prompt' },
+      { name: '--file', type: 'string', valueName: 'path', description: 'revision-bound authored reservation or resolution', tui: 'prompt' },
+      { name: '--attempt', type: 'string', valueName: 'uuid', description: 'durably reserved invocation identity', tui: 'prompt' },
+    ],
+  },
+  handler: cmdExperiment,
+  resultOf: experimentResultOf,
+  exitOf: result => result.exitCode,
+});
+
+registerCommand({
+  name: 'performance',
+  summary: 'analyze journey goals, architecture flows and source dependencies',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  instrument: false,
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: 'analyze [--file <path>] [--domain <name>] [--dry-run]',
+  verbs: [{ verb: 'analyze', summary: 'publish linked performance views from bounded current evidence' }],
+  args: {
+    positionals: [{ name: 'verb', description: PERFORMANCE_VERBS.join('|'), required: true }],
+    flags: [
+      { name: '--file', type: 'string', valueName: 'path', description: 'workspace-relative profile (default .github/harness/performance.json)', tui: 'prompt' },
+      { name: '--domain', type: 'string', valueName: 'name', description: 'existing version-2 domain membership', tui: 'prompt' },
+    ],
+  },
+  handler: cmdPerformance,
+  resultOf: performanceResultOf,
+  exitOf: result => result.exitCode,
+});
+
+registerCommand({
+  name: 'inventory',
+  summary: 'read or refresh an optional sourced local IDE snapshot',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  instrument: false,
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<show|refresh> [--editor <family>] [--profile <id>] [--installation <path>] [--launcher <path>] [--user-data <path>] [--config-root <path>] [--plugins-root <path>]',
+  verbs: [
+    { verb: 'show', summary: 'read the dated cache without collecting or creating files', sideEffect: 'read' },
+    { verb: 'refresh', summary: 'collect one IDE family and merge its cache in the selected home' },
+  ],
+  args: {
+    positionals: [{ name: 'verb', description: INVENTORY_VERBS.join('|'), required: true }],
+    flags: [
+      { name: '--editor', type: 'string', valueName: 'family', description: 'vscode, cursor or jetbrains', tui: 'prompt', appliesToVerbs: ['refresh'] },
+      { name: '--profile', type: 'string', valueName: 'id', description: 'existing profile directory ID', tui: 'prompt', appliesToVerbs: ['refresh'] },
+      ...['installation', 'launcher', 'user-data', 'config-root', 'plugins-root'].map(name => ({ name: `--${name}`, type: 'string', valueName: 'path', description: `read-only ${name} metadata location`, tui: 'prompt', appliesToVerbs: ['refresh'] })),
+    ],
+  },
+  handler: cmdInventory,
+  resultOf: inventoryResultOf,
+  exitOf: result => result.exitCode,
 });
 
 registerCommand({

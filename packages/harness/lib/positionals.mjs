@@ -3,6 +3,8 @@ export const VALUE_FLAGS = Object.freeze(new Set([
   '--category', '--changes', '--claim', '--classification', '--collection', '--command', '--constraint', '--content', '--copilot-home', '--criteria', '--critical-open',
   '--cursor', '--context-version', '--cwd', '--date', '--depth', '--docid', '--does-not-apply', '--domain', '--enforcement',
   '--expect', '--expected-output', '--file', '--from', '--from-id', '--gap', '--gap-fulfillment', '--goal', '--harness-home', '--host', '--id', '--ids', '--impacted', '--intent', '--intent-source', '--layer', '--learnings',
+  '--intent-page', '--intent-page-size',
+  '--editor', '--name', '--launcher', '--installation', '--user-data', '--config-root', '--plugins-root',
   '--limit', '--lines', '--match', '--max-bytes', '--max-seconds', '--max-turns',
   '--min-score', '--model', '--new', '--offset', '--old', '--ops', '--output', '--path', '--phase', '--plan',
   '--profile', '--provider', '--query', '--reason', '--review-completed', '--risk', '--scope', '--session', '--shows', '--since',
@@ -10,7 +12,7 @@ export const VALUE_FLAGS = Object.freeze(new Set([
   '--context-policy',
   '--slug', '--source', '--spec', '--stale', '--status', '--success-criterion', '--tags', '--target', '--text', '--timeout', '--verification-check',
   '--title', '--to', '--tool-timeout', '--trigger', '--type', '--until', '--verify-cmd', '--why',
-  '--workspace',
+  '--workspace', '--attempt',
   '--packet', '--learning-decision', '--reviewer',
   '-c',
 ]));

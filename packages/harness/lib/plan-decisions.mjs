@@ -1,11 +1,15 @@
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import YAML from 'yaml';
 import { readPlanRecord } from './plan-record.mjs';
 import { extractAcceptanceCriteria } from './plan-schema.mjs';
 import { sourcePath, sourceHash, hashIntentFile, bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
 import { assertNoPersonalWrite } from './primitive-governance.mjs';
+import { readSession } from './session.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
+import { bindPlaybook, validatePlaybookBinding } from './playbook-binding.mjs';
+import { locateVerification } from './verification-location.mjs';
+import { validateExperimentContract } from './experiment-contract.mjs';
 
 export const PLAN_ACTIONS = Object.freeze(['start', 'amend', 'progress', 'finding', 'gap', 'complete']);
 export const planRevision = text => createHash('sha256').update(text).digest('hex');
@@ -68,7 +72,7 @@ function markProgress(body, heading, ids, { tasks = false } = {}) {
     return `${prefix}x${suffix}${task}`;
   });
   if (ids.some(id => !found.has(id))) fail(`unknown progress IDs in ${heading}`);
-  return section(body, heading, changed.trim());
+  return body.replace(pattern, (full, captured) => full.slice(0, full.length - captured.length) + changed);
 }
 export function scopePaths(values) {
   if (!Array.isArray(values) || !values.length) fail('scope must be a nonempty list');
@@ -79,12 +83,12 @@ export function scopePaths(values) {
 }
 
 export function validatePlanDecision(input) {
-  fields(input, ['version', 'id', 'action', 'expect', 'rationale', 'authority', 'changes', 'intentSources', 'finding', 'gap', 'migrateIntent', 'progress'], 'operation');
+  fields(input, ['version', 'id', 'action', 'expect', 'rationale', 'authority', 'changes', 'intentSources', 'intentSelection', 'finding', 'gap', 'migrateIntent', 'progress'], 'operation');
   if (input.version !== 1 || typeof input.id !== 'string' || !ID.test(input.id) || !PLAN_ACTIONS.includes(input.action) || !HASH.test(input.expect || '')) fail('operation requires version 1, id, action and observed plan sha256 in expect');
   if (input.migrateIntent !== undefined && typeof input.migrateIntent !== 'boolean') fail('migrateIntent must be boolean');
   if (['amend', 'gap'].includes(input.action)) text(input.rationale, 'rationale');
-  const allowed = { start: ['migrateIntent'], amend: ['changes', 'intentSources', 'migrateIntent'], progress: ['progress'], finding: ['finding'], gap: ['gap'], complete: [] }[input.action];
-  for (const key of ['changes', 'intentSources', 'finding', 'gap', 'migrateIntent', 'progress']) if (input[key] !== undefined && !allowed.includes(key)) fail(`${key} is not valid for ${input.action}`);
+  const allowed = { start: ['migrateIntent'], amend: ['changes', 'intentSources', 'intentSelection', 'migrateIntent'], progress: ['progress'], finding: ['finding'], gap: ['gap'], complete: [] }[input.action];
+  for (const key of ['changes', 'intentSources', 'intentSelection', 'finding', 'gap', 'migrateIntent', 'progress']) if (input[key] !== undefined && !allowed.includes(key)) fail(`${key} is not valid for ${input.action}`);
   if (input.authority !== undefined) {
     fields(input.authority, ['scope', 'basis'], 'authority');
     text(input.authority.scope, 'authority scope');
@@ -94,7 +98,7 @@ export function validatePlanDecision(input) {
   return input;
 }
 
-export function applyPlanDecision(workspace, plan, input, { applyUpdate, recordedAt }) {
+export function applyPlanDecision(workspace, plan, input, { applyUpdate, recordedAt, copilotHome }) {
   validatePlanDecision(input);
   const change = { activity: [`${recordedAt} ${input.action} (${input.id})${input.rationale ? `: ${text(input.rationale, 'rationale')}` : ''}`] };
   if (input.action === 'start') {
@@ -114,9 +118,26 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     fm.intent_sources = plan.plan_lock && fm.intent_sources?.length ? lockIntentSources(workspace, fm.intent_sources, { rehash: true }) : bindLockedIntentSources(workspace, fm.intent_sources || [], { query: fm.intent || readPlanRecord(plan.text)?.goal || '' });
     amendments.push(...fm.intent_sources.map(source => ({ path: source.path, oldHash: sourceHash(plan.fm.intent_sources?.find(entry => sourcePath(entry) === source.path)), newHash: source.sha256 })));
     fm.intent_source_policy = 'content-v1';
-    if (readPlanRecord(plan.text)) fm.plan_format = 'short-v2'; else fm.plan_schema = 2;
+    if (readPlanRecord(plan.text)) fm.plan_format = 'short-v2'; else fm.plan_schema = Math.max(2, Number(fm.plan_schema) || 2);
   } else if (input.action === 'start' && !plan.plan_lock) {
     fm.intent_sources = fm.intent_sources?.length ? lockIntentSources(workspace, fm.intent_sources, { rehash: false }) : bindLockedIntentSources(workspace, fm.intent_sources || [], { query: fm.intent || readPlanRecord(plan.text)?.goal || '' });
+  }
+  if (input.intentSelection !== undefined) {
+    if (input.authority?.scope !== 'plan-intent' || input.intentSources !== undefined || fm.intent_source_policy !== 'content-v1') fail('selection amendments require current intent policy and exclusive plan-intent authority');
+    fields(input.intentSelection, ['previous', 'next'], 'intent selection');
+    const { previous, next } = input.intentSelection;
+    if (!Array.isArray(previous) || previous.length > 128 || previous.some(source => !sourcePath(source) || !sourceHash(source)) || new Set(previous.map(sourcePath)).size !== previous.length) fail('previous intent selection requires unique accepted bindings');
+    for (const source of previous) fields(source, ['path', 'sha256'], 'previous intent binding');
+    const canonical = entries => JSON.stringify(entries.map(source => ({ path: sourcePath(source), sha256: sourceHash(source) })).sort((a, b) => a.path.localeCompare(b.path)));
+    if (canonical(previous) !== canonical(fm.intent_sources || [])) fail('intent selection has a stale previous source set');
+    if (!Array.isArray(next) || next.length > 128 || next.some(source => typeof source !== 'string' || !source.trim()) || new Set(next.map(sourcePath)).size !== next.length) fail('next intent selection requires bounded unique paths');
+    const bindings = lockIntentSources(workspace, next, { rehash: true });
+    for (const rel of new Set([...previous.map(sourcePath), ...bindings.map(sourcePath)])) {
+      const oldHash = sourceHash(previous.find(source => sourcePath(source) === rel));
+      const newHash = sourceHash(bindings.find(source => source.path === rel));
+      if (oldHash !== newHash) amendments.push({ path: rel, oldHash, newHash });
+    }
+    fm.intent_sources = bindings;
   }
   if (input.intentSources !== undefined) {
     if (!Array.isArray(input.intentSources) || !input.intentSources.length || input.authority?.scope !== 'plan-intent') fail('source amendments require entries and explicit plan-intent authority scope');
@@ -132,9 +153,74 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
     }
   }
   if (input.changes !== undefined) {
-    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps'], 'changes');
+    fields(input.changes, ['scope', 'goal', 'constraints', 'criteria', 'reviews', 'notes', 'phases', 'gaps', 'verificationRecipe', 'playbook', 'workflowNotApplicable', 'skillsUsed', 'domainBinding', 'domainParent', 'domainChild', 'experiment'], 'changes');
     const changes = input.changes, record = readPlanRecord(plan.text);
+    if (changes.experiment !== undefined) {
+      if (record || Number(fm.plan_schema) !== 4 || !fm.experiment || input.authority?.scope !== 'experiment-intent') fail('Experiment amendments require an existing full experiment and explicit experiment-intent authority');
+      validateExperimentContract(changes.experiment);
+      if (changes.experiment.budget.max_invocations < fm.experiment.budget.max_invocations || changes.experiment.budget.max_seconds < fm.experiment.budget.max_seconds) fail('Experiment global budget limits cannot decrease');
+      fm.experiment = changes.experiment;
+    }
+    const domainChanges = ['domainBinding', 'domainParent', 'domainChild'].filter(key => changes[key] !== undefined);
+    if (domainChanges.length) {
+      if (record || Number(fm.plan_schema) < 3 || input.authority?.scope !== 'domain-intent') fail('Domain amendments require a full extended plan and explicit domain-intent authority');
+      const oldMembers = fm.domain_binding?.logical?.repos?.map(repo => repo.id).sort();
+      if (changes.domainBinding !== undefined) {
+        const nextMembers = changes.domainBinding?.logical?.repos?.map(repo => repo.id).sort();
+        if (JSON.stringify(oldMembers) !== JSON.stringify(nextMembers)) fail('Membership changes require a fresh domain parent; existing child obligations cannot be removed or silently created');
+        fm.domain_binding = changes.domainBinding;
+      }
+      if (changes.domainParent !== undefined) {
+        if (!fm.domain_parent || changes.domainChild !== undefined) fail('Only a parent can amend its parent obligations');
+        const identity = repos => repos?.map(repo => [repo.id, repo.child_plan_id, repo.child_plan_path]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+        if (JSON.stringify(identity(fm.domain_parent.repos)) !== JSON.stringify(identity(changes.domainParent.repos))) fail('An amendment must preserve every reserved child obligation and identity');
+        fm.domain_parent = changes.domainParent;
+      }
+      if (changes.domainChild !== undefined) {
+        if (!fm.domain_child || changes.domainParent !== undefined || changes.domainChild.repoId !== fm.domain_child.repoId || changes.domainChild.parent_plan_id !== fm.domain_child.parent_plan_id || changes.domainChild.parent_plan_path !== fm.domain_child.parent_plan_path) fail('A child amendment cannot change its reserved parent or repository identity');
+        fm.domain_child = changes.domainChild;
+      }
+    }
     let criterionIds = extractAcceptanceCriteria(plan);
+    if (changes.skillsUsed !== undefined) {
+      if (record || !Array.isArray(changes.skillsUsed) || !changes.skillsUsed.length || changes.skillsUsed.length > 32 || changes.skillsUsed.some(name => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))) fail('skillsUsed requires bounded skill names on a full plan');
+      if (fm.skills_used !== undefined && !Array.isArray(fm.skills_used)) fail('existing skill provenance is malformed');
+      const session = readSession(workspace);
+      if (typeof session?.sessionId !== 'string' || !session.sessionId) fail('skill provenance requires a current session identity');
+      for (const name of changes.skillsUsed) {
+        const activation = session.activatedSkills?.[name], at = Date.parse(activation?.activatedAt || '');
+        const start = session.sessionStartedAt === undefined ? null : Date.parse(session.sessionStartedAt);
+        if (activation?.complete !== true || activation?.sessionId !== session.sessionId || !Number.isFinite(at) || at > Date.now() + 1000 || start !== null && (!Number.isFinite(start) || at < start)) fail(`skill ${name} needs an actual complete read in the current session`);
+      }
+      fm.skills_used = [...new Set([...(fm.skills_used || []), ...changes.skillsUsed])];
+    }
+    if (changes.playbook !== undefined) {
+      try { fm.playbook_binding = bindPlaybook(changes.playbook, { copilotHome }); }
+      catch (error) { fail(error.message); }
+      fm.playbook = changes.playbook;
+      if (!fm.plan_id) fm.plan_id = randomUUID();
+    }
+    if (changes.workflowNotApplicable !== undefined) {
+      const procedure = validatePlaybookBinding({ fm }, { copilotHome });
+      if (!procedure.pass || !Array.isArray(changes.workflowNotApplicable) || !changes.workflowNotApplicable.length || changes.workflowNotApplicable.length > 100) fail('inapplicability requires a current procedure and bounded reasons');
+      const accepted = fm.workflow_not_applicable || [];
+      if (!Array.isArray(accepted)) fail('existing workflow inapplicability is malformed');
+      for (const entry of changes.workflowNotApplicable) {
+        fields(entry, ['playbook', 'sha256', 'step', 'reason'], 'workflow inapplicability');
+        if (entry.playbook !== fm.playbook || entry.sha256 !== fm.playbook_binding.sha256 || !procedure.steps.some(step => step.id === entry.step)) fail('inapplicability names an unknown bound step');
+        const reason = text(entry.reason, 'inapplicability reason');
+        if (reason.length > 1000) fail('inapplicability reason is oversized');
+        const existing = accepted.find(item => item.playbook === entry.playbook && item.sha256 === entry.sha256 && item.step === entry.step);
+        if (existing) existing.reason = reason;
+        if (!existing) accepted.push({ ...entry, reason });
+      }
+      if (accepted.length > 512) fail('accepted workflow inapplicability exceeds its bound');
+      fm.workflow_not_applicable = accepted;
+    }
+    if (changes.verificationRecipe !== undefined) {
+      if (!changes.verificationRecipe || typeof changes.verificationRecipe !== 'string' || locateVerification(workspace, changes.verificationRecipe).state !== 'selected') fail('verificationRecipe requires a safe existing SKILL.md');
+      fm.verification = { ...fm.verification, recipe: changes.verificationRecipe };
+    }
     if (changes.notes !== undefined) body = applyPlanNotes(body, changes.notes);
     if (changes.phases !== undefined) body = section(body, 'Plan', renderPlanPhases(changes.phases));
     if (changes.scope !== undefined) body = section(body, 'Impacted Files', scopePaths(changes.scope).map(value => `- \`${value}\``).join('\n'));

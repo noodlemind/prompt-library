@@ -3,13 +3,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { test } from 'node:test';
 import { binPath } from './helpers/cli.mjs';
 import { tempDir } from './helpers/temp.mjs';
 import { initGit, writeChecks, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 import { repoId, storeDir, storeDirForId } from '../lib/knowledge/store.mjs';
-import { externalPlansDir } from '../lib/project-layout.mjs';
+import { externalPlansDir, normalizePlanRel } from '../lib/project-layout.mjs';
 import { externalPlansDir as hookPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
+import { loadPlan, reloadPlan } from '../lib/plan-parse.mjs';
 
 function fixture() {
   const ws = tempDir('storage-alias-workspace-');
@@ -33,6 +36,56 @@ function run(c, args) {
     encoding: 'utf8', env: { ...process.env, HARNESS_HOME: c.home },
   });
 }
+
+test('Windows storage lookup observes a linked primary once and refreshes the next lookup', { skip: process.platform !== 'win32' }, t => {
+  const c = fixture();
+  const parent = tempDir('storage-identity-linked-'), linked = path.join(parent, 'checkout');
+  const added = spawnSync('git', ['worktree', 'add', '--detach', linked, 'HEAD'], { cwd: c.ws, encoding: 'utf8' });
+  assert.equal(added.status, 0, added.stderr);
+  t.after(() => {
+    spawnSync('git', ['worktree', 'remove', '--force', linked], { cwd: c.ws });
+    for (const dir of [parent, c.ws, c.home]) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+  });
+  const calls = [], original = childProcess.spawnSync;
+  t.mock.method(childProcess, 'spawnSync', function(command, args) {
+    if (command === 'git' && args[0] === 'worktree') calls.push(args);
+    return original.apply(this, arguments);
+  });
+  syncBuiltinESMExports();
+  try {
+    const local = `local-${crypto.createHash('sha256').update(fs.realpathSync.native(c.ws)).digest('hex').slice(0, 12)}`;
+    assert.equal(storeDir(linked, { home: c.home }), path.join(c.home, 'knowledge', local));
+    assert.equal(calls.length, 1, 'canonical and legacy storage candidates must share one primary observation');
+    const remote = spawnSync('git', ['remote', 'add', 'origin', 'https://github.com/example/storage-fresh.git'], { cwd: c.ws, encoding: 'utf8' });
+    assert.equal(remote.status, 0, remote.stderr);
+    const suffix = crypto.createHash('sha256').update('github.com/example/storage-fresh').digest('hex').slice(0, 8);
+    assert.equal(storeDir(linked, { home: c.home }), path.join(c.home, 'knowledge', `github.com-example-storage-fresh-${suffix}`));
+    assert.equal(calls.length, 1, 'the next lookup must observe the new remote rather than cache the local identity');
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+});
+
+test('unchanged external plans reload when legacy realpath spelling differs from native identity', t => {
+  const c = fixture();
+  t.after(() => { for (const dir of [c.ws, c.home]) fs.rmSync(dir, { recursive: true, force: true }); });
+  const adopted = run(c, ['knowledge', 'migrate-store', '--from-id', c.fromId]);
+  assert.equal(adopted.status, 0, adopted.stdout + adopted.stderr);
+  const loaded = loadPlan(c.ws, c.plan, { home: c.home });
+  assert.ok(loaded);
+  const realpath = fs.realpathSync;
+  const native = realpath.native;
+  const canonicalPlan = native(c.plan);
+  t.mock.method(fs, 'realpathSync', (file, ...args) => path.resolve(String(file)) === path.resolve(loaded.path)
+    ? path.join(path.parse(canonicalPlan).root, 'LEGACY~1', path.basename(canonicalPlan))
+    : realpath(file, ...args));
+  fs.realpathSync.native = native;
+  assert.equal(normalizePlanRel(c.ws, loaded.path, { home: native(c.home) }), canonicalPlan, 'containment must compare native identities rather than alias spellings');
+  assert.ok(reloadPlan(c.ws, loaded), 'the plan reader must use the same canonical identity as plan selection');
+  t.mock.restoreAll();
+  const current = reloadPlan(c.ws, loaded);
+  assert.ok(current, 'the authorized unchanged plan must reload through native canonical containment');
+  assert.equal(current.text, loaded.text);
+  assert.equal(fs.readFileSync(c.plan, 'utf8'), loaded.text);
+});
 
 test('migrate-store adopts old local knowledge and plans without an origin or moving their bytes', () => {
   const c = fixture();

@@ -1,18 +1,17 @@
 import { spawnSync } from 'node:child_process';
-import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { tokenize } from '../tokenize.mjs';
 import { estimateTokens } from '../token-meter.mjs';
 import { extract as lexicalExtract, SOURCE_EXTENSIONS } from './lexical-extractor.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
 import { codebaseMapWriteRel } from '../project-layout.mjs';
-import { trackedSourceFiles, readFileSafe, MAX_FILES_SCANNED } from './scan.mjs';
-import { readStructuralIndexIfCurrent } from './structural-index.mjs';
-import { readSourceFile } from './working-sources.mjs';
+import { trackedSourceFiles, readSourceFile, inspectSourceFile, MAX_FILES_SCANNED } from './scan.mjs';
+import { readStructuralIndex } from './structural-index.mjs';
+import { importEdges } from './imports.mjs';
+import { readFileFacts, FILE_FACTS_VERSION } from './facts.mjs';
+import { captureWorkingSources } from './working-sources.mjs';
 
 const DEFAULT_MAX_TOKENS = 1000;
-const IMPORT_SUFFIX = /\.(?:js|jsx|mjs|cjs|ts|tsx|py|java)$/i;
-const NODE_BUILTINS = new Set(builtinModules);
 
 function compareRel(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -32,142 +31,23 @@ function requestRel(workspace, raw) {
 
 function currentStructuralFiles(workspace, home) {
   try {
-    return readStructuralIndexIfCurrent(workspace, { home })?.files || null;
+    const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 15_000 });
+    if (head.status !== 0) return null;
+    const index = readStructuralIndex(workspace, { home, expectedSha: head.stdout.trim() });
+    const source = captureWorkingSources(workspace);
+    if (!source.valid || index?.meta?.sourceState?.version !== source.state.version || index.meta.sourceState.configDigest !== source.state.configDigest || index.meta.sourceState.extractorRevision !== source.state.extractorRevision) return null;
+    return index && !index.unreadable.length && index.meta.fileFactsVersion === FILE_FACTS_VERSION ? index.files : null;
   } catch {
     return null;
   }
 }
 
-function fileFacts(workspace, rels, home) {
-  const structural = currentStructuralFiles(workspace, home);
-  const facts = new Map();
-  for (const rel of rels) {
-    const pre = structural?.[rel];
-    const input = pre ? null : readSourceFile(workspace, rel);
-    const extracted = pre || lexicalExtract(rel, input.content || '');
-    facts.set(rel, {
-      rel,
-      symbols: Array.isArray(extracted.symbols) ? extracted.symbols : [],
-      imports: Array.isArray(extracted.imports) ? extracted.imports : [],
-      sha256: pre?.hash || input?.hash || null,
-    });
-  }
-  return facts;
+function fileFacts(workspace, rels, { extract = lexicalExtract, preferStructural = true, home } = {}) {
+  const structural = preferStructural ? currentStructuralFiles(workspace, home) : null;
+  const { facts } = readFileFacts(workspace, rels, { extract, cachedFiles: structural });
+  return { facts, structural: Boolean(structural) };
 }
 
-function uniqueOther(rels, fromRel) {
-  const hits = [];
-  for (const rel of rels || []) {
-    if (rel !== fromRel) hits.push(rel);
-  }
-  return hits.length === 1 ? hits : [];
-}
-
-function pathCandidates(normalized, fromRel, trackedSet) {
-  if (!normalized || normalized === '..' || normalized.startsWith('../')) return [];
-  if (trackedSet.has(normalized)) return normalized === fromRel ? [] : [normalized];
-  if (path.posix.extname(normalized)) return [];
-  const files = [];
-  const indexes = [];
-  for (const ext of SOURCE_EXTENSIONS) {
-    const file = `${normalized}${ext}`;
-    const index = `${normalized}/index${ext}`;
-    if (file !== fromRel && trackedSet.has(file)) files.push(file);
-    if (index !== fromRel && trackedSet.has(index)) indexes.push(index);
-  }
-  const init = `${normalized}/__init__.py`;
-  if (init !== fromRel && trackedSet.has(init)) indexes.push(init);
-  return files.length ? files : indexes;
-}
-
-function relativeTargets(fromRel, specifier, trackedSet) {
-  const normalized = path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), specifier));
-  return pathCandidates(normalized, fromRel, trackedSet);
-}
-
-function dotsToRelative(specifier) {
-  const match = /^(\.+)(.*)$/.exec(specifier);
-  if (!match) return '';
-  const climbs = match[1].length - 1;
-  const rest = match[2].split('.').filter(Boolean).join('/');
-  const prefix = climbs <= 0 ? './' : '../'.repeat(climbs);
-  return rest ? `${prefix}${rest}` : prefix;
-}
-
-function addKey(map, key, rel) {
-  if (!key) return;
-  let bucket = map.get(key);
-  if (!bucket) map.set(key, (bucket = new Set()));
-  bucket.add(rel);
-}
-
-function addSuffixes(map, key, rel) {
-  const parts = key.split('/');
-  for (let i = 0; i < parts.length; i++) addKey(map, parts.slice(i).join('/'), rel);
-}
-
-function moduleIndex(rels) {
-  const exact = new Map();
-  const suffix = new Map();
-  for (const rel of rels) {
-    const noExt = rel.replace(IMPORT_SUFFIX, '');
-    addKey(exact, rel, rel);
-    addKey(exact, noExt, rel);
-    addSuffixes(suffix, noExt, rel);
-    if (rel.endsWith('/__init__.py')) {
-      const pkg = rel.slice(0, -'/__init__.py'.length);
-      addKey(exact, pkg, rel);
-      addSuffixes(suffix, pkg, rel);
-    }
-  }
-  return { exact, suffix };
-}
-
-function moduleTargets(specifier, lookup, fromRel) {
-  const cleaned = String(specifier).replace(/['"]/g, '').trim();
-  if (!cleaned || cleaned.startsWith('node:') || NODE_BUILTINS.has(cleaned)) return [];
-  if (cleaned.includes('/')) {
-    if (IMPORT_SUFFIX.test(cleaned)) {
-      const preferred = uniqueOther(lookup.exact.get(cleaned), fromRel);
-      if (preferred.length) return preferred;
-    }
-    return uniqueOther(lookup.exact.get(cleaned.replace(IMPORT_SUFFIX, '')), fromRel);
-  }
-  const asPath = cleaned.replace(IMPORT_SUFFIX, '').split('.').filter(Boolean).join('/');
-  if (!asPath) return [];
-  return uniqueOther(lookup.suffix.get(asPath), fromRel);
-}
-
-function importTargets(fromRel, specifier, lookup, trackedSet) {
-  const cleaned = String(specifier).replace(/['"]/g, '').trim();
-  if (!cleaned) return [];
-  if (cleaned.startsWith('./') || cleaned.startsWith('../')) return relativeTargets(fromRel, cleaned, trackedSet);
-  if (cleaned.startsWith('.')) {
-    const asRelative = dotsToRelative(cleaned);
-    return asRelative ? relativeTargets(fromRel, asRelative, trackedSet) : [];
-  }
-  return moduleTargets(cleaned, lookup, fromRel);
-}
-
-function importEdges(facts, trackedSet) {
-  const lookup = moduleIndex(trackedSet);
-  const incoming = new Map();
-  const outgoing = new Map();
-  for (const { rel, imports } of facts.values()) {
-    const seen = new Set();
-    for (const imp of imports) {
-      for (const target of importTargets(rel, imp, lookup, trackedSet)) {
-        if (seen.has(target)) continue;
-        seen.add(target);
-        if (!outgoing.has(rel)) outgoing.set(rel, []);
-        outgoing.get(rel).push(target);
-        if (!incoming.has(target)) incoming.set(target, []);
-        incoming.get(target).push(rel);
-      }
-    }
-  }
-  return { incoming, outgoing };
-}
 
 function listTracked(workspace) {
   const res = spawnSync('git', ['-C', workspace, 'ls-files', '-z'], {
@@ -196,33 +76,14 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   const { files, total } = trackedSourceFiles(workspace);
   if (!files.length) return { files: [], body: '', tokens: 0, empty: true };
 
-    let structural = null;
-  if (preferStructural) {
-    try {
-      structural = readStructuralIndexIfCurrent(workspace, { home });
-    } catch {
-      structural = null;
-    }
+  const { facts: info, structural } = fileFacts(workspace, files, { extract, preferStructural, home });
+  const tiers = { treesitter: 0, lexical: 0, error: 0, unreadable: 0 };
+  for (const fact of info.values()) {
+    tiers[fact.errors ? 'error' : fact.tier] += 1;
   }
-
-  const info = new Map();
-  for (const rel of files) {
-    const pre = structural?.files?.[rel];
-    const { symbols, imports } = pre || extract(rel, readFileSafe(workspace, rel));
-    info.set(rel, { rel, symbols, imports, importedBy: 0 });
-  }
-
-    const byStem = new Map();
-  for (const rel of files) {
-    const stem = path.basename(rel).replace(/\.\w+$/, '');
-    if (!byStem.has(stem)) byStem.set(stem, []);
-    byStem.get(stem).push(rel);
-  }
-  for (const { imports } of info.values()) {
-    for (const imp of imports) {
-      const last = imp.replace(/['"]/g, '').split(/[./\\]/).filter(Boolean).pop();
-      for (const target of byStem.get(last) || []) info.get(target).importedBy += 1;
-    }
+  const { incoming } = importEdges(info, new Set(files));
+  for (const fact of info.values()) {
+    fact.importedBy = incoming.get(fact.rel)?.length || 0;
   }
 
   const queryTokens = new Set(tokenize(query));
@@ -239,12 +100,19 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   // across hosts for the same tree.
   scored.sort((a, b) => b.score - a.score || (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 
+  const mapTier = [...info.values()].some(fact => fact.tier === 'treesitter') ? 'structural' : 'lexical';
+  const summary = `> Deterministic ${mapTier} map of ${total} tracked source files${total > files.length ? ` (top ${files.length} scanned)` : ''}.`;
+  const provenance = preferStructural ? ` tree-sitter ${tiers.treesitter}, lexical ${tiers.lexical}, parse errors ${tiers.error}${tiers.unreadable ? `, unreadable ${tiers.unreadable}` : ''}.` : '';
   const lines = [
     `# ${title}`,
     '',
-    `> Deterministic ${structural ? 'structural' : 'lexical'} map of ${total} tracked source files${total > files.length ? ` (top ${files.length} scanned)` : ''}.${query ? ` Ranked for: "${query}".` : ''}`,
+    `${summary}${provenance}${query ? ` Ranked for: "${query}".` : ''}`,
     '',
   ];
+  if (estimateTokens(lines.join('\n')) > maxTokens) lines[2] = `${summary}${provenance}`;
+  if (estimateTokens(lines.join('\n')) > maxTokens) {
+    return { files: [], body: '', tokens: 0, empty: true, totalFiles: total, structural };
+  }
   const selected = [];
   for (const f of scored) {
     const symbolList = f.symbols.slice(0, 6).join(', ');
@@ -278,26 +146,20 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
   const requestedRels = [];
   const seen = new Set();
   for (const { raw, rel } of normalized) {
-    const input = readSourceFile(workspace, rel);
+    const input = inspectSourceFile(workspace, rel);
     let state = input.state;
     if (state === 'readable' && !trackedAllSet.has(rel)) {
       const ignored = spawnSync('git', ['-C', workspace, 'check-ignore', '-q', '--', rel], { timeout: 15_000 });
-      if (ignored.status !== 1) state = 'excluded';
-      else state = 'new';
+      state = ignored.status === 1 ? 'new' : 'excluded';
     }
     inputs.push({ rel, state, ...(input.hash ? { hash: input.hash } : {}) });
-    if (state !== 'readable' && state !== 'new') {
-      if (state === 'missing' && !seenMissing.has(rel)) {
-        seenMissing.add(rel);
-        missing.push(rel);
-      }
+    if (!['readable', 'new'].includes(state) && !trackedAllSet.has(rel)) {
+      if (state === 'missing' && !seenMissing.has(rel)) { seenMissing.add(rel); missing.push(rel); }
       continue;
     }
     if (state === 'new') {
-      if (SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase())) {
-        tracked.push(rel);
-        trackedSet.add(rel);
-      } else trackedAllSet.add(rel);
+      if (SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase())) { tracked.push(rel); trackedSet.add(rel); }
+      else trackedAllSet.add(rel);
     }
     if (rel && trackedSet.has(rel)) {
       if (!seen.has(rel)) {
@@ -323,7 +185,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
   }
   const hop = new Set(seeds);
   let incoming = new Map();
-  const facts = seeds.length ? fileFacts(workspace, tracked, home) : new Map();
+  const facts = seeds.length ? fileFacts(workspace, tracked, { home }).facts : new Map();
   if (seeds.length) {
     const edges = importEdges(facts, trackedSet);
     incoming = edges.incoming;
@@ -337,7 +199,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
     symbols: facts.get(rel).symbols,
     imports: facts.get(rel).imports,
     importedBy: [...(incoming.get(rel) || [])].sort(compareRel),
-    ...(includeEvidence ? { sha256: facts.get(rel).sha256 } : {}),
+    ...(includeEvidence ? { sha256: facts.get(rel).hash } : {}),
   }));
   for (const rel of plain) {
     filesOut.push({ rel, symbols: [], imports: [], importedBy: [] });

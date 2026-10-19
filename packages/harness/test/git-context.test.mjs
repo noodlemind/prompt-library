@@ -13,7 +13,28 @@ import {
   resolveDefaultBranch,
   deriveGitContext,
 } from '../lib/git-context.mjs';
-import { storeDir } from '../lib/knowledge/store.mjs';
+import { storeDir, ensureStore } from '../lib/knowledge/store.mjs';
+
+test('Git identity and owned store operations cannot trace into an inspected product', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'metadata-trace-boundary-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, 'product'), userHome = path.join(root, 'user'), home = path.join(root, 'harness');
+  fs.mkdirSync(workspace); fs.mkdirSync(userHome);
+  assert.equal(spawnSync('git', ['init', '-b', 'main'], { cwd: workspace }).status, 0);
+  const files = ['trace-events.json', 'trace-perf.log', 'trace-normal.log'].map(name => path.join(workspace, name));
+  fs.writeFileSync(path.join(userHome, '.gitconfig'), `[trace2]\n eventTarget = ${files[0]}\n perfTarget = ${files[1]}\n normalTarget = ${files[2]}\n`);
+  const previousHome = process.env.HOME;
+  process.env.HOME = userHome;
+  try {
+    deriveGitContext({ workspace });
+    storeDir(workspace, { home });
+    ensureStore(workspace, { home });
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  }
+  for (const file of files) assert.equal(fs.existsSync(file), false, file);
+});
 
 const tempDir = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 

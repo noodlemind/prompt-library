@@ -3,13 +3,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { storeDir } from './knowledge/store.mjs';
+import { gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 
 const BRANCH_SLUG_CAP = 64;
 const DETACHED_SHORT_SHA_LEN = 12;
 
 function gitOut(cwd, args) {
   try {
-    const res = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000 });
+    const res = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000, env: gitMetadataEnvironment() });
     return res.status === 0 ? res.stdout.trim() : null;
   } catch {
     return null;

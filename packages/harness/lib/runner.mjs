@@ -1,4 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export const DEFAULT_MAX_BUFFER = 2 * 1024 * 1024; // 2 MiB
 export const DEFAULT_KILL_GRACE_MS = 2000;
@@ -69,11 +71,12 @@ function createHeadTailSink(maxBuffer) {
 function defaultKill(pid, signal, platform) {
   if (platform === 'win32') {
     try {
-      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F']);
-    } catch {
-      // best effort — process may already be gone
+      const result = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { timeout: DEFAULT_GROUP_REAP_TIMEOUT_MS, windowsHide: true });
+      return { status: result.status === 0 && !result.error && !result.signal ? 'confirmed' : 'failed',
+        exitCode: result.status ?? null, signalName: result.signal ?? null, errorCode: result.error?.code ?? null };
+    } catch (error) {
+      return { status: 'failed', exitCode: null, signalName: null, errorCode: error.code || null };
     }
-    return;
   }
   try {
     process.kill(-pid, signal);
@@ -100,8 +103,10 @@ export function runProcess({
   env,
   timeoutMs,
   signal,
+  cancellationFile,
   onStdout,
   onStderr,
+  onSpawn,
   maxBuffer = DEFAULT_MAX_BUFFER,
   bufferMode = 'prefix',
   spawnFn = spawn,
@@ -121,6 +126,9 @@ export function runProcess({
   if (bufferMode === 'head-tail' && (!Number.isInteger(maxBuffer) || maxBuffer < 1)) {
     throw new TypeError('runProcess: head-tail maxBuffer must be a positive integer');
   }
+  if (cancellationFile !== undefined && (typeof cancellationFile !== 'string' || !path.isAbsolute(cancellationFile))) {
+    throw new TypeError('runProcess: cancellationFile must be an absolute owned path');
+  }
 
   return new Promise((resolve) => {
     const start = now();
@@ -130,6 +138,11 @@ export function runProcess({
     const stderrSink = createSink(maxBuffer);
 
     let settled = false;
+    let child;
+    let childClosed = false;
+    let treeTermination = { status: 'unknown' };
+    let cancellationNotice = { requested: false };
+    let provenanceError = null;
     let timeoutTimer = null;
     let killGraceTimer = null;
     let groupReapTimer = null;
@@ -178,6 +191,12 @@ export function runProcess({
         stdout: stdoutSink.text,
         stderr: stderrSink.text,
         truncated: stdoutSink.truncated || stderrSink.truncated,
+        ...(onSpawn ? { pid: child?.pid ?? null, groupId: platform === 'win32' ? null : child?.pid ?? null, provenanceError } : {}),
+        groupReaped: !child?.pid || (watchGroupDeath ? (() => { try { return !groupAlive(child.pid, platform); } catch { return false; } })() : platform === 'win32'
+          ? treeTermination.status === 'confirmed' ? childClosed : treeTermination.status === 'failed' ? false : null
+          : null),
+        ...(platform === 'win32' ? { treeTermination } : {}),
+        ...(cancellationFile ? { cancellationNotice } : {}),
         ...(bufferMode === 'head-tail' ? {
           outputTruncation: {
             stdout: { omittedChars: stdoutSink.omittedChars },
@@ -192,11 +211,10 @@ export function runProcess({
       return;
     }
 
-    let child;
     try {
       child = spawnFn(cmd, args, {
         cwd,
-        env,
+        env: cancellationFile ? { ...(env ?? process.env), HARNESS_RUN_CANCEL_FILE: cancellationFile } : env,
         shell: false,
         detached: platform !== 'win32',
         windowsHide: true,
@@ -210,15 +228,28 @@ export function runProcess({
         function safeKill(sig) {
       if (!Number.isInteger(child.pid) || child.pid <= 0) return;
       try {
-        killFn(child.pid, sig, platform);
-      } catch {
-              }
+        const termination = killFn(child.pid, sig, platform);
+        if (platform === 'win32' && ['confirmed', 'failed'].includes(termination?.status)) treeTermination = termination;
+      } catch (error) {
+        if (platform === 'win32') treeTermination = { status: 'failed', errorCode: error.code || null };
+      }
     }
 
     function terminateTree(status) {
       if (outcomeStatus) return; // already terminating for the other reason
       outcomeStatus = status;
-      safeKill('SIGTERM');
+      let cooperative = false;
+      if (platform === 'win32' && cancellationFile && Number.isInteger(child.pid) && child.pid > 0) {
+        try {
+          fs.writeFileSync(cancellationFile, JSON.stringify({ version: 1, pid: child.pid }), { flag: 'wx', mode: 0o600 });
+          cancellationNotice = { requested: true };
+          cooperative = true;
+        } catch (error) {
+          cancellationNotice = { requested: false, errorCode: error.code || null };
+        }
+      }
+      if (cooperative) killGraceTimer = setTimeout(() => safeKill('SIGTERM'), killGraceMs);
+      else safeKill('SIGTERM');
             settleDeadlineTimer = setTimeout(() => {
         finish({ status, exitCode: null, signalName: null });
       }, killGraceMs + groupReapTimeoutMs);
@@ -268,6 +299,7 @@ export function runProcess({
     });
 
     child.on('close', (exitCode, signalName) => {
+      childClosed = true;
             if (settleDeadlineTimer) {
         clearTimeout(settleDeadlineTimer);
         settleDeadlineTimer = null;
@@ -283,5 +315,12 @@ export function runProcess({
         finish(partial);
       }
     });
+    if (onSpawn && Number.isInteger(child.pid) && child.pid > 0) {
+      try { onSpawn({ pid: child.pid, groupId: platform === 'win32' ? null : child.pid }); }
+      catch (error) {
+        provenanceError = String(error?.message || 'Spawn provenance could not be retained').slice(0, 240);
+        terminateTree('failed');
+      }
+    }
   });
 }

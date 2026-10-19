@@ -2,32 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { assertNoSymlinkAncestors, readFileNoFollow } from '../fs-safe.mjs';
-import { MAX_FILES_SCANNED, MAX_FILE_BYTES } from './scan.mjs';
+import { MAX_FILES_SCANNED, inspectSourceFile } from './scan.mjs';
 import { SOURCE_EXTENSIONS } from './lexical-extractor.mjs';
 
 export const SOURCE_STATE_VERSION = 1;
 const RESOLVER_FILE = /^(?:package\.json|[jt]sconfig[^/]*\.json|pyproject\.toml|setup\.cfg|pom\.xml|build\.gradle(?:\.kts)?|\.gitignore|\.gitattributes)$/;
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
-const EXTRACTOR_REVISION = digest(['scan.mjs', 'index.mjs', 'structural-index.mjs', 'working-sources.mjs', 'lexical-extractor.mjs', 'treesitter-extractor.mjs', 'grammars.lock'].map((rel) => fs.readFileSync(new URL(rel, import.meta.url))).join('\0'));
+const EXTRACTOR_REVISION = digest(['scan.mjs', 'facts.mjs', 'imports.mjs', 'index.mjs', 'structural-index.mjs', 'working-sources.mjs', 'lexical-extractor.mjs', 'treesitter-extractor.mjs', 'grammars.lock'].map((rel) => fs.readFileSync(new URL(rel, import.meta.url))).join('\0'));
 
-export function readSourceFile(workspace, rel) {
-  if (typeof rel !== 'string' || !rel || rel.includes('\0') || path.isAbsolute(rel)) return { state: 'excluded' };
-  const full = assertNoSymlinkAncestors(workspace, rel);
-  if (!full || full === path.resolve(workspace)) return { state: 'excluded' };
-  let stat;
-  try {
-    stat = fs.lstatSync(full);
-  } catch (error) {
-    return { state: error.code === 'ENOENT' ? 'missing' : 'unreadable' };
-  }
-  if (!stat.isFile()) return { state: 'excluded' };
-  if (stat.size > MAX_FILE_BYTES) return { state: 'oversized', size: stat.size };
-  const bytes = readFileNoFollow(full, { root: workspace, maxBytes: MAX_FILE_BYTES, encoding: null });
-  if (bytes === null) return { state: 'unreadable' };
-  if (bytes.includes(0)) return { state: 'unsupported', size: bytes.length };
-  return { state: 'readable', hash: digest(bytes), size: bytes.length, content: bytes.toString('utf8'), mtime: stat.mtimeMs };
-}
 
 export function captureWorkingSources(workspace) {
   const options = { encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024 * 1024 };
@@ -41,7 +23,7 @@ export function captureWorkingSources(workspace) {
   const selectedConfigs = configs.slice(0, MAX_FILES_SCANNED);
   const configSet = new Set(configs);
   const entries = Object.fromEntries([...new Set([...selected, ...selectedConfigs])].map((rel) => {
-    const { content, mtime, ...identity } = readSourceFile(workspace, rel);
+    const { content, mtime, ...identity } = inspectSourceFile(workspace, rel);
     return [rel, identity];
   }));
   const identities = Object.entries(entries).map(([rel, { state, hash, size }]) => [rel, state, hash || null, size ?? null]);

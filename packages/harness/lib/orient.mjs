@@ -13,7 +13,6 @@ import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
 import { inertLine } from './knowledge/store.mjs';
-import { resolveObligation } from './intent-sources.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
 import { collectOrientationFacts } from './orientation-facts.mjs';
@@ -47,8 +46,8 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   const home = flags.harnessHome || flags.home;
   const facts = collectOrientationFacts({ workspace, copilotHome, flags, query: q, files });
-  const { active, session, namedFiles, gate: gatePreview, routingLines, status } = facts;
-  const { planGoal, learnings, trust, reviewCoverage, index, skills, instructions, contacts, neighborhood } = facts.slice;
+  const { active, session, namedFiles, gate: gatePreview, routingLines, status, procedure, obligation } = facts;
+  const { planGoal, learnings, trust, reviewCoverage, index, skills, instructions, contacts, neighborhood, verification, intentDiscovery, intentDetail, performance } = facts.slice;
   const recall = rankRecall(q, {
     copilotHome,
     workspace,
@@ -108,14 +107,16 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     : [`harness gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
   if (!trust.trusted) nextTools.push('harness trust status  # a person must approve policy before named checks run');
 
-  const obligation = resolveObligation(workspace, active, q);
   const intentSources = obligation.paths;
   const isolation = inspectIsolation({ workspace, home, allowInplace: flags.allowInplace });
   if (isolation.blocked) {
     nextTools.unshift(`harness worktree --slug ${planSlugFromPath(active?.path)}`);
   }
   if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
-  if (!intentSources.length) nextTools.push(prepareNextTool(workspace));
+  if (procedure) nextTools.push(`read ${inertLine(procedure.path)}`);
+  if (verification.path) nextTools.push(`read ${inertLine(verification.path)}`);
+  if (obligation.reason === 'none') nextTools.push(prepareNextTool(workspace));
+  if (intentDiscovery?.omittedCount) nextTools.push('harness orient --read --intent-page 1 --json');
 
   if (status?.stale) nextTools.push('harness index  # knowledge index is behind HEAD');
   if (status?.structural?.unreadable?.length) nextTools.push('harness index --structural  # code index is unreadable');
@@ -137,12 +138,15 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }
 
   if (gatePreview.pass && routingLines) {
-    for (const line of routingLines) if (line.startsWith('read ')) nextTools.push(line);
+    for (const line of routingLines) if (line.startsWith('read ') && !nextTools.includes(line)) nextTools.push(line);
     const javaFile = namedFiles.find(rel => rel.endsWith('.java'));
     if (javaFile) nextTools.push(`read ${javaFile}`);
   }
 
   const packBody = buildContextPack({
+    performance,
+    verification,
+    intentDiscovery,
     reviewCoverage,
     trust,
     query: q,
@@ -198,6 +202,10 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   return {
     recall,
+    ...(performance ? { performance } : {}),
+    verification,
+    intentDiscovery,
+    intentDetail,
     trust,
     learnings,
     deliveredLearnings,

@@ -222,7 +222,7 @@ test('migrate refuses to delete tracked files when git cannot be probed', () => 
     env: {
       ...process.env,
       HARNESS_HOME: harnessHome,
-      GIT_DIR: path.join(temp('mig-unk-gitdir'), 'missing.git'),
+      PATH: temp('mig-unk-path'),
     },
   });
   assert.equal(res.status, 0, res.stderr + res.stdout);

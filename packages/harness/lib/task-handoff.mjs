@@ -5,7 +5,7 @@ import { loadPlan, extractSection } from './plan-parse.mjs';
 import { extractGoalFromPlan } from './plan-goal.mjs';
 import { buildPlanView } from './plan-view.mjs';
 import { planDigest, readEvidence } from './evidence.mjs';
-import { readSourceFile } from './repo-map/working-sources.mjs';
+import { inspectSourceFile } from './repo-map/scan.mjs';
 import { redactSecrets } from './secret-scan.mjs';
 import { policyDigest } from './trust.mjs';
 
@@ -20,21 +20,26 @@ export function validateContextSnapshot({ workspace, snapshot, targets }) {
   const locations = new Set([...entries.keys(), ...targets.map(target => (path.isAbsolute(target) ? path.relative(workspace, target) : target).replaceAll('\\', '/'))]);
   for (const location of locations) {
     const expected = entries.get(location);
-    const current = readSourceFile(workspace, location);
+    const current = inspectSourceFile(workspace, location);
     if (expected?.state === 'missing' && current.state === 'missing') continue;
     if (!expected?.sha256 || expected.sha256 !== current.hash) return { pass: false, reason: 'context-stale: read each touched file with orient --read --context-version 2 before editing' };
   }
   return { pass: true };
 }
 
-export function buildTaskHandoff({ workspace, task = '' }) {
+export function buildTaskHandoff({ workspace, task = '', domainPlan = null }) {
+  if (domainPlan) return {
+    schema: 1, contract: null, domainPlan, requiresRead: true,
+    reason: 'Reload the selected domain coordinator contract and delegated work before continuing. Local plan recovery does not establish domain state.',
+    next: ['harness', 'domain', 'status', '--name', domainPlan.name, '--plan', domainPlan.path, '--json'],
+  };
   const session = readSession(workspace) || {};
   const plan = session.activePlan ? loadPlan(workspace, session.activePlan) : null;
   const contract = plan ? extractGoalFromPlan(plan) : { intent: task, constraints: [] };
   const references = session.contextSnapshot?.evidence || (session.files || []).map(location => ({ location }));
   const evidence = references.slice(0, 40).map(prior => {
     const location = path.isAbsolute(prior.location) ? path.relative(workspace, prior.location) : prior.location;
-    const current = readSourceFile(workspace, location);
+    const current = inspectSourceFile(workspace, location);
     const changed = prior.sha256 ? current.hash !== prior.sha256 : prior.state === 'missing' ? current.state !== 'missing' : false;
     const hash = prior.sha256 || current.hash;
     return { location, reference: hash ? `${location}@sha256:${hash}` : null, state: changed ? 'changed' : current.state === 'readable' ? prior.sha256 ? 'current' : 'available' : current.state };
