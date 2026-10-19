@@ -7,6 +7,7 @@ import { worktreeId } from './structural/shape.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { accountContext } from './token-meter.mjs';
 import { policyDigest } from './trust.mjs';
+import { DEFAULT_MAX_BYTES } from './fs-safe.mjs';
 
 const EVIDENCE_LIMIT = 80;
 const MAX_RECORD_BYTES = 32768;
@@ -18,7 +19,7 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
   const inputs = new Map((neighborhood?.inputs || facts.namedFiles.map(rel => ({ rel }))).map(input => [input.rel, input]));
   const paths = [...new Set([...inputs.keys(), ...(neighborhood?.files || []).map(file => file.rel)])];
   const evidence = paths.slice(0, EVIDENCE_LIMIT).map((location) => {
-    const input = inputs.get(location)?.state === 'excluded' ? { state: 'excluded' } : inspectSourceFile(workspace, location);
+    const input = inputs.get(location)?.state === 'excluded' ? { state: 'excluded' } : inspectSourceFile(workspace, location, { maxBytes: DEFAULT_MAX_BYTES });
     return {
       source: 'code', location, state: input.state,
       sha256: input.hash || null, bytes: input.size ?? null,
@@ -40,7 +41,7 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
   const currentPlan = facts.active ? loadPlan(workspace, facts.active.path) : null;
   const planChanged = facts.active && (!currentPlan || planDigest(currentPlan.text) !== identity.task.contractDigest);
   const changed = Boolean(planChanged || policyDigest(workspace) !== identity.policyDigest || !snapshot.valid || !after.valid || snapshot.state.digest !== after.state.digest || evidence.some((record) =>
-    (record.sha256 && inspectSourceFile(workspace, record.location).hash !== record.sha256) ||
+    (record.sha256 && inspectSourceFile(workspace, record.location, { maxBytes: DEFAULT_MAX_BYTES }).hash !== record.sha256) ||
     (factHashes.has(record.location) && factHashes.get(record.location) !== record.sha256)));
   const stableFacts = { ...facts.slice, trust: { state: facts.slice.trust.state, digest: facts.slice.trust.digest } };
   const record = {

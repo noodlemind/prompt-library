@@ -18,7 +18,7 @@ export function trackedSourceFiles(workspace) {
   return { files: all.slice(0, MAX_FILES_SCANNED), total: all.length, inventoryHash: createHash('sha256').update(JSON.stringify(all)).digest('hex'), unavailable: false };
 }
 
-export function inspectSourceFile(workspace, rel) {
+export function inspectSourceFile(workspace, rel, { maxBytes = MAX_FILE_BYTES } = {}) {
   if (typeof rel !== 'string' || !rel || rel.includes('\0') || path.isAbsolute(rel)) return { state: 'excluded' };
   const full = assertNoSymlinkAncestors(workspace, rel);
   if (!full || full === path.resolve(workspace)) return { state: 'excluded' };
@@ -29,8 +29,8 @@ export function inspectSourceFile(workspace, rel) {
     return { state: error.code === 'ENOENT' ? 'missing' : 'unreadable' };
   }
   if (!stat.isFile()) return { state: 'excluded' };
-  if (stat.size > MAX_FILE_BYTES) return { state: 'oversized', size: stat.size };
-  const bytes = readFileNoFollow(full, { root: workspace, maxBytes: MAX_FILE_BYTES, encoding: null });
+  if (stat.size > maxBytes) return { state: 'oversized', size: stat.size };
+  const bytes = readFileNoFollow(full, { root: workspace, maxBytes, encoding: null });
   if (bytes === null) return { state: 'unreadable' };
   if (bytes.includes(0)) return { state: 'unsupported', size: bytes.length };
   return { state: 'readable', hash: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, content: bytes.toString('utf8'), mtime: stat.mtimeMs };

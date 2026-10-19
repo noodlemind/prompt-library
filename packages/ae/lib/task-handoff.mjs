@@ -9,6 +9,7 @@ import { inspectSourceFile } from './repo-map/scan.mjs';
 import { redactSecrets } from './secret-scan.mjs';
 import { policyDigest } from './trust.mjs';
 import { captureWorkingSources } from './repo-map/working-sources.mjs';
+import { DEFAULT_MAX_BYTES } from './fs-safe.mjs';
 
 export function validateContextSnapshot({ workspace, snapshot, targets }) {
   if (snapshot?.version !== 2) return { pass: true };
@@ -21,11 +22,12 @@ export function validateContextSnapshot({ workspace, snapshot, targets }) {
     const plan = loadPlan(workspace, snapshot.plan);
     if (!plan || planDigest(plan.text) !== snapshot.contractDigest) return { pass: false, reason: 'context-stale: reload the current task contract' };
   }
-  const entries = new Map((snapshot.evidence || []).map(item => [item.location, item]));
-  const locations = new Set([...entries.keys(), ...targets.map(target => (path.isAbsolute(target) ? path.relative(workspace, target) : target).replaceAll('\\', '/'))]);
+  const relative = value => path.relative(workspace, path.resolve(workspace, value)).replaceAll('\\', '/');
+  const entries = new Map((snapshot.evidence || []).map(item => [relative(item.location), item]));
+  const locations = new Set([...entries.keys(), ...targets.map(relative)]);
   for (const location of locations) {
     const expected = entries.get(location);
-    const current = inspectSourceFile(workspace, location);
+    const current = inspectSourceFile(workspace, location, { maxBytes: DEFAULT_MAX_BYTES });
     if (expected?.state === 'missing' && current.state === 'missing') continue;
     if (!expected?.sha256 || expected.sha256 !== current.hash) return { pass: false, reason: 'context-stale: read each touched file with orient --read --context-version 2 before editing' };
   }
@@ -46,7 +48,7 @@ export function buildTaskHandoff({ workspace, task = '', domainPlan = null }) {
   const references = session.contextSnapshot?.evidence || (session.files || []).map(location => ({ location }));
   const evidence = references.slice(0, 40).map(prior => {
     const location = path.isAbsolute(prior.location) ? path.relative(workspace, prior.location) : prior.location;
-    const current = inspectSourceFile(workspace, location);
+    const current = inspectSourceFile(workspace, location, { maxBytes: DEFAULT_MAX_BYTES });
     const changed = prior.sha256 ? current.hash !== prior.sha256 : prior.state === 'missing' ? current.state !== 'missing' : false;
     const hash = prior.sha256 || current.hash;
     return { location, reference: hash ? `${location}@sha256:${hash}` : null, state: changed ? 'changed' : current.state === 'readable' ? prior.sha256 ? 'current' : 'available' : current.state };

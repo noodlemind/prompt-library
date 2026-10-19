@@ -35,8 +35,8 @@ Installed to `~/.copilot/bin/ae` on every `ae install`. Add to PATH with `ae ins
 **Per-repo bootstrap:** `ae init-repo` creates `.harness/run.mjs` (delegates to global harness + sets `--workspace`).
 
 - Pin version in product repos: `devDependencies`, a globally installed package, or `.harness-version` (see harness README).
-- If `harness` is not on `PATH`, install from the registry with `npm install -g harness@latest`, then `ae install --configure-path`.
-- Do not use `npx harness` in agent runtime instructions; reserve `npx` for one-off bootstrap or pinned CI when a registry package is available.
+- If `ae` is not on `PATH`, install from the registry with `npm install -g ae-harness@latest`, then `ae install --configure-path`.
+- Do not use `npx ae-harness` in agent runtime instructions; reserve `npx` for one-off bootstrap or pinned CI when a registry package is available.
 - Start with `.harness/context-pack.md` after `orient`. Expand missing evidence with `orient --read --context-version 2`; keep source identities and reported limits.
 - Developers use Copilot agents/skills; they do not prompt the CLI directly.
 

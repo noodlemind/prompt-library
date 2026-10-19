@@ -6,6 +6,7 @@ import { runSearch } from './retrieval/search.mjs';
 import { sourceHash } from './retrieval/source-evidence.mjs';
 import { trackedSourceFiles } from './repo-map/scan.mjs';
 import { inspectSourceFile } from './repo-map/scan.mjs';
+import { DEFAULT_MAX_BYTES } from './fs-safe.mjs';
 
 export const CONTEXT_POLICIES = Object.freeze(['legacy', 'selective', 'subsystem']);
 const MAX_FILES = 12;
@@ -45,7 +46,7 @@ export function buildTaskContext({ workspace, copilotHome, task, files = [], pol
     }
   }
   const manifest = buildContextRecord({ workspace, query: task, facts });
-  const changed = included.some(row => inspectSourceFile(workspace, row.location).hash !== row.sha256);
+  const changed = included.some(row => inspectSourceFile(workspace, row.location, { maxBytes: DEFAULT_MAX_BYTES }).hash !== row.sha256);
   coverage.sourceState = changed ? 'changed-or-unavailable' : manifest.coverage.sourceState;
   coverage.renderBarrier = manifest.coverage.renderBarrier;
   coverage.validationReason = manifest.coverage.validationReason;

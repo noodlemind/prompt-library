@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 
 test('clean installed package expands current context and rejects stale source references', (t) => {
@@ -65,4 +66,13 @@ test('clean installed package expands current context and rejects stale source r
   assert.equal(policy.contextPolicy, 'selective');
   assert.ok(policy.context.files.some(row => row.location === 'new.mjs'));
   assert.ok(policy.context.bytes <= 16000);
+  const largeBody = `export const marker = 1;\n${' '.repeat(200_000)}`;
+  fs.writeFileSync(path.join(workspace, 'large.mjs'), largeBody);
+  const large = ok('orient', '--read', '--context-version', '2', '--query', 'repair the large file', '--file', './large.mjs');
+  const largeEvidence = large.evidence.find(row => row.location === 'large.mjs');
+  assert.equal(large.coverage.sourceState, 'validated');
+  assert.equal(largeEvidence.sha256, createHash('sha256').update(largeBody).digest('hex'));
+  assert.equal(ok('get', '--path', largeEvidence.reference, '--context-version', '2').evidence.sha256, largeEvidence.sha256);
+  fs.writeFileSync(path.join(workspace, 'large.mjs'), largeBody.replace('marker = 1', 'marker = 2'));
+  assert.notEqual(cli('get', '--path', largeEvidence.reference, '--context-version', '2').status, 0);
 });

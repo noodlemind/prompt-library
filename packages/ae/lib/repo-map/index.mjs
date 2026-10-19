@@ -148,7 +148,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
   for (const { raw, rel } of normalized) {
     const input = inspectSourceFile(workspace, rel);
     let state = input.state;
-    if (state === 'readable' && !trackedAllSet.has(rel)) {
+    if (['readable', 'oversized'].includes(state) && !trackedAllSet.has(rel)) {
       const ignored = spawnSync('git', ['-C', workspace, 'check-ignore', '-q', '--', rel], { timeout: 15_000 });
       state = ignored.status === 1 ? 'new' : 'excluded';
     }
