@@ -87,7 +87,7 @@ test('the canonical terminal command retains bounded control admission', () => {
   } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
 });
 
-for (const command of ['plan-update', 'inventory', 'resources', 'domain', 'performance', 'graph', 'lookup']) {
+for (const command of ['plan-update', 'inventory', 'resources', 'domain', 'performance', 'experiment', 'graph', 'lookup']) {
   test(`canonical home flag reaches the ${command} command parser`, () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-home-parser-'));
     try {
@@ -102,6 +102,18 @@ for (const command of ['plan-update', 'inventory', 'resources', 'domain', 'perfo
     } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
   });
 }
+
+test('experiment setup accepts the canonical home flag through the CLI', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-experiment-home-'));
+  try {
+    const result = spawnSync(process.execPath, [path.join(root, 'bin/ae.mjs'), 'experiment', 'status',
+      '--ae-home', path.join(workspace, 'state'), '--workspace', workspace, '--json', '--no-events'], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const setup = JSON.parse(result.stdout).setup;
+    assert.equal(setup.workload, 'linear-json-v1');
+    assert.equal(setup.isolation, 'unprobed');
+  } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
+});
 
 test('canonical home flags retain admission for bounded diagnostic controls', () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-home-controls-'));

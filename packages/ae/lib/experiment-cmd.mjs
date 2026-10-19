@@ -20,7 +20,7 @@ const usage = message => Object.assign(new Error(`experiment: ${message}`), { co
 export function parseExperimentArguments(argv) {
   const positionals = [], values = new Map(), seen = new Set();
   const booleans = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
-  const valued = new Set(['--workspace', '--harness-home', '--copilot-home', ...Object.values(OPTIONS).flat()]);
+  const valued = new Set(['--workspace', '--ae-home', '--harness-home', '--copilot-home', ...Object.values(OPTIONS).flat()]);
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
     if (token === '--' && index === argv.length - 1) break;
@@ -36,7 +36,7 @@ export function parseExperimentArguments(argv) {
   }
   const verb = positionals[0];
   if (!EXPERIMENT_VERBS.includes(verb) || positionals.length !== 1) throw usage('unsupported verb or unexpected positional argument');
-  const allowed = new Set(['--workspace', '--harness-home', '--copilot-home', ...OPTIONS[verb]]);
+  const allowed = new Set(['--workspace', '--ae-home', '--harness-home', '--copilot-home', ...OPTIONS[verb]]);
   for (const key of values.keys()) if (!allowed.has(key)) throw usage(`${key} is unsupported for ${verb}`);
   if (verb !== 'status') for (const key of OPTIONS[verb]) if (!values.has(key)) throw usage(`${verb} requires ${key}`);
   if (values.has('--attempt') && !values.has('--plan')) throw usage('--attempt requires --plan');

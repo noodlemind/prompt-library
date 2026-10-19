@@ -25,10 +25,12 @@ jobs:
         with:
           node-version: '24'
       - run: npm ci --prefix packages/ae
+      - name: Validate release contracts
+        run: npm run --prefix packages/ae check:release
       - name: Pack and identify candidate
         run: |
           mkdir artifacts
-          npm pack ./packages/ae --pack-destination artifacts --json > artifacts/pack.json
+          npm pack ./packages/ae --ignore-scripts --pack-destination artifacts --json > artifacts/pack.json
           node --input-type=module <<'JS'
           import fs from 'node:fs';
           import crypto from 'node:crypto';
