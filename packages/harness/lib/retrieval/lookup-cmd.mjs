@@ -38,13 +38,13 @@ function resolveContext(argv) {
 }
 
 export async function lookupResultOf(argv) {
-  const { kind, identifier, workspace, copilotHome } = resolveContext(argv);
-  return lookupEntity({ kind, identifier, workspace, copilotHome });
+  const { flags, kind, identifier, workspace, copilotHome } = resolveContext(argv);
+  return lookupEntity({ kind, identifier, workspace, copilotHome, home: flags.harnessHome || flags.home });
 }
 
 export async function cmdLookup(argv) {
   const { flags, kind, identifier, workspace, copilotHome } = resolveContext(argv);
-  const result = lookupEntity({ kind, identifier, workspace, copilotHome });
+  const result = lookupEntity({ kind, identifier, workspace, copilotHome, home: flags.harnessHome || flags.home });
 
   if (flags.json) {
     console.log(redactedJson(result, { pretty: flags.verbose }));

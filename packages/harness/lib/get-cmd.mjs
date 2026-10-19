@@ -1,10 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { createHash } from 'crypto';
 import { findEntryByDocid, resolveDocPath } from './recall-rank.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 import { getCorpusRoot } from './assets.mjs';
+import { assertSourceCurrent, parseSourceReference, sourceContext, sourceHash } from './retrieval/source-evidence.mjs';
+import { redactSecrets } from './secret-scan.mjs';
 
 const PACKAGED_REL = /^(skills|agents|instructions)\//;
 
@@ -29,21 +30,17 @@ export const GET_DEFAULT_LINES = 40;
 export const GET_DEFAULT_MAX_BYTES = 2048;
 
 function truncateUtf8(text, maxBytes) {
-  let buf = Buffer.from(text, 'utf8');
-  if (buf.length <= maxBytes) return text;
-  buf = buf.slice(0, maxBytes);
-  while (buf.length > 0 && (buf[buf.length - 1] & 0xc0) === 0x80) {
-    buf = buf.slice(0, -1);
-  }
-  let excerpt = buf.toString('utf8');
-  const lastNl = excerpt.lastIndexOf('\n');
-  if (lastNl > maxBytes * 0.5) excerpt = excerpt.slice(0, lastNl);
-  return `${excerpt}\n…(truncated)`;
+  const marker = '\n…(truncated)';
+  const markerBytes = Buffer.byteLength(marker);
+  if (maxBytes < markerBytes) return new TextDecoder().decode(Buffer.from(marker).subarray(0, maxBytes), { stream: true });
+  const prefix = new TextDecoder().decode(Buffer.from(text).subarray(0, maxBytes - markerBytes), { stream: true });
+  return prefix + marker;
 }
 
 export function runGet({ workspace, copilotHome, flags, home }) {
-  const docid = flags.docid;
-  const relPath = flags.path;
+  const reference = parseSourceReference(flags.docid || flags.path);
+  const docid = flags.docid ? reference.path : null;
+  const relPath = flags.path ? reference.path : null;
   const maxLines = flags.lines || GET_DEFAULT_LINES;
   const maxBytes = flags.maxBytes || GET_DEFAULT_MAX_BYTES;
     const offset = Math.max(1, Math.floor(flags.offset || 1));
@@ -84,16 +81,22 @@ export function runGet({ workspace, copilotHome, flags, home }) {
     throw new Error(`file not found for ${docid || relPath}`);
   }
 
-    const raw = readFileNoFollow(fullPath, { root: readRoot });
-  if (raw === null) throw new Error(`file not found for ${docid || relPath}`);
+  const rawBytes = readFileNoFollow(fullPath, { root: readRoot, encoding: null });
+  if (rawBytes === null) throw new Error(`file not found for ${docid || relPath}`);
+  const raw = rawBytes.toString('utf8');
+  const sha256 = sourceHash(rawBytes);
+  assertSourceCurrent(reference.sha256, sha256);
   const allLines = raw.split(/\r?\n/);
   const start = Math.min(offset - 1, allLines.length);
   const lines = allLines.slice(start, start + maxLines);
-  let excerpt = lines.join('\n');
+  const selectedText = lines.join('\n');
+  let excerpt = redactSecrets(selectedText);
+  const wasRedacted = excerpt !== selectedText;
   const clipped = Buffer.byteLength(excerpt, 'utf8') > maxBytes;
   if (clipped) {
     excerpt = truncateUtf8(excerpt, maxBytes);
   }
+  const sourceExcerpt = wasRedacted ? selectedText : clipped ? excerpt.split('\n…(truncated)')[0] : excerpt;
     const truncated = clipped || start > 0 || start + lines.length < allLines.length;
 
   return {
@@ -105,7 +108,18 @@ export function runGet({ workspace, copilotHome, flags, home }) {
         lines: excerpt === '' ? 0 : excerpt.split('\n').length,
         offset,
     totalLines: allLines.length,
-        sha256: createHash('sha256').update(raw, 'utf8').digest('hex'),
+    sha256,
     truncated,
+    ...(flags.contextVersion === 2 ? {
+      context: sourceContext(entry.path || relPath || '', raw, offset),
+      evidence: {
+        reference: `${docid || relPath}@sha256:${sha256}`,
+        sha256,
+        representationSha256: sourceHash(excerpt),
+        redacted: wasRedacted,
+        provenance: { root: readRoot, scope: readRoot === workspaceResolved ? 'workspace' : 'external-resource' },
+        range: { startLine: offset, endLine: sourceExcerpt ? offset + sourceExcerpt.split('\n').length - 1 : null, partialLastLine: clipped },
+      },
+    } : {}),
   };
 }

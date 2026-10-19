@@ -267,6 +267,7 @@ export const AGENT_TOOLS = Object.freeze([
         path: { type: 'string', description: 'file path relative to the workspace root' },
         offset: { type: 'number', description: 'first line to return, 1-indexed (default 1)' },
         lines: { type: 'number', description: `maximum lines to return (default ${READ_DEFAULT_LINES})` },
+        contextVersion: { type: 'number', enum: [1, 2], description: 'version 2 adds source-bound evidence and surrounding declarations' },
       },
       required: ['path'],
     },
@@ -280,6 +281,9 @@ export const AGENT_TOOLS = Object.freeze([
       type: 'object',
       properties: {
         query: { type: 'string', description: 'what to look for, in words — not a regex or a glob' },
+        contextVersion: { type: 'number', enum: [1, 2], description: 'version 2 returns source references and a query-bound cursor' },
+        cursor: { type: 'string', description: 'a cursor returned by the same search' },
+        limit: { type: 'number', minimum: 1, maximum: SEARCH_ROWS, description: 'reduce the page size if output is truncated' },
       },
       required: ['query'],
     },
@@ -618,6 +622,9 @@ export async function dispatchToolCall(call, {
     const query = typeof input.query === 'string' ? input.query.trim() : '';
     if (!query) return { dispatched: false, reason: 'search requires a non-empty `query`', fatal: false };
     argv = [...base, query];
+    if (input.contextVersion !== undefined) argv.push('--context-version', String(input.contextVersion));
+    if (input.contextVersion === 2) argv.push('--limit', String(Math.max(1, Math.min(SEARCH_ROWS, Math.trunc(input.limit || SEARCH_ROWS)))));
+    if (typeof input.cursor === 'string') argv.push('--cursor', input.cursor);
     run = searchToolResultOf;
   } else if (call.name === 'todo') {
     fatalOnThrow = false;
@@ -648,6 +655,7 @@ export async function dispatchToolCall(call, {
     if (!rel) return { dispatched: false, reason: `${call.name} requires a \`path\` relative to the workspace root`, fatal: false };
     if (call.name === 'read') {
       argv = [...base, '--path', rel, '--max-bytes', String(READ_MAX_BYTES)];
+      if (input.contextVersion !== undefined) argv.push('--context-version', String(input.contextVersion));
       const lines = Number.isFinite(input.lines) && input.lines > 0 ? Math.floor(input.lines) : READ_DEFAULT_LINES;
       argv.push('--lines', String(lines));
       if (Number.isFinite(input.offset) && input.offset > 1) argv.push('--offset', String(Math.floor(input.offset)));
@@ -738,7 +746,8 @@ async function searchToolResultOf(argv, ctx = {}) {
     status: 'ok',
     exitCode: 0,
     total: result.total ?? hits.length,
-    output: [{ line: header }, { line: '' }, ...lines.map((line) => ({ line }))],
+    nextCursor: result.nextCursor,
+    output: [{ line: header }, ...(result.contextVersion === 2 ? [{ line: JSON.stringify({ nextCursor: result.nextCursor, sources: result.sources.map(({ source, status, reason }) => ({ source, status, reason })), semanticCompleteness: 'unverified' }) }, ...hits.filter(row => row.evidence).map(row => ({ line: JSON.stringify({ id: row.id, reference: row.evidence.reference, state: row.evidence.state || 'available' }) }))] : []), { line: '' }, ...lines.map((line) => ({ line }))],
   };
 }
 
@@ -757,10 +766,12 @@ async function readResultOf(argv, ctx = {}) {
     status: 'ok',
     exitCode: 0,
     sha256: result.sha256 ?? null,
+    ...(result.evidence ? { evidence: result.evidence, context: result.context } : {}),
     truncated: result.truncated ?? false,
     output: [
       { line: header },
       { line: `sha256: ${result.sha256 ?? 'unknown'}` },
+      ...(result.evidence ? [{ line: JSON.stringify({ evidence: result.evidence, context: result.context }) }] : []),
       { line: '' },
       { line: result.excerpt },
     ],

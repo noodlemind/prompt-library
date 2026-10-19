@@ -41,6 +41,8 @@ function searchResult(argv) {
   return runSearch({
     query: ctx.query,
     workspace: ctx.workspace,
+    home: ctx.flags.harnessHome || ctx.flags.home,
+    contextVersion: ctx.flags.contextVersion,
     copilotHome: ctx.copilotHome,
     mode: ctx.mode || undefined,
     sources: ctx.sources ? ctx.sources.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
