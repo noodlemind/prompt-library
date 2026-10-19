@@ -45,8 +45,9 @@ function withFileLock(file, action) {
       handle = fs.openSync(lock, 'wx', 0o600);
       break;
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      try {
+      if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error;
+      if (attempt === LOCK_ATTEMPTS - 1 && error.code !== 'EEXIST') throw error;
+      if (error.code === 'EEXIST') try {
         if (Date.now() - fs.statSync(lock).mtimeMs > 30_000) fs.rmSync(lock, { force: true });
       } catch {
         // The lock disappeared between checks; retry immediately.
