@@ -11,7 +11,11 @@ export async function checkCases(workspace, checks) {
     } else {
       const evaluate = () => Object.hasOwn(check, 'args') ? module[check.export](...check.args) : module[check.export];
       if (check.throws) await assert.rejects(async () => evaluate(), error => String(error.message).includes(check.throws));
-      else assert.deepEqual(await evaluate(), check.expected);
+      else {
+        const result = evaluate();
+        if (check.synchronous) assert.equal(typeof result?.then, 'undefined', `${check.export} must remain synchronous`);
+        assert.deepEqual(await result, check.expected);
+      }
     }
   }
 }

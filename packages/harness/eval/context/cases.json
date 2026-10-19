@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "note": "Six development and six held-out JavaScript tasks. This pilot does not establish statistical power or cross-language quality. Public task verifiers run inside the workspace. Private acceptance checks stay outside it.",
+  "note": "Seven development and seven held-out JavaScript tasks. This pilot does not establish statistical power or cross-language quality. Public task verifiers run inside the workspace. Private acceptance checks stay outside it. Reset recovery is a simulated headless context reset, not native editor compaction.",
   "cases": [
     {
       "id": "greeting",
@@ -310,6 +310,63 @@
             4
           ],
           "expected": 12
+        }
+      ]
+    },
+    {
+      "id": "unknown-formatter",
+      "split": "development",
+      "family": "unknown-file",
+      "prompt": "Investigate why welcome(name) returns the misspelled greeting. It must return hello followed by a space and the name. Preserve the alternate formatter behavior.",
+      "files": {
+        "src/welcome.mjs": "import { format } from './format.mjs';\nexport function welcome(name) { return format(name); }\n",
+        "src/format.mjs": "export function format(name) { return 'helo ' + name; }\n",
+        "src/alternate.mjs": "export function format(name) { return 'welcome ' + name; }\n"
+      },
+      "editable": [
+        "src/welcome.mjs",
+        "src/format.mjs",
+        "src/alternate.mjs"
+      ],
+      "seeds": [],
+      "requiredEvidence": [
+        "src/welcome.mjs",
+        "src/format.mjs"
+      ],
+      "publicChecks": [
+        {
+          "module": "src/welcome.mjs",
+          "export": "welcome",
+          "args": [
+            "Tess"
+          ],
+          "expected": "hello Tess"
+        }
+      ],
+      "checks": [
+        {
+          "module": "src/welcome.mjs",
+          "export": "welcome",
+          "args": [
+            "Ada"
+          ],
+          "expected": "hello Ada"
+        },
+        {
+          "module": "src/format.mjs",
+          "export": "format",
+          "args": [
+            "Lin"
+          ],
+          "expected": "hello Lin"
+        },
+        {
+          "module": "src/alternate.mjs",
+          "export": "format",
+          "args": [
+            "Kai"
+          ],
+          "expected": "welcome Kai"
         }
       ]
     },
@@ -702,6 +759,77 @@
             "status": 200,
             "key": "user"
           }
+        }
+      ]
+    },
+    {
+      "id": "reset-pricing",
+      "split": "held-out",
+      "family": "context-reset",
+      "prompt": "Continue the accepted pricing task after a context reset. Reload the durable task contract and current source before editing. The earlier source evidence may be stale.",
+      "files": {
+        "src/price.mjs": "export const TAX_RATE = 0.1;\nexport function total(amount) { return amount * (1 + TAX_RATE); }\n"
+      },
+      "editable": [
+        "src/price.mjs"
+      ],
+      "seeds": [
+        "src/price.mjs"
+      ],
+      "requiredEvidence": [
+        "src/price.mjs"
+      ],
+      "resume": {
+        "intent": "Add a fixed fee of 2 after tax.",
+        "constraints": [
+          "Preserve the current TAX_RATE export.",
+          "Preserve the synchronous total(amount) interface."
+        ]
+      },
+      "workingEdits": {
+        "src/price.mjs": "export const TAX_RATE = 0.2;\nexport function total(amount) { return amount * (1 + TAX_RATE); }\n"
+      },
+      "publicChecks": [
+        {
+          "module": "src/price.mjs",
+          "export": "total",
+          "args": [
+            5
+          ],
+          "expected": 8
+        },
+        {
+          "module": "src/price.mjs",
+          "export": "total",
+          "args": [
+            0
+          ],
+          "expected": 2
+        }
+      ],
+      "checks": [
+        {
+          "module": "src/price.mjs",
+          "export": "total",
+          "args": [
+            10
+          ],
+          "expected": 14,
+          "synchronous": true
+        },
+        {
+          "module": "src/price.mjs",
+          "export": "total",
+          "args": [
+            0
+          ],
+          "expected": 2,
+          "synchronous": true
+        },
+        {
+          "module": "src/price.mjs",
+          "export": "TAX_RATE",
+          "expected": 0.2
         }
       ]
     }

@@ -6,6 +6,9 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { contextAgentArgs, prepareCase, resolveStudyOutput, runChecks, runStudy, summarizeStudy } from '../eval/context/study.mjs';
 import { agentResultOf } from '../lib/agent-cmd.mjs';
+import { buildTaskHandoff, validateContextSnapshot } from '../lib/task-handoff.mjs';
+import { readSession } from '../lib/session.mjs';
+import { readOrientSlice } from '../lib/orient-read.mjs';
 
 const simple = {
   id: 'example', split: 'development', family: 'known-file',
@@ -78,6 +81,49 @@ test('public verifier tampering and unregistered undo files remain outside scope
     assert.equal(attempt.pass, false);
     assert.ok(attempt.scope.unexpected.includes(tamper === 'public-checks' ? '.harness/context-public-checks.json' : '.harness/undo/abc123-1234abcd.bak'));
   }
+});
+
+test('reset preparation preserves the accepted contract and requires fresh source evidence', async t => {
+  const task = JSON.parse(fs.readFileSync(new URL('../eval/context/cases.json', import.meta.url))).cases.find(task => task.id === 'reset-pricing');
+  const fixture = await prepareCase({ task, root: directory(t), id: 'reset' });
+  const before = readSession(fixture.workspace);
+  const handoff = buildTaskHandoff({ workspace: fixture.workspace, task: task.prompt });
+  assert.equal(handoff.contract?.intent, 'Add a fixed fee of 2 after tax.');
+  assert.deepEqual(handoff.contract.constraints, ['Preserve the current TAX_RATE export.', 'Preserve the synchronous total(amount) interface.']);
+  assert.equal(handoff.plan.locked, true);
+  assert.equal(handoff.requiresRead, true);
+  assert.equal(handoff.evidence.find(row => row.location === 'src/price.mjs')?.state, 'changed');
+  assert.equal(validateContextSnapshot({ workspace: fixture.workspace, snapshot: before.contextSnapshot, targets: ['src/price.mjs'] }).pass, false);
+  const current = readOrientSlice({ workspace: fixture.workspace, copilotHome: fixture.copilotHome, flags: { home: fixture.harnessHome, contextVersion: 2 }, query: 'Resume accepted pricing', files: task.seeds });
+  assert.notEqual(current.evidence[0].sha256, before.contextSnapshot.evidence[0].sha256);
+  assert.equal(validateContextSnapshot({ workspace: fixture.workspace, snapshot: readSession(fixture.workspace).contextSnapshot, targets: ['src/price.mjs'] }).pass, true);
+});
+
+test('reset contract edits remain scope violations after a correct repair', async t => {
+  const task = JSON.parse(fs.readFileSync(new URL('../eval/context/cases.json', import.meta.url))).cases.find(task => task.id === 'reset-pricing');
+  let plan;
+  const result = await runStudy({ root: directory(t), cases: [task], repeats: 1, policies: ['legacy'], host: 'scripted-test', execute: async fixture => {
+    fs.writeFileSync(path.join(fixture.workspace, 'src/price.mjs'), 'export const TAX_RATE = 0.2;\nexport function total(amount) { return amount * (1 + TAX_RATE) + 2; }\n');
+    plan = readSession(fixture.workspace).activePlan;
+    fs.appendFileSync(path.join(fixture.workspace, plan), '\nChanged accepted constraints.\n');
+    return { status: 'ok', turns: [] };
+  } });
+  assert.equal(result.attempts[0].checks.pass, true);
+  assert.equal(result.attempts[0].pass, false);
+  assert.ok(result.attempts[0].scope.unexpected.includes(plan));
+});
+
+test('reset acceptance rejects replacing the synchronous interface with a promise', async t => {
+  const task = JSON.parse(fs.readFileSync(new URL('../eval/context/cases.json', import.meta.url))).cases.find(task => task.id === 'reset-pricing');
+  const fixture = await prepareCase({ task, root: directory(t), id: 'async-reset' });
+  fs.writeFileSync(path.join(fixture.workspace, 'src/price.mjs'), 'export const TAX_RATE = 0.2;\nexport async function total(amount) { return amount * (1 + TAX_RATE) + 2; }\n');
+  assert.equal((await runChecks(fixture)).pass, false);
+});
+
+test('reset input rejects oversized contracts before creating a fixture', async t => {
+  const root = directory(t);
+  await assert.rejects(prepareCase({ root, id: 'oversized', task: { ...simple, resume: { intent: 'x'.repeat(1001), constraints: [] } } }), /resume/);
+  assert.equal(fs.existsSync(path.join(root, 'oversized')), false);
 });
 
 test('study output cannot enter the checkout through a linked parent', (t) => {
@@ -159,12 +205,14 @@ test('known repairs pass public verification and private acceptance for each fro
     configuration: { 'config.mjs': 'export const LIMIT = 25;\n' },
     units: { 'src/units.mjs': "export function parseUnits(value) { if (String(value).trim() === '' || Number(value) < 0) throw new Error('invalid'); return Number(value); }\n" },
     'dirty-import': { 'src/new.mjs': 'export function convert(n) { return n * 3; }\n' },
+    'unknown-formatter': { 'src/format.mjs': "export function format(name) { return 'hello ' + name; }\n" },
     'new-fee': { 'src/fee.mjs': 'export function fee(n) { return Math.max(1, n * 0.02); }\n' },
     'dynamic-consumer': { 'src/service.mjs': 'export function currentValue() { return 7; }\n', 'client/adapter.mjs': "const route = '../src/' + 'service.mjs';\nexport async function publicValue() { const m = await import(route); return m.currentValue(); }\n" },
     'versioned-contract': { 'src/money.mjs': 'export function roundMoney(n) { return Math.sign(n) * Math.round((Math.abs(n) + Number.EPSILON) * 100) / 100; }\n' },
     'regional-rate': { 'src/eu/rate.mjs': 'export const rate = 0.22;\n' },
     'falsey-values': { 'src/cache.mjs': 'export function readOrNull(record, key) { return record[key] ?? null; }\n' },
     'public-validation': { 'src/ids.mjs': "export function normalize(id) { const value = String(id).trim(); if (!value) throw new Error('invalid'); return value; }\n", 'src/api.mjs': "import { normalize } from './ids.mjs';\nexport function resolve(raw) { try { return { status: 200, key: normalize(raw) }; } catch { return { status: 400 }; } }\n" },
+    'reset-pricing': { 'src/price.mjs': 'export const TAX_RATE = 0.2;\nexport function total(amount) { return amount * (1 + TAX_RATE) + 2; }\n' },
   };
   const result = await runStudy({ root: directory(t), cases, repeats: 1, policies: ['legacy'], host: 'scripted-test', execute: async fixture => {
     assert.ok(repairs[fixture.task.id], fixture.task.id);

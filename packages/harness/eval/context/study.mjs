@@ -6,7 +6,8 @@ import { pathToFileURL } from 'node:url';
 import { buildTaskContext } from '../../lib/context-policy.mjs';
 import { buildStructuralIndex } from '../../lib/repo-map/structural-index.mjs';
 import { lexicalV2 } from '../../lib/repo-map/treesitter-extractor.mjs';
-import { ensureHarnessDir } from '../../lib/session.mjs';
+import { ensureHarnessDir, writeSession } from '../../lib/session.mjs';
+import { readOrientSlice } from '../../lib/orient-read.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const here = import.meta.dirname;
@@ -67,6 +68,10 @@ export async function prepareCase({ task, root, id }) {
   if (!/^[a-z0-9-]+$/.test(id)) throw new TypeError('invalid trial id');
   if (!task.checks?.length) throw new TypeError('case needs independent checks');
   if (task.publicChecks !== undefined && (!Array.isArray(task.publicChecks) || !task.publicChecks.length)) throw new TypeError('publicChecks must be a nonempty array');
+  if (task.resume) {
+    const line = (value, max) => typeof value === 'string' && value.trim() && value.length <= max && !/[\r\n]/.test(value);
+    if (!line(task.resume.intent, 1000) || !Array.isArray(task.resume.constraints) || task.resume.constraints.length > 20 || task.resume.constraints.some(value => !line(value, 250))) throw new TypeError('invalid resume contract');
+  }
   for (const file of [...task.editable, ...task.seeds, ...task.requiredEvidence, ...task.checks.map(check => check.module), ...(task.publicChecks || []).map(check => check.module)]) safePath(file);
   const trial = path.join(root, id);
   fs.mkdirSync(trial, { recursive: false });
@@ -79,9 +84,16 @@ export async function prepareCase({ task, root, id }) {
   const git = args => execFileSync('git', args, { cwd: workspace, env, stdio: 'pipe' });
   git(['init', '-q']); git(['add', '.']); git(['commit', '-qm', 'Frozen case baseline']);
   if (task.indexBeforeEdits) await buildStructuralIndex({ workspace, home: harnessHome, extractor: { tier: 'lexical', extract: lexicalV2 } });
+  ensureHarnessDir(workspace, false);
+  if (task.resume) {
+    const plan = '.harness/plans/2026-10-19-feat-context-reset-plan.md';
+    fs.mkdirSync(path.join(workspace, '.harness/plans'));
+    fs.writeFileSync(path.join(workspace, plan), `---\nplan_schema: 1\ntitle: "Frozen accepted task"\nstatus: in-progress\nplan_lock: true\nphase: 1\nintent: ${JSON.stringify(task.resume.intent)}\n---\n\n## Constraints\n${task.resume.constraints.map(value => `- ${value}`).join('\n')}\n`);
+    writeSession(workspace, { activePlan: plan, files: task.seeds });
+    readOrientSlice({ workspace, copilotHome, flags: { home: harnessHome, contextVersion: 2, plan }, query: task.resume.intent, files: task.seeds });
+  }
   writeFiles(workspace, task.workingEdits);
   writeFiles(workspace, task.newFiles);
-  ensureHarnessDir(workspace, false);
   let verifyCmd = null;
   if (task.publicChecks) {
     const control = path.join(workspace, '.harness');

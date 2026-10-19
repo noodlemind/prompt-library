@@ -48,14 +48,14 @@ Metrics: `eval/results/latest.json` (autonomous only — do not merge into AE gr
 
 ## Context policy pilot
 
-`context/cases.json` freezes six development and six held-out JavaScript cases. `context/protocol.json` fixes budgets, repeats and promotion thresholds. Run the diagnostic before changing a selection rule:
+`context/cases.json` freezes seven development and seven held-out JavaScript cases. They include an investigation with no seed files and recovery from an accepted plan with stale source evidence. The recovery case simulates a headless context reset. It does not test native editor compaction. `context/protocol.json` fixes budgets, repeats and promotion thresholds. Run the diagnostic before changing a selection rule:
 
 ```bash
 node eval/context/run.mjs --out /absolute/new/external/directory
 node eval/context/run.mjs --out /absolute/new/live/directory --live --provider <provider> --model <exact-available-id>
 ```
 
-The output directory must be new, its parent must exist, and its physical path must be outside the checkout. The first command makes no model calls. Its 108 trials validate broken baselines, fixture preparation and policy packaging. Dry runs and scripted tests never count as model task success. Live runs require configured provider access. The runner selects no fallback model.
+The output directory must be new, its parent must exist, and its physical path must be outside the checkout. The first command makes no model calls. Its 126 trials validate broken baselines, fixture preparation and policy packaging. Dry runs and scripted tests never count as model task success. Live runs require configured provider access. The runner selects no fallback model.
 
 Each arm starts in a fresh Git workspace. The autonomous agent receives public task tests through a fixed verifier command. Private acceptance checks stay outside the editable workspace and run again after the agent stops. Both baselines must fail before an attempt begins. Public tests use separate probes; they do not replace private preservation checks. Hash checks detect checker changes. File snapshots detect changes outside the allowed scope, including public verifier files and new files. Valid native edit undo receipts are recorded metadata. Unregistered undo files remain scope violations. This protects measurement integrity; it is not an operating-system sandbox.
 
