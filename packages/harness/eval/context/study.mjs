@@ -10,6 +10,7 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const here = import.meta.dirname;
 const protocolFile = path.join(here, 'protocol.json');
 const checker = path.join(here, 'check.mjs');
+const GENERATED_METADATA = new Set(['.harness/context-pack.md', '.harness/repo-map.md', '.harness/session.json', '.harness/todo.json']);
 export const PROTOCOL = Object.freeze(JSON.parse(fs.readFileSync(protocolFile, 'utf8')));
 
 function safePath(file) {
@@ -31,8 +32,9 @@ function snapshot(workspace) {
   const files = {};
   const walk = dir => {
     for (const entry of fs.readdirSync(path.join(workspace, dir), { withFileTypes: true })) {
-      if (!dir && ['.git', '.harness'].includes(entry.name)) continue;
+      if (!dir && entry.name === '.git') continue;
       const file = path.posix.join(dir, entry.name);
+      if (GENERATED_METADATA.has(file) && entry.isFile()) continue;
       if (Object.keys(files).length > 1000) throw new Error('fixture file limit exceeded');
       if (entry.isDirectory()) walk(file);
       else files[file] = entry.isFile() ? hash(fs.readFileSync(path.join(workspace, file))) : 'unsupported';
@@ -81,7 +83,7 @@ function scopeResult(fixture) {
   const after = snapshot(fixture.workspace);
   const changed = [...new Set([...Object.keys(fixture.before), ...Object.keys(after)])].filter(file => fixture.before[file] !== after[file]);
   const unexpected = changed.filter(file => !fixture.task.editable.includes(file));
-  return { pass: unexpected.length === 0, changed, unexpected };
+  return { pass: unexpected.length === 0, changed, unexpected, metadataExcluded: [...GENERATED_METADATA] };
 }
 
 function evidenceResult(task, result) {

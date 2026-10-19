@@ -46,7 +46,11 @@ test('study counts failures and scope violations across fresh arm workspaces', a
       assert.equal(workspaces.has(workspace), false);
       workspaces.add(workspace);
       fs.writeFileSync(path.join(workspace, 'src/value.mjs'), 'export const value = 2;\n');
-      if (policy === 'selective') fs.writeFileSync(path.join(workspace, 'extra.txt'), 'out of scope');
+      if (policy === 'selective') {
+        fs.writeFileSync(path.join(workspace, 'extra.txt'), 'out of scope');
+        fs.mkdirSync(path.join(workspace, '.harness'));
+        fs.writeFileSync(path.join(workspace, '.harness/hidden.mjs'), 'export const value = 2;');
+      }
       return { status: 'ok', stopReason: 'end-turn', contextAccounting: [], turns: [] };
     },
   });
@@ -54,6 +58,7 @@ test('study counts failures and scope violations across fresh arm workspaces', a
   assert.equal(result.summary.arms.legacy.passed, 2);
   assert.equal(result.summary.arms.selective.passed, 0);
   assert.equal(result.attempts.filter(row => !row.scope.pass).length, 2);
+  assert.ok(result.attempts.filter(row => row.policy === 'selective').every(row => row.scope.unexpected.includes('.harness/hidden.mjs')));
   assert.equal(result.summary.comparison, 'inconclusive');
   assert.equal(result.summary.arms.legacy.inputTokens, null);
   assert.equal(result.summary.arms.legacy.cost, null);
