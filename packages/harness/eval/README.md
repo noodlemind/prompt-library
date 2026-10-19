@@ -46,6 +46,23 @@ Metrics: `eval/results/latest.json` (autonomous only — do not merge into AE gr
 
 **Residual:** durable shell session; public submission pipelines; TB Harbor/Terminus adapter.
 
+## Context policy pilot
+
+`context/cases.json` freezes six development and six held-out JavaScript cases. `context/protocol.json` fixes budgets, repeats and promotion thresholds. Run the diagnostic before changing a selection rule:
+
+```bash
+node eval/context/run.mjs --out /absolute/new/external/directory
+node eval/context/run.mjs --out /absolute/new/live/directory --live --provider <provider> --model <exact-available-id>
+```
+
+The first command makes no model calls. Its 108 trials validate broken baselines, fixture preparation and policy packaging. Dry runs and scripted tests never count as model task success. Live runs require configured provider access. The runner selects no fallback model.
+
+Each arm starts in a fresh Git workspace. Acceptance checks stay outside the editable workspace and run again after the agent stops. Hash checks detect checker changes. File snapshots detect changes outside the allowed scope, including new files. This protects measurement integrity; it is not an operating-system sandbox. Results retain failed attempts, case/checker/protocol/source hashes, runtime and model identity, observed usage coverage, conservative evidence-before-edit observations and unknown costs. Reads through shell commands and opaque hosts remain unobserved. The runner does not expose acceptance checks as an agent verifier.
+
+Use `--split development` for tuning. Run held-out cases only after freezing the policy. `--policies legacy,selective,subsystem` uses the same retention policy in each arm. Compare retention in separate runs with `--policies selective --retention-policy legacy` and `--policies selective --retention-policy structured`; preserve the same corpus, model, runtime and budgets. Do not attribute a combined change to selection alone.
+
+The pilot has insufficient held-out attempts for its promotion threshold. Missing model access, mixed models or incomplete usage makes the comparison inconclusive. Keep experimental policies opt-in until an expanded independent corpus and reviewed results support a default change.
+
 ## Mechanical extraction comparison
 
 `node eval/mechanics/run.mjs --root <package-root> --out <new-external-directory> --label <revision-label> --lane common --runs 3` executes the maintained common regression fixtures repeatedly. The output argument is required and must be outside the candidate checkout, so receipts cannot make later comparisons dirty. Move any old in-checkout receipts outside before retrying; the evaluator never deletes them. Use lane `phase2` for the added record/proposal/report/install contracts. Run revisions sequentially with the same Node runtime and test concurrency; compare `fixtureHashes` before comparing shared trials. No paid/model calls occur.

@@ -899,7 +899,7 @@ export async function runAgentLoop({
   const turns = [];
   const contextRequests = [];
   const readIdentities = [];
-  const recordContextTurn = args => recordTurn({ ...args, contextAccounting: contextRequests.at(-1) });
+  const recordContextTurn = args => ({ ...recordTurn({ ...args, contextAccounting: contextRequests.at(-1) }), contextEvidence: contextSummary?.files || [] });
 
   const provider = startProviderFn();
   let stop = null;
@@ -1147,6 +1147,7 @@ export async function runAgentLoop({
           tool: call.name,
           dispatched: true,
           status,
+          ...(call.name === 'read' && outcome.result.sha256 ? { source: { path: outcome.result.path, sha256: outcome.result.sha256 } } : {}),
           exitCode: outcome.result.exitCode,
           durationMs: outcome.result.durationMs,
           timeoutSeconds: outcome.result.timeoutSeconds ?? outcome.timeoutSeconds ?? null,

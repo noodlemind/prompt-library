@@ -139,6 +139,7 @@ test('selective context refreshes source data before each model request', async 
   const result = await agentResultOf(argvFor(ws, home, 'update target', ['--context-policy', 'selective', '--file', 'src/target.mjs']), {}, { startProviderFn: provider.start });
   assert.equal(result.task, 'update target');
   assert.equal(result.contextPolicy, 'selective');
+  assert.equal(result.turns[0].contextEvidence[0].location, 'src/target.mjs');
   assert.match(provider.requests[0].messages.find(message => message.contextCategory === 'evidence').text, /return 1/);
   const evidence = provider.requests[1].messages.filter(message => message.contextCategory === 'evidence');
   assert.equal(evidence.length, 1);

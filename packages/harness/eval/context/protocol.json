@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "policies": ["legacy", "selective", "subsystem"],
+  "retentionPolicy": "legacy",
+  "repeats": 3,
+  "maxTurns": 20,
+  "maxSeconds": 120,
+  "checkerTimeoutMs": 15000,
+  "promotion": {
+    "minimumHeldOutAttemptsPerArm": 30,
+    "maximumAdditionalFailures": 0,
+    "minimumInputTokenReduction": 0.1,
+    "requireCompleteObservedUsage": true
+  },
+  "limits": "This small JavaScript pilot is diagnostic. It cannot authorize a default policy change. Retention comparisons require a separate protocol."
+}
