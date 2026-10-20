@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { DELIVER_AGENT_TOOLS, DELIVER_PROFILE, buildSystemPrompt, dispatchToolBatch, dispatchToolCall, runAgentLoop } from '../lib/agent-loop.mjs';
 import { approveProject, trustStatus } from '../lib/trust.mjs';
-import { deliveryCompletion, afterDeliveryTool } from '../lib/agent-delivery.mjs';
+import { deliveryCompletion, afterDeliveryTool, beforeDeliveryTool } from '../lib/agent-delivery.mjs';
 import { initGit, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 import { cliHarnessHome } from './helpers/cli.mjs';
 
@@ -16,6 +16,15 @@ const bin = path.resolve(import.meta.dirname, '../bin/ae.mjs');
 const persona = { name: 'engineer', text: fs.readFileSync(path.resolve(import.meta.dirname, '../corpus/agents/engineer.agent.md'), 'utf8') };
 const say = text => ({ text, toolCalls: [] });
 const call = (name, input) => ({ text: '', toolCalls: [{ id: 'call', name, input }] });
+
+test('lifecycle tools reject canonical home overrides before dispatch', () => {
+  for (const selector of [['--ae-home', '/other/control'], ['--ae-home=/other/control'], ['--harness-home', '/other/control']]) {
+    const result = beforeDeliveryTool({ name: 'harness', input: { argv: ['status', ...selector] } }, { workspace: process.cwd() });
+    assert.equal(result.pass, false);
+    assert.match(result.reason, /bound to this run workspace and homes/);
+  }
+  assert.equal(beforeDeliveryTool({ name: 'harness', input: { argv: ['status'] } }, { workspace: process.cwd() }).pass, true);
+});
 
 test('an explicit ordinary experiment replaces a previous domain completion selection', () => {
   for (const verb of ['begin', 'evaluate', 'resolve', 'status']) {

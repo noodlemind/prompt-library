@@ -5,10 +5,11 @@ import { estimateTokens } from '../token-meter.mjs';
 import { extract as lexicalExtract, SOURCE_EXTENSIONS } from './lexical-extractor.mjs';
 import { writeFileContained } from '../fs-safe.mjs';
 import { codebaseMapWriteRel } from '../project-layout.mjs';
-import { trackedSourceFiles, readSourceFile, MAX_FILES_SCANNED } from './scan.mjs';
+import { trackedSourceFiles, readSourceFile, inspectSourceFile, MAX_FILES_SCANNED } from './scan.mjs';
 import { readStructuralIndex } from './structural-index.mjs';
 import { importEdges } from './imports.mjs';
 import { readFileFacts, FILE_FACTS_VERSION } from './facts.mjs';
+import { captureWorkingSources } from './working-sources.mjs';
 
 const DEFAULT_MAX_TOKENS = 1000;
 
@@ -28,19 +29,21 @@ function requestRel(workspace, raw) {
   return text;
 }
 
-function currentStructuralFiles(workspace) {
+function currentStructuralFiles(workspace, home) {
   try {
     const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 15_000 });
     if (head.status !== 0) return null;
-    const index = readStructuralIndex(workspace, { expectedSha: head.stdout.trim() });
+    const index = readStructuralIndex(workspace, { home, expectedSha: head.stdout.trim() });
+    const source = captureWorkingSources(workspace);
+    if (!source.valid || index?.meta?.sourceState?.version !== source.state.version || index.meta.sourceState.configDigest !== source.state.configDigest || index.meta.sourceState.extractorRevision !== source.state.extractorRevision) return null;
     return index && !index.unreadable.length && index.meta.fileFactsVersion === FILE_FACTS_VERSION ? index.files : null;
   } catch {
     return null;
   }
 }
 
-function fileFacts(workspace, rels, { extract = lexicalExtract, preferStructural = true } = {}) {
-  const structural = preferStructural ? currentStructuralFiles(workspace) : null;
+function fileFacts(workspace, rels, { extract = lexicalExtract, preferStructural = true, home } = {}) {
+  const structural = preferStructural ? currentStructuralFiles(workspace, home) : null;
   const { facts } = readFileFacts(workspace, rels, { extract, cachedFiles: structural });
   return { facts, structural: Boolean(structural) };
 }
@@ -69,11 +72,11 @@ function trackedSourceForNeighborhood(sourceFiles, maxFiles, required) {
   return chosen;
 }
 
-export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract, title = 'Repo Map', preferStructural = true } = {}) {
+export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TOKENS, extract = lexicalExtract, title = 'Repo Map', preferStructural = true, home } = {}) {
   const { files, total } = trackedSourceFiles(workspace);
   if (!files.length) return { files: [], body: '', tokens: 0, empty: true };
 
-  const { facts: info, structural } = fileFacts(workspace, files, { extract, preferStructural });
+  const { facts: info, structural } = fileFacts(workspace, files, { extract, preferStructural, home });
   const tiers = { treesitter: 0, lexical: 0, error: 0, unreadable: 0 };
   for (const fact of info.values()) {
     tiers[fact.errors ? 'error' : fact.tier] += 1;
@@ -123,7 +126,7 @@ export function buildRepoMap({ workspace, query = '', maxTokens = DEFAULT_MAX_TO
   return { files: selected, body, tokens: estimateTokens(body), empty: false, totalFiles: total, structural: Boolean(structural) };
 }
 
-export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_SCANNED } = {}) {
+export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_SCANNED, home, includeEvidence = false } = {}) {
   const requested = Array.isArray(files) ? files : [files];
   const normalized = requested.map((raw) => ({ raw, rel: requestRel(workspace, raw) }));
   const trackedAll = listTracked(workspace);
@@ -135,6 +138,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
     normalized.map((item) => item.rel),
   );
   const trackedSet = new Set(tracked);
+  const inputs = [];
   const missing = [];
   const seenMissing = new Set();
   const seeds = [];
@@ -142,6 +146,21 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
   const requestedRels = [];
   const seen = new Set();
   for (const { raw, rel } of normalized) {
+    const input = inspectSourceFile(workspace, rel);
+    let state = input.state;
+    if (['readable', 'oversized'].includes(state) && !trackedAllSet.has(rel)) {
+      const ignored = spawnSync('git', ['-C', workspace, 'check-ignore', '-q', '--', rel], { timeout: 15_000 });
+      state = ignored.status === 1 ? 'new' : 'excluded';
+    }
+    inputs.push({ rel, state, ...(input.hash ? { hash: input.hash } : {}) });
+    if (!['readable', 'new'].includes(state) && !trackedAllSet.has(rel)) {
+      if (state === 'missing' && !seenMissing.has(rel)) { seenMissing.add(rel); missing.push(rel); }
+      continue;
+    }
+    if (state === 'new') {
+      if (SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase())) { tracked.push(rel); trackedSet.add(rel); }
+      else trackedAllSet.add(rel);
+    }
     if (rel && trackedSet.has(rel)) {
       if (!seen.has(rel)) {
         seen.add(rel);
@@ -166,7 +185,7 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
   }
   const hop = new Set(seeds);
   let incoming = new Map();
-  const facts = seeds.length ? fileFacts(workspace, tracked).facts : new Map();
+  const facts = seeds.length ? fileFacts(workspace, tracked, { home }).facts : new Map();
   if (seeds.length) {
     const edges = importEdges(facts, trackedSet);
     incoming = edges.incoming;
@@ -180,12 +199,13 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
     symbols: facts.get(rel).symbols,
     imports: facts.get(rel).imports,
     importedBy: [...(incoming.get(rel) || [])].sort(compareRel),
+    ...(includeEvidence ? { sha256: facts.get(rel).hash } : {}),
   }));
   for (const rel of plain) {
     filesOut.push({ rel, symbols: [], imports: [], importedBy: [] });
   }
   filesOut.sort((a, b) => compareRel(a.rel, b.rel));
-  return { files: filesOut, missing, requested: requestedRels };
+  return { files: filesOut, missing, requested: requestedRels, inputs };
 }
 
 /**

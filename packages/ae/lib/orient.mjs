@@ -1,31 +1,23 @@
-import { caffeinatedPointer } from './playbook-binding.mjs';
-import { locateVerification } from './verification-location.mjs';
 import fs from 'fs';
 import path from 'path';
-import { planStateFacts, reviewCoverageFacts } from './report-facts.mjs';
-import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
-import { runGate } from './gate.mjs';
+import { planStateFacts } from './report-facts.mjs';
+import { rankRecall } from './recall-rank.mjs';
 import { buildContextPack, learningsSectionBytes } from './context-pack.mjs';
 import { buildPlanView } from './plan-view.mjs';
-import { buildNeighborhood, buildRepoMap } from './repo-map/index.mjs';
-import { indexStatus } from './index-status.mjs';
-import { parseImpactedFiles } from './plan-scope.mjs';
-import { discoverInventory, routingCards, routingReadPointers, primitiveReadRoots } from './route.mjs';
-import { extractGoalFromPlan } from './plan-goal.mjs';
-import { ensureHarnessDir, readSession, writeSession } from './session.mjs';
-import { pickActivePlan, listPlanRels, loadPlan } from './plan-parse.mjs';
+import { buildRepoMap } from './repo-map/index.mjs';
+import { ensureHarnessDir, writeSession } from './session.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
-import { rankLearnings, explainLearnings } from './knowledge/retrieve.mjs';
-import { readStoreConfig, storeDir } from './knowledge/store.mjs';
+import { explainLearnings } from './knowledge/retrieve.mjs';
+import { storeDir } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { deriveGitContext } from './git-context.mjs';
 import { redactRecallEntry, redactSecrets } from './secret-scan.mjs';
 import { inertLine } from './knowledge/store.mjs';
-import { resolveObligation, intentPage } from './intent-sources.mjs';
 import { prepareNextTool } from './prepare.mjs';
 import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
-import { trustStatus } from './trust.mjs';
-import { performanceContext } from './performance.mjs';
+import { collectOrientationFacts } from './orientation-facts.mjs';
+import { buildContextRecord } from './context-record.mjs';
+import { accountContext } from './token-meter.mjs';
 
 const ORIENT_BRANCH_CAP = 80;
 function jsonGitContext(gitContext) {
@@ -37,13 +29,6 @@ function jsonGitContext(gitContext) {
     headSha: gitContext.headSha,
     baseSha: gitContext.baseSha,
   };
-}
-
-function indexPlane(plane) {
-  if (!plane?.indexed) return 'missing';
-  if (plane.unreadable?.length) return 'unreadable';
-  if (plane.stale) return 'stale';
-  return 'current';
 }
 
 export function runOrient({ workspace, copilotHome, flags, query, files }) {
@@ -60,6 +45,9 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }
 
   const home = flags.harnessHome || flags.home;
+  const facts = collectOrientationFacts({ workspace, copilotHome, flags, query: q, files });
+  const { active, session, namedFiles, gate: gatePreview, routingLines, status, procedure, obligation } = facts;
+  const { planGoal, learnings, trust, reviewCoverage, index, skills, instructions, contacts, neighborhood, verification, intentDiscovery, intentDetail, performance } = facts.slice;
   const recall = rankRecall(q, {
     copilotHome,
     workspace,
@@ -81,17 +69,13 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   const planFacts = planStateFacts(workspace);
   const planTotal = planFacts.total;
-  const plans = findMatchingPlans(workspace, q, flags.limit || 3).map((p) => ({
+  const plans = facts.matches.map((p) => ({
     path: p.path,
     status: p.status,
     plan_lock: p.plan_lock,
     score: Number(p.score.toFixed(3)),
   }));
 
-  const session = readSession(workspace) || {};
-  const active = flags.plan ? loadPlan(workspace, flags.plan) : pickActivePlan(workspace, session, plans, listPlanRels(workspace));
-  const verification = locateVerification(workspace, active?.fm?.verification?.recipe);
-  const planGoal = active ? extractGoalFromPlan(active) : null;
   const planView = active ? buildPlanView(active) : null;
 
   let memoryExcerpt = '';
@@ -104,39 +88,12 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
       .join('\n');
   }
 
-  const gatePreview = runGate({
-    workspace,
-    flags: { ...flags, phase: 'implement' },
-    query: q,
-  });
-
-  const suppliedFiles = Array.isArray(files) ? files : flags.files;
-  const namedFiles = suppliedFiles?.length ? suppliedFiles : active ? parseImpactedFiles(active) : session.files || [];
-
-    let learnings = [];
-  let explain = null;
-  try {
-    const { mode } = readStoreConfig(workspace, {});
-    if (mode !== 'off' && mode !== 'capture-only') {
-      learnings = rankLearnings({
-        workspace,
-        query: q,
-        limit: 3,
-        ...(Array.isArray(namedFiles) && namedFiles.length ? { signals: namedFiles } : {}),
-      });
-      if (flags.explain) {
-        explain = explainLearnings({ workspace, query: q });
-      }
-    }
-  } catch {
-    learnings = [];
-    explain = null;
-  }
+  const explain = flags.explain ? explainLearnings({ workspace, query: q, home }) : null;
 
     let repoMapRef = null;
   try {
     const repoMapRel = '.harness/repo-map.md';
-    const repoMap = buildRepoMap({ workspace, query: q });
+    const repoMap = buildRepoMap({ workspace, query: q, home });
     if (!repoMap.empty) {
       if (!flags.dryRun) fs.writeFileSync(path.join(workspace, repoMapRel), repoMap.body, 'utf8');
       repoMapRef = { path: repoMapRel, files: repoMap.files.length, totalFiles: repoMap.totalFiles };
@@ -148,38 +105,22 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   const nextTools = gatePreview.pass
     ? ['ae gate --phase implement', 'read plan ## Impacted Files', `ae review prepare --plan ${active?.path || '<path>'}`, 'ae verify', `ae compound --plan ${active?.path || '<path>'} --learning-decision <file>`, `ae plan-update --plan ${active?.path || '<path>'} --file <complete-decision.json>`]
     : [`ae gate --plan ${active?.path || '<path>'}`, 'read ensure-plan/SKILL.md'];
-  const trust = trustStatus({ workspace, copilotHome, home });
   if (!trust.trusted) nextTools.push('ae trust status  # a person must approve policy before named checks run');
 
-  const obligation = resolveObligation(workspace, active, q);
   const intentSources = obligation.paths;
-  const intentDiscovery = obligation.metadata;
-  const intentDetail = flags.intentPage ? intentPage(workspace, active?.fm?.intent || q, { page: flags.intentPage, pageSize: flags.intentPageSize || 8 }) : null;
   const isolation = inspectIsolation({ workspace, home, allowInplace: flags.allowInplace });
   if (isolation.blocked) {
     nextTools.unshift(`ae worktree --slug ${planSlugFromPath(active?.path)}`);
   }
-  const procedure = caffeinatedPointer(active, { copilotHome });
+  if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
   if (procedure) nextTools.push(`read ${inertLine(procedure.path)}`);
   if (verification.path) nextTools.push(`read ${inertLine(verification.path)}`);
-  if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
   if (obligation.reason === 'none') nextTools.push(prepareNextTool(workspace));
   if (intentDiscovery?.omittedCount) nextTools.push('ae orient --read --intent-page 1 --json');
 
-  let index = { knowledge: 'missing', structural: 'missing' };
-    try {
-    const status = indexStatus({ workspace, copilotHome, home });
-    index = {
-      knowledge: indexPlane(status.knowledge),
-      structural: indexPlane(status.structural),
-    };
-    if (status.stale) nextTools.push('ae index  # knowledge index is behind HEAD');
-    if (status.structural && !status.structural.indexed) nextTools.push('ae index  # code index is not built');
-    else if (status.structural?.unreadable?.length) nextTools.push('ae index  # code index is unreadable');
-    else if (status.structural?.stale) nextTools.push('ae index  # code index is behind HEAD');
-  } catch {
-    // Staleness is advisory; never block orientation on it.
-  }
+  if (status?.stale) nextTools.push('ae index  # knowledge index is behind HEAD');
+  if (status?.structural?.unreadable?.length) nextTools.push('ae index --structural  # code index is unreadable');
+  else if (!status?.structural?.indexed || status.structural.stale) nextTools.push('ae index --structural  # refresh current code facts');
 
     let knowledgeDebt = null;
   try {
@@ -196,36 +137,16 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     // Advisory; never block orientation on it.
   }
 
-  let routingLines = null;
-  let skills = [];
-  let instructions = [];
-  let contacts = [];
-  if (active?.fm?.routing) {
-    const inventory = discoverInventory(primitiveReadRoots(copilotHome));
-    routingLines = routingReadPointers(active.fm.routing, inventory);
-    ({ skills, instructions, contacts } = routingCards(active.fm.routing, inventory));
-    if (gatePreview.pass) {
-      for (const line of routingLines) {
-        if (line.startsWith('read ') && !nextTools.includes(line)) nextTools.push(line);
-      }
-      const javaFile = parseImpactedFiles(active).find((rel) => rel.endsWith('.java'));
-      if (javaFile) nextTools.push(`read ${javaFile}`);
-    }
+  if (gatePreview.pass && routingLines) {
+    for (const line of routingLines) if (line.startsWith('read ') && !nextTools.includes(line)) nextTools.push(line);
+    const javaFile = namedFiles.find(rel => rel.endsWith('.java'));
+    if (javaFile) nextTools.push(`read ${javaFile}`);
   }
 
-  let neighborhood = null;
-  if (Array.isArray(namedFiles) && namedFiles.length) {
-    try {
-      neighborhood = buildNeighborhood({ workspace, files: namedFiles });
-    } catch {
-      // Neighborhood is advisory context; never fail orientation on it.
-    }
-  }
-
-  const reviewCoverage = reviewCoverageFacts({ workspace, plan: active, copilotHome });
-  const performance = performanceContext({ workspace, home, files: namedFiles || [] });
   const packBody = buildContextPack({
     performance,
+    verification,
+    intentDiscovery,
     reviewCoverage,
     trust,
     query: q,
@@ -245,7 +166,6 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
       : null,
     planGoal,
     planView,
-    verification,
     repoMapRef,
     gatePreview: { pass: gatePreview.pass, blockedReason: gatePreview.blockedReason },
     nextTools,
@@ -253,7 +173,6 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     routingLines,
     neighborhood,
     intentSources,
-    intentDiscovery,
     worktree: isolation,
   });
 
@@ -270,6 +189,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     lastQuery: q,
     lastOrientAt: new Date().toISOString(),
     activePlan: active?.path || null,
+    lastContextFiles: namedFiles,
     contextPack: packRel,
     gateStatus: gatePreview.pass ? 'pass' : 'blocked',
     blockedReason: gatePreview.blockedReason,
@@ -283,6 +203,9 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   return {
     recall,
     ...(performance ? { performance } : {}),
+    verification,
+    intentDiscovery,
+    intentDetail,
     trust,
     learnings,
     deliveredLearnings,
@@ -302,9 +225,9 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
           intentContractExcerpt: planGoal.intentContractExcerpt,
         }
       : null,
-    verification,
     contextPack: packRel,
     repoMap: repoMapRef,
+    contextAccounting: accountContext({ boundary: 'orientation-output', components: [{ category: 'pack', id: packRel, content: packBody }] }),
     knowledgeDebt,
     gitContext: jsonGitContext(gitContext),
     worktree: {
@@ -315,17 +238,16 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
       skipReason: isolation.skipReason,
     },
     intentSources,
-    intentDiscovery,
-    intentDetail,
     reviewCoverage,
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,
     neighborhood,
-    skills: procedure && !skills.some(skill => skill.id === procedure.id) ? [...skills, procedure] : skills,
+    skills,
     instructions,
     contacts,
     index,
+    ...(flags.contextVersion === 2 ? { context: buildContextRecord({ workspace, flags, query: q, facts }) } : {}),
   };
 }
 

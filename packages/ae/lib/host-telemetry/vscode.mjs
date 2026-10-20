@@ -3,6 +3,7 @@ import path from 'node:path';
 import { resolveCopilotHome } from '../paths.mjs';
 import { collectSessionState } from './session-state.mjs';
 import { canonicalDirectoryRoot, directoryRootsOverlap } from './workspace-scope.mjs';
+import { accountContext } from '../token-meter.mjs';
 
 const NORMALIZED_WORKSPACE = Symbol('normalizedWorkspace');
 
@@ -80,6 +81,7 @@ function normalizeRecord(record) {
       estimated: false,
     },
   };
+  normalized.contextAccounting = accountContext({ boundary: 'host-usage-only', usage: normalized.usage });
   Object.defineProperty(normalized, NORMALIZED_WORKSPACE, {
     value: canonicalDirectoryRoot(
       record.workspaceRoot ?? record.workspace ?? record.gitRoot ?? record.cwd ?? null

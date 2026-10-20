@@ -11,6 +11,7 @@ import { resolvePlanUpdateFile } from './plan-update.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 import { readEvidence } from './evidence.mjs';
 import { harnessControlCommand, normalizeToolPayload, unwrapShellSegments } from '../corpus/hooks/lib/tool-payload.mjs';
+import { validateContextSnapshot } from './task-handoff.mjs';
 
 export const DELIVERY_BIN = fileURLToPath(new URL('../bin/ae.mjs', import.meta.url));
 const HOOK_ROOT = fileURLToPath(new URL('../corpus/hooks/', import.meta.url));
@@ -69,14 +70,14 @@ export function beforeDeliveryTool(call, options) {
   if (call.name === 'todo') return { pass: true };
   if (call.name === 'harness') {
     const argv = call.input?.argv;
-    if (!Array.isArray(argv) || !argv.length || !argv.every(arg => typeof arg === 'string')) return { pass: false, reason: 'harness requires argv for a supported lifecycle command or exact diagnostic/worklist control' };
+    if (!Array.isArray(argv) || !argv.length || !argv.every(arg => typeof arg === 'string')) return { pass: false, reason: 'ae requires argv for a supported lifecycle command or exact diagnostic/worklist control' };
     let decisionFlag;
     try { decisionFlag = inlineDecisionFlag(call.input); }
     catch (error) { return { pass: false, reason: error.message }; }
     const effectiveArgv = decisionFlag ? [...argv, decisionFlag, path.join(os.tmpdir(), 'harness-agent-decision-placeholder', 'decision.json')] : argv;
-    if (!(COMMANDS.has(argv[0]) || ['todo', 'inventory', 'domain', 'experiment'].includes(argv[0]) && harnessControlCommand(['harness', ...effectiveArgv], options.workspace) === argv[0])) return { pass: false, reason: 'harness requires argv for a supported lifecycle command or exact diagnostic/worklist control' };
+    if (!(COMMANDS.has(argv[0]) || ['todo', 'inventory', 'domain', 'experiment'].includes(argv[0]) && harnessControlCommand(['harness', ...effectiveArgv], options.workspace) === argv[0])) return { pass: false, reason: 'ae requires argv for a supported lifecycle command or exact diagnostic/worklist control' };
     if (argv[0] === 'trust' && argv[1] && argv[1] !== 'status') return { pass: false, reason: 'Trust approval or revocation requires a person; the agent may read trust status only.' };
-    if (argv.some(arg => /^--(?:workspace|copilot-home|harness-home|home)(?:=|$)/.test(arg))) return { pass: false, reason: 'Lifecycle commands are bound to this run workspace and homes.' };
+    if (argv.some(arg => /^--(?:workspace|copilot-home|ae-home|harness-home|home)(?:=|$)/.test(arg))) return { pass: false, reason: 'Lifecycle commands are bound to this run workspace and homes.' };
     return { pass: true };
   }
   const payload = toolPayload(call, options.workspace, options.sessionId);
@@ -93,6 +94,8 @@ export function beforeDeliveryTool(call, options) {
   if (productMutation) {
     const session = readSession(options.workspace);
     if (!session?.lastOrientReadAt || !session.files?.length) return { pass: false, reason: 'missing-orient-read: call ae orient --read --query <task> --file <each touched file> before product edits.' };
+    const current = validateContextSnapshot({ workspace: options.workspace, snapshot: session.contextSnapshot, targets: normalized.targets });
+    if (!current.pass) return current;
   }
   return { pass: true };
 }

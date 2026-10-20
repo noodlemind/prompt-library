@@ -75,8 +75,8 @@ export function compareResults(a, b) {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-export function encodeCursor({ score, source, id, generations }) {
-  return Buffer.from(JSON.stringify({ v: RETRIEVAL_RECORD_VERSION, score, source, id, generations }), 'utf8').toString('base64url');
+export function encodeCursor({ score, source, id, generations = {}, context = null }) {
+  return Buffer.from(JSON.stringify({ v: context ? 2 : 1, score, source, id, generations, ...(context ? { context } : {}) }), 'utf8').toString('base64url');
 }
 
 export function decodeCursor(raw) {
@@ -87,13 +87,13 @@ export function decodeCursor(raw) {
   } catch {
     throw Object.assign(new Error('invalid --cursor: not a cursor this build issued'), { code: 'E_USAGE' });
   }
-  if (!parsed || parsed.v !== RETRIEVAL_RECORD_VERSION || typeof parsed.id !== 'string' || !SOURCE_RANK.has(parsed.source)) {
+  if (!parsed || ![1, 2].includes(parsed.v) || !Number.isFinite(parsed.score) || typeof parsed.id !== 'string' || !SOURCE_RANK.has(parsed.source) || !parsed.generations || typeof parsed.generations !== 'object' || Array.isArray(parsed.generations)) {
     throw Object.assign(new Error('invalid --cursor: not a cursor this build issued'), { code: 'E_USAGE' });
   }
   return parsed;
 }
 
-export function federate({ sources = [], limit = 20, cursor = null } = {}) {
+export function federate({ sources = [], limit = 20, cursor = null, cursorContext = null } = {}) {
   const after = decodeCursor(cursor);
   const generations = {};
   const reported = [];
@@ -111,6 +111,11 @@ export function federate({ sources = [], limit = 20, cursor = null } = {}) {
     reported.push({ source, status, reason, generation, count: status === 'ok' ? results.length : 0 });
     if (status !== 'ok') continue;
     merged = merged.concat(normalizeSourceScores(results));
+  }
+  if (after) {
+    if ((after.v === 2 || cursorContext) && after.context !== cursorContext) throw Object.assign(new Error('cursor belongs to a different query or policy; restart the search'), { code: 'E_CURSOR_CONTEXT', exit: 2 });
+    const generationKey = value => JSON.stringify(Object.keys(value).sort().map(key => [key, value[key]]));
+    if (generationKey(after.generations) !== generationKey(generations)) throw Object.assign(new Error('cursor source generation changed; restart the search'), { code: 'E_CURSOR_STALE', exit: 2 });
   }
 
   const seen = new Set();
@@ -137,7 +142,7 @@ export function federate({ sources = [], limit = 20, cursor = null } = {}) {
     sources: reported,
     total: ordered.length,
     truncated: more,
-    nextCursor: more && last ? encodeCursor({ score: last.score, source: last.source, id: last.id, generations }) : null,
+    nextCursor: more && last ? encodeCursor({ score: last.score, source: last.source, id: last.id, generations, context: cursorContext }) : null,
     generations,
         partial: reported.some((s) => s.status === 'failed'),
   };

@@ -10,6 +10,7 @@ import { collectEpisodes } from '../knowledge/consolidate.mjs';
 import { readStructuralIndex } from '../structural/shape.mjs';
 import { planReadDirs } from '../project-layout.mjs';
 import { getCorpusRoot } from '../assets.mjs';
+import { assertSourceCurrent, parseSourceReference, sourceHash } from './source-evidence.mjs';
 
 /** The settled kind list, in the order the architecture doc states it. */
 export const LOOKUP_KINDS = Object.freeze([
@@ -78,30 +79,34 @@ function readUnderWorkspace(workspace, rel) {
   const root = path.resolve(workspace);
   const full = safeResolveUnderRoot(root, rel);
   if (!full) return { escaped: true, raw: null, full: null };
-  const raw = readFileNoFollow(full, { root });
-  return { escaped: false, raw, full };
+  const bytes = readFileNoFollow(full, { root, encoding: null });
+  return { escaped: false, raw: bytes?.toString('utf8') ?? null, bytes, full };
 }
 
 function fileEntity({ workspace, identifier }) {
-  const { escaped, raw, full } = readUnderWorkspace(workspace, identifier);
+  const reference = parseSourceReference(identifier);
+  identifier = reference.path;
+  const { escaped, raw, bytes, full } = readUnderWorkspace(workspace, identifier);
   if (escaped) {
     throw usageError(`path escapes the workspace: ${identifier}`, 'lookup file <workspace-relative-path>');
   }
   if (raw === null) throw notFound({ kind: 'file', identifier, hint: 'lookup file <workspace-relative-path>' });
+  const sha256 = sourceHash(bytes);
+  assertSourceCurrent(reference.sha256, sha256);
   return {
     kind: 'file',
     id: identifier,
     location: identifier,
     title: path.basename(identifier),
     provenance: { source: 'workspace', root: path.resolve(workspace) },
-    metadata: { bytes: Buffer.byteLength(raw, 'utf8'), lines: raw.split(/\r?\n/).length, absent: !full },
+    metadata: { bytes: bytes.length, lines: raw.split(/\r?\n/).length, absent: !full, sha256 },
     preview: preview(raw),
     related: [],
   };
 }
 
 function symbolEntity({ workspace, identifier, home }) {
-  const index = readStructuralIndex(workspace, { home });
+  const index = readStructuralIndex(workspace, { home, requireCurrent: true });
   if (!index.present) {
     throw notFound({
       kind: 'symbol',
@@ -123,7 +128,7 @@ function symbolEntity({ workspace, identifier, home }) {
     id: identifier,
     location: first.file ? `${first.file}:${first.def?.line ?? ''}`.replace(/:$/, '') : null,
     title: identifier,
-    provenance: { source: 'structural-index', generation: index.meta?.sha ?? null },
+    provenance: { source: 'structural-index', generation: index.meta.sourceState.digest },
     metadata: {
       definitions: matches.length,
       exported: Boolean(first.exported),

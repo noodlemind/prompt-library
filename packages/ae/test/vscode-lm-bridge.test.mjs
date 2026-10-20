@@ -231,6 +231,42 @@ test('the GitHub Copilot adapter uses the editor for both catalogue and completi
   assert.equal(completion.model, 'copilot/gpt-4.1');
 });
 
+test('explicit Copilot Auto reaches the native selector through the real adapter', async t => {
+  const copilotHome = tempDir('bridge-auto-home-');
+  const calls = [];
+  const { vscode, context } = fakeVSCode({ onRequest: request => calls.push(request) });
+  const [model] = await vscode.lm.selectChatModels();
+  const requested = [];
+  vscode.lm.selectChatModels = async selector => {
+    requested.push(selector.id ?? null);
+    return !selector.id || selector.id === 'auto' ? [{ ...model, id: 'auto', name: 'Auto',
+      async sendRequest(messages, options, token) {
+        if (!messages.at(-1).content.some(part => part instanceof TextPart)) throw new Error('Auto mode needs a prompt or a command to route a request.');
+        return model.sendRequest(messages, options, token);
+      },
+    }] : [];
+  };
+  const bridge = await startBridgeServer({ vscode, context, copilotHome });
+  t.after(() => bridge.close());
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  const provider = startProvider({ provider: 'github-copilot', model: 'auto', copilotHome });
+  t.after(() => provider.close());
+  const result = await provider.complete({ messages: [{ role: 'user', text: 'hello' }], tools: [] });
+  assert.equal(provider.model, 'auto');
+  assert.equal(result.model, 'auto');
+  assert.equal(requested[0], 'auto');
+  const next = await provider.complete({ messages: [
+    { role: 'user', text: 'hello' },
+    { role: 'assistant', blocks: result.blocks },
+    { role: 'user', toolResults: [{ id: 'call-1', output: 'wrote notes.md' }] },
+  ], tools: [] });
+  assert.equal(next.model, 'auto');
+  assert.equal(next.text, 'editor response');
+  assert.equal(calls[1].messages.at(-2).content[0].callId, 'call-1');
+  assert.equal(calls[1].messages.at(-2).content[0].content[0].value, 'wrote notes.md');
+  assert.equal(calls[1].messages.at(-1).content[0].value, 'Continue the current task using these tool results.');
+});
+
 test('GitHub Copilot refuses direct HTTPS credentials when the editor bridge is absent', async (t) => {
   const copilotHome = tempDir('bridge-required-home-');
   let directRequests = 0;

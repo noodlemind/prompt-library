@@ -6,6 +6,9 @@ function send(message) {
 }
 
 async function editorRequest(method, params, { onDelta = null } = {}) {
+  if (method === 'complete' && params.model === 'auto' && params.messages?.at(-1)?.toolResults?.length) {
+    params = { ...params, messages: [...params.messages, { role: 'user', text: 'Continue the current task using these tool results.' }] };
+  }
   return requestEditorBridge(method, params, {
     statePath: process.env.HARNESS_COPILOT_BRIDGE_STATE,
     onChunk: onDelta,

@@ -20,6 +20,7 @@ export const EVENT_TYPE = Object.freeze({
   COMMAND_START: 'command.start',
   COMMAND_RESULT: 'command.result',
   AGENT_LANE: 'agent_lane',
+  CONTEXT_ACCOUNTING: 'context.accounting',
 });
 
 export function detectActor(env = process.env) {

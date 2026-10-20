@@ -9,8 +9,6 @@ export const PROVIDER_TIMEOUT_MS = 300_000;
 
 export const AUTO_MODEL = 'auto';
 
-/** Whether a caller asked the harness to choose. Trimmed and case-insensitive:
- * this is a word a person types. */
 export function isAutoModel(model) {
   return typeof model === 'string' && model.trim().toLowerCase() === AUTO_MODEL;
 }
@@ -180,6 +178,13 @@ export function resolveDefaultModel(providerId, cache = {}) {
   const preferred = PROVIDERS[providerId]?.defaultModel ?? null;
     if (preferred && (!models.length || models.includes(preferred))) return preferred;
   return models[0] ?? preferred ?? null;
+}
+
+export function resolveRequestedModel(providerId, requested, cache = {}) {
+  if (isAutoModel(requested)) {
+    return providerId === 'github-copilot' ? AUTO_MODEL : resolveDefaultModel(providerId, cache);
+  }
+  return requested || resolveDefaultModel(providerId, cache);
 }
 
 /** Loopback is the one place a plaintext base URL is not a mistake. */
@@ -364,7 +369,7 @@ export function startProvider({
     }
   }
   const provider = resolveProvider(providerId);
-    const model = isAutoModel(requestedModel) ? null : requestedModel;
+  const model = resolveRequestedModel(providerId, requestedModel);
     const root = packageRoot || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const adapter = path.join(root, 'lib', provider.adapter);
   if (!fs.existsSync(adapter)) {

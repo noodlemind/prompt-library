@@ -115,6 +115,31 @@ test('old file facts cannot hide dynamic imports in live queries or incremental 
   assert.deepEqual(readStructuralIndex(f.workspace, f).files['a.mjs'].imports, ['./b.mjs']);
 });
 
+for (const change of ['missing source state', 'extractor revision', 'resolver configuration']) {
+  test(`live graph refreshes cached facts after ${change} changes`, async t => {
+    const f = fixture(t, {
+      'a.mjs': "export const load = () => import('./b.mjs');\n",
+      'b.mjs': 'export const b = 1;\n',
+      'package.json': '{"type":"module"}\n',
+    });
+    await buildStructuralIndex(f);
+    const prior = readStructuralIndex(f.workspace, f);
+    prior.files['a.mjs'].imports = [];
+    if (change === 'missing source state') delete prior.meta.sourceState;
+    if (change === 'extractor revision') {
+      prior.meta.sourceState.extractorRevision = 'f'.repeat(64);
+      prior.meta.sourceState.digest = 'e'.repeat(64);
+    }
+    assert.equal(publishSnapshot(structuralCacheDir(f.workspace, f), [
+      ['meta.json', prior.meta], ['files.json', prior.files], ['symbols.json', prior.symbols], ['graph.json', prior.graph],
+    ]).ok, true);
+    if (change === 'resolver configuration') f.write('package.json', '{"type":"commonjs"}\n');
+    const current = queryGraph({ ...f, operation: 'path', files: ['a.mjs', 'b.mjs'] });
+    assert.deepEqual(current.path, ['a.mjs', 'b.mjs']);
+    assert.equal(current.cache.reused, 0);
+  });
+}
+
 test('a source change during extraction refuses publication and preserves the previous snapshot', async (t) => {
   const f = fixture(t, { 'src/main.mjs': 'export function alpha() {}\n' });
   await buildStructuralIndex(f);

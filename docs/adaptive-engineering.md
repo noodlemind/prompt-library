@@ -305,3 +305,13 @@ Immutable series/reservation/transition journals live in `<project-store>/experi
 Target satisfaction, exhaustion, cancellation, evaluator invalidity and unknown ownership stop new candidate attempts. None completes the plan. Increasing global invocation or wall limits requires an accepted amendment on this same plan and preserves origin, baseline and spent count; changing other frozen inputs invalidates the series. After retaining a correct target, complete ordinary progress, required review, separate behavioral `verify`, learning/no-learning and completion. Evidence version 7 binds retained measurement/artifacts before and after final verification. Mandatory `experiment-target` and `experiment-retention-stability` checks cannot become advisory or disappear from accepted proof. An unmet target remains unfinished even when ordinary behavior is green.
 
 These mechanisms have dedicated CLI and process tests. Native editor delivery and comparative model outcomes remain separate acceptance evidence. The interactive Windows product/editor pilot was waived. Supported macOS measurement does not establish Windows experiment isolation; headless Windows CLI regressions remain separate required proof.
+
+## Current and expandable context
+
+Structural indexes bind working source bytes, tracked paths, resolver configuration, and extractor revisions. A dirty edit invalidates current reads. Orientation uses current lexical facts when the index is stale. Explicit new files contribute facts without indexing unrelated untracked files.
+
+Orientation shares one fact collector across the pack and read response. Existing clients retain the current legacy read fields, including graph, intent discovery, verification and optional performance context. `ae orient --read --context-version 2` adds source identities, coverage limits, omissions, and accounting. Responses above 32 KiB return a read barrier with source pointers. A returned source reference refuses changed bytes. These records do not prove semantic completeness.
+
+The optional headless runtime exposes experimental `legacy`, `selective`, and `subsystem` context policies. Selective evidence follows task seeds and import neighbors. Subsystem evidence adds files under seed directories. Each policy reports clipping and omissions. Structured retention reloads the existing plan and evidence after context changes. Both defaults remain legacy until task evaluation supports a change.
+
+Reports separate produced-artifact estimates, runtime requests, and observed host usage. Missing host visibility remains unavailable. Model-task quality and installed-editor behavior require their own evidence.

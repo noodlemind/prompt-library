@@ -1,4 +1,61 @@
 const CHARS_PER_TOKEN = 4;
+export const CONTEXT_CATEGORIES = Object.freeze(['pack', 'instructions', 'capabilities', 'evidence', 'toolResults', 'history', 'handoff']);
+
+export function accountContext({ boundary, components = [], usage = null, reads = [] } = {}) {
+  const categoryCoverage = Object.fromEntries(CONTEXT_CATEGORIES.map(category => [category, 'unavailable']));
+  const measured = components.map(({ category, id, content }) => {
+    if (!CONTEXT_CATEGORIES.includes(category)) throw new TypeError(`unknown context category: ${category}`);
+    const text = typeof content === 'string' ? content : JSON.stringify(content ?? '');
+    categoryCoverage[category] = 'estimated';
+    return { category, id, bytes: Buffer.byteLength(text, 'utf8'), tokens: estimateTokens(text), measurement: 'estimated' };
+  });
+  const inputTokens = tokenCount(usage?.['gen_ai.usage.input_tokens'] ?? usage?.inputTokens);
+  const outputTokens = tokenCount(usage?.['gen_ai.usage.output_tokens'] ?? usage?.outputTokens);
+  const cachedInputTokens = tokenCount(usage?.['gen_ai.usage.cache_read_tokens'] ?? usage?.cacheReadTokens);
+  const hasUsage = inputTokens !== null || outputTokens !== null || cachedInputTokens !== null;
+  return {
+    schema: 1, boundary,
+    components: measured.slice(0, 128),
+    componentsOmitted: Math.max(0, measured.length - 128),
+    knownBytes: measured.reduce((sum, item) => sum + item.bytes, 0),
+    estimatedTokens: measured.reduce((sum, item) => sum + item.tokens, 0),
+    categoryCoverage,
+    modelInputCoverage: boundary === 'headless-request' ? 'runtime-request-only' : 'unavailable',
+    modelUsage: { inputTokens, outputTokens, cachedInputTokens, measurement: hasUsage ? usage?.estimated === true ? 'estimated' : 'observed' : 'unavailable' },
+    reads: reads.length,
+    repeatedReads: reads.length - new Set(reads).size,
+  };
+}
+
+export function summarizeContextAccounting(events = []) {
+  const groups = new Map();
+  for (const event of events) {
+    const record = event.contextAccounting;
+    if (!record || record.schema !== 1 || event.type === 'agent.turn') continue;
+    if (!['headless-request', 'orientation-output', 'host-usage-only'].includes(record.boundary)) continue;
+    const rows = groups.get(record.boundary) || [];
+    rows.push(record);
+    groups.set(record.boundary, rows);
+  }
+  const boundaries = Object.fromEntries([...groups].map(([boundary, rows]) => {
+    const observed = rows.filter(row => row.modelUsage?.measurement === 'observed');
+    const known = field => {
+      const values = observed.map(row => tokenCount(row.modelUsage[field])).filter(value => value !== null);
+      return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+    };
+    return [boundary, {
+      records: rows.length,
+      observedUsageRecords: observed.length,
+      knownBytes: rows.reduce((sum, row) => sum + (tokenCount(row.knownBytes) || 0), 0),
+      estimatedTokens: rows.reduce((sum, row) => sum + (tokenCount(row.estimatedTokens) || 0), 0),
+      knownObservedInputTokens: known('inputTokens'),
+      knownObservedOutputTokens: known('outputTokens'),
+      knownCachedInputTokens: known('cachedInputTokens'),
+      usageCoverage: observed.length === rows.length ? 'observed-at-least-in-part' : observed.length ? 'partial' : 'unavailable',
+    }];
+  }));
+  return { boundaries, combinedModelTotal: null, reason: 'Artifact estimates, runtime requests and host observations may overlap. Inspect each boundary separately.' };
+}
 
 /** Estimate tokens for a string (or any JSON-serializable value). */
 export function estimateTokens(value) {

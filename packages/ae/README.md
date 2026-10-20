@@ -154,11 +154,17 @@ ae agent "task" --dry-run --json
 
 Profiles: `autonomous` (default) · `deliver` · `benchmark` (fixture). **Not** the Adaptive Engineering product runtime — host `@engineer` + kernel remain that.
 
+Context expansion is opt-in. `orient --read --context-version 2` returns source identities, coverage and expansion limits; the default read response keeps its current legacy shape. `get --path <path@sha256:hash> --context-version 2` refuses changed bytes. Knowledge references use `docid:<id>@sha256:<hash>` and expand through the same `get --path` command or the agent's `read` tool. Version 2 search cursors bind the query, filters and source generation. A sparse packet does not establish semantic completeness.
+
+The optional agent loop accepts `--context-policy legacy|selective|subsystem` and repeatable `--file <path>`. Selective loads bounded seed neighborhoods; subsystem adds bounded source files from seed directories. Evidence refreshes before each model request. `--retention-policy structured` preserves task state and source references during loop compaction. Both defaults remain `legacy`. Native editor hosts control their own compaction; reorient and reload the plan after it occurs. See the context pilot in `eval/README.md` before changing defaults.
+
 For the `github-copilot` provider, the signed-in VS Code editor is the only
 transport. Harness never reads Copilot credentials, exchanges OAuth tokens, or
 calls GitHub Copilot model/completion endpoints itself. The companion extension
 uses `vscode.lm`, keeping authentication, proxy policy, and enterprise CA
 handling inside VS Code.
+
+An explicit `--model auto` selects VS Code's native Auto routing for GitHub Copilot. An omitted model keeps Harness default selection. Other providers interpret `auto` as their default model. Auto responses may identify only the routing alias, so resolved model identity remains unknown.
 
 After installation or upgrade, reload the VS Code window and sign in to GitHub
 Copilot Chat. The extension starts automatically, opens an authenticated

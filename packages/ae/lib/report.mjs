@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { eventPath } from './events.mjs';
-import { measuredUsage, summarizeUsage } from './token-meter.mjs';
+import { measuredUsage, summarizeUsage, summarizeContextAccounting } from './token-meter.mjs';
 import { createStyle, keyWidthFor } from './style.mjs';
 
 const REPORT_EVENT_CAP = 2000;
@@ -408,6 +408,7 @@ export function buildReport({ workspace, copilotHome, events }) {
     },
     span,
     hostBacked,
+    contextAccounting: summarizeContextAccounting(all),
     sinks: rankSinks(all),
     topSessions: topSessions(all),
     sessions: performance.rows,

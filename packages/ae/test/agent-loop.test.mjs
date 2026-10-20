@@ -27,6 +27,7 @@ import { EXIT } from '../lib/style.mjs';
 import { setRunContext, clearRunContext } from '../lib/run-context.mjs';
 import { createEventRegistry } from '../lib/event-registry.mjs';
 import { writeEvent as writeHarnessEvent } from '../lib/events.mjs';
+import { initGit } from './helpers/index.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
@@ -99,6 +100,87 @@ test('P5AC9: the loop orients, acts through a tool, and stops when the model ask
   assert.equal(fs.readFileSync(path.join(ws, 'done.txt'), 'utf8').trim(), 'hello', 'the tool actually ran');
   assert.equal(result.text, 'wrote the file');
   assert.equal(result.usage.outputTokens, 10, 'usage accumulates across turns');
+});
+
+test('context accounting records actual runtime requests and repeated reads without storing payload content', async (t) => {
+  const { ws, home } = scaffold('agent-context-accounting');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(ws, 'target.txt'), 'private payload marker');
+  const provider = scriptedProvider([callTool('r1', 'read', { path: 'target.txt' }), callTool('r2', 'read', { path: 'target.txt' }), say('finished')]);
+  const result = await agentResultOf(argvFor(ws, home, 'inspect target'), {}, { startProviderFn: provider.start });
+  assert.equal(result.contextAccounting.length, 3);
+  assert.equal(result.contextAccounting[2].reads, 2);
+  assert.equal(result.contextAccounting[2].repeatedReads, 1);
+  assert.equal(result.contextAccounting[2].modelUsage.inputTokens, 5);
+  assert.equal(result.contextAccounting[2].modelInputCoverage, 'runtime-request-only');
+  assert.equal(JSON.stringify(result.contextAccounting).includes('private payload marker'), false);
+});
+
+test('structured retention is opt-in and sends a current handoff to the provider', async (t) => {
+  const { ws, home } = scaffold('agent-structured-retention');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const provider = scriptedProvider([say('finished')]);
+  const result = await agentResultOf(argvFor(ws, home, 'continue accepted work', ['--retention-policy', 'structured']), {}, { startProviderFn: provider.start });
+  assert.equal(result.task, 'continue accepted work');
+  assert.equal(result.retentionPolicy, 'structured');
+  assert.ok(provider.requests[0].messages.some(message => message.contextCategory === 'handoff' && message.text.includes('continue accepted work')));
+});
+
+test('structured retention compacts old searches while preserving references and pagination', async (t) => {
+  const { ws, home } = scaffold('agent-search-retention');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(ws, 'a.mjs'), 'export const retentionMarker = 1;\n');
+  fs.writeFileSync(path.join(ws, 'b.mjs'), 'export const retentionMarker = 2;\n');
+  initGit(ws);
+  const provider = scriptedProvider([
+    callTool('old-search', 'search', { query: 'retentionMarker', contextVersion: 2, limit: 1 }),
+    ...Array.from({ length: 7 }, (_, i) => callTool(`read-${i}`, 'read', { path: 'a.mjs' })),
+    say('finished'),
+  ]);
+  const result = await agentResultOf(argvFor(ws, home, 'inspect sources', ['--retention-policy', 'structured', '--max-turns', '12']), {}, { startProviderFn: provider.start });
+  assert.equal(result.stopReason, 'done');
+  const findSearch = request => request.messages.flatMap(message => message.toolResults || []).find(row => row.id === 'old-search');
+  const original = findSearch(provider.requests[1]);
+  const compacted = findSearch(provider.requests.at(-1));
+  assert.match(compacted.output, /Earlier search omitted/);
+  assert.doesNotMatch(compacted.output, /export const retentionMarker/);
+  assert.equal(compacted.search.query, 'retentionMarker');
+  assert.equal(compacted.search.nextCursor, original.search.nextCursor);
+  assert.ok(compacted.search.nextCursor);
+  assert.equal(compacted.search.results[0].reference, original.search.results[0].reference);
+  assert.match(compacted.output, /a\.mjs@sha256:|b\.mjs@sha256:/);
+});
+
+test('selective context refreshes source data before each model request', async (t) => {
+  const { ws, home } = scaffold('agent-selective-context');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(ws, 'src'));
+  fs.writeFileSync(path.join(ws, 'src/target.mjs'), 'export function item() { return 1; }\n');
+  initGit(ws);
+  const provider = scriptedProvider([callTool('edit', 'edit', { path: 'src/target.mjs', old: 'return 1;', new: 'return 2;' }), say('finished')]);
+  const result = await agentResultOf(argvFor(ws, home, 'update target', ['--context-policy', 'selective', '--file', 'src/target.mjs']), {}, { startProviderFn: provider.start });
+  assert.equal(result.task, 'update target');
+  assert.equal(result.contextPolicy, 'selective');
+  assert.equal(result.turns[0].contextEvidence[0].location, 'src/target.mjs');
+  assert.match(provider.requests[0].messages.find(message => message.contextCategory === 'evidence').text, /return 1/);
+  const evidence = provider.requests[1].messages.filter(message => message.contextCategory === 'evidence');
+  assert.equal(evidence.length, 1);
+  assert.match(evidence[0].text, /return 2/);
+  assert.doesNotMatch(evidence[0].text, /return 1/);
+});
+
+test('request receipts distinguish a reported model identity from the requested model', async (t) => {
+  const { ws, home } = scaffold('agent-model-receipt');
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const provider = scriptedProvider([{ ...say('finished'), model: 'reported-model-revision' }]);
+  const result = await agentResultOf(argvFor(ws, home, 'answer'), {}, { startProviderFn: provider.start });
+  assert.equal(result.model, 'scripted-1');
+  assert.equal(result.contextAccounting[0].model, 'reported-model-revision');
 });
 
 test('a tool timeout above exec\'s maximum clamps to the maximum instead of killing the run', async () => {

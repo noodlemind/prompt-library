@@ -3,6 +3,7 @@ import { readStructuralIndex } from './repo-map/structural-index.mjs';
 import { trackedSourceFiles } from './repo-map/scan.mjs';
 import { readFileFacts, readSourceHashes, contentHash, FILE_FACTS_VERSION } from './repo-map/facts.mjs';
 import { buildImportGraph, IMPORT_RESOLVER_VERSION } from './repo-map/imports.mjs';
+import { captureWorkingSources } from './repo-map/working-sources.mjs';
 import { EXIT } from './style.mjs';
 
 export const GRAPH_OPERATIONS = ['deps', 'dependents', 'path'];
@@ -26,7 +27,11 @@ export function queryGraph({ workspace, home, operation = 'deps', files = [], de
   const roots = files.map(file => filePath(path.resolve(workspace), file));
   const inventory = trackedSourceFiles(workspace);
   const cached = readStructuralIndex(workspace, { home });
-  const read = readFileFacts(workspace, inventory.files, { cachedFiles: cached && !cached.unreadable.length && cached.meta.fileFactsVersion === FILE_FACTS_VERSION ? cached.files : null });
+  const source = cached?.meta?.sourceState ? captureWorkingSources(workspace) : null;
+  const compatible = source?.valid && cached.meta.sourceState.version === source.state.version
+    && cached.meta.sourceState.configDigest === source.state.configDigest
+    && cached.meta.sourceState.extractorRevision === source.state.extractorRevision;
+  const read = readFileFacts(workspace, inventory.files, { cachedFiles: compatible && !cached.unreadable.length && cached.meta.fileFactsVersion === FILE_FACTS_VERSION ? cached.files : null });
   const { facts } = read;
   const graph = buildImportGraph(facts, new Set(inventory.files));
   const finalInventory = trackedSourceFiles(workspace);

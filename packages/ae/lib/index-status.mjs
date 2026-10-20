@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { resolveIndexDir } from './recall-config.mjs';
 import { structuralIndexDir, readStructuralIndex, structuralIndexIsCurrent } from './repo-map/structural-index.mjs';
 import { POSTINGS_INDEX_VERSION } from './postings-index.mjs';
+import { structuralCurrentness } from './repo-map/working-sources.mjs';
 
 function git(workspace, args) {
   const r = spawnSync('git', ['-C', workspace, ...args], { encoding: 'utf8', timeout: 10_000 });
@@ -171,8 +172,10 @@ export function structuralIndexStatus(workspace, { home } = {}) {
   }
 
   const indexedHead = meta.sha || meta.headSha || meta.baseSha || null;
-  const { head, commitsSince, filesChanged, stale: headStale } = driftFromHead(workspace, indexedHead);
-  const stale = headStale || !structuralIndexIsCurrent(workspace, index);
+  const { head, commitsSince, filesChanged } = driftFromHead(workspace, indexedHead);
+  const freshness = structuralCurrentness(workspace, meta);
+  const stale = !freshness.current || !structuralIndexIsCurrent(workspace, index);
+  const freshnessReason = freshness.reason || (stale ? 'source or index changed during validation' : null);
   const filesIndexed = Number.isFinite(meta.filesIndexed) ? meta.filesIndexed : null;
   const tier = meta.extractorTier || null;
 
@@ -187,11 +190,10 @@ export function structuralIndexStatus(workspace, { home } = {}) {
     commitsSince,
     filesChanged,
     stale,
+    freshnessReason,
     unreadable: null,
     recommendation: stale
-      ? headStale
-        ? `${commitsSince ?? '?'} commits / ${filesChanged ?? '?'} files since last code index — run \`ae index --structural\``
-        : 'worktree content or tracked inventory changed — run `ae index --structural`'
+      ? `${commitsSince === null ? freshnessReason : `${commitsSince} commits / ${filesChanged ?? '?'} files since last code index`} — run \`ae index --structural\``
       : `code symbol index current${filesIndexed != null ? ` · ${filesIndexed} files` : ''}${tier ? ` · tier ${tier}` : ''}`,
     next: stale ? 'ae index --structural' : null,
   };
@@ -214,7 +216,7 @@ export function indexStatus({ workspace, copilotHome, home } = {}) {
 
   if (!structural.indexed) parts.push('code: not built — run `ae index --structural`');
   else if (structural.unreadable?.length) parts.push('code: unreadable — run `ae index --structural`');
-  else if (structural.stale) parts.push(`code: stale (${structural.commitsSince ?? '?'} commits)`);
+  else if (structural.stale) parts.push(`code: stale (${structural.commitsSince === null ? structural.freshnessReason : `${structural.commitsSince} commits`})`);
   else parts.push('code: current');
 
   return {

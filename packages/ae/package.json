@@ -1,6 +1,6 @@
 {
   "name": "ae-harness",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Adaptive Engineering CLI for GitHub Copilot",
   "homepage": "https://github.com/noodlemind/prompt-library",
   "license": "UNLICENSED",
@@ -29,7 +29,7 @@
     "doctor": "node ./bin/ae.mjs doctor",
     "install:local": "node ./bin/ae.mjs install --configure-vscode --configure-path",
     "install:global": "npm install -g .",
-    "test": "node --import ./test/helpers/isolate-runtime-env.mjs --test ./test/*.test.mjs"
+    "test": "node ./test/run.mjs"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

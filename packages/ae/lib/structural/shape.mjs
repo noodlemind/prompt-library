@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
 import { repoId } from '../knowledge/store.mjs';
 import { currentSnapshotDir, readSnapshot } from './snapshot.mjs';
+import { structuralCurrentness } from '../repo-map/working-sources.mjs';
 
 export const STRUCTURAL_SHAPE_VERSION = 2;
 
@@ -50,6 +51,10 @@ export function readStructuralIndex(workspace, options = {}) {
   const version = snapshot.meta?.version;
   if (version !== undefined && !(Number.isFinite(version) && version <= STRUCTURAL_SHAPE_VERSION)) return absent(`unsupported structural index version ${JSON.stringify(version)} (this harness reads ${STRUCTURAL_SHAPE_VERSION})`);
   if (snapshot.unreadable.length) return absent(`unreadable structural index (${snapshot.unreadable.join('; ')})`);
+  if (options.requireCurrent) {
+    const freshness = structuralCurrentness(workspace, snapshot.meta);
+    if (!freshness.current) return absent(`stale structural index: ${freshness.reason}`);
+  }
   return { ...snapshot, present: true, reason: null, files: normalizeFiles(snapshot.files), symbols: normalizeSymbols(snapshot.symbols), graph: normalizeGraph(snapshot.graph) };
 }
 

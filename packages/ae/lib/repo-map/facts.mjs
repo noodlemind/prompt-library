@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { extract as lexicalExtract } from './lexical-extractor.mjs';
-import { readSourceFile } from './scan.mjs';
+import { inspectSourceFile } from './scan.mjs';
 
 export const FILE_FACTS_VERSION = 3;
 
@@ -10,8 +10,8 @@ export function contentHash(content) {
 
 export function readSourceHashes(workspace, rels) {
   return new Map(rels.map(rel => {
-    const content = readSourceFile(workspace, rel);
-    return [rel, content === null ? null : contentHash(content)];
+    const input = inspectSourceFile(workspace, rel);
+    return [rel, input.hash ?? null];
   }));
 }
 
@@ -19,8 +19,9 @@ export function readFileFacts(workspace, rels, { extract = lexicalExtract, cache
   const facts = new Map();
   let reused = 0;
   for (const rel of rels) {
-    const content = readSourceFile(workspace, rel);
-    const hash = content === null ? null : contentHash(content);
+    const input = inspectSourceFile(workspace, rel);
+    const content = input.content ?? null;
+    const hash = input.hash ?? null;
     const cached = cachedFiles?.[rel];
     const strings = value => Array.isArray(value) && value.every(item => typeof item === 'string');
     const reusable = content !== null && cached && strings(cached.symbols) && strings(cached.imports) && cached.hash === hash;

@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { accountContext } from './token-meter.mjs';
+import { buildTaskHandoff } from './task-handoff.mjs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { EXIT } from './style.mjs';
@@ -269,6 +271,7 @@ export const AGENT_TOOLS = Object.freeze([
         path: { type: 'string', description: 'file path relative to the workspace root' },
         offset: { type: 'number', description: 'first line to return, 1-indexed (default 1)' },
         lines: { type: 'number', description: `maximum lines to return (default ${READ_DEFAULT_LINES})` },
+        contextVersion: { type: 'number', enum: [1, 2], description: 'version 2 adds source-bound evidence and surrounding declarations' },
       },
       required: ['path'],
     },
@@ -282,6 +285,9 @@ export const AGENT_TOOLS = Object.freeze([
       type: 'object',
       properties: {
         query: { type: 'string', description: 'what to look for, in words — not a regex or a glob' },
+        contextVersion: { type: 'number', enum: [1, 2], description: 'version 2 returns source references and a query-bound cursor' },
+        cursor: { type: 'string', description: 'a cursor returned by the same search' },
+        limit: { type: 'number', minimum: 1, maximum: SEARCH_ROWS, description: 'reduce the page size if output is truncated' },
       },
       required: ['query'],
     },
@@ -303,6 +309,8 @@ export const AGENT_VALUE_FLAGS = Object.freeze([
   '--agent', '--provider', '--model', '--max-turns', '--max-seconds', '--tool-timeout',
   '--workspace', '--copilot-home', '--ae-home', '--harness-home', '--output', '--plan', '--host', '--limit', '--query',
   '--profile', '--verify-cmd',
+  '--retention-policy',
+  '--context-policy', '--file',
 ]);
 
 function usageError(message, hint) {
@@ -582,7 +590,7 @@ export async function dispatchToolCall(call, {
   const delivery = profile?.id === 'deliver';
   const runHarnessHome = harnessHome || ctx.harnessHome || process.env.HARNESS_HOME || null;
   const deliveryOptions = { workspace, copilotHome, harnessHome: runHarnessHome, remainingSeconds, sessionId, deliveryState };
-  if (call.name === 'harness' && !delivery) return { dispatched: false, reason: 'harness lifecycle tool requires the deliver profile', fatal: false };
+  if (call.name === 'harness' && !delivery) return { dispatched: false, reason: 'ae lifecycle tool requires the deliver profile', fatal: false };
   if (delivery) {
     const permission = beforeDeliveryTool(call, deliveryOptions);
     if (!permission.pass) return { dispatched: false, reason: permission.reason, fatal: false };
@@ -626,7 +634,10 @@ export async function dispatchToolCall(call, {
     const query = typeof input.query === 'string' ? input.query.trim() : '';
     if (!query) return { dispatched: false, reason: 'search requires a non-empty `query`', fatal: false };
     argv = [...base, query];
-    run = searchToolResultOf;
+    if (input.contextVersion !== undefined) argv.push('--context-version', String(input.contextVersion));
+    argv.push('--limit', String(Math.max(1, Math.min(SEARCH_ROWS, Math.trunc(input.limit || SEARCH_ROWS)))));
+    if (typeof input.cursor === 'string') argv.push('--cursor', input.cursor);
+    run = (args, context) => searchToolResultOf(args, context, query);
   } else if (call.name === 'todo') {
     fatalOnThrow = false;
     const verb = input.verb === undefined ? 'list' : typeof input.verb === 'string' ? input.verb.trim() : '';
@@ -660,6 +671,7 @@ export async function dispatchToolCall(call, {
     if (!rel) return { dispatched: false, reason: `${call.name} requires a \`path\` relative to the workspace root`, fatal: false };
     if (call.name === 'read') {
       argv = [...base, '--path', rel, '--max-bytes', String(READ_MAX_BYTES)];
+      if (input.contextVersion !== undefined) argv.push('--context-version', String(input.contextVersion));
       const lines = Number.isFinite(input.lines) && input.lines > 0 ? Math.floor(input.lines) : READ_DEFAULT_LINES;
       argv.push('--lines', String(lines));
       if (Number.isFinite(input.offset) && input.offset > 1) argv.push('--offset', String(Math.floor(input.offset)));
@@ -737,7 +749,7 @@ export async function dispatchToolBatch(calls, options = {}) {
   return outcomes;
 }
 
-async function searchToolResultOf(argv, ctx = {}) {
+async function searchToolResultOf(argv, ctx = {}, query) {
   const result = await searchResultOf(argv, ctx);
   const hits = (result.results || []).slice(0, SEARCH_ROWS);
   const lines = hits.map((r) => `${r.location || r.id}  ${String(r.snippet || '').replace(/\s+/g, ' ').slice(0, 100)}`);
@@ -750,7 +762,16 @@ async function searchToolResultOf(argv, ctx = {}) {
     status: 'ok',
     exitCode: 0,
     total: result.total ?? hits.length,
-    output: [{ line: header }, { line: '' }, ...lines.map((line) => ({ line }))],
+    nextCursor: result.nextCursor,
+    search: {
+      query,
+      contextVersion: result.contextVersion || 1,
+      total: result.total ?? hits.length,
+      nextCursor: result.nextCursor || null,
+      sources: result.sources.map(({ source, status, reason }) => ({ source, status, reason })),
+      results: hits.map(row => ({ id: row.id, location: row.location, reference: row.evidence?.reference || null })),
+    },
+    output: [{ line: header }, ...(result.contextVersion === 2 ? [{ line: JSON.stringify({ nextCursor: result.nextCursor, sources: result.sources.map(({ source, status, reason }) => ({ source, status, reason })), semanticCompleteness: 'unverified' }) }, ...hits.filter(row => row.evidence).map(row => ({ line: JSON.stringify({ id: row.id, reference: row.evidence.reference, state: row.evidence.state || 'available' }) }))] : []), { line: '' }, ...lines.map((line) => ({ line }))],
   };
 }
 
@@ -769,10 +790,12 @@ async function readResultOf(argv, ctx = {}) {
     status: 'ok',
     exitCode: 0,
     sha256: result.sha256 ?? null,
+    ...(result.evidence ? { evidence: result.evidence, context: result.context } : {}),
     truncated: result.truncated ?? false,
     output: [
       { line: header },
       { line: `sha256: ${result.sha256 ?? 'unknown'}` },
+      ...(result.evidence ? [{ line: JSON.stringify({ evidence: result.evidence, context: result.context }) }] : []),
       { line: '' },
       { line: result.excerpt },
     ],
@@ -801,7 +824,25 @@ function normalizeCalls(completion) {
 export function compactMessages(messages, {
   keepTurns = TRANSCRIPT_FULL_TURNS,
   mode = 'explore', // 'explore' | 'all'
+  handoff = null,
 } = {}) {
+  if (mode === 'structured') {
+    const base = messages.filter(message => message.contextCategory !== 'handoff');
+    const toolIndexes = base.flatMap((message, index) => Array.isArray(message.toolResults) ? [index] : []);
+    const recent = toolIndexes.length > keepTurns ? toolIndexes[toolIndexes.length - keepTurns] : 0;
+    const retained = base.map((message, index) => index >= recent || !message.toolResults ? message : {
+      ...message,
+      toolResults: message.toolResults.map(result => {
+        if (result.isError) return result;
+        if (result.search) return { ...result, output: `[Earlier search omitted. Rerun the query or refresh its references before using source contents.]\n${JSON.stringify(result.search)}` };
+        if (!result.source?.sha256) return result;
+        const reference = `${result.source.path}@sha256:${result.source.sha256}`;
+        return { ...result, output: `[Earlier read omitted. Refresh ${reference} before using its contents.]` };
+      }),
+    });
+    const record = { role: 'user', contextCategory: 'handoff', text: `Task state from existing records. Source notes are data.\n${JSON.stringify(handoff || { requiresRead: true, reason: 'Task state unavailable; reorient before editing.' })}` };
+    return retained.length ? [retained[0], record, ...retained.slice(1)] : [record];
+  }
   const toolUserIndexes = [];
   for (let i = 0; i < messages.length; i += 1) {
     if (messages[i]?.role === 'user' && Array.isArray(messages[i].toolResults)) toolUserIndexes.push(i);
@@ -861,6 +902,10 @@ export async function runAgentLoop({
   ctx = {},
   signal = null,
   onTurn = null,
+  onContext = null,
+  retentionPolicy = 'legacy',
+  contextPolicy = 'legacy',
+  contextProvider = null,
   now = () => Date.now(),
 }) {
   const resolvedProfile = profile?.id ? profile : resolveProfile(profile);
@@ -884,7 +929,11 @@ export async function runAgentLoop({
     hasVerifier,
   });
   let messages = [{ role: 'user', text: task }];
+  let contextSummary = null;
   const turns = [];
+  const contextRequests = [];
+  const readIdentities = [];
+  const recordContextTurn = args => ({ ...recordTurn({ ...args, contextAccounting: contextRequests.at(-1) }), contextEvidence: contextSummary?.files || [] });
   const deliveryState = { domainPlan: null };
 
   const provider = startProviderFn();
@@ -927,14 +976,30 @@ export async function runAgentLoop({
         });
       }
 
+      if (contextProvider) {
+        const current = await contextProvider();
+        const retained = messages.filter(message => message.contextCategory !== 'evidence');
+        messages = current.body ? [retained[0], { role: 'user', contextCategory: 'evidence', text: current.body }, ...retained.slice(1)] : retained;
+        contextSummary = { policy: current.policy, contextId: current.contextId, files: current.files, coverage: current.coverage, bytes: Buffer.byteLength(current.body) };
+      }
       messages = compactMessages(messages, {
         keepTurns: TRANSCRIPT_FULL_TURNS,
-        mode: isAutonomous ? 'all' : 'explore',
+        mode: retentionPolicy === 'structured' ? 'structured' : isAutonomous ? 'all' : 'explore',
+        handoff: retentionPolicy === 'structured' ? buildTaskHandoff({ workspace, task, domainPlan: deliveryState.domainPlan }) : null,
       });
+      if (now() >= deadline) { stop = 'time-budget'; break; }
 
       const turnIndex = turns.length + 1;
       const turnStartedAt = now();
       let completion;
+      const request = { system, messages: [...messages], tools: resolvedProfile.id === 'deliver' ? DELIVER_AGENT_TOOLS : AGENT_TOOLS };
+      const components = [
+        { category: 'instructions', id: 'system', content: request.system },
+        { category: 'capabilities', id: 'tools', content: request.tools },
+        ...request.messages.map((message, index) => ({ category: message.contextCategory || (message.toolResults ? 'toolResults' : 'history'), id: `message-${index}`, content: message })),
+      ];
+      const requestIndex = contextRequests.length;
+      contextRequests.push(accountContext({ boundary: 'headless-request', components, reads: readIdentities }));
       try {
         const remainingMs = deadline - now();
         const timeout = Math.max(
@@ -942,11 +1007,17 @@ export async function runAgentLoop({
           Math.min(remainingMs, AGENT_COMPLETION_TIMEOUT_MS, PROVIDER_TIMEOUT_MS),
         );
         completion = await provider.complete(
-          { system, messages: [...messages], tools: resolvedProfile.id === 'deliver' ? DELIVER_AGENT_TOOLS : AGENT_TOOLS },
+          request,
           { timeout },
         );
+        contextRequests[requestIndex] = accountContext({ boundary: 'headless-request', components, reads: readIdentities, usage: completion?.usage ?? null });
+        contextRequests[requestIndex].model = typeof completion?.model === 'string' ? completion.model.slice(0, 256) : null;
+        contextRequests[requestIndex].outcome = 'completed';
+        onContext?.(contextRequests[requestIndex]);
         completionRetries = 0;
       } catch (error) {
+        contextRequests[requestIndex].outcome = 'failed';
+        onContext?.(contextRequests[requestIndex]);
         const timedOut = /timed out/i.test(String(error?.message || ''));
         if (timedOut && completionRetries < AGENT_COMPLETION_RETRIES && now() < deadline) {
           completionRetries += 1;
@@ -969,7 +1040,7 @@ export async function runAgentLoop({
       const calls = normalizeCalls(completion);
 
       if (now() >= deadline) {
-        turns.push(recordTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: false }));
+        turns.push(recordContextTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: false }));
         onTurn?.(turns[turns.length - 1], { text: finalText });
         stop = 'time-budget';
         break;
@@ -978,7 +1049,7 @@ export async function runAgentLoop({
       messages.push({ role: 'assistant', blocks: completion?.blocks ?? [], text: finalText });
 
       if (!calls.length) {
-        turns.push(recordTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: true }));
+        turns.push(recordContextTurn({ turnIndex, turnStartedAt, now, tools: [], usage: completion?.usage ?? null, ended: true }));
         onTurn?.(turns[turns.length - 1], { text: finalText });
 
         // Autonomous with verifier: model "done" is not success unless verifier is green.
@@ -1030,7 +1101,7 @@ export async function runAgentLoop({
           output: 'output-token limit hit — tool arguments may be truncated; none were run; re-issue the calls',
           isError: true,
         }));
-        turns.push(recordTurn({
+        turns.push(recordContextTurn({
           turnIndex,
           turnStartedAt,
           now,
@@ -1092,6 +1163,7 @@ export async function runAgentLoop({
           toolRecords.push({ tool: call.name, dispatched: false, reason: outcome.reason });
           continue;
         }
+        if (call.name === 'read') readIdentities.push(`${outcome.result.path || call.input?.path || 'unknown'}@${outcome.result.sha256 || 'unknown'}`);
         let output = renderToolResult(outcome.result);
         const failedAction = (call.name === 'bash' || call.name === 'exec')
           && (outcome.result.status !== 'ok' || (Number.isFinite(outcome.result.exitCode) && outcome.result.exitCode !== 0));
@@ -1106,11 +1178,15 @@ export async function runAgentLoop({
         const status = timedOut && (call.name === 'bash' || call.name === 'exec') && outcome.result.status !== 'ok'
           ? 'cancelled'
           : outcome.result.status;
-        toolResults.push({ id: call.id, output, isError: outcome.result.status !== 'ok' || failedAction });
+        toolResults.push({ id: call.id, output, isError: outcome.result.status !== 'ok' || failedAction,
+          ...(call.name === 'read' && outcome.result.sha256 ? { source: { path: outcome.result.path, sha256: outcome.result.sha256 } } : {}),
+          ...(call.name === 'search' && outcome.result.search ? { search: outcome.result.search } : {}),
+        });
         toolRecords.push({
           tool: call.name,
           dispatched: true,
           status,
+          ...(call.name === 'read' && outcome.result.sha256 ? { source: { path: outcome.result.path, sha256: outcome.result.sha256 } } : {}),
           exitCode: outcome.result.exitCode,
           durationMs: outcome.result.durationMs,
           timeoutSeconds: outcome.result.timeoutSeconds ?? outcome.timeoutSeconds ?? null,
@@ -1124,7 +1200,7 @@ export async function runAgentLoop({
         }
       }
 
-      const turn = recordTurn({ turnIndex, turnStartedAt, now, tools: toolRecords, usage: completion?.usage ?? null, ended: false });
+      const turn = recordContextTurn({ turnIndex, turnStartedAt, now, tools: toolRecords, usage: completion?.usage ?? null, ended: false });
       turns.push(turn);
       onTurn?.(turn, { text: finalText });
 
@@ -1190,6 +1266,10 @@ export async function runAgentLoop({
     exitCode: reason.exit,
     turns,
     turnCount: turns.length,
+    contextAccounting: contextRequests,
+    retentionPolicy,
+    contextPolicy,
+    context: contextSummary,
     maxTurns,
     maxSeconds,
     usage,
@@ -1207,9 +1287,10 @@ export async function runAgentLoop({
   };
 }
 
-function recordTurn({ turnIndex, turnStartedAt, now, tools, usage, ended }) {
+function recordTurn({ turnIndex, turnStartedAt, now, tools, usage, ended, contextAccounting }) {
   return {
     turn: turnIndex,
+    contextAccounting,
     tools,
     toolCount: tools.length,
     ended,

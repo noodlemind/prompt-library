@@ -9,8 +9,25 @@ import { applyHarnessHomeFlag, harnessGlobalHome } from '../lib/paths.mjs';
 import { installGlobalHarnessShim } from '../lib/global-bin.mjs';
 import { analyzeTerminalEffects } from '../corpus/hooks/lib/tool-payload.mjs';
 import { harnessHome as hookHome } from '../corpus/hooks/lib/external-plans.mjs';
+import { parseFlags } from '../lib/flags.mjs';
+import { parseQueryFromArgv } from '../lib/argv.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+test('registry bootstrap examples select the distribution in the package manifest', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const contract = fs.readFileSync(path.join(root, 'corpus/skills/references/harness-tool-contract.md'), 'utf8');
+  const packages = [...contract.matchAll(/`npm install -g ([^`\s]+)/g)].map(match => match[1]).filter(name => !name.startsWith('.'));
+  assert.ok(packages.length > 0);
+  for (const name of packages) assert.equal(name.replace(/@latest$/, ''), manifest.name);
+});
+
+test('home selectors stay out of positional retrieval queries', () => {
+  for (const selector of [['--ae-home', '/private/control home'], ['--ae-home=/private/control home'], ['--harness-home', '/private/control home']]) {
+    const args = ['item', ...selector, '--context-version', '2'];
+    assert.equal(parseQueryFromArgv(args, parseFlags(args)), 'item');
+  }
+});
 
 function withEnvironment(values, run) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));

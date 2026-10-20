@@ -51,6 +51,7 @@ export function experimentFixture(t, { linked = true, candidate = [0, 0], contra
   const startProcess = (...args) => spawn(process.execPath, [experimentBin, ...args, '--workspace', workspace, '--harness-home', home, '--copilot-home', copilotHome, '--json', '--no-events'], { cwd: workspace, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const invoke = (...args) => {
     const result = cli(...args);
+    assert.ifError(result.error);
     assert.equal(result.status, 0, `${args.join(' ')}\n${result.stdout}\n${result.stderr}`);
     return JSON.parse(result.stdout);
   };

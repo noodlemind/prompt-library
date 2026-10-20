@@ -16,6 +16,8 @@ import { trackedSourceFiles, readFileSafe } from '../repo-map/scan.mjs';
 import { readStructuralIndex } from '../structural/shape.mjs';
 import { SOURCES, createRetrievalResult, federate } from './kernel.mjs';
 import { planReadDirs } from '../project-layout.mjs';
+import { captureWorkingSources } from '../repo-map/working-sources.mjs';
+import { runGet } from '../get-cmd.mjs';
 
 /** The settled mode list, in the order the architecture doc states it. */
 export const MATCH_MODES = Object.freeze(['ranked', 'literal', 'regex', 'path', 'symbol']);
@@ -198,9 +200,9 @@ function topCandidates(results) {
 // ---------------------------------------------------------------- code
 
 function codeSymbols({ query, workspace, home, explain }) {
-  const index = readStructuralIndex(workspace, { home });
+  const index = readStructuralIndex(workspace, { home, requireCurrent: true });
     if (!index.present) return skipped('code', `${index.reason} — build one with: ae index --structural`);
-  const generation = typeof index.meta?.sha === 'string' ? index.meta.sha : null;
+  const generation = index.meta.sourceState.digest;
   const needle = query.toLowerCase();
   const results = [];
   for (const symbol of index.symbols || []) {
@@ -652,6 +654,7 @@ export function runSearch({
   cursor = null,
   explain = false,
   collection = null,
+  contextVersion = 1,
 } = {}) {
   const text = typeof query === 'string' ? query.trim() : '';
   if (!text) throw usageError('search requires a query', 'ae search <query> [--match ranked|literal|regex|path|symbol]');
@@ -672,8 +675,9 @@ export function runSearch({
   }
 
   const queryTokens = queryTokensOf(text);
+  const sourceSnapshot = contextVersion === 2 && selectedSources.includes('code') ? captureWorkingSources(workspace) : null;
     const headSha =
-    selectedSources.includes('code') || selectedSources.includes('plans') ? workspaceGeneration(workspace) : null;
+    sourceSnapshot?.state?.digest || (selectedSources.includes('code') || selectedSources.includes('plans') ? workspaceGeneration(workspace) : null);
 
   const entries = [];
   for (const source of selectedSources) {
@@ -702,5 +706,37 @@ export function runSearch({
     }
   }
 
-  return { ...federate({ sources: entries, limit: resolveLimit(limit), cursor }), match: selectedMode };
+  const cursorContext = contextVersion === 2 ? digestOf([JSON.stringify([2, text, selectedMode, [...selectedSources].sort(), collection])]) : null;
+  if (contextVersion === 2) {
+    for (const entry of entries) {
+      if (entry.source !== 'code') entry.generation = digestOf([JSON.stringify([entry.generation, entry.status, entry.results])]);
+    }
+  }
+  const result = { ...federate({ sources: entries, limit: resolveLimit(limit), cursor, cursorContext }), match: selectedMode };
+  if (contextVersion === 2) {
+    for (const row of result.results) {
+      if (!['code', 'knowledge'].includes(row.source)) continue;
+      try {
+        const location = String(row.location || row.id).replace(/:\d+(?::\d+)?$/, '');
+        const offset = Number(/:(\d+)$/.exec(row.location || '')?.[1]) || 1;
+        const excerpt = runGet({ workspace, copilotHome, home, flags: { ...(row.source === 'knowledge' ? { docid: row.id } : { path: location }), offset, lines: 5, maxBytes: 800, contextVersion: 2 } });
+        row.excerpt = excerpt.excerpt;
+        row.evidence = { ...excerpt.evidence, representationField: 'excerpt' };
+        row.context = excerpt.context;
+      } catch {
+        row.evidence = { state: 'unavailable', reference: null };
+      }
+    }
+    const after = sourceSnapshot ? captureWorkingSources(workspace) : null;
+    if (sourceSnapshot && (!sourceSnapshot.valid || !after.valid || sourceSnapshot.state.digest !== after.state.digest)) {
+      result.results = result.results.filter(row => row.source !== 'code');
+      result.partial = true;
+      result.nextCursor = null;
+      const code = result.sources.find(source => source.source === 'code');
+      if (code) { code.status = 'failed'; code.reason = sourceSnapshot.reason || after.reason || 'working sources changed during search; retry'; code.count = 0; }
+    }
+    result.contextVersion = 2;
+    result.coverage = { candidateLimitPerSource: SOURCE_CANDIDATE_CAP, matchedLineLimitPerFile: MATCHED_LINE_CAP, sourceState: sourceSnapshot?.state || null, semanticCompleteness: 'unverified', unavailableReferences: result.results.filter(row => row.evidence?.state === 'unavailable').map(row => ({ source: row.source, id: row.id })) };
+  }
+  return result;
 }

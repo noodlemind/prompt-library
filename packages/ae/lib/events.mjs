@@ -44,6 +44,7 @@ export const EVENT_TYPES = new Set([
   'undo',
     'trust',
     'agent.turn',
+  'context.accounting',
     'journal.pruned',
 ]);
 
@@ -126,6 +127,7 @@ export function writeEvent(workspace, flags, payload) {
     'removed',
     'reason',
     'repeatEvidence',
+    'contextAccounting',
     // The trust-change descriptor: which project, and which way it moved.
     'trust',
   ]) {

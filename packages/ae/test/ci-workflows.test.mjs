@@ -32,8 +32,6 @@ test('full suites retain discovery and replace the repeated delivery and adaptiv
   assert.match(suite(windows.jobs.tests).run, /node scripts\/ci-tests\.mjs --shard \$\{\{ matrix.shard \}\} --shards 4/);
   assert.equal(windows.jobs.windows.needs, 'tests');
   assert.equal(windows.jobs.windows.if, 'always()');
-  const manifest = JSON.parse(fs.readFileSync(new URL('packages/ae/package.json', root), 'utf8'));
-  assert.match(manifest.scripts.test, /--test \.\/test\/\*\.test\.mjs$/);
   for (const file of ['deterministic-delivery', 'insight-compound', 'domain-commands', 'windows-authority', 'ci-workflows']) {
     assert.ok(fs.existsSync(new URL(`packages/ae/test/${file}.test.mjs`, root)), file);
   }

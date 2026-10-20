@@ -70,7 +70,7 @@ export function buildContextPack({
     const lines = [
     '# Harness Context Pack',
     '',
-    '> Read this file only — do not re-read full plans/solutions into chat.',
+    '> Expand evidence with `ae orient --read --context-version 2`.',
     '> Excludes plan ## Activity and ## Verification Evidence by design.',
   ];
 
@@ -274,7 +274,7 @@ function fitDeliveryPack(body, planPath) {
   if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
   // An oversized contract is an explicit read barrier, never a partial goal
   // presented as sufficient editing context.
-  return '# Harness Context Pack\n\n## Context blocked\nThe goal, constraints or intent sources exceed this pack budget. Read the full plan and `ae orient --read` before editing.\n\n## Next tools\n- `ae orient --read`\n';
+  return '# Harness Context Pack\n\n## Context blocked\nThe goal, constraints or intent sources exceed this pack budget. Read the full plan and `ae orient --read --context-version 2` before editing.\n\n## Next tools\n- `ae orient --read --context-version 2`\n';
 }
 
 function placeBeforeHeading(body, heading, block) {

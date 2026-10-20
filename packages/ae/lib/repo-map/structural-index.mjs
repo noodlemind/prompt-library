@@ -13,6 +13,7 @@ import { trackedSourceFiles } from './scan.mjs';
 import { buildImportGraph, IMPORT_RESOLVER_VERSION } from './imports.mjs';
 import { readFileFacts, readSourceHashes, FILE_FACTS_VERSION } from './facts.mjs';
 import { MAX_IDENTIFIER_LENGTH } from './treesitter-extractor.mjs';
+import { captureWorkingSources, structuralCurrentness } from './working-sources.mjs';
 
 export const STRUCTURAL_INDEX_VERSION = 2;
 
@@ -52,6 +53,7 @@ export function readStructuralIndexIfCurrent(workspace, options = {}) {
 
 export function structuralIndexIsCurrent(workspace, index) {
   if (!index || index.unreadable.length || index.meta.sha !== git(workspace, ['rev-parse', 'HEAD'])) return false;
+  if (!structuralCurrentness(workspace, index.meta).current) return false;
   const inventory = trackedSourceFiles(workspace);
   if (inventory.unavailable || index.meta.inventoryHash && index.meta.inventoryHash !== inventory.inventoryHash) return false;
   const hashes = readSourceHashes(workspace, inventory.files);
@@ -276,8 +278,9 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   const priorUnreadable = onDisk?.unreadable?.length ? onDisk.unreadable : [];
   if (priorUnreadable.length) log(`prior structural index unusable: ${priorUnreadable.join('; ')} — rebuilding from scratch`);
   const prior = priorUnreadable.length ? null : onDisk;
+  const snapshot = captureWorkingSources(workspace);
   const extractorSignature = sha256(JSON.stringify({ version: FILE_FACTS_VERSION, tier: extractor.tier || 'lexical', webTreeSitter: extractor.webTreeSitter || null, grammarVersions: extractor.grammarVersions || {} }));
-  const sameExtractor = prior?.meta?.extractorSignature === extractorSignature;
+  const sameExtractor = prior?.meta?.extractorSignature === extractorSignature && prior?.meta?.sourceState?.configDigest === snapshot.state?.configDigest && prior?.meta?.sourceState?.extractorRevision === snapshot.state?.extractorRevision;
   const inventory = trackedSourceFiles(workspace);
   const { files: tracked, total } = inventory;
   const sourceSha = git(workspace, ['rev-parse', 'HEAD']);
@@ -337,6 +340,7 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   const basedOn = prior?.meta?.sha || null;
   const meta = {
     version: STRUCTURAL_INDEX_VERSION,
+    sourceState: snapshot.state || null,
     fileFactsVersion: FILE_FACTS_VERSION,
     extractorSignature,
     sha: sourceSha,
@@ -366,9 +370,10 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   };
 
   const finalInventory = trackedSourceFiles(workspace);
+  const finalSnapshot = captureWorkingSources(workspace);
   const finalHashes = readSourceHashes(workspace, tracked);
   const sourceChanged = inventory.unavailable || finalInventory.unavailable || inventory.inventoryHash !== finalInventory.inventoryHash || sourceSha !== git(workspace, ['rev-parse', 'HEAD']) || [...initialHashes].some(([rel, hash]) => hash !== finalHashes.get(rel)) || Object.entries(nextFiles).some(([rel, row]) => row.hash !== initialHashes.get(rel));
-  if (sourceChanged) {
+  if (sourceChanged || !snapshot.valid || !finalSnapshot.valid || snapshot.state.digest !== finalSnapshot.state.digest) {
     log('structural index not published: source inventory or content changed during extraction');
     return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn, sourceChanged: true };
   }
