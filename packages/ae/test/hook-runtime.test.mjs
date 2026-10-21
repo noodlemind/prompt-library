@@ -419,6 +419,11 @@ test('a failed gate permits recovery controls without authorizing product execut
   fs.appendFileSync(checksPath, '  extra:\n    command: [node, scripts/extra.mjs]\n');
   const changed = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'run_in_terminal', tool_input: { command: 'ae orient --read --json' } }));
   assert.match(changed.hookSpecificOutput?.permissionDecisionReason || '', /changed-check-config/);
+  writePassedGate(workspace, plan);
+  const sessionPath = path.join(workspace, '.harness/session.json');
+  fs.writeFileSync(sessionPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(sessionPath, 'utf8')), gatedChecksDigest: 0 }));
+  const malformed = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'run_in_terminal', tool_input: { command: 'ae orient --read --json' } }));
+  assert.match(malformed.hookSpecificOutput?.permissionDecisionReason || '', /changed-check-config/);
 });
 
 test('non-mutation VS Code tools remain read-only even when their payload includes a path', () => {
