@@ -34,11 +34,12 @@ for (const stage of ['before-plan', 'after-plan', 'after-receipt']) {
     fs.writeFileSync(decision, JSON.stringify(input));
     const injector = path.join(root, 'interrupt.mjs');
     fs.writeFileSync(injector, `import fs from 'node:fs';
+const plan = fs.realpathSync.native(process.env.AE_TEST_PLAN);
 const rename = fs.renameSync;
 fs.renameSync = function (from, to) {
-  if (String(to) === process.env.AE_TEST_PLAN && process.env.AE_TEST_STAGE === 'before-plan') process.exit(71);
+  if (String(to) === plan && process.env.AE_TEST_STAGE === 'before-plan') process.exit(71);
   const result = rename.call(this, from, to);
-  if (String(to) === process.env.AE_TEST_PLAN && process.env.AE_TEST_STAGE === 'after-plan') process.exit(71);
+  if (String(to) === plan && process.env.AE_TEST_STAGE === 'after-plan') process.exit(71);
   if (process.env.AE_TEST_STAGE === 'after-receipt' && String(to).includes('operations') && String(to).endsWith('.json')) {
     const record = JSON.parse(fs.readFileSync(to, 'utf8'));
     if (record.state === 'completed' && record.value?.action === 'finding') process.exit(71);
@@ -49,7 +50,8 @@ fs.renameSync = function (from, to) {
     const args = ['plan-update', '--plan', created.path, '--file', decision];
     const interrupted = spawnSync(process.execPath, ['--import', pathToFileURL(injector).href, bin, ...args, ...scope], {
       cwd: workspace, encoding: 'utf8', timeout: 15_000,
-      env: { ...process.env, AE_TEST_PLAN: created.path, AE_TEST_STAGE: stage },
+      // Exercise equivalent path spellings even on hosts without Windows separators.
+      env: { ...process.env, AE_TEST_PLAN: `${path.dirname(created.path)}${path.sep}.${path.sep}${path.basename(created.path)}`, AE_TEST_STAGE: stage },
     });
     assert.ifError(interrupted.error);
     assert.equal(interrupted.status, 71, interrupted.stdout + interrupted.stderr);
