@@ -315,3 +315,13 @@ Orientation shares one fact collector across the pack and read response. Existin
 The optional headless runtime exposes experimental `legacy`, `selective`, and `subsystem` context policies. Selective evidence follows task seeds and import neighbors. Subsystem evidence adds files under seed directories. Each policy reports clipping and omissions. Structured retention reloads the existing plan and evidence after context changes. Both defaults remain legacy until task evaluation supports a change.
 
 Reports separate produced-artifact estimates, runtime requests, and observed host usage. Missing host visibility remains unavailable. Model-task quality and installed-editor behavior require their own evidence.
+
+## Recovery ownership
+
+The host's Engineer owns model choice, inference, context compaction, agent interruption, and optional agent subprocesses. A subprocess can read an accepted work contract and propose decisions through the CLI. Its reasoning and execution remain outside ae-harness. No subprocess result grants trust, accepts changed intent, or replaces named verification.
+
+Harness owns deterministic state recovery. A structured plan operation records its accepted input and before/after state before publication. Retrying that same operation after an interrupted CLI process recovers the recorded result. Reusing its ID with a different payload fails. Dead update locks must meet the existing stale-lock conditions before recovery. A completed replay does not renew expired gates or evidence. These guarantees do not restart a host agent or reconstruct its private conversation.
+
+Doctor and gate JSON include bounded recovery diagnostics keyed by the original checks. Actions are scoped command arguments or guidance, with automatic retry disabled. Installation, index, plan, intent, isolation, capability, and verification failures retain their existing authority. A changed locked source requires reviewed intent and an explicit amendment. A suggested orientation command only inspects that state.
+
+The [native-host protocol](../packages/ae/eval/host/README.md) keeps installed behavior, actual host delivery, and model comparisons separate. The [priority execution record](ae-priorities.md) records the current evidence and remaining qualification work.

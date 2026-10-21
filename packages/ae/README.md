@@ -77,6 +77,10 @@ The optional `ae agent --profile deliver` loop enforces explicit orientation wit
 | `prepare` | Starter spec and ADR when those paths are missing; skips files that already exist |
 | `migrate` | Move gitignored `docs/plans` and `docs/solutions` to `.harness/plans` and `~/.ae/projects/<repo-id>/` |
 
+`doctor --json` and `gate --json` include `diagnostics` alongside their existing results. Schema 1 reports failed check IDs, blocking or advisory severity, evidence pointers, retry conditions, and proposed next actions. Command actions are argument arrays scoped to the selected workspace and homes. The CLI does not execute them. Inspect guidance before retrying a gate. Changed locked intent requires an explicit amendment.
+
+The diagnostics field contains at most 20 failures and 16 KiB of JSON. `total` counts all failed checks and `omitted` counts excluded diagnostics. The original `checks` array remains available. Diagnostics do not change pass decisions, exit codes, trust, or mutation authority.
+
 ### Session Ledger (`tui`)
 
 Projection of the kernel — not a second Engineer.
