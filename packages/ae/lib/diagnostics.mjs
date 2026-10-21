@@ -1,12 +1,13 @@
 const MAX_FAILURES = 20;
 const MAX_BYTES = 16_384;
 
-const INSTALL_CHECKS = new Set(['H1', 'H2', 'H3', 'H4', 'H7', 'H8', 'H9', 'H12', 'H14', 'H15', 'A1']);
+const INSTALL_CHECKS = new Set(['H1', 'H2', 'H3', 'H4', 'H7', 'H9', 'H12', 'H14', 'H15', 'A1']);
 const PLAN_CHECKS = new Set(['C1', 'C1a', 'C1b', 'C2', 'C3', 'C4', 'C-goal', 'C-plan-schema']);
 
 function recoveryFor(source, check) {
   if (source === 'doctor') {
-    if (INSTALL_CHECKS.has(check.id)) return { category: 'installation', command: check.id === 'H9' ? ['upgrade'] : ['install'] };
+    if (check.id === 'H8') return { category: 'installation', guidance: 'Reinstall the packaged CLI from the selected package source, then rerun doctor.' };
+    if (INSTALL_CHECKS.has(check.id)) return { category: 'installation', command: [check.id === 'H9' ? 'upgrade' : 'install', '--target', 'cli'] };
     if (['H10', 'H11'].includes(check.id)) return { category: 'index', command: ['index'] };
     return { category: 'environment', guidance: 'Inspect this readiness check and its hint before changing the environment.' };
   }

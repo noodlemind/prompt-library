@@ -592,18 +592,13 @@ test('engineer step 8 runs ae compound to close the learn loop', () => {
   assert.match(workflow, /ae report --check/, 'CI must run the budget gate');
 });
 
-// P1.6: the hand-written CATALOG (and the switch it drove `ae help`
-// from) is retired — every command's help/sig data now comes from
-// lib/registry.mjs's describeCommand/describeAll, generated from each
-// entry's own declared flags/positionals (or an explicit `usage` override
-// for the handful of commands with subcommand/alternation syntax a flat
-// flag list can't express). These assertions were rewritten to pin the
-// REGISTRY-GENERATED equivalent (still rendering the identical `harness
-test('read-only report command is registered and AC14 amendment is consistent', () => {
+// Registry entries own ae command help, including explicit usage overrides.
+test('report exposes current usage without mutating lifecycle state', () => {
   assert.equal(hasCommand('report'), true, 'report command must be registered');
   const help = describeCommand('report');
   assert.equal(help.usage, '[--facts] [--growth] [--sync] [--global] [--check] [--json]', 'help documents report');
-  // report must not write session/plan state — it only reads telemetry (and syncs under ~/.harness).
+  // --sync writes telemetry under the selected home (~/.ae by default, with legacy fallback).
+  // Report must not write session or plan state.
   const commands = read('packages/ae/lib/commands.mjs');
   const reportFn = commands.slice(commands.indexOf('export async function cmdReport'), commands.indexOf('export async function cmdValidatePlan'));
   assert.doesNotMatch(reportFn, /writeSession\(/, 'report must not mutate session state');
@@ -820,7 +815,7 @@ test('architect is an internal design skill and names no model', () => {
   assert.doesNotMatch(read('packages/ae/corpus/skills/architect/references/design-red-flags.md'), /\b(gpt|claude|grok|gemini|opus|sonnet)-\d/i);
 });
 
-test('cursor pstack routing stays out of hydration and names no model', () => {
+test('repository authoring routing uses checked-in procedures and stays out of hydration', () => {
   assert.equal(exists('scripts/build-harness-assets.mjs'), false);
   assert.equal(exists('packages/ae/assets'), false);
   assert.equal(fs.existsSync(path.join(repoRoot, 'packages/ae/corpus/.cursor')), false);
@@ -828,13 +823,23 @@ test('cursor pstack routing stays out of hydration and names no model', () => {
 
   const rule = read('.cursor/rules/edit-kind.mdc');
   assert.match(rule, /^alwaysApply:\s*true$/m);
-  for (const procedure of ['architect', 'how', 'why', 'tdd', 'unslop']) {
-    assert.match(rule, new RegExp(`\\| ${procedure} \\|`));
+  const rows = rule.split('\n').filter((line) => /^\| [^|]+ \|/.test(line) && !/^\|\s*-/.test(line)).slice(1);
+  assert.ok(rows.length > 0, 'authoring guidance must route edits to repository sources');
+  for (const row of rows) {
+    const source = row.split('|')[2].trim().match(/^`([^`]+)`$/)?.[1];
+    assert.ok(source, `procedure must name one repository file: ${row}`);
+    assert.equal(path.isAbsolute(source), false, `${source} must be repository-relative`);
+    assert.equal(source.split(/[\\/]/).includes('..'), false, `${source} must stay in the repository`);
+    assert.equal(isTracked(source), true, `${source} must be available in a fresh checkout`);
+    assert.equal(fs.statSync(path.join(repoRoot, source)).isFile(), true);
   }
-  assert.match(rule, /create-primitive/);
-  assert.match(rule, /\/code-review/);
-  assert.match(rule, /ae orient --read/);
-  assert.match(rule, /ae verify/);
+  for (const skill of ['architect', 'create-primitive', 'code-review']) {
+    assert.ok(rule.includes(`packages/ae/corpus/skills/${skill}/SKILL.md`));
+  }
+  assert.match(rule, /packages\/ae\/corpus\/agents\/engineer\.agent\.md/);
+  assert.match(rule, /node packages\/ae\/bin\/ae\.mjs orient --read --context-version 2/);
+  assert.match(rule, /node packages\/ae\/bin\/ae\.mjs verify/);
+  assert.doesNotMatch(rule, /pstack|poteto|~[\\/]|\|\s*(?:how|why|tdd|unslop)\s*\|/i);
 
   const modelPin = /\b(gpt|claude|grok|gemini|opus|sonnet|composer)-\d/i;
   const rulesDir = path.join(repoRoot, '.cursor', 'rules');

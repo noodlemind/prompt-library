@@ -129,6 +129,11 @@ test('package qualification filters its inputs, cancels stale runs and keeps bot
   assert.match(candidate.concurrency.group, /github\.ref/);
   const job = candidate.jobs.package;
   assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest']);
+  const release = job.steps.find(step => step.name === 'Validate release contracts');
+  assert.match(release.run, /npm run --prefix packages\/ae check:release/);
+  assert.match(release.run, /npm run --prefix packages\/ae check:repo/);
+  const pack = job.steps.find(step => step.name === 'Pack and identify candidate');
+  assert.doesNotMatch(pack.run, /--ignore-scripts/);
   const install = job.steps.find(step => step.name === 'Install the exact archive and drive its runtime');
   assert.match(install.run, /--offline/);
   assert.match(install.run, /artifacts\/\$AE_ARCHIVE/);

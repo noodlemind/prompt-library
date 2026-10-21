@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { tempDir } from './helpers/temp.mjs';
 import { initGit, writeChecks } from './helpers/cli-fixtures.mjs';
@@ -10,7 +11,7 @@ const bin = path.resolve(import.meta.dirname, '../bin/ae.mjs');
 
 for (const stage of ['before-plan', 'after-plan', 'after-receipt']) {
   test(`a terminated CLI recovers one accepted finding ${stage}`, t => {
-    const root = tempDir('plan-restart-');
+    const root = tempDir('plan-restart #-');
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const workspace = path.join(root, 'product');
     const home = path.join(root, 'state');
@@ -46,7 +47,7 @@ fs.renameSync = function (from, to) {
 };
 `);
     const args = ['plan-update', '--plan', created.path, '--file', decision];
-    const interrupted = spawnSync(process.execPath, ['--import', injector, bin, ...args, ...scope], {
+    const interrupted = spawnSync(process.execPath, ['--import', pathToFileURL(injector).href, bin, ...args, ...scope], {
       cwd: workspace, encoding: 'utf8', timeout: 15_000,
       env: { ...process.env, AE_TEST_PLAN: created.path, AE_TEST_STAGE: stage },
     });

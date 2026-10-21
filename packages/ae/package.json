@@ -18,11 +18,13 @@
     "corpus",
     "vscode-extension",
     "retired.json",
-    "README.md"
+    "README.md",
+    "scripts/check-release.mjs"
   ],
   "//bundledDependencies": "yaml ships INSIDE the tarball so a hand-delivered package installs without reaching a registry — it is the harness's only hard runtime dependency (zero transitive deps of its own) and the tree-sitter grammars stay optional, degrading to the lexical tier when unavailable. The trade is that the pinned version is what every consumer gets, registry installs included: they can no longer resolve a patched yaml themselves, so a yaml CVE is OUR republish. Keep the floor at a version with no known advisory (^2.9.0 clears CVE-2026-33532, which ^2.8.0 permitted) and re-check on every release.",
   "scripts": {
-    "check:release": "node --test ./test/release-version.test.mjs ./test/prompt-library-contracts.test.mjs",
+    "check:release": "node ./scripts/check-release.mjs",
+    "check:repo": "node --test ./test/release-version.test.mjs ./test/prompt-library-contracts.test.mjs",
     "preversion": "npm run check:release",
     "version": "npm run check:release",
     "prepack": "npm run check:release",

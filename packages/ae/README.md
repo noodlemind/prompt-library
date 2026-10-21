@@ -29,6 +29,20 @@ installation or upgrade. `ae install --configure-vscode` and
 
 The npm package includes `corpus/`. `ae install` copies that tree onto the Copilot home.
 
+### Validate and pack
+
+From `packages/ae/` in a checkout, or from a standalone copy of that package:
+
+```bash
+npm ci
+npm run prepack
+npm pack
+```
+
+`prepack` runs the shipped `check:release` validator. It checks package and bridge versions, CLI entry points, bundled dependencies, corpus assets, and prompt budgets using package-local files. When a source lockfile exists, it also checks the manifest and installed dependencies against that lockfile. An offline-installed archive can run the same validator and be repacked without a global `ae` command, editor customizations, or the parent repository.
+
+`npm run check:repo` retains the repository contract tests and requires a full checkout. Source CI runs both checks and packs with lifecycle scripts enabled. Packaging does not require repository-only `.cursor/`, `.github/`, documentation, or test files.
+
 ```bash
 ae init-repo    # product repo stubs: plans, checks, policy
 ae prepare      # starter docs/specs/overview.md and docs/adr/0000-architecture.md
@@ -38,7 +52,7 @@ ae migrate      # move gitignored docs/plans and docs/solutions out of the produ
 ### Pin version (product repos)
 
 ```json
-{ "devDependencies": { "harness": "0.8.18" } }
+{ "devDependencies": { "ae-harness": "0.13.0" } }
 ```
 
 Or root `.harness-version` with the same pin.
