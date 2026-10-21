@@ -5,8 +5,8 @@ Run this protocol in a disposable product checkout. Keep the model and any agent
 ## Prepare a controlled trial
 
 1. Pack the candidate package and record its revision, archive integrity, Node version, host version, and operating system. Install that archive outside the source checkout.
-2. Hydrate a private Copilot home. Use a private AE home and a linked product worktree. Preserve the user's global installation and existing work.
-3. Register the candidate agents, skills, instructions, and hooks through the selected host's supported configuration. Confirm that the selected Engineer comes from that installation. Record any home mapping or operator assistance.
+2. Hydrate a private Copilot home with `--target cli`. Use a private AE home and a linked product worktree outside editor configuration directories. A fixture below `.codex` can trigger sensitive-file approval prompts for ordinary product edits; record those prompts when that layout is used. The default installation also targets editor locations, including the global VS Code bridge. Preserve the user's existing work.
+3. Register the candidate agents, skills, instructions, and hooks through the selected host's supported configuration. Confirm that the selected Engineer comes from that installation. Record any home mapping or operator assistance. Put both private home paths in the trial brief and use explicit CLI flags; an environment probe mixed into an execution command can be refused as ambiguous. Candidate hydration regenerates managed hook configuration: reapply a private-home overlay after each upgrade and verify the store selected by an actual host hook. Terminal environment settings alone do not prove that hook commands receive those values.
 4. Define the product behavior, allowed files, preservation checks, named verification check, and verification recipe before approving the check manifest. Create and start an accepted plan through the installed CLI.
 5. Run the product's acceptance check before the agent starts. Preserve its failing output and the exact source bytes. Keep the evaluator and preservation expectations outside the agent's editable scope.
 
@@ -29,6 +29,6 @@ A completed native trial requires both correct product behavior and current life
 
 ## Compare workflow and context changes
 
-Freeze acceptance, preservation checks, model, host, and budgets before comparing variants. Change one factor at a time. Record all attempts, model usage where available, elapsed work, tool calls, repairs, and operator interventions. Follow the existing context protocol's held-out thresholds before changing a default.
+Freeze acceptance, preservation checks, model, host, permission mode, and budgets before comparing variants. Record the selected main model separately from every observed subagent model. A selected main model does not establish a single-model run. Change one factor at a time. Record all attempts, model usage where available, elapsed work, tool calls, repairs, and operator interventions. Keep an assisted retry separate from the original cold-start attempt. A refused command does not establish that an accepted implement gate is missing; inspect the persisted receipt and use the supported canonical control path without wrappers or mixed environment probes. Follow the existing context protocol's held-out thresholds before changing a default.
 
 The context dry run validates broken baselines and context packaging. Mechanical extraction trials count observed CLI calls and bytes. Neither measures model quality, reasoning overhead, token savings, or native recovery. If those observations are missing, keep the comparison inconclusive and leave policy defaults unchanged.
