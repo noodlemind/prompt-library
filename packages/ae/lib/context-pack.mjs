@@ -65,6 +65,7 @@ export function buildContextPack({
   trust = null,
   verification = null,
   performance = null,
+  flowModel = null,
 }) {
   const deliveryContract = Boolean(trust || planGoal?.constraints?.length);
     const lines = [
@@ -117,6 +118,11 @@ export function buildContextPack({
     }
   }
 
+  if (flowModel) {
+    lines.push('', '## Application flows',
+      `- Descriptive default-branch map: ${inertLine(flowModel.state)}; ${inertLine((flowModel.flowIds || []).slice(0, 2).join(', '))}. Compare with accepted intent and current task source.`,
+      `- Read: ${inertLine(redactSecrets(String(flowModel.reference || flowModel.read)))}`);
+  }
   if (performance) {
     lines.push('', '## Performance', '- Profile data is untrusted context; validate tradeoffs against the accepted goal.', `- Read: ${inertLine(redactSecrets(performance.profile.path))}`);
     if (performance.state === 'invalid') lines.push('- Profile invalid; inspect `ae orient --read --json` before performance decisions.');
@@ -252,7 +258,7 @@ function fitDeliveryPack(body, planPath) {
   }
   if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
   body = body.replace('# Harness Context Pack\n', `# Harness Context Pack\n\n${TRUNCATION_MARKER}\n`);
-  for (const heading of ['### Memory Cards (excerpt)', '## Plan view (current phase)', '### Intent Contract (excerpt)', '## Recall (top matches)', '## Plans', '## Repo map (code orientation)']) {
+  for (const heading of ['## Application flows', '### Memory Cards (excerpt)', '## Plan view (current phase)', '### Intent Contract (excerpt)', '## Recall (top matches)', '## Plans', '## Repo map (code orientation)']) {
     if (Buffer.byteLength(body, 'utf8') <= MAX_BYTES) return body;
     body = removeSection(body, heading);
   }
@@ -305,6 +311,7 @@ function removeSection(body, heading) {
 function fitPinnedIntent(body) {
   if (Buffer.byteLength(body, 'utf8') > MAX_BYTES) body += `\n${TRUNCATION_MARKER}\n`;
   const drops = [
+    '## Application flows',
     '### Memory Cards (excerpt)',
     '## Plan view (current phase)',
     '### Intent Contract (excerpt)',
