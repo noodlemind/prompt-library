@@ -405,7 +405,7 @@ test('a failed gate permits recovery controls without authorizing product execut
   const session = JSON.parse(fs.readFileSync(path.join(workspace, '.harness/session.json'), 'utf8'));
   assert.equal(session.gateStatus, 'blocked');
   assert.equal(session.gatedChecksDigest, null);
-  for (const command of ['ae orient --read --json', `node ${binPath} status --json`, `ae plan-update --plan ${plan} --file .harness/decisions/amend.json --json`]) {
+  for (const command of ['ae orient --read --json', `node "${binPath}" status --json`, `ae plan-update --plan ${plan} --file .harness/decisions/amend.json --json`]) {
     const result = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'run_in_terminal', tool_input: { command } }));
     assert.equal(result.continue, true, command + ': ' + JSON.stringify(result));
   }
