@@ -318,7 +318,7 @@ export async function cmdDoctor(argv) {
   } catch {
     /* doctor still runs */
   }
-  const { checks, pass } = await runDoctor({
+  const { checks, pass, diagnostics } = await runDoctor({
     copilotHome,
     assetsRoot: assets,
     pkgRoot,
@@ -328,7 +328,7 @@ export async function cmdDoctor(argv) {
 
   const exitCode = pass ? EXIT.ok : EXIT.doctorFailed;
   if (flags.json) {
-    emitJson(flags, { pass, exit: exitCode, checks });
+    emitJson(flags, { pass, exit: exitCode, checks, diagnostics });
   } else {
     const okCount = checks.filter((c) => c.pass).length;
     const warnCount = checks.filter((c) => !c.pass && c.optional).length;
