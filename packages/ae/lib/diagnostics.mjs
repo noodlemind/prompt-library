@@ -18,7 +18,7 @@ function recoveryFor(source, check) {
   return { category: 'prerequisite', guidance: 'Inspect the failed check and repair its prerequisite through the existing lifecycle. This diagnostic grants no additional authority.' };
 }
 
-export function recoveryDiagnostics({ source, checks, workspace, copilotHome, home, plan = null }) {
+export function recoveryDiagnostics({ source, checks, workspace, copilotHome, home, plan = null, domain = null }) {
   const scope = ['--workspace', workspace];
   if (copilotHome) scope.push('--copilot-home', copilotHome);
   if (home) scope.push('--ae-home', home);
@@ -26,7 +26,8 @@ export function recoveryDiagnostics({ source, checks, workspace, copilotHome, ho
   const failures = failed.slice(0, MAX_FAILURES).map(check => {
     const recovery = recoveryFor(source, check);
     const nextActions = [];
-    if (recovery.command) nextActions.push({ kind: 'command', argv: ['ae', ...recovery.command, ...(plan && source === 'gate' ? ['--plan', plan] : []), ...scope] });
+    const command = domain ? ['domain', 'status', '--name', domain] : recovery.command;
+    if (command) nextActions.push({ kind: 'command', argv: ['ae', ...command, ...(plan && source === 'gate' ? ['--plan', plan] : []), ...scope] });
     if (recovery.guidance) nextActions.push({ kind: 'guidance', text: recovery.guidance });
     return {
       checkId: check.id,
@@ -34,7 +35,7 @@ export function recoveryDiagnostics({ source, checks, workspace, copilotHome, ho
       severity: check.optional || check.severity === 'warn' ? 'advisory' : 'blocking',
       message: String(check.message || check.hint || check.name || '').slice(0, 512),
       evidence: { checkId: check.id, plan },
-      retry: { automatic: false, when: recovery.command ? 'after-action' : 'after-inspection' },
+      retry: { automatic: false, when: command ? 'after-action' : 'after-inspection' },
       nextActions,
     };
   });

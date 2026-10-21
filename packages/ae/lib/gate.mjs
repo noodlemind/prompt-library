@@ -273,7 +273,7 @@ export function runGate({ workspace, flags, query = '', planOverride = null, dom
           : ['ae orient', '/ensure-plan'],
   };
 
-  result.diagnostics = recoveryDiagnostics({ source: 'gate', checks, workspace, copilotHome: resolveCopilotHome(flags.copilotHome), home: flags.harnessHome || flags.home || harnessGlobalHome(), plan: plan?.path || null });
+  result.diagnostics = recoveryDiagnostics({ source: 'gate', checks, workspace, copilotHome: resolveCopilotHome(flags.copilotHome), home: domainContext?.home || flags.harnessHome || flags.home || harnessGlobalHome(), plan: plan?.path || null, domain: domainContext?.name });
   return result;
 }
 

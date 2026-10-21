@@ -83,6 +83,12 @@ test('unknown readiness checks retain evidence and require inspection', () => {
   assert.ok(result.failures[0].nextActions.every(action => action.kind === 'guidance'));
 });
 
+test('a domain parent retains its domain command context in recovery guidance', () => {
+  const result = recoveryDiagnostics({ source: 'gate', checks: [{ id: 'C-intent-sources', pass: false, severity: 'fail', message: 'Changed spec.' }], workspace: '/coordinator', copilotHome: '/copilot', home: '/state', plan: '/state/domains/catalog/plans/delivery.hplan', domain: 'catalog' });
+  assert.deepEqual(result.failures[0].nextActions[0].argv, ['ae', 'domain', 'status', '--name', 'catalog', '--plan', '/state/domains/catalog/plans/delivery.hplan', '--workspace', '/coordinator', '--copilot-home', '/copilot', '--ae-home', '/state']);
+  assert.ok(result.failures[0].nextActions.some(action => /explicit.*amend/i.test(action.text || '')));
+});
+
 test('large diagnostics report omissions and stay within their byte bound', () => {
   const checks = Array.from({ length: 80 }, (_, index) => ({ id: `H${index + 1}`, pass: false, hint: '多'.repeat(1000) }));
   const result = recoveryDiagnostics({ source: 'doctor', checks, workspace: '/product/' + 'x'.repeat(4000) });
