@@ -331,7 +331,7 @@ if (normalized.command) {
       const activePlan = session.gatedPlan || session.activePlan;
       const planText = activePlan ? fs.readFileSync(resolvePlanFile(normalized.workspace, activePlan), 'utf8') : '';
       const currentDigest = configuredChecksDigest(normalized.workspace);
-      if (Object.hasOwn(session, 'gatedChecksDigest')
+      if (typeof session.gatedChecksDigest === 'string'
         && session.gatedChecksDigest !== currentDigest
         && !isSoleHarnessRecovery()) {
         deny(
