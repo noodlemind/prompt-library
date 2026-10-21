@@ -1,7 +1,7 @@
 ------------------------ MODULE DeliveryEvidence ------------------------
 EXTENDS Integers
 
-\* Deliberately finite reference: two source revisions and two intent versions.
+\* Finite reference: baseline plus at most two edits, two accepted intent versions.
 \* Lock/Edit abstract gate.mjs; Verify abstracts evidence.mjs/verify.mjs;
 \* Compound abstracts the verified-delivery lane of compound.mjs.
 \* mode is the Engineer obligation, not a kernel-authenticated task mode.

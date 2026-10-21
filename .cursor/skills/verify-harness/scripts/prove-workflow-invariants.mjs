@@ -68,6 +68,7 @@ async function fixture(runtimeRoot) {
   const bin = path.join(runtimeRoot, 'bin/ae.mjs');
   const env = { ...process.env, ...GIT_ENV, CI: '', HARNESS_ALLOW_INPLACE: '', AE_HOME: home, HARNESS_HOME: home, COPILOT_HOME: copilot, AE_BIN: bin, HARNESS_BIN: bin, HARNESS_ENFORCEMENT: 'enforce' };
   write(path.join(ws, '.gitignore'), '.harness/\n');
+  write(path.join(ws, 'package.json'), '{"type":"module"}\n');
   write(path.join(ws, 'src/example.js'), 'export const value = 1;\n');
   const spec = path.join(ws, 'docs/specs/value.md'), specBytes = '# Value contract\n\nThe exported value must be two.\n';
   write(spec, specBytes);

@@ -77,7 +77,8 @@ function parse(bytes, label) {
   try { return JSON.parse(bytes.toString('utf8')); } catch { throw error(`invalid ${label} JSON`); }
 }
 function git(workspace, args, { input, maxBuffer = INDEX_BYTES, buffer = false } = {}) {
-  const result = spawnSync('git', ['--no-pager', '--no-replace-objects', '-c', 'core.fsmonitor=false', ...args], { cwd: workspace, input, ...(buffer ? {} : { encoding: 'utf8' }), maxBuffer, timeout: 10_000, env: gitMetadataEnvironment() });
+  const result = spawnSync('git', ['--no-pager', '--no-replace-objects', '--no-lazy-fetch', '-c', 'core.fsmonitor=false', ...args], { cwd: workspace, input, ...(buffer ? {} : { encoding: 'utf8' }), maxBuffer, timeout: 10_000, env: { ...gitMetadataEnvironment(), GIT_NO_LAZY_FETCH: '1' } });
+  if (result.status !== 0 && /unknown option:\s*--no-lazy-fetch\b/i.test(String(result.stderr || ''))) throw error('Upgrade Git to a version supporting --no-lazy-fetch before using application flow models. Reads remain disabled to prevent automatic fetches.');
   if (result.error || result.status !== 0) throw error('committed Git metadata is unavailable or exceeds its bounds');
   return result.stdout;
 }
@@ -348,7 +349,9 @@ export function flowModelContext({ workspace, home, files = [], query = '' } = {
     owner = project(workspace, home); index = readIndex(owner);
     if (!index) return null;
     const requested = requestedFiles(workspace, files), words = String(query).toLowerCase().slice(0, 4096).split(/[^a-z0-9-]+/);
-    matched = index.flows.filter(flow => words.includes(flow.id) || requested.some(file => flow.sources.some(source => watchesPath(file, source) || source === file) || index.watchPaths.some(watch => watchesPath(watch, file) && flow.sources.some(source => watchesPath(watch, source)))));
+    // Inventory watches bind freshness, including future writers. Only the
+    // declared per-flow sources and explicit flow IDs establish task relevance.
+    matched = index.flows.filter(flow => words.includes(flow.id) || requested.some(file => flow.sources.some(source => watchesPath(file, source))));
     if (!matched.length) return null;
   } catch { return null; }
   try {

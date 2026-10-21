@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { tempDir } from './helpers/temp.mjs';
@@ -52,6 +52,22 @@ test('cold reads create no private state and never assume the current branch is 
   assert.equal(fs.existsSync(f.home), false);
 });
 
+test('older Git reports the required upgrade while preserving no-fetch protection', t => {
+  const oldGit = '/usr/bin/git';
+  if (!fs.existsSync(oldGit)) return t.skip('the old system Git fixture is unavailable on this host');
+  const support = spawnSync(oldGit, ['--no-lazy-fetch', '--version'], { encoding: 'utf8', timeout: 10_000 });
+  if (!/unknown option: --no-lazy-fetch/.test(support.stderr || '')) return t.skip('the system Git supports --no-lazy-fetch');
+  const f = fixture(t), module = pathToFileURL(fileURLToPath(new URL('../lib/flow-model.mjs', import.meta.url))).href;
+  const script = `import { prepareFlowModel } from ${JSON.stringify(module)};
+try { prepareFlowModel({ workspace: process.env.FLOW_WORKSPACE, home: process.env.FLOW_HOME, watchPaths: ['src'] }); process.exitCode = 1; }
+catch (failure) { console.log(failure.message); }
+`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: path.dirname(oldGit), FLOW_WORKSPACE: f.workspace, FLOW_HOME: f.home }, encoding: 'utf8', timeout: 10_000 });
+  assert.ifError(result.error); assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /upgrade Git to a version supporting --no-lazy-fetch/i);
+  assert.equal(fs.existsSync(f.home), false);
+});
+
 test('preparation binds default-branch bytes, including while a feature worktree differs', t => {
   const f = fixture(t);
   f.git('checkout', '-qb', 'feature');
@@ -65,6 +81,38 @@ test('preparation binds default-branch bytes, including while a feature worktree
   assert.equal(fs.existsSync(f.home), false);
   const published = publishFlowModel({ ...f, input: candidate(f) });
   assert.equal(published.state, 'current');
+});
+
+test('partial-clone preparation refuses missing blobs without invoking a promisor transport', t => {
+  const f = fixture(t), partial = path.join(f.root, 'partial'), marker = path.join(f.root, 'transport-called');
+  f.git('config', 'uploadpack.allowFilter', 'true');
+  const cloned = spawnSync('git', ['clone', '--filter=blob:none', '--no-checkout', '--quiet', pathToFileURL(f.workspace).href, partial], { encoding: 'utf8', timeout: 10_000 });
+  assert.ifError(cloned.error); assert.equal(cloned.status, 0, cloned.stderr);
+  const oid = f.git('rev-parse', `${f.initial}:src/app.js`);
+  const probe = () => spawnSync('git', ['--no-lazy-fetch', 'cat-file', '-e', oid], { cwd: partial, encoding: 'utf8', timeout: 10_000 });
+  assert.notEqual(probe().status, 0, 'the fixture must begin without the promised source blob');
+  const helper = path.join(f.root, 'transport.mjs');
+  fs.writeFileSync(helper, `import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+fs.writeFileSync(${JSON.stringify(marker)}, 'called');
+const result = spawnSync('git', ['upload-pack', ...process.argv.slice(2)], { stdio: 'inherit' });
+process.exit(result.status ?? 1);
+`);
+  const quote = value => `'${value.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`;
+  const configured = spawnSync('git', ['config', 'remote.origin.uploadpack', `${quote(process.execPath)} ${quote(helper)}`], { cwd: partial, encoding: 'utf8' });
+  assert.equal(configured.status, 0, configured.stderr);
+  const packRoot = path.join(partial, '.git/objects/pack'), packs = fs.readdirSync(packRoot).sort();
+  let failure;
+  try { prepareFlowModel({ workspace: partial, home: path.join(f.root, 'partial-state'), watchPaths: ['src'] }); }
+  catch (cause) { failure = cause; }
+  assert.deepEqual({ failed: Boolean(failure), transportInvoked: fs.existsSync(marker), blobMissing: probe().status !== 0 }, { failed: true, transportInvoked: false, blobMissing: true });
+  assert.deepEqual(fs.readdirSync(packRoot).sort(), packs, 'flow preparation must not populate promised objects');
+  assert.equal(fs.existsSync(path.join(f.root, 'partial-state')), false);
+  // Positive control: the same isolated local-file fixture really can fetch.
+  const allowed = spawnSync('git', ['cat-file', '-e', oid], { cwd: partial, encoding: 'utf8', timeout: 10_000 });
+  assert.ifError(allowed.error); assert.equal(allowed.status, 0, allowed.stderr);
+  assert.equal(fs.existsSync(marker), true);
+  assert.notDeepEqual(fs.readdirSync(packRoot).sort(), packs);
 });
 
 test('narrow watch paths remain usable when unrelated committed inventory exceeds the tree budget', t => {
@@ -183,7 +231,7 @@ test('racing writers cannot replace a newer generation pointer with an older pub
   const f = fixture(t), firstInput = candidate(f), marker = path.join(f.root, 'before-pointer');
   const firstFile = path.join(f.root, 'first.json'), secondFile = path.join(f.root, 'second.json');
   fs.writeFileSync(firstFile, JSON.stringify(firstInput));
-  const module = pathToFileURL(path.resolve(import.meta.dirname, '../lib/flow-model.mjs')).href;
+  const module = pathToFileURL(fileURLToPath(new URL('../lib/flow-model.mjs', import.meta.url))).href;
   const script = `import fs from 'node:fs';
 import { publishFlowModel } from ${JSON.stringify(module)};
 if (process.env.FLOW_PAUSE) {
@@ -270,6 +318,45 @@ test('unmatched orientation reads only bounded metadata; relevant orientation re
     assert.equal(flowModelContext({ ...f, query: 'inspect checkout' }).flowIds[0], 'checkout');
     assert.ok(bodyReads > 0);
   } finally { fs.openSync = originalOpen; }
+});
+
+test('the default root inventory does not make unrelated task files relevant or open model bodies', t => {
+  const f = fixture(t), input = candidate(f, ['.']);
+  input.preparation = prepareFlowModel(f);
+  assert.deepEqual(input.preparation.watchPaths, ['.']);
+  const stored = publishFlowModel({ ...f, input });
+  const originalOpen = fs.openSync; let bodyReads = 0;
+  fs.openSync = function (file, ...args) { if (path.resolve(String(file)) === stored.reference) bodyReads++; return originalOpen.call(this, file, ...args); };
+  try {
+    assert.equal(flowModelContext({ ...f, files: ['README.md'], query: 'improve the documentation' }), null);
+    assert.equal(flowModelContext({ ...f, query: 'review checkoutish behavior' }), null);
+    assert.equal(bodyReads, 0);
+    assert.deepEqual(flowModelContext({ ...f, files: ['src/app.js'] }).flowIds, ['checkout']);
+    assert.deepEqual(flowModelContext({ ...f, files: ['README.md'], query: 'inspect checkout' }).flowIds, ['checkout']);
+  } finally { fs.openSync = originalOpen; }
+});
+
+test('a shared freshness inventory does not merge disjoint flows and still detects unmapped new writers', t => {
+  const f = fixture(t);
+  for (const name of ['login', 'shared', 'unmapped']) fs.writeFileSync(path.join(f.workspace, `src/${name}.js`), `export const ${name} = true;\n`);
+  f.git('update-ref', 'refs/remotes/origin/trunk', f.commit());
+  const input = candidate(f);
+  input.model.flows[0].sources.push('src/shared.js');
+  input.model.flows.push({ id: 'login', title: 'Login', sources: ['src/login.js', 'src/shared.js'], initial: 'ready', states: [{ id: 'ready' }], transitions: [] });
+  publishFlowModel({ ...f, input });
+  assert.deepEqual(flowModelContext({ ...f, files: ['src/login.js'] }).flowIds, ['login']);
+  assert.deepEqual(flowModelContext({ ...f, files: ['src/app.js'] }).flowIds, ['checkout']);
+  assert.deepEqual(flowModelContext({ ...f, files: ['src/shared.js'] }).flowIds, ['checkout', 'login']);
+  assert.deepEqual(flowModelContext({ ...f, files: ['src/'] }).flowIds, ['checkout', 'login']);
+  assert.deepEqual(flowModelContext({ ...f, query: 'inspect login' }).flowIds, ['login']);
+  assert.equal(flowModelContext({ ...f, files: ['src/unmapped.js'] }), null);
+  assert.equal(flowModelContext({ ...f, files: ['src/app.js-renamed'] }), null);
+  fs.writeFileSync(path.join(f.workspace, 'src/new-writer.js'), 'export const newWriter = true;\n');
+  f.git('update-ref', 'refs/remotes/origin/trunk', f.commit());
+  assert.equal(flowModelContext({ ...f, files: ['src/new-writer.js'] }), null);
+  assert.deepEqual(flowModelContext({ ...f, files: ['src/app.js'] }).flowIds, ['checkout']);
+  assert.equal(flowModelStatus(f).state, 'stale');
+  assert.deepEqual(flowMaintenance(f).changedPaths, ['src/new-writer.js']);
 });
 
 test('orientation normalizes equivalent task paths while keeping outside requests omitted', t => {

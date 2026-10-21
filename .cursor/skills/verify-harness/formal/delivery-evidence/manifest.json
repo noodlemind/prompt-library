@@ -8,7 +8,7 @@
     "packages/ae/corpus/skills/references/workflow-invariants.md"
   ],
   "limitations": [
-    "The finite model covers two source revisions and two intent versions, not arbitrary implementations or unbounded runs.",
+    "The finite model covers a baseline plus at most two edits and two accepted intent versions, not arbitrary implementations or unbounded runs.",
     "Progress assumes successful available tools, fair scheduling of review/verify/compound and the finite edit/amend bound; cancellation and permanent prerequisite failure are outside that progress claim.",
     "Mode is a documented Engineer obligation, not a kernel-authenticated semantic task-mode variable. Actual conformance checks mutation/recovery authority.",
     "CLI traces and one actual guard mutation establish observed correspondence and sensitivity, not complete implementation refinement.",
@@ -53,11 +53,11 @@
       "*"
     ],
     "lastSync": {
-      "commit": "361d9989d319a4e474af77f8bc9f3e29b9309a70",
+      "commit": "d541057bd7004e16b8a05a9de9eca3bb9675bd04",
       "dirty": true,
       "sourceKind": "working-tree-bytes",
-      "digest": "66efe9d3d92ec66272e7e1fd48351ba018951c632f76fa7bd48d538109230d2e",
-      "verificationDigest": "912ef13119eef6cb3c84d040eec54db1285099138a037a8a930cc44285dbf153",
+      "digest": "f66478c9e075632ab95a10fe2e60ef000dffbe7067beb8170b1c15364a9d293a",
+      "verificationDigest": "d40868b875155bcf9565f8e7e01ddc7ed7ae25df139f1ac09604e81b1a511438",
       "files": [
         {
           "path": ".cursor/skills/verify-harness/formal/delivery-evidence/scripts/check.mjs",
@@ -97,7 +97,7 @@
         },
         {
           "path": ".cursor/skills/verify-harness/scripts/prove-workflow-invariants.mjs",
-          "sha256": "8a93f6304347f69d38124e7f495dc3e1e60461e304dec31bcb65837b76fd17cc"
+          "sha256": "91ed2a3b2c4bca9af21e6c98f88497415bda6f1efddfc5dfb3acaee5cf9dfb2a"
         },
         {
           "path": "packages/ae/bin/ae.mjs",
@@ -401,7 +401,7 @@
         },
         {
           "path": "packages/ae/lib/flow-model.mjs",
-          "sha256": "f3d3000d27c834aea0908b01c0fcb4cf9b6296c18003e82adec77ee70ba50d56"
+          "sha256": "82d80bac14ec212c9f86dd10ab62641aaed4279afc605526208689ef24b76f88"
         },
         {
           "path": "packages/ae/lib/fs-copy.mjs",
@@ -1124,14 +1124,18 @@
     ]
   },
   "lastMaintenance": {
-    "rationale": "Reviewed the bounded DeliveryEvidence abstraction against accepted current intent, governed mutation, executed source-bound verification, verified-delivery compound and recovery boundaries. The positive real CLI lifecycle covers AE-I1 through AE-I3; the copied implementation negative control must expose the stale-intent guard mutation. Current flow, context and hook integration is included in the watched runtime inventory. This rerun updates declared coverage correspondence only; finite revision bounds, fair successful tools and incomplete implementation refinement remain explicit, with semantic completeness unverified.",
-    "previous": null,
+    "rationale": "Reviewed current accepted intent, governed mutation, executed source-bound evidence, verified-delivery compound and failed-gate recovery against the finite DeliveryEvidence abstraction. Current flow and hook hardening is within the watched runtime inventory. Actual positive CLI behavior and the copied stale-intent guard mutation must pass with bounded safety and conditional progress. Separately validated typed receipt IDs, artifact containment, pure metadata reads including ignored submodule recursion, no lazy fetch and actionable fail-closed unsupported-Git prerequisites. This updates declared correspondence only: baseline plus at most two edits, two accepted intent versions, fair available tools and incomplete implementation refinement remain explicit; semantic completeness is unverified.",
+    "previous": {
+      "commit": "d541057bd7004e16b8a05a9de9eca3bb9675bd04",
+      "digest": "0dbf7923b50f2b6b65151dccfff68a4deb73777108de94e5da2bfa6872164892",
+      "verificationDigest": "c40427a0c687a4721c7d7d8c70945a2e4f5054d1e6018034548c4ad741c39b95"
+    },
     "candidate": {
-      "commit": "361d9989d319a4e474af77f8bc9f3e29b9309a70",
+      "commit": "d541057bd7004e16b8a05a9de9eca3bb9675bd04",
       "dirty": true,
       "sourceKind": "working-tree-bytes",
-      "digest": "66efe9d3d92ec66272e7e1fd48351ba018951c632f76fa7bd48d538109230d2e",
-      "verificationDigest": "912ef13119eef6cb3c84d040eec54db1285099138a037a8a930cc44285dbf153"
+      "digest": "f66478c9e075632ab95a10fe2e60ef000dffbe7067beb8170b1c15364a9d293a",
+      "verificationDigest": "d40868b875155bcf9565f8e7e01ddc7ed7ae25df139f1ac09604e81b1a511438"
     },
     "semanticCompleteness": "unverified"
   }

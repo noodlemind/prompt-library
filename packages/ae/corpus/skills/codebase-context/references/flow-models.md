@@ -2,6 +2,8 @@
 
 Use this reference for an explicit flow-model request, relevant orientation expansion, or a compound maintenance advisory. The Engineer interprets source and authors the map. Harness binds committed inputs, validates the structured statechart, publishes immutable generations, and reports freshness. It never calls a model or fetches a remote.
 
+Flow commands require Git support for `--no-lazy-fetch`. If Git reports that option as unknown, upgrade to a version supporting it before using these commands. Harness refuses the operation rather than retrying with automatic fetching enabled. Required committed objects must already be available locally; retrieving missing objects is a separate explicit action.
+
 ## Read relevant context
 
 ```bash

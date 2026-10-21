@@ -5,6 +5,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { TEST_GIT_ENV } from './helpers/store.mjs';
 import { collectCoverage, classifyTlc, validateConfiguration, runFormalVerification } from '../corpus/skills/create-primitive/assets/formal-verification/check.mjs';
 
 const msg = (id, severity = 0, body = '') => `@!@!@STARTMSG ${id}:${severity} @!@!@\n${body}\n@!@!@ENDMSG ${id} @!@!@\n`;
@@ -17,7 +19,7 @@ function fixture(t) {
   fs.mkdirSync(path.join(root, 'src'));
   fs.writeFileSync(path.join(root, 'src/service.mjs'), 'export const value = 1;\n');
   const git = (...args) => {
-    const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull } });
+    const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', env: { ...process.env, ...TEST_GIT_ENV } });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout.trim();
   };
@@ -27,7 +29,7 @@ function fixture(t) {
 
 function manifestFixture(t) {
   const f = fixture(t);
-  const pilot = path.resolve(import.meta.dirname, '../../../.cursor/skills/verify-harness/formal/delivery-evidence');
+  const pilot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../.cursor/skills/verify-harness/formal/delivery-evidence');
   const manifest = JSON.parse(fs.readFileSync(path.join(pilot, 'manifest.json'), 'utf8'));
   for (const name of new Set(manifest.models.flatMap(model => [model.module, model.config]))) fs.copyFileSync(path.join(pilot, name), path.join(f.root, name));
   fs.writeFileSync(path.join(f.root, 'intent.md'), 'The exported fixture value is one.\n');
@@ -49,7 +51,8 @@ if (negative) {
     steps.push({ stage: 'observe-mutated-implementation-failure', exitCode: execution.status });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
-console.log(JSON.stringify({ schema: 1, feature: negative ? 'fixture-negative' : 'fixture-positive', passed: true, invariantIds: ['T1'], checkedInvariantIds: ['T1'], detected: negative, steps }));
+const ids = process.argv.includes('--string-ids') ? 'PREFIX-T1-SUFFIX' : ['T1'];
+console.log(JSON.stringify({ schema: 1, feature: negative ? 'fixture-negative' : 'fixture-positive', passed: true, invariantIds: ids, checkedInvariantIds: ids, detected: negative, steps }));
 `);
   manifest.intentSources = ['intent.md'];
   manifest.coverage = { ...f.coverage, lastSync: null };
@@ -78,6 +81,48 @@ test('coverage metadata does not invoke a configured Git filesystem monitor', { 
   fs.rmSync(called);
   collectCoverage(f.root, f.coverage);
   assert.equal(fs.existsSync(called), false);
+});
+
+test('coverage metadata does not execute a configured clean filter', t => {
+  const f = fixture(t), marker = path.join(f.root, 'filter.marker'), filter = path.join(f.root, 'filter.cjs');
+  fs.writeFileSync(filter, `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(marker)}, 'called'); process.stdout.write(fs.readFileSync(0));\n`);
+  fs.writeFileSync(path.join(f.root, '.gitattributes'), 'src/service.mjs filter=FormalFixture\n');
+  f.git('add', '.'); f.git('commit', '-qm', 'filter fixture');
+  const shellQuote = value => `'${value.replaceAll('\\', '/').replaceAll("'", "'\\''")}'`;
+  f.git('config', 'filter.FormalFixture.clean', `${shellQuote(process.execPath)} ${shellQuote(filter)}`);
+  fs.writeFileSync(path.join(f.root, 'src/service.mjs'), 'export const value = 2;\n');
+  f.git('-c', 'core.fsmonitor=false', 'status', '--porcelain');
+  assert.equal(fs.existsSync(marker), true, 'ordinary status must execute the configured filter');
+  fs.rmSync(marker);
+  const captured = collectCoverage(f.root, f.coverage);
+  assert.equal(fs.existsSync(marker), false);
+  assert.equal(captured.files[0].sha256, crypto.createHash('sha256').update('export const value = 2;\n').digest('hex'));
+});
+
+test('coverage metadata does not execute an unwatched submodule clean filter', t => {
+  const f = fixture(t), child = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-formal-submodule-'));
+  t.after(() => fs.rmSync(child, { recursive: true, force: true }));
+  const gitAt = (cwd, ...args) => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...TEST_GIT_ENV } });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  gitAt(child, 'init', '-q');
+  fs.writeFileSync(path.join(child, '.gitattributes'), 'inner.txt filter=FormalInner\n');
+  fs.writeFileSync(path.join(child, 'inner.txt'), 'before\n');
+  gitAt(child, 'add', '.'); gitAt(child, 'commit', '-qm', 'inner baseline');
+  f.git('-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', child, 'deps/sub');
+  f.git('commit', '-qm', 'submodule fixture');
+  const submodule = path.join(f.root, 'deps/sub'), marker = path.join(child, 'filter.marker'), filter = path.join(child, 'filter.cjs');
+  fs.writeFileSync(filter, `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(marker)}, 'called'); process.stdout.write(fs.readFileSync(0));\n`);
+  const shellQuote = value => `'${value.replaceAll('\\', '/').replaceAll("'", "'\\''")}'`;
+  gitAt(submodule, 'config', 'filter.FormalInner.clean', `${shellQuote(process.execPath)} ${shellQuote(filter)}`);
+  fs.writeFileSync(path.join(submodule, 'inner.txt'), 'after!\n');
+  f.git('-c', 'core.fsmonitor=false', 'status', '--porcelain');
+  assert.equal(fs.existsSync(marker), true, 'ordinary outer status must execute the inner filter');
+  fs.rmSync(marker);
+  const captured = collectCoverage(f.root, f.coverage);
+  assert.equal(fs.existsSync(marker), false);
+  assert.deepEqual(captured.files.map(file => file.path), ['src/service.mjs']);
 });
 
 test('coverage includes an untracked writer under a watched root', t => {
@@ -166,6 +211,25 @@ test('missing prerequisites block without writing synchronization metadata', asy
   assert.equal(fs.readFileSync(f.filename, 'utf8'), source);
 });
 
+test('unsupported Git gives an actionable prerequisite without retrying or advancing synchronization', { skip: process.platform === 'win32' }, async t => {
+  const f = manifestFixture(t), before = fs.readFileSync(f.filename, 'utf8');
+  const bin = path.join(f.root, 'git-bin'), calls = path.join(f.root, 'git-calls');
+  fs.mkdirSync(bin);
+  const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+  fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${quote(calls)}\nprintf '%s\\n' 'unknown option: --no-lazy-fetch' >&2\nexit 129\n`, { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  let check;
+  try {
+    process.env.PATH = `${bin}${path.delimiter}${previousPath}`;
+    check = await runFormalVerification({ workspace: f.root, manifestPath: f.filename, maintain: true, rationale: 'Reviewed fixture coverage.' });
+  } finally { process.env.PATH = previousPath; }
+  assert.equal(check.passed, false);
+  assert.equal(check.status, 'blocked');
+  assert.match(check.reason, /Upgrade Git.*--no-lazy-fetch/);
+  assert.equal(fs.readFileSync(calls, 'utf8').trim().split('\n').length, 1, 'unsupported Git must not be retried without its guard');
+  assert.equal(fs.readFileSync(f.filename, 'utf8'), before);
+});
+
 test('an occupied receipt blocks before synchronization can advance', async t => {
   const f = manifestFixture(t), before = fs.readFileSync(f.filename, 'utf8');
   const artifacts = path.join(f.root, 'artifacts'); fs.mkdirSync(artifacts);
@@ -176,6 +240,23 @@ test('an occupied receipt blocks before synchronization can advance', async t =>
   assert.equal(fs.readFileSync(f.filename, 'utf8'), before);
   assert.equal(fs.readFileSync(path.join(artifacts, 'formal-verification.json'), 'utf8'), '{"existing":true}\n');
 });
+
+for (const suffix of ['', '/new/subdirectory']) {
+  test(`a rejected symlink artifact root cannot create directories or publish evidence${suffix}`, { skip: process.platform === 'win32' }, async t => {
+    const f = fixture(t), outside = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-formal-outside-'));
+    t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+    const link = path.join(f.root, 'artifact-link');
+    fs.symlinkSync(outside, link, 'dir');
+    const check = await runFormalVerification({ workspace: f.root, manifestPath: 'missing.json', env: { ...process.env, HARNESS_CHECK_ARTIFACT_DIR: `${link}${suffix}` } });
+    assert.equal(check.passed, false);
+    assert.equal(check.status, 'blocked');
+    assert.match(check.reason, /symbolic|symlink/);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.ok(fs.existsSync(check.evidencePath), 'a fresh private fallback retains the blocked receipt');
+    assert.equal(fs.realpathSync(path.dirname(check.evidencePath)), path.dirname(check.evidencePath));
+    assert.notEqual(path.dirname(check.evidencePath), outside);
+  });
+}
 
 test('another maintenance lock is never deleted by a rejected invocation', async t => {
   const f = manifestFixture(t), lock = path.join(fs.realpathSync(os.tmpdir()), `ae-formal-maintain-${crypto.createHash('sha256').update(f.filename).digest('hex')}.lock`);
@@ -203,6 +284,17 @@ test('the actual pinned TLC and implementation controls maintain fresh evidence 
   assert.equal(first.conformance[1].observed.detected, true);
   const confirmed = JSON.parse(fs.readFileSync(f.filename, 'utf8'));
   assert.equal(confirmed.coverage.lastSync.sourceKind, 'working-tree-bytes');
+
+  for (const [field, kind] of [['command', 'positive'], ['negativeControl', 'negative']]) {
+    const malformed = structuredClone(confirmed);
+    malformed.conformance[field].push('--string-ids');
+    fs.writeFileSync(f.filename, JSON.stringify(malformed));
+    const malformedBytes = fs.readFileSync(f.filename, 'utf8');
+    const rejected = await runFormalVerification(options);
+    assert.equal(rejected.passed, false, `${kind} string IDs must not satisfy exact invariant membership`);
+    assert.match(rejected.reason, new RegExp(`${kind} control`));
+    assert.equal(fs.readFileSync(f.filename, 'utf8'), malformedBytes);
+  }
 
   confirmed.conformance.command.push('--negative-control');
   fs.writeFileSync(f.filename, JSON.stringify(confirmed));

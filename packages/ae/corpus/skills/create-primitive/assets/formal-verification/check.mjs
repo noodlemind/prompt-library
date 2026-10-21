@@ -46,9 +46,53 @@ function cleanEnv(env) {
   return result;
 }
 
-function execute(command, args, { cwd, env, timeout = 30_000 } = {}) {
-  const result = spawnSync(command, args, { cwd, env: cleanEnv(env), encoding: 'utf8', shell: false, timeout, maxBuffer: 512 * 1024, windowsHide: true });
+function execute(command, args, { cwd, env, timeout = 30_000, maxBuffer = 512 * 1024 } = {}) {
+  const result = spawnSync(command, args, { cwd, env: cleanEnv(env), encoding: 'utf8', shell: false, timeout, maxBuffer, windowsHide: true });
   return { command, args, status: result.status, signal: result.signal, error: result.error ? { code: result.error.code, message: result.error.message } : null, stdout: result.stdout || '', stderr: result.stderr || '' };
+}
+
+function metadataGit(workspace) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
+  Object.assign(env, { GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GIT_TRACE2: '0', GIT_TRACE2_EVENT: '0', GIT_TRACE2_PERF: '0' });
+  const args = ['--no-pager', '--no-lazy-fetch', '-c', 'core.fsmonitor=false', '-C', workspace];
+  const config = execute('git', [...args, 'config', '--includes', '--null', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'], { cwd: workspace, env, timeout: 4000, maxBuffer: 64 * 1024 });
+  if (config.status === 129 && /unknown option:\s*--no-lazy-fetch\b/i.test(config.stderr)) fail('Upgrade Git to a version supporting --no-lazy-fetch before running formal verification; safe metadata inspection cannot retry without the no-fetch guard');
+  if (config.error || ![0, 1].includes(config.status) || config.status === 1 && config.stdout !== '' || config.status === 0 && !config.stdout.endsWith('\0')) fail('Git filter metadata is unavailable or malformed');
+  const drivers = new Set();
+  for (const entry of config.stdout ? config.stdout.slice(0, -1).split('\0') : []) {
+    const separator = entry.indexOf('\n');
+    const match = separator > 0 && entry.slice(0, separator).match(/^filter\.(.+)\.(?:clean|smudge|process|required)$/i);
+    if (!match || /[=\r\n\0]/.test(match[1])) fail('Git filter metadata is malformed');
+    drivers.add(match[1]);
+  }
+  for (const driver of drivers) {
+    for (const operation of ['clean', 'smudge', 'process']) args.push('-c', `filter.${driver}.${operation}=`);
+    args.push('-c', `filter.${driver}.required=false`);
+  }
+  return { args, env };
+}
+
+function prepareArtifactDirectory(requested) {
+  const absolute = path.resolve(requested), root = path.parse(absolute).root;
+  const rel = path.relative(root, absolute).replaceAll('\\', '/');
+  relative(rel);
+  let current = root;
+  // Reject existing links before recursive mkdir can follow one outside the
+  // selected tree. Only a fully validated root is eligible for receipt writes.
+  for (const part of rel.split('/')) {
+    current = path.join(current, part);
+    let stat;
+    try { stat = fs.lstatSync(current); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    if (stat.isSymbolicLink()) fail('symbolic link is not an artifact directory');
+    if (!stat.isDirectory()) fail('artifact root ancestors must be directories');
+  }
+  fs.mkdirSync(absolute, { recursive: true });
+  contained(root, rel);
+  return fs.realpathSync(absolute);
+}
+
+function privateArtifactDirectory() {
+  return fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'ae-formal-evidence-'));
 }
 
 export function collectCoverage(workspace, coverage) {
@@ -69,9 +113,10 @@ export function collectCoverage(workspace, coverage) {
   for (const rel of coverage.watchRoots) visit(relative(rel));
   const files = [...found].sort().map(rel => ({ path: rel, sha256: hash(readRegular(root, rel)) }));
   if (!files.length) fail('declared source coverage is empty');
-  const head = execute('git', ['-c', 'core.fsmonitor=false', '-C', root, 'rev-parse', 'HEAD'], { cwd: root, env: process.env });
+  const metadata = metadataGit(root);
+  const head = execute('git', [...metadata.args, 'rev-parse', 'HEAD'], { cwd: root, env: metadata.env });
   if (head.error || head.status !== 0 || !/^[a-f0-9]{40,64}$/.test(head.stdout.trim())) fail('current Git commit is unavailable');
-  const status = execute('git', ['-c', 'core.fsmonitor=false', '-C', root, 'status', '--porcelain', '--untracked-files=all'], { cwd: root, env: process.env });
+  const status = execute('git', [...metadata.args, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=all'], { cwd: root, env: metadata.env });
   if (status.error || status.status !== 0) fail('working-tree status is unavailable');
   return { commit: head.stdout.trim(), dirty: Boolean(status.stdout.trim()), sourceKind: 'working-tree-bytes', files, digest: hash(JSON.stringify(files)) };
 }
@@ -155,11 +200,7 @@ export async function runFormalVerification({ workspace = process.cwd(), manifes
   let ownedLock = null, root, artifactDir, receiptHash = null;
   try {
     root = fs.realpathSync(workspace);
-    artifactDir = env.HARNESS_CHECK_ARTIFACT_DIR ? path.resolve(env.HARNESS_CHECK_ARTIFACT_DIR) : fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'ae-formal-evidence-'));
-    fs.mkdirSync(artifactDir, { recursive: true });
-    const artifactRoot = path.parse(artifactDir).root;
-    contained(artifactRoot, path.relative(artifactRoot, artifactDir).replaceAll('\\', '/'));
-    if (!fs.lstatSync(artifactDir).isDirectory()) fail('artifact root must be a real directory');
+    artifactDir = env.HARNESS_CHECK_ARTIFACT_DIR ? prepareArtifactDirectory(env.HARNESS_CHECK_ARTIFACT_DIR) : privateArtifactDirectory();
     receipt.evidencePath = path.join(artifactDir, 'formal-verification.json');
     if (fs.existsSync(receipt.evidencePath)) fail('formal-verification.json already exists; use a fresh invocation artifact directory');
     const manifestRel = path.relative(root, path.resolve(root, manifestPath || '')).replaceAll('\\', '/');
@@ -221,7 +262,8 @@ export async function runFormalVerification({ workspace = process.cwd(), manifes
       const expectedFeature = kind === 'positive' ? manifest.conformance.positiveFeature : manifest.conformance.negativeFeature;
       const requiredIds = kind === 'positive' ? manifest.conformance.invariantIds : manifest.conformance.negativeInvariantIds;
       const checkedIds = kind === 'positive' ? observed?.invariantIds : observed?.checkedInvariantIds;
-      const pass = !execution.error && !execution.signal && execution.status === 0 && observed?.schema === 1 && observed.passed === true && observed.feature === expectedFeature && Array.isArray(observed.steps) && observed.steps.length > 0 && requiredIds.every(id => checkedIds?.includes(id)) && (kind === 'negative' ? observed.detected === true : observed.detected !== true);
+      const validIds = Array.isArray(checkedIds) && checkedIds.length > 0 && checkedIds.length <= 16 && checkedIds.every(id => typeof id === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(id));
+      const pass = !execution.error && !execution.signal && execution.status === 0 && observed?.schema === 1 && observed.passed === true && observed.feature === expectedFeature && Array.isArray(observed.steps) && observed.steps.length > 0 && validIds && requiredIds.every(id => checkedIds.includes(id)) && (kind === 'negative' ? observed.detected === true : observed.detected !== true);
       receipt.conformance.push({ kind, pass, execution, observed });
       if (!pass) { receipt.status = execution.error || execution.signal ? 'blocked' : 'failed'; fail(`actual implementation ${kind} control did not establish its required result`); }
     }
@@ -261,7 +303,7 @@ export async function runFormalVerification({ workspace = process.cwd(), manifes
   } finally {
     if (ownedLock) fs.rmSync(ownedLock, { force: true });
   }
-  if (!artifactDir) artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-formal-evidence-'));
+  if (!artifactDir) artifactDir = privateArtifactDirectory();
   receipt.evidencePath ||= path.join(artifactDir, 'formal-verification.json');
   try { if (receiptHash) { if (!receipt.passed) replaceOwnedReceipt(artifactDir, receipt, receiptHash); } else writeReceipt(artifactDir, receipt); }
   catch (error) { receipt.passed = false; receipt.status = 'blocked'; receipt.reason = `receipt publication failed: ${error.message}`; }

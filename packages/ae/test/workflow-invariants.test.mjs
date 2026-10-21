@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { tempDir } from './helpers/temp.mjs';
 
-const root = path.resolve(import.meta.dirname, '../../..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const helper = path.join(root, '.cursor/skills/verify-harness/scripts/prove-workflow-invariants.mjs');
 const guard = path.join(root, 'packages/ae/lib/intent-sources.mjs');
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -20,8 +21,10 @@ function drive(t, args = [], extraEnv = {}) {
   return { result, artifacts };
 }
 
-test('workflow invariant drive proves real failed and successful delivery boundaries', t => {
-  const { result, artifacts } = drive(t);
+test('workflow invariant drive proves real delivery boundaries without implicit module detection', t => {
+  // Early Node 20 has no syntax detection; newer runtimes must exercise that contract too.
+  const nodeOptions = [process.env.NODE_OPTIONS, process.allowedNodeEnvironmentFlags.has('--no-experimental-detect-module') ? '--no-experimental-detect-module' : ''].filter(Boolean).join(' ');
+  const { result, artifacts } = drive(t, [], { NODE_OPTIONS: nodeOptions });
   assert.equal(result.status, 0, result.stderr + result.stdout);
   const receipt = JSON.parse(result.stdout);
   assert.equal(receipt.passed, true);

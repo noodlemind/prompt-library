@@ -37,6 +37,8 @@ The starter configuration has exactly three directives: `SPECIFICATION Spec`, on
 
 Install tools deliberately outside the repository's source artifacts. The starter pins the official [TLC v1.7.4 JAR](https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar), SHA-256 `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`, reporting `2.19 of 08 August 2024`, and requires Java 17 or newer. Set `AE_TLC_JAR` to its absolute regular-file path. `AE_TLC_JAVA` may select an explicit absolute Java executable. A different tool version requires a reviewed runner/protocol update; do not change a manifest pin merely to accept unknown bytes.
 
+The optional checker also requires Git supporting the global `--no-lazy-fetch` option. If Git rejects that option, upgrade Git before rerunning. Safe metadata inspection refuses to retry without the no-fetch guard and leaves synchronization unchanged.
+
 Run the copied helper with `--manifest <repo-relative manifest.json>` from the product root. The specialized skill should give its real filled-in command. The library pilot runs:
 
 ```bash
