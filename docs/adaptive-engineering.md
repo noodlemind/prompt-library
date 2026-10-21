@@ -324,6 +324,6 @@ Harness owns deterministic state recovery. A structured plan operation records i
 
 Doctor and gate JSON include bounded recovery diagnostics keyed by the original checks. Actions are scoped command arguments or guidance, with automatic retry disabled. Installation, index, plan, intent, isolation, capability, and verification failures retain their existing authority. A changed locked source requires reviewed intent and an explicit amendment. A suggested orientation command only inspects that state.
 
-A failed gate clears its accepted check binding. The hook permits canonical inspection and amendment controls in that state while product edits and opaque execution remain blocked. A changed manifest with an accepted check binding still requires gate recovery.
+A failed gate clears its accepted check binding. The hook permits standalone canonical inspection and amendment controls in that state while product edits and opaque execution remain blocked. A changed manifest with an accepted check binding still requires gate recovery.
 
 The [native-host protocol](../packages/ae/eval/host/README.md) keeps installed behavior, actual host delivery, and model comparisons separate. The [priority execution record](../.audit/ae-priorities.md) records the current evidence and remaining qualification work.

@@ -304,10 +304,10 @@ function unplannedNamedChecks(commands, command, planText) {
     .map(({ name }) => name);
 }
 
-function isSoleHarnessRecovery() {
+function soleHarnessControl() {
   const effects = normalized.terminalEffects;
-  return !normalized.mutation && !effects.ambiguous && !effects.hasOpaque && effects.invocations.length === 1
-    && ['gate', 'worktree'].includes(harnessControlCommand(effects.invocations[0], normalized.workspace));
+  if (normalized.mutation || effects.ambiguous || effects.hasOpaque || effects.invocations.length !== 1) return null;
+  return harnessControlCommand(effects.invocations[0], normalized.workspace);
 }
 
 try {
@@ -331,13 +331,16 @@ if (normalized.command) {
       const activePlan = session.gatedPlan || session.activePlan;
       const planText = activePlan ? fs.readFileSync(resolvePlanFile(normalized.workspace, activePlan), 'utf8') : '';
       const currentDigest = configuredChecksDigest(normalized.workspace);
+      const control = soleHarnessControl();
       if (Object.hasOwn(session, 'gatedChecksDigest')
-        && session.gatedChecksDigest !== null
         && session.gatedChecksDigest !== currentDigest
-        && !isSoleHarnessRecovery()) {
+        && !(session.gatedChecksDigest === null && control)
+        && !['gate', 'worktree'].includes(control)) {
         deny(
           'changed-check-config',
-          'The configured check manifest changed after the implement gate. Rerun ae gate before running terminal commands',
+          session.gatedChecksDigest === null
+            ? 'The failed implement gate has no accepted check binding. Run a standalone canonical ae control command to recover before product execution'
+            : 'The configured check manifest changed after the implement gate. Rerun ae gate before running terminal commands',
           'invalid'
         );
       }

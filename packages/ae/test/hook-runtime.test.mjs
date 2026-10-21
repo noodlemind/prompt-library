@@ -409,9 +409,10 @@ test('a failed gate permits recovery controls without authorizing product execut
     const result = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'run_in_terminal', tool_input: { command } }));
     assert.equal(result.continue, true, command + ': ' + JSON.stringify(result));
   }
-  for (const command of ['node scripts/check.mjs', 'ae orient --read; node scripts/check.mjs']) {
+  for (const command of ['node scripts/check.mjs', 'ae orient --read; node scripts/check.mjs', 'ae worktree --slug mixed && git status', 'ae orient --read; ae status --json']) {
     const result = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'run_in_terminal', tool_input: { command } }));
     assert.equal(result.hookSpecificOutput?.permissionDecision, 'deny', command);
+    assert.match(result.hookSpecificOutput.permissionDecisionReason, /standalone canonical/);
   }
   const edit = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'replace_string_in_file', tool_input: { filePath: path.join(workspace, 'src/example.js'), oldString: 'old', newString: 'new' } }));
   assert.equal(edit.hookSpecificOutput?.permissionDecision, 'deny');
