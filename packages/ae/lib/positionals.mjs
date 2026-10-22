@@ -14,6 +14,7 @@ export const VALUE_FLAGS = Object.freeze(new Set([
   '--title', '--to', '--tool-timeout', '--trigger', '--type', '--until', '--verify-cmd', '--why',
   '--workspace', '--attempt',
   '--packet', '--learning-decision', '--reviewer',
+  '--sources', '--renderer', '--layout', '--root', '--operation', '--flow', '--receipt', '--max-nodes',
   '-c',
 ]));
 

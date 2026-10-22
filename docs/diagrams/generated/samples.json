@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-22T11:32:10.289Z",
+  "generatedAt": "2026-10-22T12:05:26.055Z",
   "samples": [
     {
       "name": "architecture",
@@ -39,7 +39,7 @@
       "title": "Inspect imports before a change",
       "context": "Actual current-worktree imports around diagram-cmd.mjs, bounded to two hops and seven nodes. Import edges describe module dependencies; they do not assert runtime calls.",
       "command": "ae diagrams graph --root packages/ae/lib/diagram-cmd.mjs --operation deps --depth 2 --limit 24 --max-nodes 7 --json",
-      "id": "2501373023a63cbd9237875f3cef30ea389981bbf6e2e143d143e8b0d6492ef6",
+      "id": "a0f9d62d200aa9ab1631b623bda510599cf78754478f2e59e857a18af9849ea1",
       "renderer": {
         "engine": "pele",
         "version": "1.8.0",
