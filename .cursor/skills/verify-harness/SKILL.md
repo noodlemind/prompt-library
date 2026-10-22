@@ -1,11 +1,11 @@
 ---
 name: verify-harness
-description: Prove Harness CLI intent lock, prepare, worktree isolation, and installed release behavior with real commands. Use for runtime verification. Not for code review or general CLI questions.
+description: Prove AE CLI intent lock, preparation, worktree isolation, flows, workflow invariants, and installed release behavior with real commands. Use for runtime verification. Not for code review or general CLI questions.
 ---
 
 # Verify Harness
 
-The user-facing surface is the `harness` CLI in `packages/ae`. There is no web UI. Agents call `orient`, `prepare`, `plan-new --file`, `plan-update --file`, `gate --phase implement`, and `worktree`. Prove those commands in disposable git workspaces. The installed-release drive packs the checkout, installs that archive, upgrades the preceding source-package fixture, and then runs the hydrated CLI.
+The user-facing surface is the `ae` CLI in `packages/ae`. There is no web UI. Agents call `orient`, `prepare`, `plan-new --file`, `plan-update --file`, `gate --phase implement`, `worktree`, and `flows`. Prove those commands in disposable git workspaces. The installed-release drive packs the checkout, installs that archive, upgrades the preceding source-package fixture, and then runs the hydrated CLI.
 
 ## Launch
 
@@ -14,7 +14,7 @@ There is no long-lived server. Install package deps once, then start each drive 
 From the prompt-library root:
 
 ```bash
-node packages/ae/bin/ae.mjs --help
+node packages/ae/bin/ae.mjs help
 ```
 
 Ready when that command exits `0` and prints command names including `orient`, `prepare`, `plan-new`, `gate`, and `worktree`.
@@ -42,7 +42,7 @@ Use isolated temp git repos. Do not drive the operator checkout.
 3. Spawn `node packages/ae/bin/ae.mjs <command> --json`.
 4. Parse stdout JSON and the written plan file. Assert the observable values named in the feature map.
 
-Bind `verify-intent-lock`, `verify-prepare`, `verify-issue-worktree`, or `verify-installed-release` to the accepted plan. Harness runs their configured helper argv. Each helper owns readiness, drive, evidence, and cleanup. Run doctor before selecting a drive. These helpers do not start a long-lived server.
+Bind the affected feature's named checks to the accepted plan. Harness runs their configured helper argv. Each helper owns readiness, drive, evidence, and cleanup. Run doctor before selecting a drive. These helpers do not start a long-lived server. Shared flow-map verification and workflow conformance need only the ordinary doctor. The separate optional formal pilot requires its own explicit Java and TLC prerequisites.
 
 ## Evidence
 
@@ -56,6 +56,8 @@ Proof standards:
 Write artifacts to `.cursor/skills/verify-harness/evidence/<feature>/`. The helper can use `HARNESS_DRIVE_EVIDENCE_ROOT` for an isolated output root. Keep evidence out of git. Each receipt records invocations, owned resource paths, doctor outcome, and cleanup. When `/opt/cursor/artifacts` exists, copy the same files there.
 
 The installed-release drive requires the verification controller's `HARNESS_CHECK_ARTIFACT_DIR`. It writes `installed-release.json` there and preserves its archive, command receipts, completed plan, numerical artifacts, and final evidence in `build/` and `drive/`. The receipt records the source SHA and dirty state. It distinguishes the preceding source-package fixture from a published release and makes no native editor or model-quality claim.
+
+The formal-flow and workflow-invariant drives write `formal-flows/drive.json`, `workflow-invariants/drive.json`, or `workflow-invariants-negative/drive.json` beneath `HARNESS_CHECK_ARTIFACT_DIR`. Their manual runs use private invocation directories when no artifact root is selected. The optional deep pilot writes `formal-verification.json`; its [repo-local skill](./formal/delivery-evidence/SKILL.md) distinguishes bounded model checking, implementation conformance, and deliberate-break detection. None of these receipts establishes model quality or native editor activation.
 
 A proof includes the action and the resulting state. Example for intent lock: `plan-new` stdout path, the plan's `intent_sources[0].path`, `intent_sources[0].sha256` equal to the sha256 of the spec bytes at lock, then `gate --phase implement` exits `1` after the spec file is rewritten and exits `0` only after an accepted source amendment.
 
@@ -71,6 +73,11 @@ Delete temp workspaces, temp `AE_HOME` dirs, and linked git worktrees the drive 
 - Prepare proof: `node .cursor/skills/verify-harness/scripts/prove-prepare.mjs`
 - Journey performance: `ae checks run verify-performance --json`; the [feature recipe](./features/performance.md) records the CLI and separate browser proof.
 - Installed release proof: `ae checks run verify-installed-release --json` from a trusted checkout on macOS; see [the installed-release recipe](./features/installed-release.md).
+- Shared flow models: `node .cursor/skills/verify-harness/scripts/prove-formal-flows.mjs`, named check `verify-formal-flows`; see [formal models](./features/formal-models.md).
+- Self-contained diagrams: `ae checks run adaptive-diagram-tests --json`; see [diagram rendering](./features/diagrams.md) for real CLI, native tool, offline installation, freshness and negative-control coverage.
+- Workflow conformance: `node .cursor/skills/verify-harness/scripts/prove-workflow-invariants.mjs`, named check `verify-workflow-invariants`.
+- Deliberate-break detection: `node .cursor/skills/verify-harness/scripts/prove-workflow-invariants.mjs --negative-control`, named check `verify-workflow-invariants-negative`; see [workflow invariants](./features/workflow-invariants.md).
+- Optional deep model check: `node .cursor/skills/verify-harness/formal/delivery-evidence/scripts/check.mjs`, named check `verify-formal-delivery`. Read the [pilot skill](./formal/delivery-evidence/SKILL.md) first; Java 17+ and the exact approved `AE_TLC_JAR` are separate prerequisites. Maintenance uses the [companion skill](./formal/delivery-evidence/maintain/SKILL.md).
 
 ## Trigger Examples
 

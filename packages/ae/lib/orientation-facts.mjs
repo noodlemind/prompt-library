@@ -16,6 +16,7 @@ import { caffeinatedPointer } from './playbook-binding.mjs';
 import { locateVerification } from './verification-location.mjs';
 import { resolveObligation, intentPage } from './intent-sources.mjs';
 import { performanceContext } from './performance.mjs';
+import { flowModelContext } from './flow-model.mjs';
 
 function indexPlane(plane) {
   if (!plane?.indexed) return 'missing';
@@ -55,7 +56,9 @@ export function collectOrientationFacts({ workspace, copilotHome, flags = {}, qu
   const procedure = caffeinatedPointer(active, { copilotHome });
   const obligation = resolveObligation(workspace, active, q);
   const performance = performanceContext({ workspace, home, files: namedFiles || [] });
+  const flowModel = advisory('flow-model', null, () => flowModelContext({ workspace, home, files: namedFiles || [], query: q }));
   const slice = {
+    ...(flowModel ? { flowModel } : {}),
     ...(performance ? { performance } : {}),
     neighborhood,
     graph: { commands: ['ae graph deps', 'ae graph dependents', 'ae graph path'], source: 'current-worktree', bounded: true, calls: 'approximate references only' },

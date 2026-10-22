@@ -12,11 +12,15 @@ test('clean installed package expands current context and rejects stale source r
   const packageRoot = path.resolve(import.meta.dirname, '..');
   const npm = [process.env.npm_execpath, path.join(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'), path.resolve(path.dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js')].find(candidate => candidate && fs.existsSync(candidate));
   assert.ok(npm);
-  const packed = spawnSync(process.execPath, [npm, 'pack', '--json', '--pack-destination', root], { cwd: packageRoot, encoding: 'utf8', timeout: 60000 });
+  // Cold archive setup unpacks the bundled WASM/font assets; runtime CLI calls
+  // below retain their own deadlines.
+  const packed = spawnSync(process.execPath, [npm, 'pack', '--json', '--pack-destination', root], { cwd: packageRoot, encoding: 'utf8', timeout: 120000 });
+  assert.ifError(packed.error);
   assert.equal(packed.status, 0, packed.stderr);
   const metadata = JSON.parse(packed.stdout)[0];
   const archive = path.join(root, metadata.filename);
-  const installed = spawnSync(process.execPath, [npm, 'install', '--prefix', root, '--offline', '--ignore-scripts', '--omit=optional', archive], { encoding: 'utf8', timeout: 60000 });
+  const installed = spawnSync(process.execPath, [npm, 'install', '--prefix', root, '--offline', '--ignore-scripts', '--omit=optional', archive], { encoding: 'utf8', timeout: 120000 });
+  assert.ifError(installed.error);
   assert.equal(installed.status, 0, installed.stderr);
   const runtime = path.join(root, 'node_modules/ae-harness');
   const workspace = path.join(root, 'workspace'), copilotHome = path.join(root, 'copilot'), harnessHome = path.join(root, 'control');

@@ -47,7 +47,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   const home = flags.harnessHome || flags.home;
   const facts = collectOrientationFacts({ workspace, copilotHome, flags, query: q, files });
   const { active, session, namedFiles, gate: gatePreview, routingLines, status, procedure, obligation } = facts;
-  const { planGoal, learnings, trust, reviewCoverage, index, skills, instructions, contacts, neighborhood, verification, intentDiscovery, intentDetail, performance } = facts.slice;
+  const { planGoal, learnings, trust, reviewCoverage, index, skills, instructions, contacts, neighborhood, verification, intentDiscovery, intentDetail, performance, flowModel } = facts.slice;
   const recall = rankRecall(q, {
     copilotHome,
     workspace,
@@ -112,6 +112,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   if (isolation.blocked) {
     nextTools.unshift(`ae worktree --slug ${planSlugFromPath(active?.path)}`);
   }
+  if (flowModel) nextTools.push('ae flows show --json');
   if (intentSources[0]) nextTools.push(`read ${intentSources[0].path}`);
   if (procedure) nextTools.push(`read ${inertLine(procedure.path)}`);
   if (verification.path) nextTools.push(`read ${inertLine(verification.path)}`);
@@ -144,6 +145,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
   }
 
   const packBody = buildContextPack({
+    flowModel,
     performance,
     verification,
     intentDiscovery,
@@ -202,6 +204,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
 
   return {
     recall,
+    ...(flowModel ? { flowModel } : {}),
     ...(performance ? { performance } : {}),
     verification,
     intentDiscovery,

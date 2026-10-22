@@ -575,6 +575,73 @@ export function harnessControlCommand(tokens, workspace) {
   } else return null;
   if (!args.length) return 'help';
   if (HARNESS_CONTROL.has(args[0])) return args[0];
+  if (args[0] === 'diagrams') {
+    // Hydrated hooks cannot import package lib/. Keep this bounded grammar in
+    // step with diagram-cmd.mjs; diagram-native tests cover the shared forms.
+    const verb = args[1], options = {
+      render: ['--file', '--sources', '--renderer', '--layout', '--timeout'],
+      graph: ['--root', '--operation', '--depth', '--limit', '--max-nodes', '--timeout'],
+      flow: ['--flow', '--limit', '--max-nodes', '--timeout'], status: ['--receipt'],
+    };
+    if (!Object.hasOwn(options, verb)) return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--workspace', '--ae-home', '--harness-home', '--copilot-home', '--output', ...options[verb]]);
+    const seen = new Set(), values = new Map();
+    for (let index = 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('='), name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || Buffer.byteLength(value) > 4096 || /[\x00-\x1f\x7f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    const required = { render: '--file', graph: '--root', flow: '--flow', status: '--receipt' }[verb];
+    if (!values.has(required)) return null;
+    const contained = (value, scope = false) => {
+      if (scope && value === '.') return true;
+      return value.length <= 1024 && !/[\x00-\x1f\x7f\\:]/.test(value) && !path.isAbsolute(value) && !path.win32.isAbsolute(value)
+        && !value.split('/').some(part => !part || part === '.' || part === '..' || scope && ['.git', '.harness', 'node_modules'].includes(part.toLowerCase()));
+    };
+    for (const key of ['--file', '--root', '--receipt']) if (values.has(key) && !contained(values.get(key))) return null;
+    if (values.has('--sources') && values.get('--sources').split(',').some(value => !contained(value.trim(), true))) return null;
+    const file = values.get('--file');
+    if (file && !/\.(?:mmd|mermaid|d2)$/.test(file)) return null;
+    const renderer = values.get('--renderer') || (file?.endsWith('.d2') ? 'd2' : undefined);
+    if (renderer && !['pele', 'd2'].includes(renderer)) return null;
+    if (values.has('--layout') && (renderer !== 'd2' || !['tala', 'elk', 'dagre'].includes(values.get('--layout')))) return null;
+    if (values.has('--operation') && !['deps', 'dependents'].includes(values.get('--operation'))) return null;
+    for (const [key, max] of [['--depth', 32], ['--limit', 200], ['--max-nodes', 200], ['--timeout', 30000]]) {
+      if (!values.has(key)) continue;
+      const value = values.get(key), number = Number(value);
+      if (!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number < 1 || number > max) return null;
+    }
+    if (values.has('--output') && !['json-envelope', 'agent'].includes(values.get('--output'))) return null;
+    if (values.has('--workspace') && path.resolve(values.get('--workspace')) !== path.resolve(workspace)) return null;
+    return 'diagrams';
+  }
+  if (args[0] === 'flows') {
+    const verb = args[1];
+    if (!['prepare', 'publish', 'status', 'show'].includes(verb)) return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--file', '--workspace', '--ae-home', '--harness-home', '--copilot-home']), seen = new Set(), values = new Map();
+    for (let index = 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('='), name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || Buffer.byteLength(value) > 4096 || /[\x00-\x1f\x7f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    const file = values.get('--file');
+    if (verb === 'publish' && !file || file && !['prepare', 'publish'].includes(verb)) return null;
+    if (file && (path.isAbsolute(file) || path.win32.isAbsolute(file) || file.includes('\\') || file.includes(':') || file.split('/').some(part => !part || part === '.' || part === '..'))) return null;
+    if (values.has('--workspace') && path.resolve(values.get('--workspace')) !== path.resolve(workspace)) return null;
+    return 'flows';
+  }
   if (args[0] === 'performance') {
     if (args[1] !== 'analyze') return null;
     const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);

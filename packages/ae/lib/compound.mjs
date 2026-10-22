@@ -1,3 +1,4 @@
+import { flowMaintenance } from './flow-model.mjs';
 import { gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 import { planRecordRoot, planHome, planTrustHome, validateDomainContext } from './domain-context.mjs';
 import fs from 'fs';
@@ -371,7 +372,7 @@ async function runLearningDecision({ workspace, copilotHome, flags, log, domainC
   }));
 }
 
-export async function runCompound({ workspace, copilotHome, flags, log = () => {}, domainContext = null }) {
+async function runCompoundCore({ workspace, copilotHome, flags, log = () => {}, domainContext = null }) {
   if (flags.learningDecision) return runLearningDecision({ workspace, copilotHome, flags, log, domainContext });
   if (domainContext && flags.insight) throw new Error('Domain learning requires a selected verified parent and an authored learning decision');
   if (flags.insight) return runInsightCompound({ workspace, copilotHome, flags, log, home: flags.home });
@@ -483,4 +484,17 @@ export async function runCompound({ workspace, copilotHome, flags, log = () => {
     blockedReason: null,
     nextTools: ['/compound-learnings', '/auto-compound'],
   };
+}
+
+// Optional main-generation maintenance is advisory after the existing proof path.
+export async function runCompound(options) {
+  const result = await runCompoundCore(options);
+  const { flags = {}, workspace, domainContext } = options;
+  if (result.pass && !flags.insight && !flags.dryRun && !domainContext) {
+    try {
+      const maintenance = flowMaintenance({ workspace, home: flags.harnessHome || flags.home });
+      if (maintenance) return { ...result, flowMaintenance: maintenance };
+    } catch { /* Descriptive context cannot overturn verified delivery. */ }
+  }
+  return result;
 }

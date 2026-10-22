@@ -1,0 +1,19 @@
+# Hand-authored inferred responsibility view; not an extracted runtime graph.
+# See README.md for evidence and limitations.
+direction: right
+engineer: Host Engineer
+authored: Authored diagram source
+sources: Selected repository sources
+harness: AE Harness {
+  binding: Capture source bindings
+  worker: Render in bundled worker
+  receipt: Retain provenance and artifact hashes
+}
+viewer: Local HTML and SVG
+
+engineer -> authored: Authors and reviews
+sources -> harness.binding: Source inventory
+authored -> harness.worker: Diagram text
+harness.binding -> harness.receipt: Source bindings
+harness.worker -> harness.receipt: Artifact hashes
+harness.worker -> viewer: Local output

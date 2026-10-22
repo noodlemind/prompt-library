@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "generatedAt": "2026-10-22T13:12:18.381Z",
+  "samples": [
+    {
+      "name": "architecture",
+      "title": "Explain the responsibility boundary",
+      "context": "The Engineer authors and reviews the explanation. AE captures selected sources, renders in bundled workers, and retains source and artifact hashes. Hand-authored inference.",
+      "command": "ae diagrams render --file docs/diagrams/ae-rendering.d2 --sources docs/adaptive-engineering.md,packages/ae/lib/diagram.mjs,packages/ae/lib/diagram-cmd.mjs,packages/ae/lib/diagrams --renderer d2 --layout tala --json",
+      "id": "b55d13ad02600e1ef0c7affb5b886c239ee7cb62de42a646d9915c77c0b1ba83",
+      "renderer": {
+        "engine": "d2",
+        "version": "0.1.34",
+        "layout": "tala",
+        "settings": {
+          "policy": "ae-static-diagrams-v1",
+          "palette": "ae-light-v1",
+          "network": "disabled",
+          "imports": "disabled",
+          "externalAssets": "disabled",
+          "maxInputBytes": 50000,
+          "maxOutputBytes": 4194304,
+          "talaSeeds": [
+            1
+          ],
+          "themeID": 0,
+          "pad": 24
+        }
+      },
+      "freshness": {
+        "state": "current",
+        "scope": "worktree"
+      },
+      "verification": "not-verified",
+      "svgSha256": "793434c090732f0158d36d00362a6f6b7a3ca412948a27e23c4303cbc7695d36"
+    },
+    {
+      "name": "dependencies",
+      "title": "Inspect imports before a change",
+      "context": "Actual current-worktree imports around diagram-cmd.mjs, bounded to two hops and seven nodes. Import edges describe module dependencies; they do not assert runtime calls.",
+      "command": "ae diagrams graph --root packages/ae/lib/diagram-cmd.mjs --operation deps --depth 2 --limit 24 --max-nodes 7 --json",
+      "id": "afe51ded3a070349e49a9ab4a2f4ef98e51f5fa4a39f5ae0ae2f86cc49c75cb0",
+      "renderer": {
+        "engine": "pele",
+        "version": "1.8.0",
+        "layout": null,
+        "settings": {
+          "policy": "ae-static-diagrams-v1",
+          "palette": "ae-light-v1",
+          "network": "disabled",
+          "imports": "disabled",
+          "externalAssets": "disabled",
+          "maxInputBytes": 50000,
+          "maxOutputBytes": 4194304,
+          "idPrefix": "ae-diagram",
+          "responsive": false,
+          "autoDirection": false,
+          "now": 0
+        }
+      },
+      "freshness": {
+        "state": "current",
+        "scope": "worktree"
+      },
+      "verification": "not-verified",
+      "svgSha256": "fc22cb3147cf3d1c9103116371866915edf462e931827528e2af01f86d9085fd"
+    },
+    {
+      "name": "recovery",
+      "title": "Discuss a recovery path",
+      "context": "Simplified, hand-authored view of structuredPlanUpdate. Detailed locks, authority checks, completion prerequisites and conversion handling are omitted. Descriptive context; not a checked proof.",
+      "command": "ae diagrams render --file docs/diagrams/recovery.mmd --sources packages/ae/lib/plan-update.mjs --renderer pele --json",
+      "id": "d8db1bed7b03796e9c82fb1ee7b760920bed3f70a3c98b09c26993f76ef51c56",
+      "renderer": {
+        "engine": "pele",
+        "version": "1.8.0",
+        "layout": null,
+        "settings": {
+          "policy": "ae-static-diagrams-v1",
+          "palette": "ae-light-v1",
+          "network": "disabled",
+          "imports": "disabled",
+          "externalAssets": "disabled",
+          "maxInputBytes": 50000,
+          "maxOutputBytes": 4194304,
+          "idPrefix": "ae-diagram",
+          "responsive": false,
+          "autoDirection": false,
+          "now": 0
+        }
+      },
+      "freshness": {
+        "state": "current",
+        "scope": "worktree"
+      },
+      "verification": "not-verified",
+      "svgSha256": "66b2f9bc7b4096f55c131327955eaecacdc6006cc500b46aa7422d2d331bc699"
+    }
+  ]
+}

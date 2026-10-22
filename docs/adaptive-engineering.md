@@ -54,6 +54,20 @@ For an ordinary visible change, the Engineer selects affected features and share
 
 Each drive proves a real user path through readiness, doctor, action, observation, evidence, and cleanup. Doctor runs before the first drive and after a failed drive. Helpers clean up only resources they own and preserve artifacts after success, failure, or cancellation. An unreachable feature records its prerequisite and attempted route. A product assertion cannot be rewritten as intentional without an accepted intent amendment. Local CLI proof, installed-package proof, and native editor activation carry separate evidence.
 
+### Selected formal verification
+
+A critical property can acquire a specialized, repository-local verification procedure inside the selected product recipe. The existing `create-primitive` workflow owns creation and maintenance through its [formal verification reference](../packages/ae/corpus/skills/create-primitive/references/formal-verification.md). It adds supporting models, configuration, helpers, and evidence rather than a new globally installed skill or agent. The Engineer selects a method appropriate to the property and binds the executable checks to accepted criteria.
+
+State machines, retries, and concurrency can benefit from a bounded TLA+/PlusCal model. A model result remains separate from implementation correspondence. The maintained check records accepted properties, source coverage including likely new writers, assumptions and finite bounds, tool identity, positive and negative controls, and evidence against actual code. Drift, product defects, and intended requirement changes need distinct judgments. Maintenance must not weaken a property to accept a bug or advance synchronization after a blocked check. Relevant agent-written changes maintain their affected verification before final review and proof.
+
+Java and TLC are prerequisites only when an explicitly selected formal check uses them. Ordinary sessions, package installation, and `npm pack` neither install nor probe those tools. Missing tools or unfinished exploration cannot supply successful formal evidence.
+
+### Three workflow invariants
+
+The [workflow invariant reference](../packages/ae/corpus/skills/references/workflow-invariants.md) captures exactly three existing boundaries: accepted intent precedes product mutation; current verification precedes verified delivery learning; and modes preserve product mutation authority. It is read on demand for lifecycle changes or optional verification, not injected into ordinary sessions. The separate unverified insight lane remains available.
+
+The Engineer continues to own mode selection. Harness checks actual operations and recorded authority; it does not authenticate a printed mode or gain a new semantic mode variable. Optional models and real CLI/hook drives test the selected boundaries without changing the Engineer–Harness contract or establishing native editor behavior.
+
 ## How capability is acquired
 
 A capability moves through candidate, experimental, active, deprecated, and retired. Promotion needs a trigger eval, an outcome eval, and promotion evidence. Retirement leaves a tombstone so a later task can see the overlap with what replaced it.
@@ -315,6 +329,41 @@ Orientation shares one fact collector across the pack and read response. Existin
 The optional headless runtime exposes experimental `legacy`, `selective`, and `subsystem` context policies. Selective evidence follows task seeds and import neighbors. Subsystem evidence adds files under seed directories. Each policy reports clipping and omissions. Structured retention reloads the existing plan and evidence after context changes. Both defaults remain legacy until task evaluation supports a change.
 
 Reports separate produced-artifact estimates, runtime requests, and observed host usage. Missing host visibility remains unavailable. Model-task quality and installed-editor behavior require their own evidence.
+
+### Shared descriptive flow models
+
+The optional shared application map describes committed default-branch behavior through a lightweight structured statechart. It complements import facts and product verification recipes. The Engineer authors states, events, guards, failure paths, assumptions, and limitations after inspecting exact sources. Harness prepares source bindings, validates the schema, and publishes immutable snapshots keyed by the existing project identity and generation commit. It never fetches a remote or invokes an LLM.
+
+```bash
+ae flows prepare --file .harness/decisions/flow-scope.json --json
+ae flows publish --file .harness/decisions/flow-candidate.json --json
+ae flows status --json
+ae flows show --json
+```
+
+The optional scope file contains `watchPaths`, for example `{"watchPaths":["src/orders"]}`. Preparation returns the locally observed default ref, commit, exact regular source paths, modes, hashes, and digest. A candidate preserves that preparation verbatim and adds a version 1 `statechart` model. Publish rechecks the observed tip and bindings; identical retries replay, while conflicting bytes at an existing generation fail. The [flow-model reference](../packages/ae/corpus/skills/codebase-context/references/flow-models.md) defines the authoring and maintenance procedure.
+
+The baseline is the locally available default ref resolved from configuration or `origin/HEAD`, not feature HEAD, dirty worktree bytes, or an unseen remote tip. Status distinguishes absent, current, stale, and unknown. Watched changes on a later observed default tip make the map stale; an unrelated linear advance may preserve currentness for that scope. New committed files beneath watched directories participate. Unresolved or divergent metadata remains unknown. Linked worktrees share the project's local model store in the selected Harness home; no distributed synchronization is implied.
+
+Orientation returns bounded relevant pointers, at most 4096 bytes, when task files or an exact flow ID match. It does not include the model body in the response. The Engineer can expand the pointer to check intent completeness, then inspect the task candidate separately. This descriptive context cannot accept requirements, enter `intent_sources` automatically, grant mutation authority, or satisfy verification. Missing optional maps leave unrelated work available.
+
+A successful compound may return an advisory `flowMaintenance` pointer when an existing map is stale after relevant observed-default advancement. Compound does not merge main, generate a map, or run an agent. The Engineer explicitly prepares again, inspects the new committed sources, and publishes an authored generation within authorized scope. Explicit regeneration uses the same procedure. Deep rerunnable proof stays in the maintained product recipe rather than the descriptive map.
+
+### Local diagram rendering
+
+The existing Codebase Context skill owns diagram interpretation through its on-demand [diagram reference](../packages/ae/corpus/skills/codebase-context/references/diagrams.md). The host Engineer authors source-backed explanations and labels inferred or proposed relationships; Harness renders bounded local inputs, captures provenance, and reports freshness. This adds no agent, MCP server, model call, network request, or runtime installer. Bundled Pele and D2 dependencies load on demand in workers and produce SVG plus self-contained HTML.
+
+```bash
+ae diagrams render --file docs/diagrams/architecture.d2 --sources src/orders,config/orders.json --renderer d2 --layout tala --json
+ae diagrams render --file docs/diagrams/recovery.mmd --sources src/orders --renderer pele --json
+ae diagrams graph --root src/orders/service.ts --operation deps --depth 2 --limit 40 --json
+ae diagrams flow --flow order-recovery --json
+ae diagrams status --receipt .harness/diagrams/<id>/receipt.json --json
+```
+
+Render accepts a restricted Mermaid/D2 subset with Harness-owned options; imports, remote assets, author-controlled renderer configuration, links, and markup are unsupported. TALA handles architecture layout, with ELK or Dagre available for directional views. The returned `id` and `artifacts` identify immutable output under `.harness/diagrams/<id>/`, including `svg`, `html`, and `receipt`. Open those returned artifact paths. Without `--sources`, authored text remains `diagram-only`; selected files or directories bind the view to worktree bytes and watched inventory, including new files.
+
+Dependency diagrams reuse bounded current-worktree import facts and retain unresolved edges and coverage limits. Flow diagrams render existing committed-default-branch descriptive models without regenerating them; keep their recorded generation and freshness distinct from the worktree. Artifact integrity and source currentness do not prove architecture correctness, complete behavior, accepted intent, or a TLA+ property. [Hand-authored examples](diagrams/README.md) illustrate these limits.
 
 ## Recovery ownership
 

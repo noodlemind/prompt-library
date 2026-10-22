@@ -211,7 +211,7 @@ test('an external project-store plan can pass the implement gate', () => {
   }
 });
 
-function runHook(name, workspace, payload) {
+function runHook(name, workspace, payload, { authorityBin = binPath } = {}) {
   return spawnSync(process.execPath, [path.join(hooksRoot, name)], {
     cwd: workspace,
     input: JSON.stringify({
@@ -221,7 +221,12 @@ function runHook(name, workspace, payload) {
       ...payload,
     }),
     encoding: 'utf8',
-    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce', HARNESS_BIN: binPath },
+    env: {
+      ...process.env,
+      HARNESS_ENFORCEMENT: 'enforce',
+      HARNESS_BIN: authorityBin,
+      ...(authorityBin === binPath ? {} : { AE_BIN: authorityBin }),
+    },
   });
 }
 
@@ -733,26 +738,88 @@ function writeSessionFiles(workspace, files) {
   fs.writeFileSync(sessionPath, JSON.stringify(session));
 }
 
-test('a non-empty orient file list allows only those governed paths', () => {
+// These four path-policy unit cases assume an available proof authority. Keep
+// the real CLI for the other hook integration cases, including stale gates and
+// authority failures. This fixture accepts one captured request and reads only
+// its captured plan; unsupported policy requests retain enforce/30 defaults.
+function scopeAuthorityFixture(workspace, plan) {
+  const canonicalWorkspace = fs.realpathSync(workspace);
+  const planPath = path.join(canonicalWorkspace, plan);
+  const bytes = fs.readFileSync(planPath);
+  const bytesHash = crypto.createHash('sha256').update(bytes).digest('hex');
+  const digest = crypto.createHash('sha256').update(planContractText(bytes.toString('utf8'))).digest('hex');
+  const expected = ['status', '--contract-digest', '--plan', plan, '--json', '--no-events', '--workspace', canonicalWorkspace];
+  const authority = path.join(canonicalWorkspace, '.harness', 'exclusive-scope-authority.mjs');
+  fs.mkdirSync(path.dirname(authority), { recursive: true });
+  fs.writeFileSync(authority, `import fs from 'node:fs';
+import crypto from 'node:crypto';
+const expected = ${JSON.stringify(expected)};
+const actual = process.argv.slice(2);
+if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) process.exit(2);
+try {
+  if (fs.realpathSync(process.cwd()) !== ${JSON.stringify(canonicalWorkspace)}) process.exit(2);
+  const planPath = ${JSON.stringify(planPath)};
+  if (!fs.lstatSync(planPath).isFile()) process.exit(3);
+  const bytes = fs.readFileSync(planPath);
+  if (crypto.createHash('sha256').update(bytes).digest('hex') !== ${JSON.stringify(bytesHash)}) process.exit(3);
+} catch { process.exit(3); }
+process.stdout.write(JSON.stringify({ digest: ${JSON.stringify(digest)} }) + '\\n');
+`);
+  return authority;
+}
+
+function hookDiagnostic(result) {
+  return JSON.stringify({ status: result.status, signal: result.signal, error: result.error?.message, stdout: result.stdout, stderr: result.stderr }, null, 2);
+}
+
+test('exclusive scope authority fixture accepts only its captured plan request and bytes', (t) => {
   const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const plan = writePlan(workspace), authority = scopeAuthorityFixture(workspace, plan);
+  const expected = ['status', '--contract-digest', '--plan', plan, '--json', '--no-events', '--workspace', fs.realpathSync(workspace)];
+  const run = args => spawnSync(process.execPath, [authority, ...args], { cwd: workspace, encoding: 'utf8', timeout: 10000 });
+  const valid = run(expected);
+  assert.equal(valid.status, 0, valid.stderr + valid.stdout);
+  assert.deepEqual(JSON.parse(valid.stdout), { digest: crypto.createHash('sha256').update(planContractText(fs.readFileSync(path.join(workspace, plan), 'utf8'))).digest('hex') });
+  for (const args of [
+    ['status', '--effective-policy', '--json', '--no-events', '--workspace', workspace],
+    [...expected, '--validate-completion'],
+    expected.map((value, index) => index === 3 ? '../outside-plan.md' : value),
+    expected.map((value, index) => index === 7 ? path.dirname(workspace) : value),
+  ]) {
+    const rejected = run(args);
+    assert.equal(rejected.status, 2, rejected.stderr + rejected.stdout);
+    assert.equal(rejected.stdout, '');
+  }
+  fs.appendFileSync(path.join(workspace, plan), '\nChanged fixture bytes.\n');
+  const changed = run(expected);
+  assert.equal(changed.status, 3, changed.stderr + changed.stdout);
+  assert.equal(changed.stdout, '');
+});
+
+test('a non-empty orient file list allows only those governed paths', (t) => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const plan = writePlan(workspace);
   writePassedGate(workspace, plan);
+  const authorityBin = scopeAuthorityFixture(workspace, plan);
   writeSessionFiles(workspace, ['src/schema.json']);
 
   const allowed = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
     tool_input: { filePath: 'src/schema.json' },
-  });
-  assert.equal(allowed.status, 0, allowed.stderr);
-  assert.notEqual(outputJson(allowed).hookSpecificOutput?.permissionDecision, 'deny');
+  }, { authorityBin });
+  assert.equal(allowed.status, 0, hookDiagnostic(allowed));
+  assert.equal(outputJson(allowed).continue, true, hookDiagnostic(allowed));
 
   const denied = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
     tool_input: { filePath: '.github/skills/example/SKILL.md' },
-  });
+  }, { authorityBin });
+  assert.equal(denied.status, 0, hookDiagnostic(denied));
   const reason = outputJson(denied).hookSpecificOutput.permissionDecisionReason;
-  assert.equal(outputJson(denied).hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(reason, /outside-exclusive-files/);
+  assert.equal(outputJson(denied).hookSpecificOutput.permissionDecision, 'deny', hookDiagnostic(denied));
+  assert.match(reason, /outside-exclusive-files/, hookDiagnostic(denied));
   assert.match(reason, /\.github\/skills\/example\/SKILL\.md/);
   assert.match(reason, /ae orient --read/);
   assert.doesNotMatch(reason, /--query/);
@@ -762,54 +829,61 @@ test('a non-empty orient file list allows only those governed paths', () => {
   const emptyList = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
     tool_input: { filePath: 'src/schema.json' },
-  });
-  assert.equal(emptyList.status, 0, emptyList.stderr);
-  assert.notEqual(outputJson(emptyList).hookSpecificOutput?.permissionDecision, 'deny');
+  }, { authorityBin });
+  assert.equal(emptyList.status, 0, hookDiagnostic(emptyList));
+  assert.equal(outputJson(emptyList).continue, true, hookDiagnostic(emptyList));
 });
 
-test('an exclusive directory or glob entry does not authorize other files', () => {
+test('an exclusive directory or glob entry does not authorize other files', (t) => {
   const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const plan = writePlan(workspace);
   writePassedGate(workspace, plan);
+  const authorityBin = scopeAuthorityFixture(workspace, plan);
 
   for (const entry of ['src/', 'src/**']) {
     writeSessionFiles(workspace, [entry]);
     const denied = runHook('require-plan-gate.mjs', workspace, {
       tool_name: 'replace_string_in_file',
       tool_input: { filePath: 'src/schema.json' },
-    });
+    }, { authorityBin });
+    assert.equal(denied.status, 0, hookDiagnostic(denied));
     const output = outputJson(denied).hookSpecificOutput || {};
-    assert.equal(output.permissionDecision, 'deny', `${entry}\n${denied.stdout}`);
-    assert.match(output.permissionDecisionReason, /outside-exclusive-files/);
+    assert.equal(output.permissionDecision, 'deny', `${entry}\n${hookDiagnostic(denied)}`);
+    assert.match(output.permissionDecisionReason, /outside-exclusive-files/, hookDiagnostic(denied));
     assert.match(output.permissionDecisionReason, /src\/schema\.json/);
   }
 });
 
-test('an absolute exclusive path allows the same workspace file and rejects a path outside it', () => {
+test('an absolute exclusive path allows the same workspace file and rejects a path outside it', (t) => {
   const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const plan = writePlan(workspace);
   writePassedGate(workspace, plan);
+  const authorityBin = scopeAuthorityFixture(workspace, plan);
   writeSessionFiles(workspace, [path.join(workspace, 'src', 'schema.json')]);
 
   const allowed = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
     tool_input: { filePath: 'src/schema.json' },
-  });
-  assert.equal(allowed.status, 0, allowed.stderr);
-  assert.notEqual(outputJson(allowed).hookSpecificOutput?.permissionDecision, 'deny');
+  }, { authorityBin });
+  assert.equal(allowed.status, 0, hookDiagnostic(allowed));
+  assert.equal(outputJson(allowed).continue, true, hookDiagnostic(allowed));
 
   writeSessionFiles(workspace, [path.join(os.tmpdir(), 'outside-exclusive', 'src', 'schema.json')]);
   const denied = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'replace_string_in_file',
     tool_input: { filePath: 'src/schema.json' },
-  });
+  }, { authorityBin });
+  assert.equal(denied.status, 0, hookDiagnostic(denied));
   const output = outputJson(denied).hookSpecificOutput;
-  assert.equal(output.permissionDecision, 'deny');
-  assert.match(output.permissionDecisionReason, /outside-exclusive-files/);
+  assert.equal(output.permissionDecision, 'deny', hookDiagnostic(denied));
+  assert.match(output.permissionDecisionReason, /outside-exclusive-files/, hookDiagnostic(denied));
 });
 
-test('mkdir may create a parent of an exclusive file and no other directory', () => {
+test('mkdir may create a parent of an exclusive file and no other directory', (t) => {
   const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const plan = writePlan(workspace);
   const planPath = path.join(workspace, plan);
   fs.writeFileSync(
@@ -817,22 +891,24 @@ test('mkdir may create a parent of an exclusive file and no other directory', ()
     fs.readFileSync(planPath, 'utf8').replace('- `src/schema.json`', '- `src/schema.json`\n- `src/new/file.js`'),
   );
   writePassedGate(workspace, plan);
+  const authorityBin = scopeAuthorityFixture(workspace, plan);
   writeSessionFiles(workspace, ['src/new/file.js']);
 
   const parent = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'run_in_terminal',
     tool_input: { command: 'mkdir -p src/new' },
-  });
-  assert.equal(parent.status, 0, parent.stderr);
-  assert.notEqual(outputJson(parent).hookSpecificOutput?.permissionDecision, 'deny');
+  }, { authorityBin });
+  assert.equal(parent.status, 0, hookDiagnostic(parent));
+  assert.equal(outputJson(parent).continue, true, hookDiagnostic(parent));
 
   const sibling = runHook('require-plan-gate.mjs', workspace, {
     tool_name: 'run_in_terminal',
     tool_input: { command: 'mkdir -p .github/skills' },
-  });
+  }, { authorityBin });
+  assert.equal(sibling.status, 0, hookDiagnostic(sibling));
   const output = outputJson(sibling).hookSpecificOutput;
-  assert.equal(output.permissionDecision, 'deny');
-  assert.match(output.permissionDecisionReason, /outside-exclusive-files/);
+  assert.equal(output.permissionDecision, 'deny', hookDiagnostic(sibling));
+  assert.match(output.permissionDecisionReason, /outside-exclusive-files/, hookDiagnostic(sibling));
 });
 
 test('planned gate requires an in-progress transition and fresh gate before product mutation', () => {

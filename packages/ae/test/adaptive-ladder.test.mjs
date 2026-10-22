@@ -9,7 +9,7 @@ test('adaptive ladder drives the harness CLI through trust, orient, verify, and 
   assert.equal(
     failed.length,
     0,
-    failed.map((row) => `${row.id}\n${row.evidence.error}`).join('\n\n'),
+    failed.map((row) => `${row.id}\n${JSON.stringify(row.evidence, null, 2)}`).join('\n\n'),
   );
   const gaps = Object.fromEntries(report.results.map((row) => [row.id, row.evidence.gap]));
   assert.equal(gaps['verify-omission-stays-passed'], 'omission-stays-passed');
