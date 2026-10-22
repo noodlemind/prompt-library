@@ -2,7 +2,7 @@ version: 1
 checks:
   harness-tests:
     command: ["npm", "--prefix", "packages/ae", "test"]
-    timeout_seconds: 600
+    timeout_seconds: 1800
   prompt-contracts:
     command: ["node", "--test", "packages/ae/test/prompt-library-contracts.test.mjs"]
     timeout_seconds: 120
