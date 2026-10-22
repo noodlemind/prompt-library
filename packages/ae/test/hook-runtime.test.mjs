@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import YAML from 'yaml';
 import { planContractText } from '../lib/evidence.mjs';
+import { publishGateSession } from '../lib/gate.mjs';
 import { externalPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
 import { callProofAuthority } from '../corpus/hooks/lib/proof-authority.mjs';
 import {
@@ -391,6 +392,39 @@ checks:
     tool_input: { command: 'ae gate --json' },
   });
   assert.equal(outputJson(sole).continue, true);
+});
+
+test('a failed gate permits recovery controls without authorizing product execution', t => {
+  const workspace = tempWorkspace();
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const plan = writePlan(workspace);
+  const checksPath = path.join(workspace, '.github/harness/checks.yaml');
+  fs.writeFileSync(checksPath, 'version: 1\nchecks:\n  harness-tests:\n    command: [node, scripts/check.mjs]\n');
+  writePassedGate(workspace, plan);
+  publishGateSession({ workspace, result: { pass: false, exitCode: 1, phase: 'implement', plan: { path: plan }, blockedReason: 'Selected intent source changed' }, policy: { enforcement: 'enforce' } });
+  const session = JSON.parse(fs.readFileSync(path.join(workspace, '.harness/session.json'), 'utf8'));
+  assert.equal(session.gateStatus, 'blocked');
+  assert.equal(session.gatedChecksDigest, null);
+  for (const command of ['ae orient --read --json', `node "${binPath}" status --json`, `ae plan-update --plan ${plan} --file .harness/decisions/amend.json --json`]) {
+    const result = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'run_in_terminal', tool_input: { command } }));
+    assert.equal(result.continue, true, command + ': ' + JSON.stringify(result));
+  }
+  for (const command of ['node scripts/check.mjs', 'ae orient --read; node scripts/check.mjs', 'ae worktree --slug mixed && git status', 'ae orient --read; ae status --json']) {
+    const result = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'run_in_terminal', tool_input: { command } }));
+    assert.equal(result.hookSpecificOutput?.permissionDecision, 'deny', command);
+    assert.match(result.hookSpecificOutput.permissionDecisionReason, /standalone canonical/);
+  }
+  const edit = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'replace_string_in_file', tool_input: { filePath: path.join(workspace, 'src/example.js'), oldString: 'old', newString: 'new' } }));
+  assert.equal(edit.hookSpecificOutput?.permissionDecision, 'deny');
+  writePassedGate(workspace, plan);
+  fs.appendFileSync(checksPath, '  extra:\n    command: [node, scripts/extra.mjs]\n');
+  const changed = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'run_in_terminal', tool_input: { command: 'ae orient --read --json' } }));
+  assert.match(changed.hookSpecificOutput?.permissionDecisionReason || '', /changed-check-config/);
+  writePassedGate(workspace, plan);
+  const sessionPath = path.join(workspace, '.harness/session.json');
+  fs.writeFileSync(sessionPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(sessionPath, 'utf8')), gatedChecksDigest: 0 }));
+  const malformed = outputJson(runHook('require-plan-gate.mjs', workspace, { tool_name: 'run_in_terminal', tool_input: { command: 'ae orient --read --json' } }));
+  assert.match(malformed.hookSpecificOutput?.permissionDecisionReason || '', /changed-check-config/);
 });
 
 test('non-mutation VS Code tools remain read-only even when their payload includes a path', () => {

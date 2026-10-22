@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import YAML from 'yaml';
+import { validateRelease } from '../scripts/check-release.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const readJson = rel => JSON.parse(fs.readFileSync(path.join(packageRoot, rel), 'utf8'));
@@ -45,4 +46,8 @@ test('release corpus validates agent authority, guardrails and references', () =
   assert.equal(result.status, 'ok', JSON.stringify(result));
   assert.ok(result.counts.agent > 0);
   assert.ok(result.counts.skill > 0);
+});
+
+test('package-local release checks validate the distribution and source lockfile', () => {
+  assert.equal(validateRelease().lockfile, 'checked');
 });

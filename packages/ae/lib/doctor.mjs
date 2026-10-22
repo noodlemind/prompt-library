@@ -18,7 +18,7 @@ import { runVerify } from './verify.mjs';
 import { approveProject } from './trust.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
-import { resolveVSCodeSettingsPaths } from './paths.mjs';
+import { harnessGlobalHome, resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
 import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings } from './knowledge/store.mjs';
 import { storageIdForRepo } from './storage-aliases.mjs';
@@ -28,6 +28,7 @@ import { listBuckets } from './knowledge/overlay.mjs';
 import { branchExists } from './knowledge/layer.mjs';
 import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
 import { loadReportEvents, knowledgeSlos } from './report.mjs';
+import { recoveryDiagnostics } from './diagnostics.mjs';
 import { readStructuralIndex } from './repo-map/structural-index.mjs';
 import { grammarStatus, packageGrammarRoots } from './repo-map/treesitter-extractor.mjs';
 import { assertNoSymlinkAncestors } from './fs-safe.mjs';
@@ -866,5 +867,5 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
 
   const required = checks.filter((c) => !c.optional);
   const pass = required.every((c) => c.pass);
-  return { checks, pass };
+  return { checks, pass, diagnostics: recoveryDiagnostics({ source: 'doctor', checks, workspace, copilotHome, home: flags.harnessHome || flags.home || harnessGlobalHome() }) };
 }

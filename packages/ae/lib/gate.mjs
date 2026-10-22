@@ -8,7 +8,7 @@ import { findMatchingPlans } from './recall-rank.mjs';
 import { intentContractHasContent } from './plan-goal.mjs';
 import { planDigest, readEvidence, validateEvidence } from './evidence.mjs';
 import { loadPolicy } from './policy.mjs';
-import { resolveCopilotHome } from './paths.mjs';
+import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { primitivePlanGovernance } from './primitive-governance.mjs';
 import { validateRoutingSnapshot } from './route.mjs';
 import { configuredCheckSnapshot, validatePlanReadiness } from './plan-readiness.mjs';
@@ -16,6 +16,7 @@ import { readPlanRecord } from './plan-record.mjs';
 import { validatePlanSchema } from './plan-schema.mjs';
 import { intentSourcesCheck } from './intent-sources.mjs';
 import { inspectIsolation, worktreeGateMessage } from './worktree.mjs';
+import { recoveryDiagnostics } from './diagnostics.mjs';
 
 export function runGate({ workspace, flags, query = '', planOverride = null, domainContext = null }) {
   const sessionRoot = domainContext ? validateDomainContext(domainContext, workspace).root : planOverride ? planRecordRoot(workspace, planOverride) : workspace;
@@ -272,6 +273,7 @@ export function runGate({ workspace, flags, query = '', planOverride = null, dom
           : ['ae orient', '/ensure-plan'],
   };
 
+  result.diagnostics = recoveryDiagnostics({ source: 'gate', checks, workspace, copilotHome: resolveCopilotHome(flags.copilotHome), home: domainContext?.home || flags.harnessHome || flags.home || harnessGlobalHome(), plan: plan?.path || null, domain: domainContext?.name });
   return result;
 }
 
