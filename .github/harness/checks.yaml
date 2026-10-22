@@ -6,6 +6,10 @@ checks:
   prompt-contracts:
     command: ["node", "--test", "packages/ae/test/prompt-library-contracts.test.mjs"]
     timeout_seconds: 120
+  adaptive-diagram-tests:
+    command: ["node", "--test", "--test-concurrency=4", "packages/ae/test/diagram-command.test.mjs", "packages/ae/test/diagram-renderer.test.mjs", "packages/ae/test/diagram-projections.test.mjs", "packages/ae/test/diagram-package.test.mjs", "packages/ae/test/diagram-native.test.mjs"]
+    timeout_seconds: 600
+    proof: behavior
   verify-performance:
     artifacts: ["performance.json"]
     command: ["node", ".cursor/skills/verify-harness/scripts/prove-performance.mjs"]

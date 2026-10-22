@@ -1,0 +1,14 @@
+%% Hand-authored simplified inference from structuredPlanUpdate.
+%% See README.md for omitted guards and limits; this is not checked proof.
+stateDiagram-v2
+    [*] --> Inspect
+    Inspect --> Blocked: Conflict
+    Inspect --> Replay: Completed retry
+    Inspect --> Pending: New decision
+    Inspect --> Pending: Pending retry
+    Pending --> Published: Write after bytes
+    Pending --> Published: Already written
+    Published --> Completed: Persist completion
+    Completed --> Replay: Retry
+    Replay --> [*]
+    Blocked --> [*]

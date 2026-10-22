@@ -98,7 +98,12 @@ test('standalone source and its offline-installed archive validate and pack with
   const source = path.join(root, 'source');
   fs.cpSync(packageRoot, source, { recursive: true, filter: entry => path.basename(entry) !== 'node_modules' && !entry.endsWith('.tgz') });
   fs.mkdirSync(path.join(source, 'node_modules'));
-  fs.cpSync(path.join(packageRoot, 'node_modules/yaml'), path.join(source, 'node_modules/yaml'), { recursive: true });
+  const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+  for (const dependency of manifest.bundledDependencies) {
+    const destination = path.join(source, 'node_modules', dependency);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.cpSync(path.join(packageRoot, 'node_modules', dependency), destination, { recursive: true });
+  }
   const userconfig = path.join(root, 'npm-userconfig'), globalconfig = path.join(root, 'npm-globalconfig');
   fs.writeFileSync(userconfig, '');
   fs.writeFileSync(globalconfig, '');
@@ -124,7 +129,7 @@ test('standalone source and its offline-installed archive validate and pack with
   assert.equal(packed.name, 'ae-harness');
   assert.ok(packed.files.some(file => file.path === 'scripts/check-release.mjs'));
   const prefix = path.join(root, 'installed');
-  ok(root, ['install', '--prefix', prefix, '--offline', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', path.join(archives, packed.filename)]);
+  ok(root, ['install', '--prefix', prefix, '--offline', '--ignore-scripts=false', '--omit=optional', '--no-audit', '--no-fund', path.join(archives, packed.filename)]);
   const installed = path.join(prefix, 'node_modules/ae-harness');
   assert.equal(fs.existsSync(path.join(installed, 'test')), false);
   assert.equal(fs.existsSync(path.join(installed, 'package-lock.json')), false);
@@ -134,6 +139,14 @@ test('standalone source and its offline-installed archive validate and pack with
   const repacked = path.join(root, 'repacked');
   fs.mkdirSync(repacked);
   ok(installed, ['pack', '--json', '--pack-destination', repacked]);
+
+  const wasm = path.join(installed, 'node_modules/@d2lang/d2/dist/node-esm/d2.wasm');
+  fs.renameSync(wasm, `${wasm}-missing`);
+  try {
+    const missingRenderer = run(installed, ['run', 'prepack']);
+    assert.notEqual(missingRenderer.status, 0, 'prepack must reject a missing bundled renderer runtime');
+    assert.match(missingRenderer.stdout + missingRenderer.stderr, /renderer.*asset|asset.*renderer/i);
+  } finally { fs.renameSync(`${wasm}-missing`, wasm); }
 
   const lockPath = path.join(source, 'package-lock.json'), lockBytes = fs.readFileSync(lockPath);
   const lock = JSON.parse(lockBytes);
@@ -145,9 +158,9 @@ test('standalone source and its offline-installed archive validate and pack with
   fs.writeFileSync(lockPath, lockBytes);
 
   const manifestPath = path.join(source, 'package.json'), manifestBytes = fs.readFileSync(manifestPath);
-  const manifest = JSON.parse(manifestBytes);
-  manifest.bin = { harness: './bin/ae.mjs' };
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  const invalidManifest = JSON.parse(manifestBytes);
+  invalidManifest.bin = { harness: './bin/ae.mjs' };
+  fs.writeFileSync(manifestPath, JSON.stringify(invalidManifest));
   const wrongBin = run(source, ['run', 'check:release']);
   assert.notEqual(wrongBin.status, 0, 'release validation must reject stale CLI export names');
   assert.match(wrongBin.stdout + wrongBin.stderr, /ae.*bin|bin.*ae/i);

@@ -34,6 +34,8 @@ Explain the product from source-bound Harness facts and targeted code inspection
 
 Read [flow-models.md](references/flow-models.md) when explicitly generating a shared model, or when a relevant orientation or compound pointer calls for inspection. Harness prepares committed default-branch source bindings and publishes an agent-authored structured statechart. Inspect those exact sources before authoring; no command invokes an LLM or fetches a remote. The model is optional descriptive context, not accepted intent or verification proof. Do not generate a model during ordinary onboarding unless requested.
 
+Read [diagrams.md](references/diagrams.md) when a requested explanation benefits from a rendered architecture, dependency, or flow view. The Engineer authors and interprets the view; Harness renders bounded local inputs and records their provenance. Rendering does not establish architecture correctness.
+
 ## Guardrails
 
 - Facts are source-bound observations; stale indexes and omitted rows stay visible.

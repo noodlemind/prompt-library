@@ -74,6 +74,7 @@ Delete temp workspaces, temp `AE_HOME` dirs, and linked git worktrees the drive 
 - Journey performance: `ae checks run verify-performance --json`; the [feature recipe](./features/performance.md) records the CLI and separate browser proof.
 - Installed release proof: `ae checks run verify-installed-release --json` from a trusted checkout on macOS; see [the installed-release recipe](./features/installed-release.md).
 - Shared flow models: `node .cursor/skills/verify-harness/scripts/prove-formal-flows.mjs`, named check `verify-formal-flows`; see [formal models](./features/formal-models.md).
+- Self-contained diagrams: `ae checks run adaptive-diagram-tests --json`; see [diagram rendering](./features/diagrams.md) for real CLI, native tool, offline installation, freshness and negative-control coverage.
 - Workflow conformance: `node .cursor/skills/verify-harness/scripts/prove-workflow-invariants.mjs`, named check `verify-workflow-invariants`.
 - Deliberate-break detection: `node .cursor/skills/verify-harness/scripts/prove-workflow-invariants.mjs --negative-control`, named check `verify-workflow-invariants-negative`; see [workflow invariants](./features/workflow-invariants.md).
 - Optional deep model check: `node .cursor/skills/verify-harness/formal/delivery-evidence/scripts/check.mjs`, named check `verify-formal-delivery`. Read the [pilot skill](./formal/delivery-evidence/SKILL.md) first; Java 17+ and the exact approved `AE_TLC_JAR` are separate prerequisites. Maintenance uses the [companion skill](./formal/delivery-evidence/maintain/SKILL.md).

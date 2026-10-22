@@ -53,6 +53,15 @@ export function validateRelease() {
     assert.ok(dependencyMatches(dependency.version, manifest.dependencies[name]), `${name} bundled version does not satisfy ${manifest.dependencies[name]}`);
     if (lock) assert.equal(dependency.version, lock.packages[`node_modules/${name}`]?.version, `${name} installed version differs from lockfile`);
   }
+  for (const rel of [
+    'THIRD-PARTY-NOTICES.md',
+    'node_modules/pele/dist/pele.js', 'node_modules/pele/LICENSE',
+    'node_modules/@d2lang/d2/dist/node-esm/index.js',
+    'node_modules/@d2lang/d2/dist/node-esm/worker.js',
+    'node_modules/@d2lang/d2/dist/node-esm/wasm_exec.js',
+    'node_modules/@d2lang/d2/dist/node-esm/d2.wasm',
+    'node_modules/@d2lang/d2/LICENSE.txt', 'node_modules/@d2lang/d2/THIRD_PARTY_NOTICES.txt',
+  ]) assert.ok(fs.existsSync(path.join(packageRoot, rel)), `missing bundled renderer asset: ${rel}`);
 
   const cli = (...args) => execFileSync(process.execPath, [path.join(packageRoot, 'bin/ae.mjs'), ...args], { cwd: packageRoot, encoding: 'utf8' });
   for (const flag of ['--version', '-V']) assert.equal(cli(flag).trim(), manifest.version, `${flag} must report the shipped version`);

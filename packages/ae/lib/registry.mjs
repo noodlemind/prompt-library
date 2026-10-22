@@ -81,6 +81,7 @@ import { cmdInventory, inventoryResultOf, INVENTORY_VERBS } from './inventory-cm
 import { cmdPerformance, performanceResultOf, PERFORMANCE_VERBS } from './performance-cmd.mjs';
 import { cmdFlows, flowsResultOf, FLOW_VERBS } from './flow-model-cmd.mjs';
 import { cmdGraph, graphResultOf, GRAPH_OPERATIONS } from './graph-cmd.mjs';
+import { cmdDiagrams, diagramsResultOf, DIAGRAM_VERBS } from './diagram-cmd.mjs';
 
 const REGISTRY = new Map();
 
@@ -1284,6 +1285,45 @@ registerCommand({
   },
   handler: cmdExperiment,
   resultOf: experimentResultOf,
+  exitOf: result => result.exitCode,
+});
+
+registerCommand({
+  name: 'diagrams',
+  summary: 'render source-bound diagrams using bundled offline engines',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  instrument: false,
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<render|graph|flow|status> [--file <path>] [--sources <paths>] [--renderer <pele|d2>] [--layout <tala|elk|dagre>] [--root <path>] [--operation <deps|dependents>] [--flow <id>] [--receipt <path>] [--depth <n>] [--limit <n>] [--max-nodes <n>] [--timeout <ms>] [--dry-run]',
+  verbs: [
+    { verb: 'render', summary: 'render an authored Mermaid or D2 source with explicit evidence' },
+    { verb: 'graph', summary: 'render a bounded current-worktree module-import view' },
+    { verb: 'flow', summary: 'render a saved committed-default-branch statechart' },
+    { verb: 'status', summary: 'inspect source freshness and retained artifact integrity', sideEffect: 'read' },
+  ],
+  args: {
+    positionals: [{ name: 'verb', description: DIAGRAM_VERBS.join('|'), required: true }],
+    flags: [
+      { name: '--file', type: 'string', valueName: 'path', description: 'workspace-relative .mmd, .mermaid or .d2 file', tui: 'prompt', verbs: ['render'] },
+      { name: '--sources', type: 'string', valueName: 'paths', description: 'comma-separated source files or watched directories', tui: 'prompt', verbs: ['render'] },
+      { name: '--renderer', type: 'string', valueName: 'pele|d2', description: 'bundled backend matching the source syntax', tui: 'prompt', verbs: ['render'] },
+      { name: '--layout', type: 'string', valueName: 'tala|elk|dagre', description: 'D2 layout; default tala', tui: 'prompt', verbs: ['render'] },
+      { name: '--root', type: 'string', valueName: 'path', description: 'tracked source file for the import view', tui: 'prompt', verbs: ['graph'] },
+      { name: '--operation', type: 'string', valueName: 'deps|dependents', description: 'import neighbors; default deps', tui: 'prompt', verbs: ['graph'] },
+      { name: '--flow', type: 'string', valueName: 'id', description: 'existing saved application flow ID', tui: 'prompt', verbs: ['flow'] },
+      { name: '--receipt', type: 'string', valueName: 'path', description: 'returned receipt path for freshness inspection', tui: 'prompt', verbs: ['status'] },
+      { name: '--depth', type: 'number', valueName: 'n', description: 'graph depth 1 to 32; default 2', tui: 'prompt', verbs: ['graph'] },
+      { name: '--limit', type: 'number', valueName: 'n', description: 'graph/flow edge limit 1 to 200; default 50', tui: 'prompt', verbs: ['graph', 'flow'] },
+      { name: '--max-nodes', type: 'number', valueName: 'n', description: 'view nodes 1 to 200; default 50', tui: 'prompt', verbs: ['graph', 'flow'] },
+      { name: '--timeout', type: 'number', valueName: 'ms', description: 'worker deadline 1 to 30000 ms; default 10000', tui: 'prompt', verbs: ['render', 'graph', 'flow'] },
+    ],
+  },
+  handler: cmdDiagrams,
+  resultOf: diagramsResultOf,
   exitOf: result => result.exitCode,
 });
 

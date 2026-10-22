@@ -349,6 +349,22 @@ Orientation returns bounded relevant pointers, at most 4096 bytes, when task fil
 
 A successful compound may return an advisory `flowMaintenance` pointer when an existing map is stale after relevant observed-default advancement. Compound does not merge main, generate a map, or run an agent. The Engineer explicitly prepares again, inspects the new committed sources, and publishes an authored generation within authorized scope. Explicit regeneration uses the same procedure. Deep rerunnable proof stays in the maintained product recipe rather than the descriptive map.
 
+### Local diagram rendering
+
+The existing Codebase Context skill owns diagram interpretation through its on-demand [diagram reference](../packages/ae/corpus/skills/codebase-context/references/diagrams.md). The host Engineer authors source-backed explanations and labels inferred or proposed relationships; Harness renders bounded local inputs, captures provenance, and reports freshness. This adds no agent, MCP server, model call, network request, or runtime installer. Bundled Pele and D2 dependencies load on demand in workers and produce SVG plus self-contained HTML.
+
+```bash
+ae diagrams render --file docs/diagrams/architecture.d2 --sources src/orders,config/orders.json --renderer d2 --layout tala --json
+ae diagrams render --file docs/diagrams/recovery.mmd --sources src/orders --renderer pele --json
+ae diagrams graph --root src/orders/service.ts --operation deps --depth 2 --limit 40 --json
+ae diagrams flow --flow order-recovery --json
+ae diagrams status --receipt .harness/diagrams/<id>/receipt.json --json
+```
+
+Render accepts a restricted Mermaid/D2 subset with Harness-owned options; imports, remote assets, author-controlled renderer configuration, links, and markup are unsupported. TALA handles architecture layout, with ELK or Dagre available for directional views. The returned `id` and `artifacts` identify immutable output under `.harness/diagrams/<id>/`, including `svg`, `html`, and `receipt`. Open those returned artifact paths. Without `--sources`, authored text remains `diagram-only`; selected files or directories bind the view to worktree bytes and watched inventory, including new files.
+
+Dependency diagrams reuse bounded current-worktree import facts and retain unresolved edges and coverage limits. Flow diagrams render existing committed-default-branch descriptive models without regenerating them; keep their recorded generation and freshness distinct from the worktree. Artifact integrity and source currentness do not prove architecture correctness, complete behavior, accepted intent, or a TLA+ property. [Hand-authored examples](diagrams/README.md) illustrate these limits.
+
 ## Recovery ownership
 
 The host's Engineer owns model choice, inference, context compaction, agent interruption, and optional agent subprocesses. A subprocess can read an accepted work contract and propose decisions through the CLI. Its reasoning and execution remain outside ae-harness. No subprocess result grants trust, accepts changed intent, or replaces named verification.
