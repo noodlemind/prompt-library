@@ -59,3 +59,27 @@ checks:
     command: ["node", "--test", "packages/ae/test/experiment-contract.test.mjs", "packages/ae/test/experiment-isolation.test.mjs", "packages/ae/test/experiment-measurement.test.mjs", "packages/ae/test/experiment-state.test.mjs", "packages/ae/test/experiment-snapshots.test.mjs", "packages/ae/test/experiment-commands.test.mjs", "packages/ae/test/experiment-release.test.mjs", "packages/ae/test/agent-delivery.test.mjs", "packages/ae/test/domain-context.test.mjs", "packages/ae/test/registry.test.mjs", "packages/ae/test/flag-value-guards.test.mjs", "packages/ae/test/command-index-enumerability.test.mjs"]
     timeout_seconds: 600
     proof: behavior
+  adaptive-formal-tests:
+    command: ["node", "--test", "packages/ae/test/flow-model.test.mjs", "packages/ae/test/flow-model-context.test.mjs", "packages/ae/test/formal-verification.test.mjs", "packages/ae/test/workflow-invariants.test.mjs", "packages/ae/test/package-standalone.test.mjs", "packages/ae/test/release-version.test.mjs", "packages/ae/test/registry.test.mjs", "packages/ae/test/command-index-contract.test.mjs", "packages/ae/test/command-index-enumerability.test.mjs", "packages/ae/test/command-index-envelope.test.mjs"]
+    timeout_seconds: 300
+    proof: behavior
+  verify-formal-flows:
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-formal-flows.mjs"]
+    artifacts: ["formal-flows/drive.json"]
+    timeout_seconds: 180
+    proof: behavior
+  verify-workflow-invariants:
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-workflow-invariants.mjs"]
+    artifacts: ["workflow-invariants/drive.json"]
+    timeout_seconds: 180
+    proof: behavior
+  verify-workflow-invariants-negative:
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-workflow-invariants.mjs", "--negative-control"]
+    artifacts: ["workflow-invariants-negative/drive.json"]
+    timeout_seconds: 180
+    proof: behavior
+  verify-formal-delivery:
+    command: ["node", ".cursor/skills/verify-harness/formal/delivery-evidence/scripts/check.mjs", "--manifest", ".cursor/skills/verify-harness/formal/delivery-evidence/manifest.json"]
+    artifacts: ["formal-verification.json"]
+    timeout_seconds: 300
+    proof: behavior

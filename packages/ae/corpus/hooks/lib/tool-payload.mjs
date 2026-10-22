@@ -575,6 +575,27 @@ export function harnessControlCommand(tokens, workspace) {
   } else return null;
   if (!args.length) return 'help';
   if (HARNESS_CONTROL.has(args[0])) return args[0];
+  if (args[0] === 'flows') {
+    const verb = args[1];
+    if (!['prepare', 'publish', 'status', 'show'].includes(verb)) return null;
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const valued = new Set(['--file', '--workspace', '--ae-home', '--harness-home', '--copilot-home']), seen = new Set(), values = new Map();
+    for (let index = 2; index < args.length; index++) {
+      const token = args[index], split = token.indexOf('='), name = split < 0 ? token : token.slice(0, split), key = name === '-v' ? '--verbose' : name;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      if (boolean.has(name) && split < 0) continue;
+      if (!valued.has(name)) return null;
+      const value = split < 0 ? args[++index] : token.slice(split + 1);
+      if (!value || value.startsWith('-') || Buffer.byteLength(value) > 4096 || /[\x00-\x1f\x7f]/.test(value)) return null;
+      values.set(name, value);
+    }
+    const file = values.get('--file');
+    if (verb === 'publish' && !file || file && !['prepare', 'publish'].includes(verb)) return null;
+    if (file && (path.isAbsolute(file) || path.win32.isAbsolute(file) || file.includes('\\') || file.includes(':') || file.split('/').some(part => !part || part === '.' || part === '..'))) return null;
+    if (values.has('--workspace') && path.resolve(values.get('--workspace')) !== path.resolve(workspace)) return null;
+    return 'flows';
+  }
   if (args[0] === 'performance') {
     if (args[1] !== 'analyze') return null;
     const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);

@@ -79,6 +79,7 @@ import { cmdDomain, domainResultOf, parseDomainArguments, DOMAIN_VERBS } from '.
 import { cmdExperiment, experimentResultOf, parseExperimentArguments, EXPERIMENT_VERBS } from './experiment-cmd.mjs';
 import { cmdInventory, inventoryResultOf, INVENTORY_VERBS } from './inventory-cmd.mjs';
 import { cmdPerformance, performanceResultOf, PERFORMANCE_VERBS } from './performance-cmd.mjs';
+import { cmdFlows, flowsResultOf, FLOW_VERBS } from './flow-model-cmd.mjs';
 import { cmdGraph, graphResultOf, GRAPH_OPERATIONS } from './graph-cmd.mjs';
 
 const REGISTRY = new Map();
@@ -1283,6 +1284,32 @@ registerCommand({
   },
   handler: cmdExperiment,
   resultOf: experimentResultOf,
+  exitOf: result => result.exitCode,
+});
+
+registerCommand({
+  name: 'flows',
+  summary: 'prepare, publish and inspect shared descriptive application flow models',
+  group: 'engineer loop',
+  sideEffect: 'mutate',
+  instrument: false,
+  workspaceJournal: false,
+  capabilities: [],
+  outputModes: ['ledger', 'json'],
+  surfaces: ['cli', 'tui', 'agent'],
+  usage: '<prepare|publish|status|show> [--file <path>] [--dry-run]',
+  verbs: [
+    { verb: 'prepare', summary: 'capture committed default-branch source bindings', sideEffect: 'read' },
+    { verb: 'publish', summary: 'publish an immutable authored statechart generation' },
+    { verb: 'status', summary: 'inspect observed default-branch applicability', sideEffect: 'read' },
+    { verb: 'show', summary: 'read the validated current generation', sideEffect: 'read' },
+  ],
+  args: {
+    positionals: [{ name: 'verb', description: FLOW_VERBS.join('|'), required: true }],
+    flags: [{ name: '--file', type: 'string', valueName: 'path', description: 'workspace-relative preparation scope or authored publication JSON', tui: 'prompt' }],
+  },
+  handler: cmdFlows,
+  resultOf: flowsResultOf,
   exitOf: result => result.exitCode,
 });
 

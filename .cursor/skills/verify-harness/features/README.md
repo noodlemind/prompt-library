@@ -30,14 +30,17 @@ This directory is the maintained source for verifying user-facing Harness CLI be
 Each feature file starts with an H1 title and one paragraph describing the user-visible behavior. It then uses exactly four H2 sections in this order.
 
 1. `Sub-features` lists short IDs with one line for each behavior.
-2. `How to get to it (user POV)` lists every user entry point.
-3. `Driving it with <harness>` starts with `Preconditions:` and uses labeled bullets that pair each user action with an exact command and observable result.
+2. `How a person reaches it` names user entry points and their prerequisites.
+3. `Driving it` pairs user actions with exact commands and observable results.
 4. `Gotchas` lists traps that can waste or invalidate a verification run.
 
 ## Features
 
-- [Intent lock](./intent-lock.md) covers spec discovery, hashes at plan lock, missing-source gate failure, and no mid-flight hash fail.
+- [Intent lock](./intent-lock.md), named check `verify-intent-lock`, covers spec discovery, accepted hashes, changed/missing-source rejection, frozen selections, and explicit amendments.
 - [Issue worktree](./issue-worktree.md) covers isolation from the default-branch checkout and `ae worktree --slug`.
 - [Prepare](./prepare.md) covers starter spec and ADR files, orient discovery, skip-on-edit, and gitignored `docs/`.
 - [Journey performance](./performance.md) covers a disposable domain, linked analysis views, stale measurements and scoped authoring/review context through `verify-performance`.
 - [Installed release](./installed-release.md) covers a packed fresh installation, predecessor upgrade, matching hydrated runtime and corpus, and completed bounded experiment delivery.
+- [Formal models](./formal-models.md), named check `verify-formal-flows`, covers committed-default-branch preparation, authored map publication, relevant bounded orientation, freshness, obsolete-candidate rejection, and explicit maintenance. It needs ordinary Node/Git readiness; deeper checking is opt-in.
+- [Workflow invariants](./workflow-invariants.md), named checks `verify-workflow-invariants` and `verify-workflow-invariants-negative`, cover actual mutation/recovery/completion authority and deliberate-break detection in an owned package copy. They do not require TLC.
+- The optional [delivery-evidence pilot](../formal/delivery-evidence/SKILL.md), named check `verify-formal-delivery`, needs Java 17+ and the approved TLC JAR. It reports finite model scope separately from implementation proof.
