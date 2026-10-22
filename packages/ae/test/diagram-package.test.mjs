@@ -69,9 +69,6 @@ test('offline local and global archives render both bundled backends from foreig
     fs.writeFileSync(path.join(workspace, 'src/input.mjs'), 'export const receive = () => "ready";\n');
     fs.writeFileSync(path.join(workspace, 'diagram.mmd'), 'flowchart LR\n  received[Received] --> processed[Processed]\n');
     fs.writeFileSync(path.join(workspace, 'diagram.d2'), 'direction: right\nreceived: Received\nprocessed: Processed\nreceived -> processed\n');
-    run('git', ['init', '-q'], workspace);
-    run('git', ['add', '.'], workspace);
-    run('git', ['-c', 'user.name=AE package fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'], workspace);
     for (const renderer of ['pele', 'd2']) {
       const result = JSON.parse(run(process.execPath, [cli, 'diagrams', 'render', '--file', renderer === 'pele' ? 'diagram.mmd' : 'diagram.d2', '--sources', 'src/input.mjs', '--renderer', renderer, ...(renderer === 'd2' ? ['--layout', 'tala'] : []), '--workspace', workspace, '--ae-home', path.join(root, `${mode} ae home`), '--json'], foreign));
       assert.equal(result.status, 'ok');
