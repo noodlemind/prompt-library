@@ -116,10 +116,34 @@ initialize this repo (`init-repo`) from the palette
 | `compound --insight` | Investigation capture (not promotable) |
 | `report --growth` | AE growth scoreboard from events (**no LLM**) |
 | `recall` / `get` / `search` / `lookup` / `tree` | Retrieval |
+| `flows prepare` / `flows publish` / `flows status` / `flows show` | Optional source-bound descriptive application model |
 | `edit` / `write` / `apply` / `undo` | Mutations (`undo` operator-only) |
 | `exec` / `bash` | Governed process / shell |
 | `todo` | Durable worklist (`.harness/todo.json`) |
 | `validate-plan` / `index` / `events` / `run` | Plan check, indexes, ledger, prior runs |
+
+### Optional application flow models
+
+```bash
+ae flows prepare --file .harness/decisions/flow-scope.json --json
+ae flows publish --file .harness/decisions/flow-candidate.json --json
+ae flows status --json
+ae flows show --json
+```
+
+The optional scope file is `{"watchPaths":["src/orders"]}` with paths chosen for this product. Preparation captures exact committed sources from the locally observed default branch. Without a scope file, it reuses existing watch paths or starts at `.`. Inspect those sources, retain the returned preparation unchanged, and author the candidate's structured statechart before publishing. Harness validates and stores immutable project/generation-commit snapshots; it does not fetch or invoke an LLM. See [flow model authoring](corpus/skills/codebase-context/references/flow-models.md) for the candidate fields and limits.
+
+Status distinguishes `absent`, `current`, `stale`, and `unknown`. It describes the observed committed default ref, not a dirty feature checkout or unseen remote state. Relevant orientation receives bounded pointers rather than model bodies. Consult them for intent completeness, then inspect the task sources. A map never becomes automatic `intent_sources`, accepted intent, or verification proof.
+
+Successful compound results may include advisory `flowMaintenance` for an existing model made stale by watched default-branch changes. The Engineer explicitly inspects and regenerates it; compound neither merges main nor starts that work. Linked worktrees share the selected home's project store; sharing does not imply cross-machine synchronization.
+
+### Repository-local formal checks
+
+When a critical property needs deeper verification, extend the selected product recipe through the existing [formal verification procedure](corpus/skills/create-primitive/references/formal-verification.md). Keep accepted properties, source coverage, models, tool configuration, negative controls, actual-code correspondence, and maintenance evidence together. Relevant code changes rerun and maintain that check; failed or blocked work cannot silently advance synchronization. An abstract model pass does not establish implementation correctness.
+
+The optional [workflow invariant reference](corpus/skills/references/workflow-invariants.md) covers exactly three existing boundaries: intent before mutation, current verification before verified delivery learning, and mode-related mutation authority. It adds no ordinary-session injection or new Engineer–Harness contract. The Engineer still chooses modes; Harness checks operations and recorded authority.
+
+Java/TLC are used only by an explicitly selected formal check. Normal `npm pack`, installation, and unrelated sessions need neither tool. These supporting checks add no global skill or external plugin prerequisite.
 
 ### Domain delivery
 

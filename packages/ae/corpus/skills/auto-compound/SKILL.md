@@ -82,6 +82,8 @@ ae compound --plan <path> --learning-decision <file> --workspace . --json
 
 The command validates current proof, publishes through the existing writer, and reports the persisted destination and index or dormant proposal result. Never edit learning frontmatter before publication or rerun tests for bookkeeping. Report actual evidence and publication outcomes.
 
+When a successful compound result includes `flowMaintenance`, treat it as advisory context maintenance. It identifies an existing shared model made stale by watched changes on the observed default branch. Read [flow-models.md](../codebase-context/references/flow-models.md), inspect the bound committed sources, and regenerate explicitly through `/codebase-context` within authorized scope. Compound neither merges the default branch nor invokes an agent, rewrites the model, or creates a missing one. Flow maintenance does not replace the learning decision or change delivery completion authority.
+
 ## Debt check (session-end drain)
 
 After persisting, run:
