@@ -139,7 +139,7 @@ export function assertStoreSchemaSupported(dir) {
       `knowledge store schema ${recorded} is newer than this CLI supports (${STORE_SCHEMA}) — upgrade harness before touching this store`
     );
     err.code = 'E_STORE_SCHEMA';
-    err.hint = 'npm install -g ae-harness@latest && ae install';
+    err.hint = 'npm install -g ./packages/ae && ae install';
     throw err;
   }
   return recorded;

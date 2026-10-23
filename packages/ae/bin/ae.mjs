@@ -4,7 +4,7 @@ import path from 'node:path';
 import { inspect } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { createStyle, keyWidthFor, EXIT } from '../lib/style.mjs';
-import { dispatch as dispatchRegistered, hasCommand, describeCommand, getCommand } from '../lib/registry.mjs';
+import { dispatch as dispatchRegistered, hasCommand, describeCommand, getCommand, commandHelpRequested } from '../lib/registry.mjs';
 import { createProcessEventRegistry, detectActor } from '../lib/event-registry.mjs';
 import { parseFlags, hasFlag } from '../lib/flags.mjs';
 import { applyHarnessHomeFlag, resolveCopilotHome } from '../lib/paths.mjs';
@@ -33,6 +33,7 @@ export const HELP_COMMAND_ORDER = [
 
 const GLOBAL_OPTIONS = [
   ['--version, -V', 'print the package version and exit'],
+  ['--help, -h', 'usage for ae, or for one command: ae <command> --help'],
   ['--json', 'JSON output for machine readers'],
   ['--dry-run', 'print actions without writing'],
   ['--verbose, -v', 'full detail: per-file logging, all checks, unclamped hints'],
@@ -191,6 +192,8 @@ export async function main() {
         workspace: path.resolve(flags.workspace),
         copilotHome: resolveCopilotHome(flags.copilotHome),
       })));
+    } else if (hasCommand(command) && commandHelpRequested(args)) {
+      console.log(renderCommandHelp(command));
     } else if (hasCommand(command)) {
       const { args: laneArgs, output } = extractOutputLane(args);
       const runFlags = parseFlags(args);

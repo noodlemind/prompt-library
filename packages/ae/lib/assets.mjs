@@ -12,7 +12,7 @@ export function readPkgVersion() {
 export function getCorpusRoot() {
   const root = path.join(pkgRoot, 'corpus');
   if (!fs.existsSync(path.join(root, 'skills', 'engineer', 'SKILL.md'))) {
-    throw new Error('Package corpus not found. Reinstall the packaged CLI with: npm install -g ae-harness.');
+    throw new Error('Package corpus not found. Reinstall the packaged CLI from this repository: npm install -g ./packages/ae');
   }
   return root;
 }

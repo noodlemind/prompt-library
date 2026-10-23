@@ -54,6 +54,30 @@ function parseLayer(raw) {
   return raw;
 }
 
+export const INSTALLED_TARGETS = Object.freeze(['vscode', 'cli', 'intellij']);
+export const RECOGNIZED_UNINSTALLED_TARGETS = Object.freeze(['cursor', 'codex', 'grok']);
+
+function assignTargets(flags, value) {
+  const names = String(value ?? '').split(',').map((target) => target.trim());
+  if (!names.length || names.some((name) => !name)) {
+    invalidFlag('--target', value, 'requires a comma-separated target list');
+  }
+  const installed = new Set(INSTALLED_TARGETS);
+  const recognized = new Set(RECOGNIZED_UNINSTALLED_TARGETS);
+  const unknown = names.filter((name) => !installed.has(name) && !recognized.has(name));
+  const skipped = names.filter((name) => recognized.has(name));
+  if (unknown.length || skipped.length) {
+    const parts = [];
+    if (unknown.length) parts.push(`unknown target: ${unknown.join(', ')}`);
+    if (skipped.length) {
+      parts.push(`recognized but not installed: ${skipped.join(', ')} (ae install writes no host config for ${skipped.join(', ')})`);
+    }
+    parts.push(`installed targets: ${INSTALLED_TARGETS.join(', ')}`);
+    invalidFlag('--target', value, parts.join('; '));
+  }
+  flags.targets = new Set(names);
+}
+
 export function hasFlag(argv, name) {
   for (const a of argv) {
     if (a === '--') return false;
@@ -229,13 +253,13 @@ export function parseFlags(argv) {
       flags.home = next;
     }
         else if (a.startsWith('--target=')) {
-      const value = a.split('=')[1];
+      const value = a.slice('--target='.length);
       if (!value) invalidFlag('--target', value, 'requires a comma-separated target list');
-      flags.targets = new Set(value.split(',').map((t) => t.trim()));
+      assignTargets(flags, value);
     } else if (a === '--target') {
       const next = scan[++i];
             if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--target', next, 'requires a comma-separated target list');
-      flags.targets = new Set(next.split(',').map((t) => t.trim()));
+      assignTargets(flags, next);
     } else if (a.startsWith('--plan=')) flags.plan = a.split('=').slice(1).join('=');
     else if (a === '--plan') flags.plan = scan[++i];
     else if (a.startsWith('--base=')) flags.base = a.split('=').slice(1).join('=');

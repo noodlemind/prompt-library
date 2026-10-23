@@ -1,6 +1,6 @@
 ---
 name: engineer
-description: "Route questions, substantial investigation, or end-to-end software delivery to @engineer, which selects Answer, Investigate, Review, or Deliver mode. Not for review-only requests — use /code-review."
+description: "Route questions, substantial investigation, or end-to-end software delivery to @engineer, which selects Answer, Investigate, Review, or Deliver mode. Not for review-only requests."
 argument-hint: "[describe the engineering outcome]"
 ---
 
@@ -22,7 +22,7 @@ Apply the [performance code principles](references/performance-engineering.md#co
 
 **Should not trigger:**
 
-- "Review this diff only." → use `/code-review`
+- "Review this diff only." → use the code-review skill
 - "Diagnose the installed Harness hooks." → use `/harness-doctor`
 - "Refresh the project README only." → use `/project-readme`
 
@@ -31,10 +31,10 @@ Apply the [performance code principles](references/performance-engineering.md#co
 - `/engineer` routes questions, substantial investigation, or full-cycle delivery to the accountable agent.
 - `@engineer` Answer mode owns quick read-only answers without ceremony.
 - `@engineer` Deliver mode owns execution of an explicit locked plan.
-- `/code-review` owns review-only requests.
+- The code-review skill owns review-only requests.
 
 - Locked-plan execution → `@engineer` Deliver mode
-- Review only → `/code-review`
+- Review only → the code-review skill
 - Quick answer without edits → `@engineer` Answer mode
 - Substantial evidence-only diagnosis → `@engineer` Investigate mode
 - Setup diagnosis → `/harness-doctor`

@@ -27,8 +27,8 @@ Activate when the user wants to:
 
 **Should not trigger:**
 - "What does this repo do?" -> use @engineer Answer mode for quick Q&A
-- "Generate a plan for this feature" -> use /plan-issue
-- "Document a solved bug" -> use /compound-learnings
+- "Generate a plan for this feature" -> ask @engineer to plan it
+- "Document a solved bug" -> use the compound-learnings skill
 
 ## Inputs and Outputs
 
@@ -91,7 +91,7 @@ Section expectations:
 
 ### 4. Edit README
 
-Reuse the current plan when its scope already includes the README. Otherwise use `/ensure-plan` with a concise full creation decision (`type: docs`), one phase, the README path, evidence-based acceptance criteria, and an inspected trusted documentation check. Full docs plans may have no required code review; retain any reviews required by the accepted plan or policy. A short plan retains its code-review requirement. Do not widen scope to code, configuration, or unrelated workflows.
+Reuse the current plan when its scope already includes the README. Otherwise use the ensure-plan skill with a concise full creation decision (`type: docs`), one phase, the README path, evidence-based acceptance criteria, and an inspected trusted documentation check. Full docs plans may have no required code review; retain any reviews required by the accepted plan or policy. A short plan retains its code-review requirement. Do not widen scope to code, configuration, or unrelated workflows.
 
 Submit a start decision and require its successful implement gate before editing. A missing adequate named check remains a verification gap; do not invent a check or claim completion.
 

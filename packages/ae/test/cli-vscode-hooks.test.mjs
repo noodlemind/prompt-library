@@ -68,6 +68,7 @@ test('VS Code configuration explicitly discovers hydrated user hooks', () => {
   const settings = mergeVSCodeSettings({ 'chat.hookFilesLocations': { 'custom/hooks': true } });
   assert.equal(settings['chat.hookFilesLocations']['custom/hooks'], true);
   assert.equal(settings['chat.hookFilesLocations']['~/.copilot/hooks'], true);
+  assert.equal(settings['chat.subagents.allowInvocationsFromSubagents'], true);
 });
 
 test('VS Code settings parser preserves URL strings and accepts JSONC comments', () => {

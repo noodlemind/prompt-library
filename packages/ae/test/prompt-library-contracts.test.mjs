@@ -127,7 +127,7 @@ test('engineer agent is frozen, thin, and leaves the delivery checklist to the h
   }
   assert.match(engineer, /Switch .* to Deliver before editing/i);
   assert.match(engineer, /For changed work/i);
-  assert.match(engineer, /\/code-review[\s\S]{0,80}require passed `ae verify`/);
+  assert.match(engineer, /code-review[\s\S]{0,80}require passed `ae verify`/);
   assert.match(engineer, /ae plan-update/);
   assert.match(engineer, /architect\/SKILL\.md/);
   assert.match(engineer, /do not edit the CLI's state store in the editor/i);
@@ -157,7 +157,8 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   assert.equal(handoffs.get('Plan and Fix')?.send, false);
   assert.match(handoffs.get('Plan and Fix')?.prompt || '', /proportional plan/i);
   assert.match(globalWorkflow, /@engineer[\s\S]{0,160}name the mode first/i);
-  assert.match(globalWorkflow, /call a defect confirmed only when evidence demonstrates/i);
+  assert.doesNotMatch(globalWorkflow, /confirmed only when evidence demonstrates/i);
+  assert.doesNotMatch(globalWorkflow, /confirmed race/i);
 });
 
 test('every agent handoff declares a target agent that exists', () => {

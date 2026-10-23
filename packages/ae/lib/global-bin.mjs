@@ -8,7 +8,7 @@ const PATH_MARKER = '# harness global bin';
 const PATH_EXPORT = 'export PATH="$HOME/.copilot/bin:$PATH"';
 
 export const INSTALL_FIX_HINT =
-  'ae install  (npx ae-harness install | npm install -g ae-harness | local: node packages/ae/bin/ae.mjs install)';
+  'ae install  (from a repository checkout: npm install -g ./packages/ae && ae install; local: node packages/ae/bin/ae.mjs install)';
 
 export function globalBinDir(copilotHome) {
   return path.join(copilotHome, 'bin');

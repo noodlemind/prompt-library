@@ -277,6 +277,13 @@ function flagIndex(entry) {
   return index;
 }
 
+/** `--help` and `-h` before `--` ask for command help. They are not command flags. */
+export function commandHelpRequested(argv) {
+  const end = argv.indexOf('--');
+  const scan = end === -1 ? argv : argv.slice(0, end);
+  return scan.some((token) => token === '--help' || token === '-h');
+}
+
 export function validateArgs(entry, argv) {
   const known = flagIndex(entry);
     const present = new Set();
@@ -337,6 +344,7 @@ export async function dispatch(argv, ctx = {}) {
   if (!entry) {
     throw usageError(`unknown command: ${name}`, 'ae help');
   }
+  if (commandHelpRequested(rest)) return EXIT.ok;
   validateArgs(entry, rest);
   const lane = ctx.output;
   assertLaneSupported(entry, lane);
@@ -750,7 +758,7 @@ registerCommand({
 // --- setup ------------------------------------------------------------
 
 const INSTALL_FLAGS = [
-  { name: '--target', type: 'string', valueName: 't,..', description: 'vscode,cli,intellij', required: false, default: null, tui: 'cli-only' },
+  { name: '--target', type: 'string', valueName: 't,..', description: 'installed: vscode, cli, intellij. cursor, codex, and grok are recognized but not installed', required: false, default: null, tui: 'cli-only' },
   { name: '--autonomy', type: 'string', valueName: 'mode', description: 'full | balanced | strict', required: false, default: null, tui: 'cli-only' },
   { name: '--configure-vscode', type: 'boolean', description: 'merge VS Code chat.* discovery settings', required: false, default: false, tui: 'cli-only' },
   { name: '--configure-path', type: 'boolean', description: 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)', required: false, default: false, tui: 'cli-only' },

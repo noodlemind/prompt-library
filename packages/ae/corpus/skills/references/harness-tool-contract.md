@@ -29,14 +29,14 @@ Installed to `~/.copilot/bin/ae` on every `ae install`. Add to PATH with `ae ins
 
 | Method | Command |
 |--------|---------|
-| Registry | `npm install -g ae-harness@latest` then `ae install` |
-| Local clone | `npm install -g ./packages/ae` or `node packages/ae/bin/ae.mjs install --configure-path` |
+| Checkout | `npm install -g ./packages/ae` from the repository root, then `ae install` |
+| Local clone | `node packages/ae/bin/ae.mjs install --configure-path` |
 
 **Per-repo bootstrap:** `ae init-repo` creates `.harness/run.mjs` (delegates to global harness + sets `--workspace`).
 
 - Pin version in product repos: `devDependencies`, a globally installed package, or `.harness-version` (see harness README).
-- If `ae` is not on `PATH`, install from the registry with `npm install -g ae-harness@latest`, then `ae install --configure-path`.
-- Do not use `npx ae-harness` in agent runtime instructions; reserve `npx` for one-off bootstrap or pinned CI when a registry package is available.
+- If `ae` is not on `PATH`, install from a checkout of this repository with `npm install -g ./packages/ae` at the repository root, then `ae install --configure-path`. The package is not on the npm registry.
+- Do not use `npx ae-harness` in agent runtime instructions. There is no published registry package to execute.
 - Start with `.harness/context-pack.md` after `orient`. Expand missing evidence with `orient --read --context-version 2`; keep source identities and reported limits.
 - Developers use Copilot agents/skills; they do not prompt the CLI directly.
 
