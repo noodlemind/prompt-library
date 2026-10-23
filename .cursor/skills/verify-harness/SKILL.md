@@ -1,6 +1,6 @@
 ---
 name: verify-harness
-description: Prove AE CLI intent lock, preparation, worktree isolation, structural context, diagrams, flows, workflow invariants, and installed release behavior with real commands. Use for runtime verification. Not for code review or general CLI questions.
+description: Prove AE CLI intent lock, preparation, worktree isolation, structural context, diagrams, flows, workflow invariants, and installed releases. Use for runtime verification. Not for code review or general CLI questions.
 ---
 
 # Verify Harness
