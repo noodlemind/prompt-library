@@ -235,6 +235,34 @@ test('AST call candidates require an unshadowed import and a supported direct na
   for (const name of ['hidden', 'step', 'DefaultName']) assert.ok(unresolved.some(row => row.symbol === name && row.reason === 'unsupported-export-binding'));
 });
 
+test('imported object members cannot bind unrelated module exports while namespaces retain candidates', async t => {
+  const f = fixture(t);
+  const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
+  f.write('a.mjs', "import { client } from './b.mjs';\nexport function run() { client.close(); }\n");
+  f.write('b.mjs', 'export const client = { close() {} };\nexport function close() {}\n');
+  f.write('namespace.mjs', "import * as api from './b.mjs';\nexport function run() { api.close(); }\n");
+  f.write('require.cjs', "const api = require('./b.mjs');\nexports.run = function () { api.close(); };\n");
+  f.write('destructured.cjs', "const { client } = require('./b.mjs');\nexports.run = function () { client.close(); };\n");
+  f.write('default.mjs', "import client from './b.mjs';\nexport function run() { client.close(); }\n");
+  f.write('py_object.py', 'from py_api import client\ndef run():\n    client.close()\n');
+  f.write('py_module.py', 'import py_api as api\ndef run():\n    api.close()\n');
+  f.write('py_api.py', 'client = object()\ndef close():\n    pass\n');
+  f.git('add', '.');
+  await buildStructuralIndex({ ...f, extractor });
+  const index = readStructuralIndex(f.workspace, f);
+  for (const file of ['a.mjs', 'destructured.cjs', 'default.mjs', 'py_object.py']) {
+    assert.deepEqual(index.graph.calls.filter(row => row.from === file && row.symbol === 'close'), [], file);
+    assert.ok(index.graph.unresolvedCalls.some(row => row.from === file && row.symbol === 'close' && row.reason === 'unsupported-receiver-binding'), file);
+  }
+  for (const file of ['namespace.mjs', 'require.cjs']) {
+    const call = index.graph.calls.find(row => row.from === file && row.symbol === 'close');
+    assert.deepEqual(call?.to, ['b.mjs'], file);
+    assert.equal(call.reason, 'explicit-import-binding', file);
+    assert.equal(call.candidates[0].name, 'close', file);
+  }
+  assert.deepEqual(index.graph.calls.find(row => row.from === 'py_module.py' && row.symbol === 'close')?.to, ['py_api.py']);
+});
+
 test('a shadowed call cannot suppress a later imported call in the same function', async t => {
   const f = fixture(t);
   const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });

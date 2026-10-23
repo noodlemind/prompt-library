@@ -9,6 +9,7 @@ import { readFileFacts } from '../lib/repo-map/facts.mjs';
 import { buildImportGraph, importResolver, resolveImportBinding } from '../lib/repo-map/imports.mjs';
 import { spawnSync } from 'node:child_process';
 import { buildStructuralIndex, readStructuralIndex } from '../lib/repo-map/structural-index.mjs';
+import { loadResolverConfigs } from '../lib/repo-map/resolver-config.mjs';
 
 test('lexical imports ignore comments, quoted examples, template text and member import methods', () => {
   const source = [
@@ -78,6 +79,71 @@ test('tracked tsconfig paths resolve aliases and retain configuration evidence',
   const binding = resolveImportBinding('src/main.ts', 'execute', from, tracked, { workspace });
   assert.deepEqual(binding.targets, ['src/lib.ts']);
   assert.equal(binding.bindings[0].imported, 'run');
+});
+
+test('resolver configuration preserves string-array separators and tries later path targets', (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-config-arrays-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const git = args => spawnSync('git', ['-C', workspace, ...args], { encoding: 'utf8' });
+  assert.equal(git(['init', '-q']).status, 0);
+  const value = {
+    compilerOptions: { paths: { '@app/*': ['missing/*', 'src/*'] } },
+    include: ['src', 'test'], exclude: ['src/excluded', 'test/excluded'],
+    files: ['outside/selected.ts', 'outside/other.ts'],
+  };
+  fs.writeFileSync(path.join(workspace, 'tsconfig.json'), JSON.stringify(value));
+  const tracked = new Set(['src/main.ts', 'test/main.ts', 'outside/selected.ts', 'outside/other.ts', 'outside/ignored.ts', 'src/excluded/main.ts', 'test/excluded/main.ts', 'src/lib.ts']);
+  for (const file of tracked) {
+    fs.mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
+    fs.writeFileSync(path.join(workspace, file), 'export function run() {}');
+  }
+  assert.equal(git(['add', '.']).status, 0);
+  assert.equal(git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']).status, 0);
+  const [config] = loadResolverConfigs(workspace);
+  assert.equal(config.unsupported, undefined);
+  for (const key of ['include', 'exclude', 'files']) assert.deepEqual(config[key], value[key]);
+  assert.deepEqual(config.mappings, Object.entries(value.compilerOptions.paths));
+  const resolve = importResolver(tracked, { workspace });
+  for (const from of ['src/main.ts', 'test/main.ts', 'outside/selected.ts', 'outside/other.ts']) {
+    const result = resolve(from, '@app/lib');
+    assert.deepEqual(result.targets, ['src/lib.ts']);
+    assert.equal(result.resolution, 'configured-path');
+    assert.ok(result.evidence.some(item => item.path === 'tsconfig.json' && /^[a-f0-9]{64}$/.test(item.sha256)));
+  }
+  for (const from of ['outside/ignored.ts', 'src/excluded/main.ts', 'test/excluded/main.ts']) assert.deepEqual(resolve(from, '@app/lib').targets, []);
+});
+
+test('JSONC trailing-comma removal preserves quoted punctuation and escaped quotes', (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-config-jsonc-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const git = args => spawnSync('git', ['-C', workspace, ...args], { encoding: 'utf8' });
+  assert.equal(git(['init', '-q']).status, 0);
+  const alias = '@comma, ]';
+  const include = ['src', 'test', 'quoted"entry, ]'];
+  const exclude = ['comma, }', 'slash//inside'];
+  const files = ['literal/*comment*/inside.ts'];
+  fs.writeFileSync(path.join(workspace, 'tsconfig.json'), [
+    '{ // comments may surround real trailing commas',
+    '  "compilerOptions": {',
+    `    "paths": { ${JSON.stringify(alias)}: ["missing", "src/lib", /* fallback */], },`,
+    '  },',
+    `  "include": [${include.map(value => JSON.stringify(value)).join(', ')},],`,
+    `  "exclude": [${exclude.map(value => JSON.stringify(value)).join(', ')},],`,
+    `  "files": [${files.map(value => JSON.stringify(value)).join(', ')},],`,
+    '}',
+  ].join('\n'));
+  fs.mkdirSync(path.join(workspace, 'src'));
+  fs.writeFileSync(path.join(workspace, 'src/main.ts'), 'export function main() {}');
+  fs.writeFileSync(path.join(workspace, 'src/lib.ts'), 'export function run() {}');
+  assert.equal(git(['add', '.']).status, 0);
+  assert.equal(git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']).status, 0);
+  const [config] = loadResolverConfigs(workspace);
+  assert.equal(config.unsupported, undefined);
+  assert.deepEqual(config.include, include);
+  assert.deepEqual(config.exclude, exclude);
+  assert.deepEqual(config.files, files);
+  assert.deepEqual(config.mappings, [[alias, ['missing', 'src/lib']]]);
+  assert.deepEqual(importResolver(new Set(['src/main.ts', 'src/lib.ts']), { workspace })('src/main.ts', alias).targets, ['src/lib.ts']);
 });
 
 test('untracked resolver configuration cannot silently change graph resolution', (t) => {

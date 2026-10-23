@@ -211,7 +211,9 @@ function buildGraph(files, symbols, truncation, workspace) {
           ...(importedNameReference ? { referenceKind: 'imported-name' } : {}) });
       if (importedNameReference && binding.reason === 'no-explicit-binding') binding.reason = 'unsupported-import-binding';
       const bound = binding.reason !== 'no-explicit-binding';
-      const definitions = bound ? binding.bindings.flatMap(imported => {
+      const bindings = r.receiver ? binding.bindings.filter(imported => imported.imported === '*' && ['namespace', 'module'].includes(imported.kind)) : binding.bindings;
+      if (r.receiver && binding.reason === 'explicit-import-binding' && !bindings.length) binding.reason = 'unsupported-receiver-binding';
+      const definitions = bound ? bindings.flatMap(imported => {
         if (imported.kind === 'type') return [];
         const name = r.receiver || imported.imported === '*' || imported.imported === 'default' ? r.name : imported.imported;
         return (symbols[name]?.defs || []).filter(def => def.file === imported.target

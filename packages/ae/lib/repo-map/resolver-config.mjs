@@ -8,7 +8,7 @@ function jsonConfig(text) {
   const masks = sourceMasks('config.ts', text);
   const trailing = /,\s*(?=[}\]])/g;
   const remove = new Set();
-  for (const match of masks.code.matchAll(trailing)) remove.add(match.index);
+  for (const match of masks.text.matchAll(trailing)) if (masks.code[match.index] === ',') remove.add(match.index);
   return JSON.parse(masks.text.split('').filter((_, index) => !remove.has(index)).join(''));
 }
 

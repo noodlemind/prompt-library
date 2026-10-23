@@ -97,6 +97,22 @@ test('the complete serialized packet respects its byte ceiling and reports omiss
   assert.ok(packet.sources.length <= 2);
 });
 
+test('broad impact packets retain explicit seed evidence before graph detail', t => {
+  const files = { 'target.mjs': 'export const target = 1;\n' };
+  for (let i = 0; i < 24; i++) files[`caller-${i}.mjs`] = `import { target } from './target.mjs';\nexport const value = target;\n`;
+  const f = fixture(t, files);
+  const packet = f.build({ files: ['target.mjs'], questionKind: 'change-impact' });
+  assert.equal(packet.coverage.sourceState, 'validated');
+  assert.ok(packet.sources.some(row => row.location === 'target.mjs' && row.excerpt.includes('export const target = 1')));
+  assert.ok(packet.coverage.graphDetailsOmitted > 0);
+  assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 16000);
+  assert.equal(packet.coverage.bytes, Buffer.byteLength(JSON.stringify(packet)));
+  const tight = f.build({ files: ['target.mjs'], questionKind: 'change-impact', maxBytes: 2048 });
+  assert.ok(tight.coverage.omittedFiles > packet.coverage.omittedFiles);
+  assert.ok(Buffer.byteLength(JSON.stringify(tight)) <= 2048);
+  assert.equal(tight.coverage.bytes, Buffer.byteLength(JSON.stringify(tight)));
+});
+
 test('packet byte counts stay exact across the 9999 to 10000 boundary before enforcing the ceiling', t => {
   const f = fixture(t, { 'retry.mjs': 'export const retry = 1;\n' });
   const { dir } = ensureStore(f.workspace, { home: f.home });

@@ -49,12 +49,6 @@ function measurePacketSize(packet) {
 }
 
 function enforceBudget(packet, maxBytes) {
-  while (measurePacketSize(packet) > maxBytes && packet.sources.length) {
-    packet.sources.pop(); packet.coverage.omittedFiles++;
-  }
-  while (measurePacketSize(packet) > maxBytes && packet.learnings.length) {
-    packet.learnings.pop(); packet.coverage.omittedLearnings++;
-  }
   for (const graph of [...packet.graphs].reverse()) {
     for (const key of ['edges', 'unresolved', 'nodes']) {
       while (measurePacketSize(packet) > maxBytes && graph[key]?.length) {
@@ -67,6 +61,12 @@ function enforceBudget(packet, maxBytes) {
         freshness: graph.freshness, outcome: graph.outcome, scope: graph.scope, detailsOmitted: true };
       packet.coverage.graphDetailsOmitted++;
     }
+  }
+  while (measurePacketSize(packet) > maxBytes && packet.sources.length) {
+    packet.sources.pop(); packet.coverage.omittedFiles++;
+  }
+  while (measurePacketSize(packet) > maxBytes && packet.learnings.length) {
+    packet.learnings.pop(); packet.coverage.omittedLearnings++;
   }
   while (measurePacketSize(packet) > maxBytes && packet.suggestedVerificationAreas.length) {
     packet.suggestedVerificationAreas.pop(); packet.coverage.verificationAreasOmitted++;
