@@ -102,7 +102,7 @@ export function projectGraph(result, options = {}) {
     metadata: {
       version: 1, kind: 'module-imports', scope: 'worktree', authority: 'descriptive-context',
       semantics: 'Module import declarations; not runtime calls or proof.',
-      ...pick(result, ['snapshot', 'source', 'relation', 'operation', 'roots', 'depth', 'limit', 'outcome', 'path', 'coverage', 'depthLimitReached', 'omitted', 'unresolved', 'cache']),
+      ...pick(result, ['snapshot', 'generation', 'source', 'freshness', 'producer', 'relation', 'operation', 'roots', 'depth', 'limit', 'outcome', 'path', 'coverage', 'depthLimitReached', 'omitted', 'unresolved', 'cache']),
       nodes, edges: projectedEdges, view: selected.view,
     },
   };

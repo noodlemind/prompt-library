@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { extract as lexicalExtract } from './lexical-extractor.mjs';
 import { inspectSourceFile } from './scan.mjs';
 
-export const FILE_FACTS_VERSION = 3;
+export const FILE_FACTS_VERSION = 4;
 
 export function contentHash(content) {
   return createHash('sha256').update(content).digest('hex');
@@ -32,6 +32,7 @@ export function readFileFacts(workspace, rels, { extract = lexicalExtract, cache
       hash,
       symbols: Array.isArray(extracted.symbols) ? extracted.symbols : [],
       imports: Array.isArray(extracted.imports) ? extracted.imports : [],
+      importOccurrences: Array.isArray(extracted.importOccurrences) ? extracted.importOccurrences : [],
       defs: Array.isArray(extracted.defs) ? extracted.defs : [],
       refs: Array.isArray(extracted.refs) ? extracted.refs : [],
       complexity: Number.isFinite(extracted.complexity) ? extracted.complexity : 1,

@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
+import { applicabilityLines } from './applicability.mjs';
 import { storageIdForRepo } from '../storage-aliases.mjs';
 import { assertNoSymlinkAncestors, assertRealpathContained, readFileNoFollow } from '../fs-safe.mjs';
 import { gitMetadataEnvironment } from '../../corpus/hooks/lib/product-diff.mjs';
@@ -345,7 +346,7 @@ export function parseLearningFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return { fm: {}, body: text.trim() };
   const fm = { episodes: [], anchors: [] };
-  let openList = null; // 'episodes' | 'anchors' | null
+  let openList = null;
   let current = null;
     for (const line of m[1].split(/\r?\n/)) {
     if (/^episodes:\s*$/.test(line)) {
@@ -364,16 +365,28 @@ export function parseLearningFrontmatter(text) {
       current = null;
       continue;
     }
-    if (openList === 'episodes') {
+    if (/^source_bindings:\s*\[\]\s*$/.test(line)) {
+      openList = null;
+      current = null;
+      fm.source_bindings = [];
+      continue;
+    }
+    if (/^source_bindings:\s*$/.test(line)) {
+      openList = 'source_bindings';
+      current = null;
+      fm.source_bindings = [];
+      continue;
+    }
+    if (openList === 'episodes' || openList === 'source_bindings') {
       const item = line.match(/^\s{2}- (\w+):\s*(.*)$/);
       const sub = line.match(/^\s{4}(\w+):\s*(.*)$/);
       if (item) {
         current = { [item[1]]: unquote(item[2]) };
-        fm.episodes.push(current);
+        fm[openList].push(current);
         continue;
       }
       if (sub && current) {
-        current[sub[1]] = unquote(sub[2]);
+        current[sub[1]] = openList === 'source_bindings' && sub[2].trim() === 'null' ? null : unquote(sub[2]);
         continue;
       }
     }
@@ -560,6 +573,7 @@ export function serializeLearning(fm, body) {
   } else {
     lines.push('anchors: []');
   }
+  lines.push(...applicabilityLines(fm));
   lines.push(`superseded_by: ${fm.superseded_by || 'null'}`);
   lines.push(`last_confirmed: ${fm.last_confirmed || 'null'}`);
   if (fm.merged_from) lines.push(`merged_from: ${fm.merged_from}`);

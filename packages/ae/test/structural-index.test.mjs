@@ -637,7 +637,7 @@ test('no-network guard: source-text scan of the structural read modules for mode
   // web-tree-sitter is loaded ONLY inside the async factory, never statically.
   const extractorSrc = read('lib/repo-map/treesitter-extractor.mjs');
   assert.doesNotMatch(extractorSrc, /^import[^\n]*web-tree-sitter/m, 'no static web-tree-sitter import');
-  assert.match(extractorSrc, /await import\('web-tree-sitter'\)/, 'runtime loads lazily in the factory');
+  assert.match(extractorSrc, /await import\(pathToFileURL\(loaderFull\)\.href\)/, 'verified package-relative runtime loads lazily in the factory');
 });
 
 // ONE GENERATION ON DISK, ALWAYS (review finding). Writing the four tables one

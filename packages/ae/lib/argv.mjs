@@ -30,6 +30,8 @@ const FLAGS_WITH_VALUES = new Set([
   '--source',
   '--cursor',
   '--context-version',
+  '--question-kind',
+  '--generation',
   '--depth',
   '--file',
   '--adapter',

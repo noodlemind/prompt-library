@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { applyOps } from '../lib/knowledge/apply.mjs';
+import { parseLearningFrontmatter, serializeLearning } from '../lib/knowledge/store.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
@@ -53,7 +54,7 @@ function setStatus(harnessHome, ws, id, status) {
   fs.writeFileSync(file, raw.replace(/status: provisional/, `status: ${status}`), 'utf8');
 }
 
-function seededContext() {
+function seededContext({ sourceBound = false } = {}) {
   const ws = tempDir('oe-ws-');
   const home = tempDir('oe-home-');
   const harnessHome = tempDir('oe-hh-');
@@ -108,6 +109,14 @@ function seededContext() {
   setStatus(harnessHome, ws, ACTIVE_ID, 'active');
   setStatus(harnessHome, ws, RETIRED_ID, 'retired');
 
+  if (!sourceBound) {
+    const file = learningFile(harnessHome, ws, STALE_ID);
+    const { fm, body } = parseLearningFrontmatter(fs.readFileSync(file, 'utf8'));
+    delete fm.applicability_version;
+    delete fm.source_bindings;
+    fs.writeFileSync(file, serializeLearning(fm, body), 'utf8');
+  }
+
   // Break the anchor, then index — the store's real path to a stale exclusion.
   fs.rmSync(path.join(ws, 'src/widgetd.mjs'), { force: true });
   const idx = run({ ws, home, harnessHome }, ['index']);
@@ -160,7 +169,6 @@ test('orient --explain --json decomposes every learning with matching scores', (
   assert.equal(byId[RETIRED_ID].score, null);
   assert.equal(surfacedById[RETIRED_ID], undefined);
 
-  // Stale-anchored: excluded, never surfaced, no decomposition.
   assert.equal(byId[STALE_ID].excluded, 'stale-anchor');
   assert.equal(byId[STALE_ID].score, null);
   assert.equal(surfacedById[STALE_ID], undefined);
@@ -174,6 +182,22 @@ test('orient --explain renders muted per-candidate decomposition lines', () => {
   assert.match(res.stdout, new RegExp(`${PROVISIONAL_ID.replace('/', '\\/')} hits \\d+/\\d+ × damping 0\\.5 = `));
   assert.match(res.stdout, new RegExp(`${RETIRED_ID.replace('/', '\\/')} excluded: retired`));
   assert.match(res.stdout, new RegExp(`${STALE_ID.replace('/', '\\/')} excluded: stale-anchor`));
+});
+
+test('orient explains a new bound learning with a missing source as visible applicability review', () => {
+  const c = seededContext({ sourceBound: true });
+  const res = run(c, ['orient', '--query', QUERY, '--explain']);
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const out = JSON.parse(res.stdout);
+  const candidate = out.explain.candidates.find(row => row.id === STALE_ID);
+  const surfaced = out.learnings.find(row => row.id === STALE_ID);
+  assert.equal(candidate.excluded, null, 'the cached legacy exclusion does not hide a source-bound learning');
+  assert.equal(candidate.applicability.state, 'needs-review');
+  assert.equal(candidate.applicability.bindings[0].reason, 'source-missing');
+  assert.equal(surfaced.applicability.state, 'needs-review');
+  assert.equal(surfaced.status, 'provisional', 'applicability does not alter historical claim status');
+  const pack = fs.readFileSync(path.join(c.ws, '.harness', 'context-pack.md'), 'utf8');
+  assert.match(pack, /\[widgetd\/stale-one\].*\[applicability: needs-review; source bindings only\]/);
 });
 
 test('orient without --explain has no explain data and prints no decomposition lines', () => {

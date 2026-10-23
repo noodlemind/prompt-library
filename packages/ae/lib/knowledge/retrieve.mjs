@@ -1,8 +1,9 @@
 import fs from 'node:fs';
-import { storeDir, readStaleExclusions, inertLine } from './store.mjs';
+import { storeDir, readStaleExclusions, inertLine, repoId } from './store.mjs';
 import { loadLayeredLearnings, layerTieRank } from './overlay.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
 import { tokenize } from '../tokenize.mjs';
+import { APPLICABILITY_VERSION, hasSourceIdentityBindings, learningApplicability } from './applicability.mjs';
 
 function retrievedText(value) {
   return inertLine(redactSecrets(String(value ?? '')));
@@ -24,7 +25,7 @@ export function retrievalExclusion(l, staleExcluded = {}) {
     if (l.fm.promoted_to_golden) return 'promoted-to-golden';
   if (l.fm.status === 'retired') return 'retired';
   if (l.fm.status === 'disputed') return 'disputed';
-  if (staleExcluded[l.id]) return 'stale-anchor';
+  if (staleExcluded[l.id] && !hasSourceIdentityBindings(l.fm)) return 'stale-anchor';
   return null;
 }
 
@@ -45,7 +46,7 @@ function signalTokenSet(signals) {
   return tokens;
 }
 
-function scoreLearning(l, { queryTokens, signalTokens = new Set(), staleExcluded, include }) {
+function scoreLearning(l, { queryTokens, signalTokens = new Set(), signalPaths = new Set(), staleExcluded, include }) {
   const gate = retrievalExclusion(l, staleExcluded);
   if (gate) return { excluded: gate };
     if (include && !include(l)) return { excluded: 'filtered' };
@@ -56,6 +57,10 @@ function scoreLearning(l, { queryTokens, signalTokens = new Set(), staleExcluded
 
   const claimLine = (l.body.split('\n').find((x) => x.trim()) || '').trim();
   const hay = new Set(tokenize(`${l.fm.trigger || ''} ${claimLine}`));
+  for (const anchor of Array.isArray(l.fm.anchors) ? l.fm.anchors : []) {
+    if (!signalPaths.has(anchor)) continue;
+    for (const token of tokenize(anchor)) if (signalTokens.has(token)) hay.add(token);
+  }
   const matched = [];
   for (const t of queryTokens) if (hay.has(t)) matched.push(t);
   const hits = matched.length;
@@ -74,13 +79,15 @@ export function rankLearnings({ workspace, query, limit = 3, home, include, sign
 
   const queryTokens = new Set(tokenize(query || ''));
   const signalTokens = signalTokenSet(signals);
+  const signalPaths = new Set(Array.isArray(signals) ? signals.filter(signal => typeof signal === 'string') : []);
   for (const token of signalTokens) queryTokens.add(token);
   if (!queryTokens.size) return [];
 
   const results = [];
   const appliesBias = new Map();
+  const sourceByRow = new Map();
   for (const l of learnings) {
-    const scored = scoreLearning(l, { queryTokens, signalTokens, staleExcluded, include });
+    const scored = scoreLearning(l, { queryTokens, signalTokens, signalPaths, staleExcluded, include });
     if (scored.excluded) continue;
     const advisory =
       (l.fm.episodes || []).length > 0 && (l.fm.episodes || []).every((e) => e.kind === 'insight');
@@ -98,17 +105,23 @@ export function rankLearnings({ workspace, query, limit = 3, home, include, sign
             ...(l.layer === 'branch' ? { layer: 'branch', ...(l.subordinate ? { subordinate: true } : {}) } : {}),
     };
     appliesBias.set(row, scored.appliesSignalHits);
+    sourceByRow.set(row, l.fm);
     results.push(row);
   }
 
-    return results
+  const selected = results
     .sort((a, b) => b.score - a.score || layerTieRank(a) - layerTieRank(b) || appliesBias.get(b) - appliesBias.get(a) || a.id.localeCompare(b.id))
     .slice(0, limit);
+  const repository = selected.some(row => String(sourceByRow.get(row)?.applicability_version) === String(APPLICABILITY_VERSION)) ? repoId(workspace) : null;
+  const sourceCache = new Map();
+  return selected.map(row => ({ ...row, applicability: learningApplicability({ workspace, repository, cache: sourceCache, fm: sourceByRow.get(row) }) }));
 }
 
 export function explainLearnings({ workspace, query, home, include }) {
   const { learnings, staleExcluded } = loadLearnings({ workspace, home });
   const queryTokens = new Set(tokenize(query || ''));
+  const repository = learnings.some(learning => String(learning.fm.applicability_version) === String(APPLICABILITY_VERSION)) ? repoId(workspace) : null;
+  const sourceCache = new Map();
 
   const candidates = learnings.map((l) => {
     const scored = scoreLearning(l, { queryTokens, staleExcluded, include });
@@ -121,6 +134,7 @@ export function explainLearnings({ workspace, query, home, include }) {
       base: scored.base ?? null,
       damping: scored.damping ?? null,
       score: scored.score ?? null,
+      applicability: learningApplicability({ workspace, repository, cache: sourceCache, fm: l.fm }),
       // Same additive layer marker as rankLearnings — absent without buckets.
       ...(l.layer === 'branch' ? { layer: 'branch' } : {}),
     };

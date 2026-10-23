@@ -545,7 +545,7 @@ export function structuralChecks({ workspace, grammarRoots = packageGrammarRoots
         pass: false,
         hint: lockGone
           ? `grammars.lock missing or unreadable — wasm integrity cannot be verified and the treesitter tier is refused; reinstall the harness package, then re-run: ae index --structural`
-          : `grammar wasm sha256 mismatch vs grammars.lock (${languages}) — the index fell back to lexical loudly; reinstall the harness optional dependencies, then re-run: ae index --structural`,
+          : `grammar wasm sha256 mismatch vs grammars.lock (${languages}) — the index fell back to lexical loudly; reinstall the AE package to restore shipped parser assets, then re-run: ae index --structural`,
       });
       return checks;
     }

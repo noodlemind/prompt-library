@@ -81,7 +81,7 @@ test('docs surface is the adaptive engineering explanation', () => {
     .readdirSync(docsRoot)
     .filter((name) => !name.startsWith('.') && !generated.has(name))
     .sort();
-  assert.deepEqual(topLevel, ['adaptive-engineering.md', 'diagrams', 'migration', 'site']);
+  assert.deepEqual(topLevel, ['adaptive-engineering.md', 'diagrams', 'migration', 'site', 'structural-knowledge.md']);
   assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);

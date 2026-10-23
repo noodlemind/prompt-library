@@ -97,10 +97,21 @@ function normalizeGraph(parsed) {
     if (typeof edge.symbol === 'string' && Array.isArray(edge.to)) {
       // Builder form: caller file + callee symbol + defining files.
       for (const target of edge.to) {
-        if (typeof target === 'string') calls.push({ from: `${edge.from}#${edge.symbol}`, to: `${target}#${edge.symbol}` });
+        const candidates = Array.isArray(edge.candidates) ? edge.candidates.filter(candidate => candidate?.file === target) : [];
+        const name = candidates.length && typeof candidates[0].name === 'string' ? candidates[0].name : edge.symbol;
+        if (typeof target === 'string') calls.push({
+          from: `${edge.from}#${edge.symbol}`, to: `${target}#${name}`,
+          relation: edge.relation || 'call-candidate', method: edge.method || 'unknown',
+          resolutionStatus: edge.resolutionStatus || (edge.to.length > 1 ? 'ambiguous' : 'candidate'),
+          authority: 'descriptive-context',
+          ...(['call-site', 'imported-name-reference'].includes(edge.observation) ? { observation: edge.observation } : {}),
+          ...(edge.id ? { id: edge.id } : {}), ...(edge.reason ? { reason: edge.reason } : {}),
+          ...(Array.isArray(edge.evidence) ? { evidence: edge.evidence } : {}),
+          ...(candidates.length ? { candidates } : {}),
+        });
       }
     } else if (typeof edge.to === 'string') {
-      calls.push({ from: edge.from, to: edge.to });
+      calls.push({ ...edge, from: edge.from, to: edge.to, relation: edge.relation || 'call-candidate', resolutionStatus: edge.resolutionStatus || 'candidate', authority: 'descriptive-context' });
     }
   }
   const unresolved = [];

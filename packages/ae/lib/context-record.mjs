@@ -17,7 +17,8 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
   const snapshot = facts.sourceSnapshot || captureWorkingSources(workspace);
   const neighborhood = facts.slice.neighborhood;
   const inputs = new Map((neighborhood?.inputs || facts.namedFiles.map(rel => ({ rel }))).map(input => [input.rel, input]));
-  const paths = [...new Set([...inputs.keys(), ...(neighborhood?.files || []).map(file => file.rel)])];
+  const impactSources = facts.slice.impactContext?.sources || [];
+  const paths = [...new Set([...inputs.keys(), ...(neighborhood?.files || []).map(file => file.rel), ...impactSources.map(source => source.location)])];
   const evidence = paths.slice(0, EVIDENCE_LIMIT).map((location) => {
     const input = inputs.get(location)?.state === 'excluded' ? { state: 'excluded' } : inspectSourceFile(workspace, location, { maxBytes: DEFAULT_MAX_BYTES });
     return {
@@ -37,10 +38,13 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
     evidence,
   };
   const after = captureWorkingSources(workspace);
-  const factHashes = new Map((facts.slice.neighborhood?.files || []).filter(file => file.sha256).map(file => [file.rel, file.sha256]));
+  const factHashes = new Map([
+    ...(facts.slice.neighborhood?.files || []).filter(file => file.sha256).map(file => [file.rel, file.sha256]),
+    ...impactSources.map(source => [source.location, source.sha256]),
+  ]);
   const currentPlan = facts.active ? loadPlan(workspace, facts.active.path) : null;
   const planChanged = facts.active && (!currentPlan || planDigest(currentPlan.text) !== identity.task.contractDigest);
-  const changed = Boolean(planChanged || policyDigest(workspace) !== identity.policyDigest || !snapshot.valid || !after.valid || snapshot.state.digest !== after.state.digest || evidence.some((record) =>
+  const changed = Boolean(facts.slice.impactContext?.coverage.sourceState === 'changed-or-unavailable' || planChanged || policyDigest(workspace) !== identity.policyDigest || !snapshot.valid || !after.valid || snapshot.state.digest !== after.state.digest || evidence.some((record) =>
     (record.sha256 && inspectSourceFile(workspace, record.location, { maxBytes: DEFAULT_MAX_BYTES }).hash !== record.sha256) ||
     (factHashes.has(record.location) && factHashes.get(record.location) !== record.sha256)));
   const stableFacts = { ...facts.slice, trust: { state: facts.slice.trust.state, digest: facts.slice.trust.digest } };

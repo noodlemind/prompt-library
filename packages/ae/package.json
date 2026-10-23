@@ -1,6 +1,6 @@
 {
   "name": "ae-harness",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Adaptive Engineering CLI for GitHub Copilot",
   "homepage": "https://github.com/noodlemind/prompt-library",
   "license": "UNLICENSED",
@@ -22,7 +22,7 @@
     "THIRD-PARTY-NOTICES.md",
     "scripts/check-release.mjs"
   ],
-  "//bundledDependencies": "All hard runtime dependencies ship inside the tarball for offline installation and diagram rendering. Pele and D2/WASM are pinned, package-owned libraries; diagramming requires no separate executable, server or download. Optional tree-sitter grammars retain lexical fallback. Bundled dependency fixes require an AE republish; review advisories and upstream licenses on every release.",
+  "//bundledDependencies": "All hard runtime dependencies ship inside the tarball for offline installation and diagram rendering. Pinned Pele and D2/WASM need no separate executable, service or download. Pinned Tree-sitter loader/runtime and selected grammar WASM assets ship under lib/repo-map/vendor with upstream licenses and integrity manifests; no native bindings or optional package installation is required. Bundled dependency updates require an AE release and license/advisory review.",
   "scripts": {
     "check:release": "node ./scripts/check-release.mjs",
     "check:repo": "node --test ./test/release-version.test.mjs ./test/prompt-library-contracts.test.mjs",
@@ -58,12 +58,5 @@
     "agent-skills",
     "adaptive-engineer",
     "harness"
-  ],
-  "optionalDependencies": {
-    "tree-sitter-java": "0.23.5",
-    "tree-sitter-javascript": "0.23.1",
-    "tree-sitter-python": "0.23.6",
-    "tree-sitter-typescript": "0.23.2",
-    "web-tree-sitter": "0.25.10"
-  }
+  ]
 }

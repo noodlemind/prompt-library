@@ -1,0 +1,6 @@
+{
+  "name": "web-tree-sitter",
+  "version": "0.25.10",
+  "license": "MIT",
+  "type": "module"
+}

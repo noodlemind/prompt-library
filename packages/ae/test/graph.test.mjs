@@ -58,7 +58,9 @@ test('ambiguous bare imports retain their reason without fabricated module edges
   await buildStructuralIndex(f);
   const graph = readStructuralIndex(f.workspace, f).graph;
   assert.deepEqual(graph.modules, []);
-  assert.deepEqual(graph.unresolvedImports, [{ from: 'src/main.mjs', import: 'helper', reason: 'ambiguous' }]);
+  assert.deepEqual(graph.unresolvedImports.map(({ from, import: specifier, reason }) => ({ from, import: specifier, reason })), [{ from: 'src/main.mjs', import: 'helper', reason: 'ambiguous' }]);
+  assert.equal(graph.unresolvedImports[0].resolutionStatus, 'ambiguous');
+  assert.deepEqual(graph.unresolvedImports[0].candidates, ['left/helper.mjs', 'right/helper.mjs']);
 });
 
 test('a rebuild detects changed content even when size and mtime are unchanged', async (t) => {

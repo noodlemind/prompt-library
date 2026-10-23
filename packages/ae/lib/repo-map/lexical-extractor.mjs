@@ -1,15 +1,6 @@
 /** Lexical extract seam; tree-sitter tier lives in treesitter-extractor.mjs. */
 import path from 'node:path';
-
-const IMPORT_PATTERNS = {
-  java: [/^\s*import\s+(?:static\s+)?([\w.]+)/gm],
-  ts: [
-    /\b(?:import|export)\s+[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/g,
-    /\bimport\s*['"]([^'"]+)['"]/g,
-    /\b(?:require|import)\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-  ],
-  py: [/^\s*from\s+([\w.]+)\s+import\b/gm, /^\s*import\s+([\w.]+)/gm],
-};
+import { sourceMasks, lexicalImportOccurrences } from './occurrences.mjs';
 
 const SYMBOL_PATTERNS = {
   java: [
@@ -29,7 +20,7 @@ const SYMBOL_PATTERNS = {
 const EXPORT_PATTERNS = {
   ts: [
     // export [default] [declare] [async] [abstract] <decl> <name>
-    /\bexport\s+(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:abstract\s+)?(?:class|interface|type|enum|function\s*\*?|const|let|var)\s+(\w+)/g,
+    /\bexport\s+(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:abstract\s+)?(?:function(?:\s*\*\s*|\s+)|(?:class|interface|type|enum|const|let|var)\s+)(\w+)/g,
     /\bexport\s+default\s+(\w+)\s*[;\n]/g, // export default Existing;
     /\bexport\s+\*\s+as\s+(\w+)\s+from\b/g,
     /\b(?:module\.)?exports\.(\w+)\s*=/g, // CommonJS named export
@@ -112,24 +103,26 @@ function objectLiteralKeys(body, into) {
   }
 }
 
-function exportedNames(lang, text) {
+function exportedNames(lang, text, accepts) {
   const exported = new Set();
   for (const pattern of EXPORT_PATTERNS[lang] || []) {
     for (const m of text.matchAll(pattern)) {
+      if (!accepts(m)) continue;
       if (m[1] && !NOT_AN_EXPORT.test(m[1])) exported.add(m[1]);
     }
   }
   if (lang === 'ts') {
-    for (const m of text.matchAll(TS_EXPORT_LIST)) exportListNames(m[1], exported);
-    for (const m of text.matchAll(TS_MODULE_EXPORTS_OBJECT)) objectLiteralKeys(m[1], exported);
+    for (const m of text.matchAll(TS_EXPORT_LIST)) if (accepts(m)) exportListNames(m[1], exported);
+    for (const m of text.matchAll(TS_MODULE_EXPORTS_OBJECT)) if (accepts(m)) objectLiteralKeys(m[1], exported);
   }
   if (lang === 'py') {
     const all = PY_ALL.exec(text);
-    if (all) {
+    if (all && accepts(all)) {
       // An explicit __all__ is the module's declared surface — authoritative.
       for (const m of all[1].matchAll(/["']([\w.]+)["']/g)) exported.add(m[1]);
     } else {
       for (const m of text.matchAll(PY_MODULE_LEVEL_DEF)) {
+        if (!accepts(m)) continue;
         if (!m[1].startsWith('_')) exported.add(m[1]);
       }
     }
@@ -143,7 +136,7 @@ function exportedNames(lang, text) {
  * default binding, `from mod import a`, `const { a } = require(...)`, and the
  * Java class of an `import com.acme.Role;`. Only what the source states.
  */
-function importedNames(lang, text) {
+function importedNames(lang, text, accepts) {
   const names = new Set();
   const addList = (body, { aliasWins = false } = {}) => {
     for (const raw of String(body).split(',')) {
@@ -157,17 +150,19 @@ function importedNames(lang, text) {
   };
   if (lang === 'ts') {
     for (const m of text.matchAll(TS_IMPORT_CLAUSE)) {
+      if (!accepts(m)) continue;
       const clause = m[1].replace(/^type\s+/, '');
       const braces = /\{([^}]*)\}/.exec(clause);
       if (braces) addList(braces[1]);
       const bare = clause.replace(/\{[^}]*\}/g, '').replace(/\*\s+as\s+[\w$]+/g, '');
       addList(bare);
     }
-    for (const m of text.matchAll(TS_REQUIRE_DESTRUCTURE)) addList(m[1]);
+    for (const m of text.matchAll(TS_REQUIRE_DESTRUCTURE)) if (accepts(m)) addList(m[1]);
   } else if (lang === 'py') {
-    for (const m of text.matchAll(PY_FROM_IMPORT)) addList(m[1].replace(/[()]/g, ''));
+    for (const m of text.matchAll(PY_FROM_IMPORT)) if (accepts(m)) addList(m[1].replace(/[()]/g, ''));
   } else if (lang === 'java') {
     for (const m of text.matchAll(JAVA_IMPORT)) {
+      if (!accepts(m)) continue;
       const last = m[1].split('.').pop();
       if (last && last !== '*') names.add(last);
     }
@@ -180,14 +175,21 @@ function importedNames(lang, text) {
  * identifier this file does not otherwise declare still counts (it is part of
  * the module surface), but nothing is reported as exported that is not also
  * reported as a symbol. */
-export function extract(rel, content) {
+export function extract(rel, content, { masks: suppliedMasks } = {}) {
   const lang = languageOf(rel);
   if (!lang) return { symbols: [], imports: [], exported: [], references: [] };
-  const text = String(content || '');
+  const input = String(content || '');
+  const masks = suppliedMasks || sourceMasks(rel, input);
+  const text = masks.text;
+  const accepts = match => {
+    const at = match.index + Math.max(0, match[0].search(/\S/));
+    return masks.code[at] === input[at];
+  };
 
   const symbols = new Set();
   for (const pattern of SYMBOL_PATTERNS[lang] || []) {
     for (const m of text.matchAll(pattern)) {
+      if (!accepts(m)) continue;
       // tf uses "type" "name" — prefer the name (group 3 or 2).
       const name = m[3] || m[2] || m[1];
       if (name && !NOT_A_SYMBOL.test(name)) symbols.add(name);
@@ -197,25 +199,21 @@ export function extract(rel, content) {
   // Export markers also DECLARE symbols the per-language patterns above miss
   // (`export let`, `export { helper }`, `exports.run = ...`) — the module
   // surface is exactly what the structural checks reason about.
-  const exported = exportedNames(lang, text);
+  const exported = exportedNames(lang, text, accepts);
   for (const name of exported) symbols.add(name);
 
-  const imports = new Set();
-  // Imports only apply to code languages, not SQL/HCL.
-  if (lang !== 'sql' && lang !== 'tf') {
-    for (const pattern of IMPORT_PATTERNS[lang] || []) {
-      for (const m of text.matchAll(pattern)) if (m[1]) imports.add(m[1]);
-    }
-  }
+  const importOccurrences = lexicalImportOccurrences(rel, input, masks);
+  const imports = new Set(importOccurrences.map(occurrence => occurrence.specifier));
 
   const symbolList = [...symbols].slice(0, MAX_LEXICAL_SYMBOLS);
   const kept = new Set(symbolList);
-  const references = [...importedNames(lang, text)];
+  const references = [...importedNames(lang, text, accepts)];
   return {
     symbols: symbolList,
     imports: [...imports].slice(0, MAX_LEXICAL_IMPORTS),
+    importOccurrences: importOccurrences.slice(0, MAX_LEXICAL_IMPORTS),
     exported: [...exported].filter((name) => kept.has(name)),
     references: references.slice(0, MAX_LEXICAL_IMPORTS),
-    limitsReached: { symbols: symbols.size > MAX_LEXICAL_SYMBOLS, imports: imports.size > MAX_LEXICAL_IMPORTS, refs: references.length > MAX_LEXICAL_IMPORTS },
+    limitsReached: { symbols: symbols.size > MAX_LEXICAL_SYMBOLS, imports: imports.size > MAX_LEXICAL_IMPORTS, importOccurrences: importOccurrences.length > MAX_LEXICAL_IMPORTS, refs: references.length > MAX_LEXICAL_IMPORTS },
   };
 }

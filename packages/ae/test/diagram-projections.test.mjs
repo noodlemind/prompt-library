@@ -55,6 +55,28 @@ test('module projection is deterministic when extractor arrays have different or
   assert.deepEqual(projectGraph(first), projectGraph(second));
 });
 
+test('module projection retains the producing generation, freshness and parser provenance', () => {
+  const input = graph();
+  input.generation = 'd'.repeat(32);
+  input.freshness = { state: 'current', liveValidated: true };
+  input.producer = {
+    resolverVersion: 2, fileFactsVersion: 4, extractorTier: 'treesitter',
+    grammarVersions: { javascript: 'verified-grammar' }, integrityFailures: [], missingGrammars: [],
+  };
+  input.edges[0].method = 'ast';
+  input.edges[0].resolutionStatus = 'candidate';
+  input.edges[0].evidence = [{ path: 'src/a.mjs', sha256: digest, range: { startLine: 2, startColumn: 1, endLine: 2, endColumn: 24 } }];
+  const result = projectGraph(input);
+  assert.equal(result.metadata.generation, input.generation);
+  assert.deepEqual(result.metadata.freshness, input.freshness);
+  assert.deepEqual(result.metadata.producer, input.producer);
+  assert.equal(result.metadata.edges[0].method, 'ast');
+  assert.equal(result.metadata.edges[0].resolutionStatus, 'candidate');
+  assert.deepEqual(result.metadata.edges[0].evidence, input.edges[0].evidence);
+  result.metadata.producer.grammarVersions.javascript = 'changed';
+  assert.equal(input.producer.grammarVersions.javascript, 'verified-grammar', 'receipt metadata must not alias query results');
+});
+
 test('bounded import views keep roots and count every hidden node and edge separately from upstream omissions', () => {
   const input = graph();
   input.roots = ['n59.mjs'];

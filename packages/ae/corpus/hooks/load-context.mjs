@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { planDisplayPath, planRoots } from './lib/external-plans.mjs';
 import { resolveHookWorkspace } from './lib/tool-payload.mjs';
+import { unwrapOrientSlice } from './lib/orient-slice.mjs';
 
 function emptyOrientSlice() {
   return {
@@ -33,6 +34,8 @@ function orientSlice(workspace) {
     ...(bin ? [bin] : []),
     'orient',
     '--read',
+    '--context-version',
+    '2',
     '--json',
     '--no-events',
     '--workspace',
@@ -46,12 +49,7 @@ function orientSlice(workspace) {
   });
   if (!res || res.error || res.status !== 0 || !res.stdout) return emptyOrientSlice();
   try {
-    const parsed = JSON.parse(res.stdout);
-    const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed) : [];
-    if (!['neighborhood', 'learnings', 'skills', 'instructions', 'contacts', 'index', 'gateStatus', 'activePlan'].every(key => keys.includes(key))) {
-      return emptyOrientSlice();
-    }
-    return { ...emptyOrientSlice(), ...parsed };
+    return unwrapOrientSlice(JSON.parse(res.stdout), emptyOrientSlice());
   } catch {
     return emptyOrientSlice();
   }

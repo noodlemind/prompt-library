@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
   branchComplexity,
@@ -20,6 +20,17 @@ import {
 const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
 const grammars = extractor.tier === 'treesitter';
 const skipNote = 'optional tree-sitter grammars not installed — lexical absence mode';
+
+function copyRuntime(root) {
+  const lock = loadGrammarsLock();
+  const destination = path.join(root, lock.runtime.package);
+  fs.mkdirSync(destination, { recursive: true });
+  const source = packageGrammarRoots().map(base => path.join(base, lock.runtime.package)).find(base => fs.existsSync(path.join(base, lock.runtime.file)) && fs.existsSync(path.join(base, lock.runtime.loader.file)));
+  assert.ok(source, 'the shipped runtime and loader must be available for corruption controls');
+  for (const file of [lock.runtime.file, lock.runtime.loader.file]) fs.copyFileSync(path.join(source, file), path.join(destination, file));
+  fs.writeFileSync(path.join(destination, 'package.json'), JSON.stringify({ type: 'module' }));
+  return destination;
+}
 
 test('grammars.lock ships, parses, and pins sha256 for runtime and all grammars', () => {
   const lock = loadGrammarsLock();
@@ -44,7 +55,7 @@ test('lexicalV2 preserves v1 fields and adds approximate defs, real export flags
   const r = lexicalV2('a.ts', 'export function hi(){ if (x) {} }\nfunction Local(){}\n');
   assert.deepEqual(r.symbols, ['hi', 'Local']);
   assert.deepEqual(r.defs, [
-    { name: 'hi', kind: 'symbol', line: 1, exported: true },
+    { name: 'hi', kind: 'symbol', line: 1, exported: true, exportKind: 'named' },
     { name: 'Local', kind: 'symbol', line: 2, exported: false },
   ]);
   assert.deepEqual(r.refs, [], 'no imports means no references — never a guessed call');
@@ -118,6 +129,31 @@ test('lexicalV2 is linear in file size — the default tier must not rescan per 
   assert.equal(r.defs.length, 512);
   assert.equal(r.defs[0].line, 20_001, 'declaration lines are still resolved exactly');
   assert.ok(elapsed < 300, `lexicalV2 took ${elapsed}ms on one ${Math.round(content.length / 1024)}KB file — the per-name rescan is back`);
+});
+
+test('lexical export detection bounds malformed declaration whitespace', () => {
+  const moduleUrl = new URL('../lib/repo-map/treesitter-extractor.mjs', import.meta.url).href;
+  const script = `
+    import assert from 'node:assert/strict';
+    import { lexicalV2 } from ${JSON.stringify(moduleUrl)};
+    const result = lexicalV2('malformed.ts', 'export function' + ' '.repeat(200_000) + '(');
+    assert.deepEqual(result.defs, []);
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    timeout: 10_000,
+    encoding: 'utf8',
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('lexical export detection retains ordinary and generator declarations', () => {
+  for (const declaration of ['function run()', 'function*run()', 'function * run()', 'async function* run()']) {
+    const result = lexicalV2('exported.mjs', `export ${declaration} {}`);
+    assert.deepEqual(result.defs.map(({ name, exported, exportKind }) => ({ name, exported, exportKind })), [
+      { name: 'run', exported: true, exportKind: 'named' },
+    ]);
+  }
 });
 
 test('the lexical path caps symbols and imports like the AST path does', () => {
@@ -275,27 +311,13 @@ test('integrity mismatch: corrupted grammar wasm is a LOUD lexical fallback, abs
   const jsDir = path.join(dir, lock.grammars.javascript.package);
   fs.mkdirSync(jsDir, { recursive: true });
   fs.writeFileSync(path.join(jsDir, lock.grammars.javascript.file), 'not the pinned wasm bytes');
-    let runtimeSrc = null;
-  try {
-    runtimeSrc = createRequire(import.meta.url).resolve(`${lock.runtime.package}/${lock.runtime.file}`);
-  } catch {
-    runtimeSrc = null; // not installed anywhere the resolver can see — absence mode
-  }
-  if (runtimeSrc) {
-    const rtDir = path.join(dir, lock.runtime.package);
-    fs.mkdirSync(rtDir, { recursive: true });
-    fs.copyFileSync(runtimeSrc, path.join(rtDir, lock.runtime.file));
-  }
+  copyRuntime(dir);
   const ext = await createTreesitterExtract({ grammarRoots: [dir] });
-  if (runtimeSrc) {
-    assert.ok(
-      ext.integrityFailures.some((f) => f.language === 'javascript' && /sha256 mismatch/.test(f.reason)),
-      'corrupt wasm must be recorded as an integrity failure'
-    );
-    assert.ok(!ext.available.includes('javascript'), 'corrupt grammar must not instantiate');
-  } else {
-    assert.equal(ext.tier, 'lexical');
-  }
+  assert.ok(
+    ext.integrityFailures.some((f) => f.language === 'javascript' && /sha256 mismatch/.test(f.reason)),
+    'corrupt wasm must be recorded as an integrity failure'
+  );
+  assert.ok(!ext.available.includes('javascript'), 'corrupt grammar must not instantiate');
   const r = ext.extract('x.mjs', 'export function fromLexical() {}');
   assert.equal(r.tier, 'lexical', 'the corrupted grammar language falls back to lexical');
   assert.ok(r.symbols.includes('fromLexical'));
@@ -310,26 +332,14 @@ test('integrity mismatch: corrupted grammar wasm is a LOUD lexical fallback, abs
 });
 
 test('runtime integrity mismatch disables the whole tier loudly', async (t) => {
-  const lockForSkip = JSON.parse(fs.readFileSync(DEFAULT_LOCK_PATH, 'utf8'));
-    let loaderInstalled = true;
-  try {
-    loaderInstalled = Boolean(import.meta.resolve?.(lockForSkip.runtime.package));
-  } catch {
-    loaderInstalled = false;
-  }
-  if (!loaderInstalled) {
-    t.skip(`${lockForSkip.runtime.package} not installed (optional) — no runtime to corrupt`);
-    return;
-  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-grammar-rt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const lock = JSON.parse(fs.readFileSync(DEFAULT_LOCK_PATH, 'utf8'));
-  const rtDir = path.join(dir, lock.runtime.package);
-  fs.mkdirSync(rtDir, { recursive: true });
+  const rtDir = copyRuntime(dir);
   fs.writeFileSync(path.join(rtDir, lock.runtime.file), 'corrupt runtime');
   const ext = await createTreesitterExtract({ grammarRoots: [dir] });
   assert.equal(ext.tier, 'lexical');
   assert.ok(ext.integrityFailures.some((f) => f.language === 'runtime'));
-  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('the JS loader entry point is hash-pinned, not just the wasm', async (t) => {

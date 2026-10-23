@@ -7,11 +7,13 @@ import { test } from 'node:test';
 import { harnessControlCommand } from '../corpus/hooks/lib/tool-payload.mjs';
 import { beforeDeliveryTool } from '../lib/agent-delivery.mjs';
 import { createTreesitterExtract, packageGrammarRoots } from '../lib/repo-map/treesitter-extractor.mjs';
+import { prepareGraph } from '../lib/graph.mjs';
+import { readStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 
 const bin = path.resolve(import.meta.dirname, '../bin/ae.mjs');
 const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
 
-function fixture(t, files = {}) {
+function fixture(t, files = {}, { timeout = 10000 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-graph-cli-'));
   const workspace = path.join(root, 'repo');
   const home = path.join(root, 'home');
@@ -30,7 +32,7 @@ function fixture(t, files = {}) {
   };
   for (const [rel, body] of Object.entries(initial)) write(rel, body);
   for (const args of [['add', '.'], ['commit', '-qm', 'fixture']]) assert.equal(spawnSync('git', args, { cwd: workspace, env }).status, 0);
-  const cli = (...args) => spawnSync(process.execPath, [bin, ...args, '--workspace', workspace], { cwd: workspace, env, encoding: 'utf8', timeout: 10_000 });
+  const cli = (...args) => spawnSync(process.execPath, [bin, ...args, '--workspace', workspace], { cwd: workspace, env, encoding: 'utf8', timeout });
   const json = (...args) => {
     const result = cli(...args, '--json');
     assert.equal(result.status, 0, result.stderr + result.stdout);
@@ -57,7 +59,8 @@ test('deps, dependents and path produce bounded directed relationships in every 
     assert.match(result.stdout, /a\.mjs/);
     if (lane === 'json-envelope') assert.equal(JSON.parse(result.stdout).command, 'graph');
   }
-  assert.equal(fs.existsSync(f.home), false, 'an uncached query publishes no index');
+  assert.equal(fs.existsSync(f.home), true, 'a cold CLI query prepares its parser-backed structural generation');
+  assert.match(deps.generation, /^[a-f0-9]{32}$/);
 });
 
 test('dirty edits and removed files change live graph queries without rebuilding the index', (t) => {
@@ -91,7 +94,10 @@ test('cycles terminate and ambiguous imports qualify negative path results', (t)
   assert.equal(cycle.edges.length, 3);
   assert.equal(cycle.nodes.length, 3);
   assert.equal(f.json('graph', 'path', 'd.mjs', 'one/helper.mjs').outcome, 'unknown');
-  assert.deepEqual(f.json('graph', 'deps', 'd.mjs').unresolved, [{ from: 'd.mjs', import: 'helper', reason: 'ambiguous' }]);
+  const unresolved = f.json('graph', 'deps', 'd.mjs').unresolved;
+  assert.deepEqual(unresolved.map(({ from, import: specifier, reason }) => ({ from, import: specifier, reason })), [{ from: 'd.mjs', import: 'helper', reason: 'ambiguous' }]);
+  assert.equal(unresolved[0].resolutionStatus, 'ambiguous');
+  assert.deepEqual(unresolved[0].candidates, ['one/helper.mjs', 'two/helper.mjs']);
 });
 
 test('invalid queries fail at the boundary and graph commands are available to agents', (t) => {
@@ -102,6 +108,100 @@ test('invalid queries fail at the boundary and graph commands are available to a
   const argv = ['graph', 'deps', 'a.mjs'];
   assert.equal(harnessControlCommand(['harness', ...argv], f.workspace), 'graph');
   assert.equal(beforeDeliveryTool({ name: 'harness', input: { argv } }, { workspace: f.workspace }).pass, true);
+});
+
+test('explain and impact use source evidence while named generations stay historical in every lane', t => {
+  const f = fixture(t);
+  const explanation = f.json('graph', 'explain', 'a.mjs', 'c.mjs');
+  assert.deepEqual(explanation.path, ['a.mjs', 'b.mjs', 'c.mjs']);
+  assert.equal(explanation.explanation[0].evidence[0].path, 'a.mjs');
+  assert.equal(explanation.explanation[0].evidence[0].range.startLine, 1);
+  const impact = f.json('graph', 'impact', 'c.mjs', '--depth', '2');
+  assert.deepEqual(impact.affected.map(row => row.file), ['b.mjs', 'a.mjs']);
+  const generation = explanation.generation;
+  f.write('a.mjs', "import { c } from './c.mjs';\n");
+  for (const lane of ['ledger', 'json-envelope', 'agent']) {
+    const args = ['graph', 'explain', 'a.mjs', 'c.mjs', '--generation', generation];
+    const result = lane === 'ledger' ? f.cli(...args, '--json') : f.cli(...args, '--output', lane);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /b\.mjs/);
+    assert.match(result.stdout, /historical/);
+  }
+  const invalid = f.cli('graph', 'deps', 'a.mjs', '--generation', '../outside', '--json');
+  assert.equal(invalid.status, 2);
+});
+
+test('cold graph dry runs never publish an index in JSON or envelope output', t => {
+  for (const lane of ['ledger', 'json-envelope']) {
+    const f = fixture(t);
+    const args = ['graph', 'deps', 'a.mjs', '--dry-run'];
+    const result = lane === 'ledger' ? f.cli(...args, '--json') : f.cli(...args, '--output', lane);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(f.home), false, 'dry-run must not create a home or structural generation');
+    assert.match(result.stdout, /"dryRun":true/);
+    assert.doesNotMatch(result.stdout, /"prepared":true/);
+    assert.match(result.stdout, /"extractorTier":"lexical"/);
+  }
+});
+
+test('over-budget AST publication keeps small CLI queries available with labelled lexical evidence', t => {
+  const body = Array.from({ length: 150 }, (_, i) => `export function f${i}() { return ${i}; }`).join('\n');
+  const files = Object.fromEntries(Array.from({ length: 450 }, (_, i) => [`m${i}.mjs`, `${i === 0 ? "import './m1.mjs';\n" : ''}${body}\n`]));
+  const f = fixture(t, files, { timeout: 60000 });
+  const result = f.json('graph', 'deps', 'm0.mjs');
+  assert.deepEqual(result.edges.map(edge => edge.to), ['m1.mjs']);
+  assert.equal(result.preparation.degraded, true);
+  assert.equal(result.preparation.refreshed, false);
+  assert.equal(result.preparation.tier, 'lexical');
+  assert.equal(result.preparation.reason.code, 'E_STRUCTURAL_PUBLISH');
+  assert.match(result.preparation.reason.message, /bounded files\.json/);
+  assert.equal(result.generation, null);
+  assert.equal(result.producer.extractorTier, 'lexical');
+  assert.deepEqual(result.producer.grammarVersions, {});
+  assert.ok(result.edges.every(edge => edge.method === 'lexical'));
+  assert.equal(readStructuralIndex(f.workspace, { home: f.home }), null);
+  for (const lane of [[], ['--output', 'json-envelope']]) {
+    const orient = f.json('orient', '--read', '--context-version', '2', '--question-kind', 'change-impact', '--file', 'm1.mjs', ...lane);
+    const packet = orient.slice.impactContext;
+    assert.equal(packet.preparation.degraded, true);
+    assert.equal(packet.preparation.reason.code, 'E_STRUCTURAL_PUBLISH');
+    assert.ok(packet.graphs.every(graph => graph.generation === null && graph.producer.extractorTier === 'lexical'));
+  }
+  const historical = f.cli('graph', 'deps', 'm0.mjs', '--generation', 'f'.repeat(32), '--json');
+  assert.equal(historical.status, 1);
+  assert.match(historical.stderr, /E_GRAPH_SNAPSHOT/);
+});
+
+test('an unborn HEAD keeps live CLI graph queries available with a preparation reason', t => {
+  const f = fixture(t);
+  fs.rmSync(path.join(f.workspace, '.git', 'refs', 'heads'), { recursive: true });
+  const result = f.json('graph', 'deps', 'a.mjs');
+  assert.deepEqual(result.edges.map(edge => edge.to), ['b.mjs']);
+  assert.equal(result.preparation.degraded, true);
+  assert.match(result.preparation.reason.message, /HEAD|source state/);
+  assert.equal(result.generation, null);
+  const envelope = f.cli('graph', 'deps', 'a.mjs', '--output', 'json-envelope');
+  assert.equal(envelope.status, 0, envelope.stderr);
+  assert.match(envelope.stdout, /"degraded":true/);
+  assert.match(envelope.stdout, /"code":"E_STRUCTURAL_SOURCE_STATE"/);
+});
+
+test('source mutation during parser preparation still fails closed', async t => {
+  const f = fixture(t);
+  const original = fs.statSync;
+  let changed = false;
+  fs.statSync = function (file, ...args) {
+    const result = original.call(this, file, ...args);
+    if (!changed && file === path.join(f.workspace, 'a.mjs')) {
+      changed = true;
+      f.write('a.mjs', "import './c.mjs';\n");
+    }
+    return result;
+  };
+  try {
+    await assert.rejects(prepareGraph({ ...f, operation: 'deps', files: ['a.mjs'] }), { code: 'E_GRAPH_PREPARE' });
+    assert.equal(changed, true);
+  } finally { fs.statSync = original; }
 });
 
 test('long default imports, side effects and reexports agree before and after indexing', (t) => {
@@ -139,7 +239,8 @@ for (const [extension, language] of [['mjs', 'javascript'], ['ts', 'typescript']
     const f = fixture(t, { [loader]: "export const load = () => import('./b.mjs');\n" });
     const cold = f.json('graph', 'path', loader, 'c.mjs');
     assert.deepEqual(cold.path, [loader, 'b.mjs', 'c.mjs']);
-    assert.equal(f.cli('index', '--structural').status, 0);
+    const indexed = f.cli('index', '--structural');
+    assert.equal(indexed.status, 0, indexed.stderr + indexed.stdout);
     const warm = f.json('graph', 'path', loader, 'c.mjs');
     assert.equal(warm.outcome, 'found');
     assert.deepEqual(warm.path, [loader, 'b.mjs', 'c.mjs']);

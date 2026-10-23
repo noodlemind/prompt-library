@@ -25,7 +25,6 @@ function commitAll(ws, message) {
   execFileSync('git', ['commit', '-qm', message], { cwd: ws, env: GIT_ENV });
 }
 
-/** The DEFAULT tier: what every install without the optional grammars uses. */
 function lexicalExtractor() {
   return {
     counters: { parseFailures: 0, parsed: 0, errorFiles: 0 },
@@ -90,7 +89,7 @@ test('builder output round-trips through the shape reader (AST tier, grammars in
   );
 });
 
-test('removed-symbol-with-callers fires end to end from real builder output in the default lexical tier', async (t) => {
+test('removed-symbol-with-callers fires end to end from real builder output in the explicit lexical tier', async (t) => {
   const { ws, home } = fixtureRepo(t, 'struct-compat-lex-');
     await buildStructuralIndex({ workspace: ws, home, extractor: lexicalExtractor() });
 
@@ -104,6 +103,9 @@ test('removed-symbol-with-callers fires end to end from real builder output in t
     index.graph.calls.some((edge) => edge.to === 'a.mjs#beta' && edge.from.startsWith('caller.mjs')),
     `the named import is a recorded edge: ${JSON.stringify(index.graph.calls)}`
   );
+  const reference = index.graph.calls.find(edge => edge.to === 'a.mjs#beta' && edge.from.startsWith('caller.mjs'));
+  assert.equal(reference.method, 'lexical');
+  assert.equal(reference.observation, 'imported-name-reference');
 
   fs.writeFileSync(path.join(ws, 'a.mjs'), 'export function alpha() { return 1; }\n');
   const result = runStructuralExpectations({ workspace: ws, plan: PLAN, changedFiles: ['a.mjs'], home });

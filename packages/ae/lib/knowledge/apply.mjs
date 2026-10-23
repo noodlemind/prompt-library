@@ -33,6 +33,7 @@ import { bucketDirFor, readBucketMeta, bucketAncestryOk, isSafeBucketKey } from 
 import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 import { readLearningFile, writeLearningFile, writeStoreFile, readStoreFile } from './store-io.mjs';
 import { episodeResolveRoots } from '../project-layout.mjs';
+import { APPLICABILITY_VERSION, MAX_SOURCE_BINDINGS, applicabilityLines, applicabilityBytes, captureSourceBindings } from './applicability.mjs';
 
 const FILE_TOUCHING = new Set(['ADD', 'STRENGTHEN', 'SUPERSEDE', 'MERGE']);
 
@@ -64,7 +65,7 @@ function newIdFor(op) {
   return `${normalizeSlug(op.domain)}/${normalizeSlug(op.slug)}`;
 }
 const ANCHOR_RE = /\b[\w][\w./-]*\.(?:mjs|js|ts|tsx|py|java|sql|md|ya?ml|json)\b/g;
-const ANCHOR_CAP = 8;
+const ANCHOR_CAP = MAX_SOURCE_BINDINGS;
 
 function fail(code, reason) {
   return { code, reason };
@@ -222,6 +223,8 @@ export function renderLearning({
   does_not_apply,
   shows,
   provenance,
+  sourceBindings,
+  applicabilityVersion,
 }) {
   const lines = [
     '---',
@@ -244,6 +247,7 @@ export function renderLearning({
   } else {
     lines.push('anchors: []');
   }
+  lines.push(...applicabilityLines({ applicability_version: applicabilityVersion, source_bindings: sourceBindings }));
   lines.push(`superseded_by: ${supersededBy || 'null'}`);
   lines.push(`last_confirmed: ${todayClamped()}`);
   if (mergedFrom?.length) lines.push(`merged_from: [${mergedFrom.join(', ')}]`);
@@ -1419,11 +1423,14 @@ export function applyOps({
       } else {
         status = statusForAuthority(op.authority, status);
       }
+      const anchors = promotionMode ? scope.anchors || [] : extractAnchors({ workspace, copilotHome, episodes: op.episodes, home });
       const content = renderLearning({
         trigger: op.trigger,
         body: op.body,
         episodes: op.episodes,
-        anchors: extractAnchors({ workspace, copilotHome, episodes: op.episodes, home }),
+        anchors,
+        sourceBindings: promotionMode ? scope.source_bindings : anchors.length ? captureSourceBindings({ workspace, paths: anchors }) : undefined,
+        applicabilityVersion: promotionMode ? scope.applicability_version : anchors.length ? APPLICABILITY_VERSION : undefined,
         origin,
         status,
         source,
@@ -1436,7 +1443,7 @@ export function applyOps({
         shows: scope.shows,
         provenance,
       });
-            if (Buffer.byteLength(content, 'utf8') - provenanceBytes(provenance) > LEARNING_BYTE_CAP) {
+            if (Buffer.byteLength(content, 'utf8') - provenanceBytes(provenance) - applicabilityBytes(parseLearningFrontmatter(content).fm) > LEARNING_BYTE_CAP) {
         return rejectOp('E_BYTE_CAP', `${id} exceeds ${LEARNING_BYTE_CAP} bytes — split into two claims`, op.episodes);
       }
       writes.push({ op, id, domain, slug, content });
@@ -1450,7 +1457,7 @@ export function applyOps({
       if (content === null) {
         return rejectOp('E_TARGET', `op ${op.target}: learning file could not be read safely from the store`, op.episodes);
       }
-            if (Buffer.byteLength(content, 'utf8') - provenanceBytes(target.fm) > LEARNING_BYTE_CAP) {
+            if (Buffer.byteLength(content, 'utf8') - provenanceBytes(target.fm) - applicabilityBytes(parseLearningFrontmatter(content).fm) > LEARNING_BYTE_CAP) {
         return rejectOp(
           'E_BYTE_CAP',
           `${op.target} exceeds ${LEARNING_BYTE_CAP} bytes after strengthening — split into two claims or supersede`,
@@ -1725,11 +1732,17 @@ function composeStrengthenedLearning(target, op, workspace, copilotHome, home) {
   const authority = picked('authority');
   // A later fix ends rank damping for other provisional learnings. An inference stays provisional.
   const status = authority === 'inference' ? 'provisional' : fm.status === 'provisional' && gainedFix ? 'active' : fm.status || 'active';
+  const anchors = [...new Set([...(fm.anchors || []), ...extractAnchors({ workspace, copilotHome, episodes: merged, home })])].slice(0, ANCHOR_CAP);
+  const sourceBindings = Array.isArray(fm.source_bindings)
+    ? [...fm.source_bindings, ...captureSourceBindings({ workspace, paths: anchors.filter(anchor => !fm.source_bindings.some(binding => binding.path === anchor)) })]
+    : fm.source_bindings;
   const content = renderLearning({
     trigger: fm.trigger || '',
     body,
     episodes: merged,
-    anchors: extractAnchors({ workspace, copilotHome, episodes: merged, home }),
+    anchors,
+    sourceBindings,
+    applicabilityVersion: fm.applicability_version,
     origin: fm.origin || 'unknown',
     status,
     source: fm.source || 'auto',

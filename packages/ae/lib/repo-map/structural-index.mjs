@@ -10,7 +10,7 @@ import { redactSecrets } from '../secret-scan.mjs';
 import { estimateTokens } from '../token-meter.mjs';
 import { EXIT } from '../style.mjs';
 import { trackedSourceFiles } from './scan.mjs';
-import { buildImportGraph, IMPORT_RESOLVER_VERSION } from './imports.mjs';
+import { buildImportGraph, importResolver, resolveImportBinding, IMPORT_RESOLVER_VERSION } from './imports.mjs';
 import { readFileFacts, readSourceHashes, FILE_FACTS_VERSION } from './facts.mjs';
 import { MAX_IDENTIFIER_LENGTH } from './treesitter-extractor.mjs';
 import { captureWorkingSources, structuralCurrentness } from './working-sources.mjs';
@@ -92,22 +92,42 @@ function cleanName(name) {
 }
 
 function sanitizeEntry(res, { hash, mtime, size }) {
+  const range = value => value && Number.isSafeInteger(value.startLine) && value.startLine > 0
+    && Number.isSafeInteger(value.endLine) && value.endLine >= value.startLine
+    ? { startLine: value.startLine, endLine: value.endLine,
+      ...(Number.isSafeInteger(value.startColumn) && value.startColumn > 0 ? { startColumn: value.startColumn } : {}),
+      ...(Number.isSafeInteger(value.endColumn) && value.endColumn > 0 ? { endColumn: value.endColumn } : {}) } : undefined;
   return {
     hash,
     mtime,
     size,
     symbols: (res.symbols || []).map(cleanName),
     imports: (res.imports || []).map(specifier => redactSecrets(String(specifier))),
+    importOccurrences: (res.importOccurrences || []).slice(0, 256).map(item => ({
+      specifier: redactSecrets(String(item.specifier || '')),
+      ...(range(item.range) ? { range: range(item.range) } : {}),
+      method: item.method === 'ast' ? 'ast' : 'lexical',
+      bindings: (item.bindings || []).slice(0, 256).map(binding => ({ imported: cleanName(binding.imported), local: cleanName(binding.local), kind: String(binding.kind || 'named').slice(0, 24) })),
+    })),
     complexity: Number.isFinite(res.complexity) ? res.complexity : 1,
     defs: (res.defs || []).map((d) => ({
       name: cleanName(d.name),
       kind: String(d.kind || 'symbol').slice(0, 24),
       line: Number.isFinite(d.line) ? d.line : 0,
       exported: Boolean(d.exported),
+      ...(['named', 'default'].includes(d.exportKind) ? { exportKind: d.exportKind } : {}),
+      ...(typeof d.owner === 'string' ? { owner: cleanName(d.owner) } : {}),
+      ...(typeof d.id === 'string' ? { id: redactSecrets(d.id).slice(0, 2048) } : {}),
+      ...(range(d.range) ? { range: range(d.range) } : {}),
+      ...(typeof d.signature === 'string' ? { signature: redactSecrets(d.signature).slice(0, 2048) } : {}),
     })),
     refs: (res.refs || []).map((r) => ({
       name: cleanName(r.name),
       line: Number.isFinite(r.line) ? r.line : 0,
+      ...(range(r.range) ? { range: range(r.range) } : {}),
+      ...(typeof r.owner === 'string' ? { owner: cleanName(r.owner) } : {}),
+      ...(typeof r.receiver === 'string' ? { receiver: cleanName(r.receiver) } : {}),
+      ...(r.importBinding === 'shadowed' ? { importBinding: 'shadowed' } : {}),
     })),
     tier: res.tier === 'treesitter' ? 'treesitter' : 'lexical',
     limitsReached: res.limitsReached || {},
@@ -143,7 +163,10 @@ function buildSymbolTable(files, truncation) {
         distinct += 1;
       }
       if (symbols[d.name].defs.length < MAX_DEFS_PER_SYMBOL) {
-        symbols[d.name].defs.push({ file: rel, line: d.line, kind: d.kind, exported: d.exported });
+        symbols[d.name].defs.push({ file: rel, line: d.line, kind: d.kind, exported: d.exported,
+          ...(d.exportKind ? { exportKind: d.exportKind } : {}),
+          ...(d.id ? { id: d.id } : {}), ...(d.owner ? { owner: d.owner } : {}),
+          ...(d.range ? { range: d.range } : {}), ...(d.signature ? { signature: d.signature } : {}) });
       } else {
         truncation.symbolDetail = true;
       }
@@ -161,41 +184,78 @@ function buildSymbolTable(files, truncation) {
   return symbols;
 }
 
-function buildGraph(files, symbols, truncation) {
+function buildGraph(files, symbols, truncation, workspace) {
   const rels = Object.keys(files).sort();
-  const imports = buildImportGraph(new Map(rels.map(rel => [rel, files[rel]])), new Set(rels), { maxEdges: MAX_MODULE_EDGES, maxUnresolved: MAX_UNRESOLVED });
+  const trackedSet = new Set(rels);
+  const imports = buildImportGraph(new Map(rels.map(rel => [rel, files[rel]])), trackedSet, { workspace, maxEdges: MAX_MODULE_EDGES, maxUnresolved: MAX_UNRESOLVED });
   const { modules, unresolvedImports } = imports;
   truncation.moduleEdges = imports.moduleEdgesTruncated;
   truncation.unresolved = imports.unresolvedTruncated;
-  // Caller/callee approximation: a ref name that the declaration table binds
-  // to files OTHER than the caller becomes a call edge; everything else is an
-  // explicit unresolved call, never a fabricated edge.
   const calls = [];
   const unresolvedCalls = [];
   const seenUnresolved = new Set();
+  const resolve = importResolver(trackedSet, { workspace });
   for (const rel of rels) {
     const perFile = new Map();
     for (const r of Array.isArray(files[rel]?.refs) ? files[rel].refs : []) {
-      if (!r || typeof r.name !== 'string' || perFile.has(r.name)) continue;
-      perFile.set(r.name, true);
+      if (!r || typeof r.name !== 'string') continue;
+      const occurrenceKey = `${r.owner || ''}\0${r.receiver || ''}\0${r.name}\0${r.importBinding || ''}`;
+      if (perFile.has(occurrenceKey)) continue;
+      perFile.set(occurrenceKey, true);
       const entry = symbols[r.name];
-      const to = entry ? [...new Set(entry.defs.map((d) => d.file))].filter((f) => f !== rel).slice(0, 5) : [];
+      const lexicalReference = files[rel].tier === 'lexical';
+      const importedNameReference = lexicalReference && /\.[cm]?[jt]sx?$/i.test(rel);
+      const binding = r.importBinding === 'shadowed'
+        ? { reason: 'shadowed-import-binding', bindings: [], evidence: [] }
+        : resolveImportBinding(rel, r.receiver || r.name, files[rel], trackedSet, { workspace, resolve,
+          ...(importedNameReference ? { referenceKind: 'imported-name' } : {}) });
+      if (importedNameReference && binding.reason === 'no-explicit-binding') binding.reason = 'unsupported-import-binding';
+      const bound = binding.reason !== 'no-explicit-binding';
+      const bindings = r.receiver ? binding.bindings.filter(imported => imported.imported === '*' && ['namespace', 'module'].includes(imported.kind)) : binding.bindings;
+      if (r.receiver && binding.reason === 'explicit-import-binding' && !bindings.length) binding.reason = 'unsupported-receiver-binding';
+      const definitions = bound ? bindings.flatMap(imported => {
+        if (imported.kind === 'type') return [];
+        const name = r.receiver || imported.imported === '*' || imported.imported === 'default' ? r.name : imported.imported;
+        return (symbols[name]?.defs || []).filter(def => def.file === imported.target
+          && (!/\.[cm]?[jt]sx?$/i.test(imported.target) || imported.imported !== 'default' && !def.owner && def.exportKind === 'named'))
+          .map(def => ({ ...def, name }));
+      }) : r.receiver ? [] : (entry?.defs || []).map(def => ({ ...def, name: r.name }));
+      if (bound && binding.bindings.length && !definitions.length && binding.reason === 'explicit-import-binding') binding.reason = 'unsupported-export-binding';
+      const targets = [...new Set(definitions.map(def => def.file))].filter(file => file !== rel);
+      const to = targets.slice(0, 5);
+      const candidates = definitions.filter(def => to.includes(def.file)).slice(0, MAX_DEFS_PER_SYMBOL);
+      const evidence = [
+        ...(r.range ? [{ path: rel, sha256: files[rel].hash, range: r.range }] : []),
+        ...(bound ? binding.evidence : []),
+      ].slice(0, 32);
       if (to.length) {
-        if (calls.length < MAX_CALL_EDGES) calls.push({ from: rel, symbol: r.name, to });
+        if (calls.length < MAX_CALL_EDGES) calls.push({ id: sha256(JSON.stringify(['call-candidate', rel, r.owner || '', r.receiver || '', r.name, to])), from: rel, symbol: r.name, to,
+          relation: 'call-candidate', method: bound && !lexicalReference ? 'static-resolver' : files[rel].tier === 'treesitter' ? 'ast' : 'lexical',
+          resolutionStatus: targets.length > 1 || candidates.length > 1 ? 'ambiguous' : 'candidate', candidates,
+          reason: bound ? lexicalReference ? 'imported-name-reference' : binding.reason : 'name-reference-approximation',
+          observation: files[rel].tier === 'treesitter' ? 'call-site' : 'imported-name-reference', evidence,
+          ...(targets.length > to.length ? { candidatesOmitted: targets.length - to.length } : {}),
+        });
         else truncation.callEdges = true;
-      } else if (!entry) {
+      } else if (!entry || bound || r.receiver) {
         const key = `${rel}\0${r.name}`;
         if (seenUnresolved.has(key)) continue;
         if (unresolvedCalls.length < MAX_UNRESOLVED) {
           seenUnresolved.add(key);
-          unresolvedCalls.push({ from: rel, symbol: r.name });
+          unresolvedCalls.push({ from: rel, symbol: r.name, relation: 'call-candidate', resolutionStatus: 'unresolved',
+            reason: bound ? binding.reason : r.receiver ? 'unsupported-receiver' : 'no-definition', evidence });
         } else {
           truncation.unresolved = true;
         }
       }
     }
   }
-  return { modules, unresolvedImports, calls, unresolvedCalls };
+  const adjacency = { version: 1, relation: 'observed-module-imports', forward: Object.create(null), reverse: Object.create(null) };
+  modules.forEach((edge, index) => {
+    (adjacency.forward[edge.from] ||= []).push(index);
+    (adjacency.reverse[edge.to] ||= []).push(index);
+  });
+  return { modules, unresolvedImports, calls, unresolvedCalls, adjacency };
 }
 
 function symbolDelta(priorSymbols, nextSymbols) {
@@ -331,7 +391,7 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   // the routine per-symbol def/ref cap, which only shortens a list.
   const truncation = { symbols: false, symbolDetail: false, moduleEdges: false, callEdges: false, unresolved: false };
   const symbols = buildSymbolTable(nextFiles, truncation);
-  const graph = buildGraph(nextFiles, symbols, truncation);
+  const graph = buildGraph(nextFiles, symbols, truncation, workspace);
   const delta = symbolDelta(prior?.symbols, symbols);
 
   const errorFiles = Object.values(nextFiles).filter((f) => f.errors).length;
@@ -373,14 +433,17 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   const finalSnapshot = captureWorkingSources(workspace);
   const finalHashes = readSourceHashes(workspace, tracked);
   const sourceChanged = inventory.unavailable || finalInventory.unavailable || inventory.inventoryHash !== finalInventory.inventoryHash || sourceSha !== git(workspace, ['rev-parse', 'HEAD']) || [...initialHashes].some(([rel, hash]) => hash !== finalHashes.get(rel)) || Object.entries(nextFiles).some(([rel, row]) => row.hash !== initialHashes.get(rel));
-  if (sourceChanged || !snapshot.valid || !finalSnapshot.valid || snapshot.state.digest !== finalSnapshot.state.digest) {
+  const sourceStateChanged = snapshot.valid !== finalSnapshot.valid || snapshot.state && finalSnapshot.state && snapshot.state.digest !== finalSnapshot.state.digest;
+  if (sourceChanged || !snapshot.valid || !finalSnapshot.valid || sourceStateChanged) {
     log('structural index not published: source inventory or content changed during extraction');
-    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn, sourceChanged: true };
+    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn,
+      sourceChanged: Boolean(sourceChanged || sourceStateChanged),
+      reason: { code: 'E_STRUCTURAL_SOURCE_STATE', message: snapshot.reason || finalSnapshot.reason || 'Source inventory or content changed during extraction.' } };
   }
 
   if (!meta.sha) {
     log('structural index not published — git HEAD could not be read');
-    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
+    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn, reason: { code: 'E_STRUCTURAL_HEAD', message: 'Git HEAD could not be read.' } };
   }
 
   if (!dryRun) {
@@ -393,7 +456,7 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     ]);
     if (!published.ok) {
       log(`structural index write refused: ${published.failed}`);
-      return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
+      return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn, reason: { code: 'E_STRUCTURAL_PUBLISH', message: published.failed } };
     }
     dir = published.dir;
     meta.generation = published.generation;
