@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import {
   branchComplexity,
@@ -128,6 +129,31 @@ test('lexicalV2 is linear in file size — the default tier must not rescan per 
   assert.equal(r.defs.length, 512);
   assert.equal(r.defs[0].line, 20_001, 'declaration lines are still resolved exactly');
   assert.ok(elapsed < 300, `lexicalV2 took ${elapsed}ms on one ${Math.round(content.length / 1024)}KB file — the per-name rescan is back`);
+});
+
+test('lexical export detection bounds malformed declaration whitespace', () => {
+  const moduleUrl = new URL('../lib/repo-map/treesitter-extractor.mjs', import.meta.url).href;
+  const script = `
+    import assert from 'node:assert/strict';
+    import { lexicalV2 } from ${JSON.stringify(moduleUrl)};
+    const result = lexicalV2('malformed.ts', 'export function' + ' '.repeat(200_000) + '(');
+    assert.deepEqual(result.defs, []);
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    timeout: 10_000,
+    encoding: 'utf8',
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('lexical export detection retains ordinary and generator declarations', () => {
+  for (const declaration of ['function run()', 'function*run()', 'function * run()', 'async function* run()']) {
+    const result = lexicalV2('exported.mjs', `export ${declaration} {}`);
+    assert.deepEqual(result.defs.map(({ name, exported, exportKind }) => ({ name, exported, exportKind })), [
+      { name: 'run', exported: true, exportKind: 'named' },
+    ]);
+  }
 });
 
 test('the lexical path caps symbols and imports like the AST path does', () => {

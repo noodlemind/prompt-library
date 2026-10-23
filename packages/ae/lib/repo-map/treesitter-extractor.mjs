@@ -76,7 +76,7 @@ function firstLines(text, names) {
 function lexicalNamedExports(rel, code) {
   const names = new Set();
   if (!/\.[cm]?[jt]sx?$/i.test(rel)) return names;
-  const declarations = /\bexport\s+(?:(?:async|declare|abstract)\s+)*(?:function\s*\*?\s+|class\s+|(?:const|let|var)\s+)([\w$]+)/g;
+  const declarations = /\bexport\s+(?:(?:async|declare|abstract)\s+)*(?:function(?:\s*\*\s*|\s+)|class\s+|(?:const|let|var)\s+)([\w$]+)/g;
   const braces = /[{}]/g;
   let depth = 0, brace = braces.exec(code), declaration;
   while ((declaration = declarations.exec(code))) {

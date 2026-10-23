@@ -20,7 +20,7 @@ const SYMBOL_PATTERNS = {
 const EXPORT_PATTERNS = {
   ts: [
     // export [default] [declare] [async] [abstract] <decl> <name>
-    /\bexport\s+(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:abstract\s+)?(?:class|interface|type|enum|function\s*\*?|const|let|var)\s+(\w+)/g,
+    /\bexport\s+(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:abstract\s+)?(?:function(?:\s*\*\s*|\s+)|(?:class|interface|type|enum|const|let|var)\s+)(\w+)/g,
     /\bexport\s+default\s+(\w+)\s*[;\n]/g, // export default Existing;
     /\bexport\s+\*\s+as\s+(\w+)\s+from\b/g,
     /\b(?:module\.)?exports\.(\w+)\s*=/g, // CommonJS named export
