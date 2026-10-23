@@ -84,7 +84,7 @@ function enforceBudget(packet, maxBytes) {
 
 /** Build question-specific descriptive evidence. This never changes plan/check authority. */
 export function buildChangeImpactContext({ workspace, copilotHome, home, query = '', files = [], questionKind = 'change-impact', generation,
-  maxFiles = 12, maxBytes = 16000, depth = 2, limit = 40 } = {}) {
+  maxFiles = 12, maxBytes = 16000, depth = 2, limit = 40, graphPreparation } = {}) {
   if (!QUESTION_KINDS.includes(questionKind)) throw usage('unsupported question kind');
   if (typeof workspace !== 'string' || !workspace) throw usage('workspace is required');
   if (typeof query !== 'string' || query.length > 8000) throw usage('query must be a string of at most 8000 characters');
@@ -103,6 +103,7 @@ export function buildChangeImpactContext({ workspace, copilotHome, home, query =
     schema: 'harness.change-impact.v1', questionKind, authority: 'descriptive-context',
     contextId: '0'.repeat(64), queryHash: sourceHash(query), graphs: [], sources: [], learnings: [], gaps: [],
     suggestedVerificationAreas: [], limitations: [...LIMITATIONS],
+    ...(graphPreparation ? { preparation: graphPreparation } : {}),
     coverage: { scope: ['lookup', 'prior-lesson'].includes(questionKind) ? 'explicit-source-selection' : 'git-tracked-source',
       sourceState: questionKind === 'prior-lesson' ? 'not-applicable' : generation ? 'historical' : 'pending-validation',
       semanticCompleteness: 'unverified', maxFiles, maxBytes, bytes: 0, omittedFiles: 0, omittedLearnings: 0,
@@ -114,9 +115,9 @@ export function buildChangeImpactContext({ workspace, copilotHome, home, query =
   }
   if (!selected.length && questionKind !== 'prior-lesson') packet.gaps.push({ kind: 'no-seeds', reason: 'No supported source seed was selected or found.' });
   if (questionKind === 'dependency-path') {
-    packet.graphs.push(queryGraph({ workspace, home, operation: 'path', files: selected.map(row => row.path), depth, limit, generation }));
+    packet.graphs.push(queryGraph({ workspace, home, operation: 'path', files: selected.map(row => row.path), depth, limit, generation, lexicalFallback: graphPreparation?.degraded === true }));
   } else if (questionKind === 'change-impact') {
-    for (const seed of selected) packet.graphs.push(queryGraph({ workspace, home, operation: 'impact', files: [seed.path], depth, limit, generation }));
+    for (const seed of selected) packet.graphs.push(queryGraph({ workspace, home, operation: 'impact', files: [seed.path], depth, limit, generation, lexicalFallback: graphPreparation?.degraded === true }));
   }
   const candidates = new Map(selected.map(row => [row.path, { ...row, range: null }]));
   for (const graph of packet.graphs) {

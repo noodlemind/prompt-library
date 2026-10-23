@@ -17,11 +17,12 @@ const EXTRACTOR_REVISION = digest(JSON.stringify(['scan.mjs', 'facts.mjs', 'impo
   }
 })));
 
-export function captureWorkingSources(workspace) {
+export function captureWorkingSources(workspace, { allowUnborn = false } = {}) {
   const options = { encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024 * 1024 };
   const listed = spawnSync('git', ['-C', workspace, 'ls-files', '-z'], options);
   const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], options);
-  if (listed.status !== 0 || head.status !== 0) return { valid: false, reason: 'source state unavailable' };
+  if (listed.status !== 0 || head.status !== 0 && !allowUnborn) return { valid: false, reason: 'source state unavailable' };
+  const sourceHead = head.status === 0 ? head.stdout.trim() : null;
   const paths = [...new Set(listed.stdout.split('\0').filter(Boolean))].sort();
   const sourcePaths = paths.filter((rel) => SOURCE_EXTENSIONS.has(path.extname(rel).toLowerCase()));
   const selected = sourcePaths.slice(0, MAX_FILES_SCANNED);
@@ -36,12 +37,12 @@ export function captureWorkingSources(workspace) {
   return {
     valid: configs.length <= MAX_FILES_SCANNED,
     reason: configs.length > MAX_FILES_SCANNED ? 'resolver files exceed the source scan budget' : null,
-    head: head.stdout.trim(),
+    head: sourceHead,
     files: selected,
     entries,
     state: {
       version: SOURCE_STATE_VERSION,
-      digest: digest(JSON.stringify([SOURCE_STATE_VERSION, EXTRACTOR_REVISION, head.stdout.trim(), sourcePaths, configs, identities])),
+      digest: digest(JSON.stringify([SOURCE_STATE_VERSION, EXTRACTOR_REVISION, sourceHead, sourcePaths, configs, identities])),
       extractorRevision: EXTRACTOR_REVISION,
       configDigest: digest(JSON.stringify(identities.filter(([rel]) => configSet.has(rel)))),
       scanned: selected.length,

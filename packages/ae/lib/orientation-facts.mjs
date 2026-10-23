@@ -25,7 +25,7 @@ function indexPlane(plane) {
   return plane.stale ? 'stale' : 'current';
 }
 
-export function collectOrientationFacts({ workspace, copilotHome, flags = {}, query = '', files } = {}) {
+export function collectOrientationFacts({ workspace, copilotHome, flags = {}, query = '', files, graphPreparation } = {}) {
   const session = readSession(workspace) || {};
   const q = query || flags.query || (flags.contextVersion === 2 ? session.lastQuery || '' : '');
   const sourceSnapshot = flags.contextVersion === 2 ? captureWorkingSources(workspace) : null;
@@ -75,6 +75,6 @@ export function collectOrientationFacts({ workspace, copilotHome, flags = {}, qu
     gateStatus: gate.pass ? 'pass' : 'blocked',
     activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
   };
-  if (flags.questionKind) slice.impactContext = buildChangeImpactContext({ workspace, copilotHome, home, query: q, files: flags.files || [], questionKind: flags.questionKind });
+  if (flags.questionKind) slice.impactContext = buildChangeImpactContext({ workspace, copilotHome, home, query: q, files: flags.files || [], questionKind: flags.questionKind, graphPreparation });
   return { slice, active, session, namedFiles, matches, gate, status, routingLines, failures, sourceSnapshot, query: q, procedure, obligation };
 }

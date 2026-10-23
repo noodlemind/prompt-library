@@ -126,9 +126,9 @@ export function queryGraph({ workspace, home, operation = 'deps', files = [], de
   } else {
     const inventory = trackedSourceFiles(workspace);
     cached = lexicalFallback ? null : readStructuralIndex(workspace, { home });
-    const source = cached?.meta?.sourceState ? captureWorkingSources(workspace) : null;
+    const source = captureWorkingSources(workspace, { allowUnborn: true });
     sourceIdentity = source?.state || null;
-    const compatible = source?.valid && cached.meta.sourceState.version === source.state.version
+    const compatible = source.valid && cached?.meta?.sourceState && cached.meta.sourceState.version === source.state.version
       && cached.meta.sourceState.configDigest === source.state.configDigest
       && cached.meta.sourceState.extractorRevision === source.state.extractorRevision;
     const read = readFileFacts(workspace, inventory.files, { cachedFiles: compatible && !cached.unreadable.length && cached.meta.fileFactsVersion === FILE_FACTS_VERSION ? cached.files : null });
@@ -140,9 +140,9 @@ export function queryGraph({ workspace, home, operation = 'deps', files = [], de
     adjacencyReused = Boolean(stored && graph.adjacency);
     const finalInventory = trackedSourceFiles(workspace);
     const finalHashes = readSourceHashes(workspace, inventory.files);
-    const finalSource = source ? captureWorkingSources(workspace) : null;
+    const finalSource = captureWorkingSources(workspace, { allowUnborn: true });
     const sourceChanged = finalInventory.unavailable || finalInventory.inventoryHash !== inventory.inventoryHash
-      || source && (!finalSource?.valid || source.state.digest !== finalSource.state.digest)
+      || !source.valid || !finalSource.valid || source.state.digest !== finalSource.state.digest
       || [...facts].some(([rel, fact]) => fact.hash !== finalHashes.get(rel));
     coverage = {
       tracked: inventory.total, scanned: facts.size, filesTruncated: inventory.total > facts.size, unavailable: inventory.unavailable, sourceChanged,

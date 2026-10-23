@@ -775,14 +775,15 @@ export async function computeOrientResult(argv) {
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);
+  let graphPreparation;
   if (flags.questionKind) {
     if (!flags.read || flags.contextVersion !== 2) throw Object.assign(new Error('--question-kind requires --read --context-version 2'), { code: 'E_USAGE', exit: 2 });
-    if (!flags.dryRun && ['dependency-path', 'change-impact'].includes(flags.questionKind)) {
-      await prepareGraph({ workspace, home: flags.harnessHome || flags.home });
+    if (['dependency-path', 'change-impact'].includes(flags.questionKind)) {
+      graphPreparation = await prepareGraph({ workspace, home: flags.harnessHome || flags.home, dryRun: flags.dryRun });
     }
   }
   if (flags.read) {
-    const result = readOrientSlice({ workspace, copilotHome, flags, query, files: flags.files });
+    const result = readOrientSlice({ workspace, copilotHome, flags, query, files: flags.files, graphPreparation });
     return { flags, workspace, copilotHome, query, result, read: true };
   }
   const result = runOrient({ workspace, copilotHome, flags, query });

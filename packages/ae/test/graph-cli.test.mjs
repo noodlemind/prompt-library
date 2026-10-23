@@ -13,7 +13,7 @@ import { readStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 const bin = path.resolve(import.meta.dirname, '../bin/ae.mjs');
 const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
 
-function fixture(t, files = {}) {
+function fixture(t, files = {}, { timeout = 10000 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-graph-cli-'));
   const workspace = path.join(root, 'repo');
   const home = path.join(root, 'home');
@@ -32,7 +32,7 @@ function fixture(t, files = {}) {
   };
   for (const [rel, body] of Object.entries(initial)) write(rel, body);
   for (const args of [['add', '.'], ['commit', '-qm', 'fixture']]) assert.equal(spawnSync('git', args, { cwd: workspace, env }).status, 0);
-  const cli = (...args) => spawnSync(process.execPath, [bin, ...args, '--workspace', workspace], { cwd: workspace, env, encoding: 'utf8', timeout: 10_000 });
+  const cli = (...args) => spawnSync(process.execPath, [bin, ...args, '--workspace', workspace], { cwd: workspace, env, encoding: 'utf8', timeout });
   const json = (...args) => {
     const result = cli(...args, '--json');
     assert.equal(result.status, 0, result.stderr + result.stdout);
@@ -147,7 +147,7 @@ test('cold graph dry runs never publish an index in JSON or envelope output', t 
 test('over-budget AST publication keeps small CLI queries available with labelled lexical evidence', t => {
   const body = Array.from({ length: 150 }, (_, i) => `export function f${i}() { return ${i}; }`).join('\n');
   const files = Object.fromEntries(Array.from({ length: 450 }, (_, i) => [`m${i}.mjs`, `${i === 0 ? "import './m1.mjs';\n" : ''}${body}\n`]));
-  const f = fixture(t, files);
+  const f = fixture(t, files, { timeout: 60000 });
   const result = f.json('graph', 'deps', 'm0.mjs');
   assert.deepEqual(result.edges.map(edge => edge.to), ['m1.mjs']);
   assert.equal(result.preparation.degraded, true);
@@ -160,6 +160,13 @@ test('over-budget AST publication keeps small CLI queries available with labelle
   assert.deepEqual(result.producer.grammarVersions, {});
   assert.ok(result.edges.every(edge => edge.method === 'lexical'));
   assert.equal(readStructuralIndex(f.workspace, { home: f.home }), null);
+  for (const lane of [[], ['--output', 'json-envelope']]) {
+    const orient = f.json('orient', '--read', '--context-version', '2', '--question-kind', 'change-impact', '--file', 'm1.mjs', ...lane);
+    const packet = orient.slice.impactContext;
+    assert.equal(packet.preparation.degraded, true);
+    assert.equal(packet.preparation.reason.code, 'E_STRUCTURAL_PUBLISH');
+    assert.ok(packet.graphs.every(graph => graph.generation === null && graph.producer.extractorTier === 'lexical'));
+  }
   const historical = f.cli('graph', 'deps', 'm0.mjs', '--generation', 'f'.repeat(32), '--json');
   assert.equal(historical.status, 1);
   assert.match(historical.stderr, /E_GRAPH_SNAPSHOT/);

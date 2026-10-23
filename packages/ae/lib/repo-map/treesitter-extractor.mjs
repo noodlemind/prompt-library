@@ -263,29 +263,37 @@ function importOccurrence(node, specifier, rel) {
 }
 
 const JS_FUNCTION_SCOPES = new Set(['function_declaration', 'function_expression', 'generator_function_declaration', 'generator_function', 'arrow_function', 'method_definition']);
+const JS_BLOCK_SCOPES = new Set(['statement_block', 'catch_clause', 'for_statement', 'for_in_statement', 'switch_body']);
 
 function bindingContains(node, identifier) {
   if (!node) return false;
   if (['identifier', 'shorthand_property_identifier_pattern'].includes(node.type)) return node.text === identifier;
   if (node.type === 'pair_pattern') return bindingContains(node.childForFieldName('value'), identifier);
-  return (node.namedChildren || []).some(child => bindingContains(child, identifier));
+  if (['assignment_pattern', 'object_assignment_pattern'].includes(node.type)) return bindingContains(node.childForFieldName('left'), identifier);
+  if (['required_parameter', 'optional_parameter'].includes(node.type)) return bindingContains(node.childForFieldName('pattern') || node.childForFieldName('name'), identifier);
+  if (['formal_parameters', 'object_pattern', 'array_pattern', 'rest_pattern'].includes(node.type)) return (node.namedChildren || []).some(child => bindingContains(child, identifier));
+  return false;
 }
 
 function shadowedIdentifier(node, identifier, cache, importedDeclarations = new Set()) {
   for (let scope = node.parent; scope; scope = scope.parent) {
-    if (!JS_FUNCTION_SCOPES.has(scope.type) && !['program', 'statement_block', 'catch_clause'].includes(scope.type)) continue;
+    if (!JS_FUNCTION_SCOPES.has(scope.type) && scope.type !== 'program' && !JS_BLOCK_SCOPES.has(scope.type)) continue;
     const key = `${scope.id}\0${identifier}`;
     if (!cache.has(key)) {
       const parameters = scope.childForFieldName('parameters') || scope.childForFieldName('parameter');
       let shadowed = bindingContains(parameters, identifier);
+      if (scope.type === 'for_in_statement' && scope.children.some(child => ['let', 'const', 'var'].includes(child.type))) shadowed ||= bindingContains(scope.childForFieldName('left'), identifier);
       if (JS_FUNCTION_SCOPES.has(scope.type) && scope.childForFieldName('name')?.text === identifier) shadowed = true;
-      if (!shadowed) for (const declaration of scope.descendantsOfType(['variable_declarator', 'function_declaration', 'class_declaration'])) {
+      if (!shadowed) for (const declaration of scope.descendantsOfType(['variable_declarator', 'function_declaration', 'class_declaration', 'for_in_statement'])) {
         if (importedDeclarations.has(declaration.id)) continue;
-        const name = declaration.childForFieldName('name');
+        const loop = declaration.type === 'for_in_statement';
+        const hoisted = declaration.parent?.type === 'variable_declaration' || loop && declaration.children.some(child => child.type === 'var');
+        if (loop && !hoisted) continue;
+        const name = declaration.childForFieldName(loop ? 'left' : 'name');
         if (!bindingContains(name, identifier)) continue;
         let contained = true;
         for (let parent = declaration.parent; parent && parent.id !== scope.id; parent = parent.parent) {
-          if (JS_FUNCTION_SCOPES.has(parent.type)) { contained = false; break; }
+          if (JS_FUNCTION_SCOPES.has(parent.type) || !hoisted && JS_BLOCK_SCOPES.has(parent.type)) { contained = false; break; }
         }
         if (contained) { shadowed = true; break; }
       }
@@ -304,7 +312,7 @@ function jsExportDetails(node) {
   let declaration = node;
   if (node.type === 'variable_declarator' && ['lexical_declaration', 'variable_declaration'].includes(node.parent?.type)) declaration = node.parent;
   const statement = declaration.parent;
-  if (statement?.type !== 'export_statement') return {};
+  if (statement?.type !== 'export_statement' || statement.parent?.type !== 'program') return {};
   return { exportKind: statement.children.some(child => child.type === 'default') ? 'default' : 'named' };
 }
 

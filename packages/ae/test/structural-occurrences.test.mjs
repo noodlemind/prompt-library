@@ -246,6 +246,44 @@ test('AST JavaScript export metadata identifies only direct declaration surfaces
   ]);
 });
 
+test('TypeScript namespace exports do not become module-level named exports', async () => {
+  const extractor = await createTreesitterExtract();
+  const result = extractor.extract('main.ts', 'export namespace Api { export function nested() {} }\nexport function visible() {}');
+  assert.equal(result.tier, 'treesitter');
+  assert.equal(result.defs.find(def => def.name === 'nested').exportKind, undefined);
+  assert.equal(result.defs.find(def => def.name === 'visible').exportKind, 'named');
+});
+
+test('AST import shadows respect block lifetimes, var hoisting and parameter binding patterns', async () => {
+  const extractor = await createTreesitterExtract();
+  const result = extractor.extract('main.mjs', [
+    "import { run as execute } from './run.mjs';",
+    'function caught() { try {} catch (execute) { execute(); } execute(); }',
+    'function block() { { const execute = local; execute(); } execute(); }',
+    'function hoisted() { { var execute = local; } execute(); }',
+    'function loop() { for (let execute of values) { execute(); } execute(); }',
+    'function defaulted(x = execute()) {}',
+    'function destructured({ other = execute() }) { execute(); }',
+    'function renamed({ execute: local }) { execute(); }',
+    'function array([execute]) { execute(); }',
+  ].join('\n'));
+  assert.equal(result.tier, 'treesitter');
+  assert.deepEqual(result.refs.filter(ref => ref.name === 'execute').map(ref => [ref.owner, ref.importBinding]), [
+    ['caught', 'shadowed'], ['caught', undefined], ['block', 'shadowed'], ['block', undefined],
+    ['hoisted', 'shadowed'], ['loop', 'shadowed'], ['loop', undefined], ['defaulted', undefined],
+    ['destructured', undefined], ['destructured', undefined], ['renamed', undefined], ['array', 'shadowed'],
+  ]);
+  const typed = extractor.extract('main.ts', [
+    "import { run as execute } from './run.mjs';",
+    'function typed(x: typeof execute = execute()) { execute(); }',
+    'function optional(execute?: () => void) { execute(); }',
+  ].join('\n'));
+  assert.equal(typed.tier, 'treesitter');
+  assert.deepEqual(typed.refs.filter(ref => ref.name === 'execute').map(ref => [ref.owner, ref.importBinding]), [
+    ['typed', undefined], ['typed', undefined], ['optional', 'shadowed'],
+  ]);
+});
+
 test('AST structural index keeps CommonJS bindings on the matching modules', async (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-cjs-bindings-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-cjs-bindings-home-'));

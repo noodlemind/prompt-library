@@ -199,7 +199,7 @@ function buildGraph(files, symbols, truncation, workspace) {
     const perFile = new Map();
     for (const r of Array.isArray(files[rel]?.refs) ? files[rel].refs : []) {
       if (!r || typeof r.name !== 'string') continue;
-      const occurrenceKey = `${r.owner || ''}\0${r.receiver || ''}\0${r.name}`;
+      const occurrenceKey = `${r.owner || ''}\0${r.receiver || ''}\0${r.name}\0${r.importBinding || ''}`;
       if (perFile.has(occurrenceKey)) continue;
       perFile.set(occurrenceKey, true);
       const entry = symbols[r.name];

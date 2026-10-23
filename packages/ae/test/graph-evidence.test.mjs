@@ -9,6 +9,7 @@ import { lexicalV2, createTreesitterExtract, packageGrammarRoots } from '../lib/
 import { queryGraph } from '../lib/graph.mjs';
 import { parseGraphArguments } from '../lib/graph-cmd.mjs';
 import { readStructuralIndex as readShapeIndex } from '../lib/structural/shape.mjs';
+import { captureWorkingSources } from '../lib/repo-map/working-sources.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-graph-evidence-'));
@@ -150,6 +151,47 @@ test('configuration-only alias changes invalidate graph snapshot identity', asyn
   assert.notEqual(after.snapshot, before.snapshot);
 });
 
+for (const lexicalFallback of [false, true]) {
+  for (const unborn of [false, true]) {
+    test(`live graph rejects a configuration race without a cache (fallback=${lexicalFallback}, unborn=${unborn})`, t => {
+      const f = fixture(t);
+      f.write('alias.ts', "import { run } from '@target';\n");
+      f.write('left.ts', 'export function run() {}\n');
+      f.write('right.ts', 'export function run() {}\n');
+      const config = target => JSON.stringify({ compilerOptions: { paths: { '@target': [`./${target}.ts`] } } });
+      f.write('tsconfig.json', config('left'));
+      f.git('add', '.');
+      if (unborn) {
+        fs.rmSync(path.join(f.workspace, '.git', 'refs', 'heads'), { recursive: true });
+        assert.equal(captureWorkingSources(f.workspace).valid, false, 'index publication still requires HEAD');
+        const live = queryGraph({ ...f, files: ['alias.ts'], lexicalFallback });
+        assert.deepEqual(live.edges.map(edge => edge.to), ['left.ts']);
+        assert.deepEqual(live.freshness, { state: 'current', liveValidated: true });
+      }
+      const configStat = fs.statSync(path.join(f.workspace, 'tsconfig.json'));
+      const originalRead = fs.readSync;
+      let changed = false;
+      fs.readSync = function (fd, ...args) {
+        const read = originalRead.call(this, fd, ...args);
+        const stat = fs.fstatSync(fd);
+        if (!changed && stat.dev === configStat.dev && stat.ino === configStat.ino) {
+          changed = true;
+          f.write('tsconfig.json', config('right'));
+        }
+        return read;
+      };
+      let result;
+      try { result = queryGraph({ ...f, files: ['alias.ts'], lexicalFallback }); }
+      finally { fs.readSync = originalRead; }
+      assert.equal(changed, true);
+      assert.equal(result.coverage.sourceChanged, true);
+      assert.equal(result.outcome, 'unknown');
+      assert.deepEqual(result.freshness, { state: 'unknown', liveValidated: false });
+      assert.deepEqual(result.edges, []);
+    });
+  }
+}
+
 test('type-only bindings never become same-name global call candidates', async t => {
   const f = fixture(t);
   f.write('a.ts', "import type { run } from './b.ts';\n");
@@ -191,4 +233,18 @@ test('AST call candidates require an unshadowed import and a supported direct na
   const unresolved = index.graph.unresolvedCalls.filter(row => row.from === 'a.mjs');
   assert.ok(unresolved.some(row => row.symbol === 'execute' && row.reason === 'shadowed-import-binding'));
   for (const name of ['hidden', 'step', 'DefaultName']) assert.ok(unresolved.some(row => row.symbol === name && row.reason === 'unsupported-export-binding'));
+});
+
+test('a shadowed call cannot suppress a later imported call in the same function', async t => {
+  const f = fixture(t);
+  const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
+  f.write('a.mjs', "import { execute } from './b.mjs';\nexport function run() { try {} catch (execute) { execute(); } return execute(); }\n");
+  f.write('b.mjs', 'export function execute() {}\n');
+  await buildStructuralIndex({ ...f, extractor });
+  const index = readStructuralIndex(f.workspace, f);
+  const calls = index.graph.calls.filter(row => row.from === 'a.mjs' && row.symbol === 'execute');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].to, ['b.mjs']);
+  assert.ok(index.graph.unresolvedCalls.some(row => row.from === 'a.mjs' && row.reason === 'shadowed-import-binding'));
+  assert.ok(calls[0].evidence[0].range.startColumn > index.graph.unresolvedCalls.find(row => row.from === 'a.mjs' && row.reason === 'shadowed-import-binding').evidence[0].range.startColumn);
 });

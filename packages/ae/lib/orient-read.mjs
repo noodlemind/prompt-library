@@ -2,8 +2,8 @@ import { collectOrientationFacts } from './orientation-facts.mjs';
 import { buildContextRecord } from './context-record.mjs';
 import { writeSession } from './session.mjs';
 
-export function readOrientSlice({ workspace, copilotHome, flags = {}, query = '', files } = {}) {
-  const facts = collectOrientationFacts({ workspace, copilotHome, flags, query, files });
+export function readOrientSlice({ workspace, copilotHome, flags = {}, query = '', files, graphPreparation } = {}) {
+  const facts = collectOrientationFacts({ workspace, copilotHome, flags, query, files, graphPreparation });
   const q = facts.query;
   const record = flags.contextVersion === 2 ? buildContextRecord({ workspace, flags, query: q, facts }) : null;
   if (String(q).trim() && !flags.dryRun) {
