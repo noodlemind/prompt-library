@@ -10,11 +10,9 @@ Developers use Copilot **`@engineer`**. The kernel never starts an LLM on the ho
 
 ## Install
 
-Before the first registry publication, install from the source checkout or a qualified archive. The package workflow produces candidate archives; publication is an owner action.
+The package is not published to the public npm registry. From a checkout of this repository, install the local package. The package workflow produces candidate archives; publication is an owner action.
 
 ```bash
-npm install -g ae-harness@latest
-# local monorepo:
 npm install -g ./packages/ae
 
 ae tui                    # first launch hydrates VS Code + CLI automatically
