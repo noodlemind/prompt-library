@@ -30,7 +30,7 @@ Read selected intent sources and task-relevant repository context. Use /recall f
 
 Choose the smallest approach that meets the goal. Identify impacted paths and meaningful acceptance criteria. Inspect trusted named checks from `.github/harness/checks.yaml`; judge assertion adequacy rather than matching a check name. Record source-backed reasoning, constraints, unresolved questions, and risk-aware review needs.
 
-For transaction races, lost updates, duplicate writes, or flush/commit misconceptions, require a failing concurrent reproduction before strategy selection. Route domain review when needed. Repeated missing capability becomes a proposal, not an inline installation.
+For transaction races, lost updates, duplicate writes, or flush/commit misconceptions, apply the confirmation rule in engineer.agent.md before strategy selection. Route domain review when needed. Repeated missing capability becomes a proposal, not an inline installation.
 
 ## Submit the plan decision
 
