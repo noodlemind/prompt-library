@@ -1,7 +1,6 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { spawnSync } from 'child_process';
 import { readLock } from './lock.mjs';
 
 const PATH_MARKER = '# harness global bin';
@@ -101,12 +100,20 @@ export function installGlobalHarnessShim(copilotHome, flags, log) {
 }
 
 export function findHarnessOnPath() {
-  const isWin = process.platform === 'win32';
-  const cmd = isWin ? 'where' : 'which';
-  const result = spawnSync(cmd, ['ae'], { encoding: 'utf8' });
-  if (result.status !== 0 || !result.stdout?.trim()) return null;
-  const first = result.stdout.trim().split(/\r?\n/)[0].trim();
-  return first || null;
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH');
+  const entries = String(process.env[pathKey] || '').split(path.delimiter).filter(Boolean);
+  const names = process.platform === 'win32' ? ['ae.cmd', 'ae.exe', 'ae.mjs', 'ae'] : ['ae'];
+  for (const dir of entries) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // This PATH entry does not contain the shim.
+      }
+    }
+  }
+  return null;
 }
 
 export function configureShellPath(copilotHome, flags, log) {

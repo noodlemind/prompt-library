@@ -10,7 +10,7 @@ import { stopBlockOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy } from './lib/policy.mjs';
 import { writeSessionState } from './lib/session-state.mjs';
 import { resolveHookWorkspace } from './lib/tool-payload.mjs';
-import { authorityBin } from './lib/authority-bin.mjs';
+import { nodeAuthority } from './lib/authority-bin.mjs';
 
 const startedAt = Date.now();
 // Leave five seconds for hook startup/output within the configured 90-second deadline.
@@ -57,7 +57,7 @@ function event(fields) {
 
 function deny(message) {
   const planFlag = session?.activePlan ? ` --plan ${session.activePlan}` : '';
-  const recipe = `; next: run \`ae verify${planFlag} --workspace . --json\` after the edit is complete, record a publish or no-learning decision with \`ae compound${planFlag} --learning-decision <file>\`, and complete the plan with \`ae plan-update${planFlag} --file <complete-decision.json>\` before stopping`;
+  const recipe = `; next: run \`ae verify${planFlag} --workspace . --json\` after the edit is complete, record a publish or no-learning decision with \`ae compound${planFlag} --learning-decision -\`, and complete the plan by piping JSON to \`ae plan-update${planFlag} --file -\` before stopping`;
   const base = input.stop_hook_active
     ? `${message}; verification is still pending after the prior Stop block`
     : message;
@@ -91,11 +91,11 @@ try {
 }
 
 function refreshVerification(current) {
-  const bin = authorityBin();
-  const command = bin ? process.execPath : 'ae';
-  const args = [...(bin ? [bin] : []), 'verify', '--json', '--no-events', '--workspace', workspace];
+  const node = nodeAuthority();
+  if (!node) return current;
+  const args = [...node.args, 'verify', '--json', '--no-events', '--workspace', workspace];
   if (current?.activePlan) args.push('--plan', current.activePlan);
-  const result = spawnSync(command, args, {
+  const result = spawnSync(node.command, args, {
     cwd: workspace,
     encoding: 'utf8',
     // Reserve time for both authority reads after refreshing missing evidence.

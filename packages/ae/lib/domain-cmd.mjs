@@ -5,7 +5,7 @@ import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { redactedJson, createRedactor } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { readDomain, inspectDomain } from './domain-contract.mjs';
-import { assertNoSymlinkAncestors, canonicalPath, readFileNoFollow } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, canonicalPath, readBoundedInput, readFileNoFollow } from './fs-safe.mjs';
 import { resolveDomainContext, validateDomainContext } from './domain-context.mjs';
 import { createDomainPlans } from './domain-plans.mjs';
 import { domainStatus, domainCoordinatorCheck } from './domain-delivery.mjs';
@@ -106,7 +106,7 @@ function acceptedCoordinatorRefresh(parsed, workspace, plan) {
 }
 
 function readDecision(workspace, argument) {
-  const text = readFileNoFollow(path.resolve(workspace, argument), { maxBytes: 1024 * 1024 });
+  const text = argument === '-' ? readBoundedInput() : readFileNoFollow(path.resolve(workspace, argument), { maxBytes: 1024 * 1024 });
   try {
     if (text === null || YAML.parseDocument(text, { schema: 'json', uniqueKeys: true, maxAliasCount: 0 }).errors.length) throw new Error();
     const value = JSON.parse(text);

@@ -31,7 +31,7 @@ Not on PATH? `node ~/.copilot/bin/ae …` or `ae install --configure-path`.
 - Keep skills, agents, and instructions in the user profile. Do not copy the harness corpus into product repositories.
 - Product repositories may still receive work artifacts such as `docs/plans/`, `docs/solutions/`, and README changes when a skill intentionally creates them.
 - Skills are on-demand procedures. Load one when its trigger matches the work; do not bulk-read the catalog at session start.
-- Before planning or editing a skill, agent, instruction, check, or reference, load `~/.copilot/skills/create-primitive/SKILL.md`; merely naming the skill in plan metadata does not activate it.
+- Before planning or editing a skill, agent, instruction, check, or reference, load `ae get --reference skills/create-primitive/SKILL.md --json`; merely naming the skill in plan metadata does not activate it.
 - After a missing-gate denial, bootstrap the canonical plan in a standalone plan-only mutation; never batch plan creation with product paths.
 - Resolve capability gaps when explicit, high-risk, or encountered. Missing optional capability does not block ordinary work; a safety-critical gap blocks only the affected operation.
 - Deliver runs the code-review skill, fixes the findings, then requires passed `ae verify`. Update plans with `ae plan-update`. Do not edit a `~/.ae` plan in the editor. Read-only answers and investigations report supporting evidence without plan or completion ceremony.

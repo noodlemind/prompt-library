@@ -41,6 +41,6 @@ A skill for every install is a commit under `packages/ae/corpus/skills/<name>/SK
 ## Not the same as knowledge
 
 - **Skill/agent** = how to work (procedure, review criteria).
-- **Knowledge** = what we learned. Recall reads `~/.copilot/knowledge/solutions/`.
+- **Knowledge** = what we learned. Recall reads `~/.copilot/knowledge/solutions/`. Print one solution file with `ae get --reference knowledge/solutions/<file>.md --json`. Do not search the product workspace for it.
 
-Capability lifecycle and approval remain governed by `packages/ae/corpus/knowledge/capability-registry.yaml`, `~/.copilot/skills/references/capability-gap-proposal.md`, and `/create-primitive`.
+Capability lifecycle and approval remain governed by `packages/ae/corpus/knowledge/capability-registry.yaml`, `ae get --reference skills/references/capability-gap-proposal.md --json`, and `/create-primitive`.

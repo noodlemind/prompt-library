@@ -10,3 +10,10 @@ export function authorityBin({ includeOverride = true } = {}) {
     try { return fs.statSync(full).isFile(); } catch { return false; }
   }) || null;
 }
+
+/** Run the installed CLI with Node. Never invokes an `ae` shell shim. */
+export function nodeAuthority() {
+  const bin = authorityBin();
+  if (!bin) return null;
+  return { command: process.execPath, args: [bin] };
+}

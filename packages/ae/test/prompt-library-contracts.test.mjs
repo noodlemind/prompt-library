@@ -146,7 +146,7 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   assert.match(engineer, /requested file mutation enters Deliver before the first edit/i);
   assert.match(engineer, /blocked[\s\S]*ensure-plan[\s\S]*start decision[\s\S]*implement gate before editing/i);
   assert.match(engineer, /skill, agent, instruction, prompt, check, reference, or solution[\s\S]{0,100}create-primitive/i);
-  assert.match(engineer, /read `~\/\.copilot\/skills\/create-primitive\/SKILL\.md`[\s\S]{0,180}not activation/i);
+  assert.match(engineer, /ae get --reference skills\/create-primitive\/SKILL\.md[\s\S]{0,180}not activation/i);
   assert.match(engineer, /Capture for Later[\s\S]{0,120}Plan and Fix[\s\S]{0,120}Leave in Chat/i);
   assert.match(engineer, /Name the mode first/i);
   assert.match(engineer, /shared state and interleavings[\s\S]{0,100}confirmed only when evidence demonstrates/i);
@@ -223,7 +223,7 @@ test('existing skills own structured findings, proportional plans, and primitive
     assert.match(primitive, new RegExp(option.replaceAll('/', '\\/'), 'i'), `migration decision missing ${option}`);
   }
   assert.match(primitive, /actually loaded in the current chat session[\s\S]{0,180}not claim activation/i);
-  assert.match(primitive, /~\/\.copilot\/skills\/java\/SKILL\.md[\s\S]{0,120}~\/\.copilot\/skills\/aws\/SKILL\.md/i);
+  assert.match(primitive, /ae get --reference skills\/java\/SKILL\.md[\s\S]{0,160}ae get --reference skills\/aws\/SKILL\.md/i);
   assert.match(primitive, /map every acceptance criterion/i);
   assert.match(primitive, /do not invent check names/i);
 });

@@ -10,7 +10,7 @@ Read `ae resources candidates --json`. Exact recorded claim identity and suspect
 
 Judge whether the gap belongs in Harness, an existing skill reference, a regression test, a product check, an instruction, or a separate agent. Prefer an existing owner when its boundary fits. A deterministic reusable operation belongs in Harness. Author the intervention, concrete evaluation cases, overlap analysis and minimum permissions.
 
-Use the versioned dormant proposal contract in [resource-operations.md](../references/resource-operations.md). `resources propose` preserves frozen evidence and does not install or register anything. Follow the single [human approval policy](../references/human-approval-policy.md) before activation. Existing direct authorization persists within its scope. A model-authored approval field grants no authority.
+Use the versioned dormant proposal contract in resource-operations.md (`ae get --reference skills/references/resource-operations.md --json`). `resources propose` preserves frozen evidence and does not install or register anything. Follow the single human approval policy (`ae get --reference skills/references/human-approval-policy.md --json`) before activation. Existing direct authorization persists within its scope. A model-authored approval field grants no authority.
 
 ## Trigger Examples
 

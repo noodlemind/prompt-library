@@ -69,7 +69,7 @@ export function validateCompletion({ workspace, plan, copilotHome }) {
   const checked = completionPrerequisites({ workspace, plan, copilotHome });
   if (!checked.pass) return checked;
   const record = readReviewRecord(recordRoot, completionRel(plan));
-  if (!record || record.version !== 2 || record.id !== checked.id || recordHash(record.value) !== record.id) return { pass: false, message: 'No current bound completion record; record a learning decision and submit ae plan-update --file <complete-decision.json> after review and verify' };
-  if (plan.status !== 'done') return { pass: false, message: 'Completion transaction is pending; retry the same ae plan-update --file <complete-decision.json>' };
+  if (!record || record.version !== 2 || record.id !== checked.id || recordHash(record.value) !== record.id) return { pass: false, message: 'No current bound completion record; pipe a complete decision to ae plan-update --file - after review and verify' };
+  if (plan.status !== 'done') return { pass: false, message: 'Completion transaction is pending; retry the same complete decision on ae plan-update --file -' };
   return { pass: true, record: record.id, message: 'Current bound completion record validated' };
 }

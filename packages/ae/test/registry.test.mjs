@@ -472,7 +472,7 @@ test('CLI: get without --docid or --path is E_USAGE/exit 2 with the original mes
   const body = JSON.parse(result.stderr);
   assert.equal(body.ok, false);
   assert.equal(body.error.code, 'E_USAGE');
-  assert.equal(body.error.message, 'get requires --docid <id> or --path <relative-path>');
+  assert.equal(body.error.message, 'get requires --docid <id>, --path <relative-path>, or --reference <installed-corpus-path>');
   assert.equal(body.error.exit, 2);
 });
 

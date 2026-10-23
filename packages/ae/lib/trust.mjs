@@ -6,6 +6,7 @@ import { EXIT } from './style.mjs';
 import { writeFileContained, readFileNoFollow } from './fs-safe.mjs';
 import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { runtimeSetting } from '../corpus/hooks/lib/runtime-identity.mjs';
+import { aeWorktreePrimary } from './worktree.mjs';
 
 export const TRUST_SCHEMA_VERSION = 1;
 
@@ -128,26 +129,47 @@ function writeStore({ copilotHome, home } = {}, store) {
   return written;
 }
 
+function approvalState(record, workspace, store) {
+  if (store.unreadable) return { state: 'untrusted', reason: 'the trust store could not be read, so nothing is trusted' };
+  if (record?.status === 'revoked') return { state: 'revoked', reason: 'trust was explicitly revoked' };
+  if (record?.status === 'trusted') {
+    if (digestMatchesApproval(record.digest, workspace)) return { state: 'trusted', reason: `approved ${record.approvedAt}` };
+    return { state: 'stale', reason: 'the policy files have changed since this project was approved' };
+  }
+  return { state: 'untrusted', reason: 'this project has never been approved' };
+}
+
 export function trustStatus({ workspace, copilotHome, home }) {
   const identity = projectIdentity(workspace);
   const store = readStore({ copilotHome, home });
   const record = store.projects[identity.root] || null;
   const digest = policyDigest(workspace);
-
-  let state = 'untrusted';
-  let reason = 'this project has never been approved';
-  if (store.unreadable) {
-    reason = 'the trust store could not be read, so nothing is trusted';
-  } else if (record?.status === 'revoked') {
-    state = 'revoked';
-    reason = 'trust was explicitly revoked';
-  } else if (record?.status === 'trusted') {
-    if (digestMatchesApproval(record.digest, workspace)) {
-      state = 'trusted';
-      reason = `approved ${record.approvedAt}`;
-    } else {
-      state = 'stale';
-      reason = 'the policy files have changed since this project was approved';
+  const own = approvalState(record, workspace, store);
+  let state = own.state;
+  let reason = own.reason;
+  let inherited = false;
+  let inheritedFrom = null;
+  let approvedAt = record?.approvedAt ?? null;
+  let approvedDigest = record?.digest ?? null;
+  const ownDecides = store.unreadable || record?.status === 'revoked' || record?.status === 'trusted';
+  if (!ownDecides) {
+    const primary = aeWorktreePrimary(workspace);
+    if (primary) {
+      const primaryIdentity = projectIdentity(primary);
+      const primaryRecord = store.projects[primaryIdentity.root] || null;
+      inheritedFrom = primaryIdentity.root;
+      if (primaryRecord?.status === 'trusted' && digestMatchesApproval(primaryRecord.digest, workspace)) {
+        state = 'trusted';
+        inherited = true;
+        reason = `inherited from trusted primary ${primaryIdentity.root}`;
+        approvedAt = primaryRecord.approvedAt ?? null;
+        approvedDigest = primaryRecord.digest ?? null;
+      } else if (primaryRecord?.status === 'revoked') {
+        reason = `inherited trust removed because primary ${primaryIdentity.root} was revoked`;
+      } else if (primaryRecord?.status === 'trusted') {
+        state = 'stale';
+        reason = `ae worktree of ${primaryIdentity.root}, but its policy files differ from that approval`;
+      }
     }
   }
 
@@ -157,10 +179,12 @@ export function trustStatus({ workspace, copilotHome, home }) {
     id: identity.id,
     state,
     trusted: state === 'trusted',
+    inherited,
+    inheritedFrom,
     reason,
     digest,
-    approvedAt: record?.approvedAt ?? null,
-    approvedDigest: record?.digest ?? null,
+    approvedAt,
+    approvedDigest,
     pinned: [...PINNED_FILES],
     store: trustStorePath({ copilotHome, home }),
   };

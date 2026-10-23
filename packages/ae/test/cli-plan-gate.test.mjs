@@ -215,7 +215,8 @@ test('gate directs a planned plan to the atomic start operation', () => {
 
   assert.equal(result.status, 0, result.stderr);
   const body = JSON.parse(result.stdout);
-  assert.deepEqual(body.nextTools, ['ae plan-update --plan docs/plans/2026-05-22-fix-example-plan.md --file <start-decision.json>']);
+  assert.match(body.nextTools[0], new RegExp(`ae plan-update --workspace ${workspace} --plan docs/plans/2026-05-22-fix-example-plan.md --file -`));
+  assert.match(body.nextTools[0], /"action":"start"/);
 });
 
 test('validate-plan strict-intent fails locked plan with empty intent contract', () => {

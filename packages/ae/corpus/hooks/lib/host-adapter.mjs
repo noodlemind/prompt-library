@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { normalizeRuntimeEnvironment } from './runtime-identity.mjs';
 import { preToolDenyOutput, stopBlockOutput } from './hook-output.mjs';
 import { unwrapOrientSlice } from './orient-slice.mjs';
+import { nodeAuthority } from './authority-bin.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +22,7 @@ function emptySlice() {
     reviewCoverage: null,
     learnings: [],
     skills: [],
+    procedure: { id: null, reason: null },
     instructions: [],
     contacts: [],
     index: { knowledge: 'missing', structural: 'missing' },
@@ -30,8 +32,9 @@ function emptySlice() {
 }
 
 function harnessCommand() {
-  const bin = process.env.HARNESS_BIN;
-  return { command: bin ? process.execPath : 'ae', prefix: bin ? [bin] : [] };
+  const node = nodeAuthority();
+  if (!node) return null;
+  return { command: node.command, prefix: node.args };
 }
 
 function takeFlag(argv, name) {
@@ -49,7 +52,9 @@ function sliceFrom(parsed) {
 }
 
 function orientSlice(workspace, { query = '', files = [], readOnly = true } = {}) {
-  const { command, prefix } = harnessCommand();
+  const harness = harnessCommand();
+  if (!harness) return emptySlice();
+  const { command, prefix } = harness;
   const args = [...prefix, 'orient', ...(readOnly ? ['--read', '--context-version', '2'] : []), '--json', '--no-events', '--workspace', workspace];
   if (query) args.push('--query', query);
   for (const file of files) args.push('--file', file);
@@ -121,7 +126,12 @@ export function runHostAdapter() {
     process.exit(gate.status ?? 1);
   }
   if (event === 'stop') {
-    const { command, prefix } = harnessCommand();
+    const harness = harnessCommand();
+    if (!harness) {
+      process.stdout.write(`${JSON.stringify({ ...slice, outcome: null })}\n`);
+      process.exit(1);
+    }
+    const { command, prefix } = harness;
     const args = [...prefix, 'verify', '--json', '--no-events', '--workspace', workspace];
     if (process.env.COPILOT_HOME) args.push('--copilot-home', process.env.COPILOT_HOME);
     if (process.env.HARNESS_HOME) args.push('--harness-home', process.env.HARNESS_HOME);

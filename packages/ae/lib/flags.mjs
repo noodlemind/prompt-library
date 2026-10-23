@@ -127,6 +127,7 @@ export function parseFlags(argv) {
     minScore: 0.15,
     docid: null,
     path: null,
+    reference: null,
     lines: 40,
     maxBytes: 2048,
     host: null,
@@ -281,6 +282,8 @@ export function parseFlags(argv) {
     else if (a.startsWith('--collection=')) flags.collection = a.split('=')[1];
     else if (a.startsWith('--min-score=')) flags.minScore = parseMinScore(a.split('=')[1], '--min-score');
     else if (a === '--min-score') flags.minScore = parseMinScore(scan[++i], '--min-score');
+    else if (a.startsWith('--reference=')) flags.reference = a.split('=').slice(1).join('=');
+    else if (a === '--reference') flags.reference = scan[++i];
     else if (a.startsWith('--docid=')) flags.docid = a.split('=').slice(1).join('=');
     else if (a === '--docid') flags.docid = scan[++i];
     else if (a.startsWith('--path=')) flags.path = a.split('=').slice(1).join('=');
@@ -380,6 +383,13 @@ export function parseFlags(argv) {
     else if (a === '--merged') flags.merged = true;
     else if (a.startsWith('--stale=')) flags.stale = parsePositiveInt(a.split('=')[1], '--stale');
     else if (a === '--stale') flags.stale = parsePositiveInt(scan[++i], '--stale');
+  }
+
+  if (flags.reference) {
+    const linesSet = scan.some((token) => token === '--lines' || token.startsWith('--lines='));
+    const bytesSet = scan.some((token) => token === '--max-bytes' || token.startsWith('--max-bytes='));
+    if (!linesSet) flags.lines = 100_000;
+    if (!bytesSet) flags.maxBytes = 200_000;
   }
 
   return flags;

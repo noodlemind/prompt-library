@@ -224,6 +224,7 @@ function treeContext(argv) {
     subject: positionals[0] ?? null,
     target: positionals[1] ?? null,
     depth: depthRaw ? Number(depthRaw) : undefined,
+    files: argv.includes('--files'),
     workspace: path.resolve(flags.workspace),
     copilotHome: resolveCopilotHome(flags.copilotHome),
   };
@@ -235,6 +236,7 @@ function treeResult(argv) {
     subject: ctx.subject,
     target: ctx.target,
     depth: ctx.depth,
+    files: ctx.files,
     workspace: ctx.workspace,
     copilotHome: ctx.copilotHome,
   });
@@ -257,6 +259,11 @@ export async function cmdTree(argv) {
   if (flags.json) {
     console.log(redactedJson(result, { pretty: flags.verbose }));
     return 0;
+  }
+  if (Array.isArray(result.files)) {
+    for (const file of result.files) console.log(file);
+    if (result.unavailable) console.error(result.emptyReason);
+    return result.unavailable ? 1 : 0;
   }
 
   const keyWidth = keyWidthFor(['tree', 'totals', 'limits']);

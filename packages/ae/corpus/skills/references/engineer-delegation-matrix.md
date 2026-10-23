@@ -1,6 +1,6 @@
 # Engineer Delegation Matrix
 
-Load when delegating from `@engineer`. Every delegation uses `~/.copilot/skills/references/subagent-context-packet.md`.
+Load when delegating from `@engineer`. Every delegation uses `ae get --reference skills/references/subagent-context-packet.md --json`.
 
 ## Team Size
 

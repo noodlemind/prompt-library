@@ -10,7 +10,7 @@ The task-mode boundary and normative delivery lifecycle are in `engineer.agent.m
 - The Engineer prepares review, dispatches required judgments, and collects them with `ae review assemble` before authoritative verification. The coordinator returns raw results without CLI execution.
 - `ae verify --plan <path> --workspace . --json` runs trusted named checks, scope validation, and evidence capture.
 - `ae compound --plan <path> --learning-decision <file> --workspace . --json` records durable learning or explicit no-learning against current passed proof.
-- `ae plan-update --plan <path> --file <complete-decision.json> --workspace . --json` consumes the revision-bound complete decision. Required review, current proof, completed tasks, and completed learning must agree before Stop permits delivery completion.
+- Pipe the revision-bound complete decision to `ae plan-update --plan <path> --workspace . --file - --json`. Required review, current proof, completed tasks, and completed learning must agree before Stop permits delivery completion. List files with `ae tree workspace --files --json`. Search file text with `ae search <query> --match literal --source code --json`. Do not run rg, grep, find, or any program other than `ae`, `node`, and `git`.
 
 After orient, read every `intentSources` path. If a source is ambiguous, set `needs-info` and write `## Missing`. Do not implement a guessed requirement.
 

@@ -8,6 +8,7 @@ import { assertSourceCurrent, parseSourceReference, sourceContext, sourceHash } 
 import { redactSecrets } from './secret-scan.mjs';
 import { externalPlansDir } from './project-layout.mjs';
 import { domainContextOf, planRecordRoot } from './domain-context.mjs';
+import { installedCorpusHomes, resolveInstalledReference } from './corpus-reference.mjs';
 
 const PACKAGED_REL = /^(skills|agents|instructions)\//;
 
@@ -59,7 +60,7 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
   const reference = parseSourceReference(flags.docid || flags.path);
   const documentReference = reference.sha256 && reference.path.startsWith('docid:');
   const docid = documentReference ? reference.path.slice('docid:'.length) : flags.docid ? reference.path : null;
-  const relPath = flags.path && !documentReference ? reference.path : null;
+  let relPath = flags.path && !documentReference ? reference.path : null;
   const maxLines = flags.lines || GET_DEFAULT_LINES;
   const maxBytes = flags.maxBytes || GET_DEFAULT_MAX_BYTES;
   const offset = Math.max(1, Math.floor(flags.offset || 1));
@@ -69,7 +70,16 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
   let fullPath = null;
   let readRoot = null;
 
-  if (docid) {
+  if (flags.reference) {
+    const found = resolveInstalledReference(flags.reference, installedCorpusHomes({ copilotHome }));
+    if (!found) {
+      throw new Error(`installed reference not found: ${flags.reference}. Pass a path under skills/, agents/, or instructions/ from ae install. Do not search the workspace.`);
+    }
+    fullPath = found.fullPath;
+    readRoot = found.readRoot;
+    relPath = found.rel;
+    entry = { docid: null, path: found.rel, title: path.basename(found.fullPath) };
+  } else if (docid) {
     entry = findEntryByDocid(copilotHome, workspace, docid);
     if (!entry) throw new Error(`docid not found in manifest: ${docid}`);
     const resolved = resolveDocPath(copilotHome, workspace, entry, {
@@ -97,7 +107,7 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
       title: path.basename(relPath),
     };
   } else {
-    throw new Error('get requires --docid <id> or --path <relative-path>');
+    throw new Error('get requires --docid <id>, --path <relative-path>, or --reference <installed-corpus-path>');
   }
 
   if (!fullPath || !fs.existsSync(fullPath)) {

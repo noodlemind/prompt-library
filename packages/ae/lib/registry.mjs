@@ -515,8 +515,8 @@ function agentRequireArgs(rest) {
 }
 
 function getRequireArgs(rest, flags) {
-  if (!flags.docid && !flags.path) {
-    return 'get requires --docid <id> or --path <relative-path>';
+  if (!flags.docid && !flags.path && !flags.reference) {
+    return 'get requires --docid <id>, --path <relative-path>, or --reference <installed-corpus-path>';
   }
 }
 
@@ -612,6 +612,7 @@ export function describeCommand(name) {
     options: [
       ...entry.args.flags.map((f) => [flagLabel(f), f.description || '']),
       ...(entry.extraOptions || []),
+      ...GLOBAL_FLAGS.map((f) => [flagLabel(f), f.description || '']),
     ],
   };
 }
@@ -939,7 +940,7 @@ registerCommand({
     args: {
     positionals: [],
     flags: [
-      { name: '--file', type: 'string', valueName: 'decision.json', description: 'Version 1 full or short creation decision; owns dates, IDs, headings and bindings' },
+      { name: '--file', type: 'string', valueName: 'decision.json', description: 'Version 1 full or short creation decision, or - to read that JSON from stdin; owns dates, IDs, headings and bindings' },
       { name: '--type', type: 'string', valueName: 't', description: 'feat|fix|docs|refactor|chore', required: true, default: null, tui: 'prompt' },
       { name: '--slug', type: 'string', valueName: 's', description: 'lowercase-hyphen slug', required: true, default: null, tui: 'prompt' },
       { name: '--intent', type: 'string', valueName: 'text', description: 'one-line intent', required: true, default: null, tui: 'prompt' },
@@ -973,7 +974,7 @@ registerCommand({
     positionals: [],
     flags: [
       { name: '--plan', type: 'string', valueName: 'path', description: 'plan file under the external store or a legacy plan directory', required: true, default: null, tui: 'prompt', choices: 'plan', valueIsLiteral: true },
-      { name: '--file', type: 'string', valueName: 'decision.json', description: 'Versioned start, amend, progress, finding, gap or complete decision with expected revision and replay ID' },
+      { name: '--file', type: 'string', valueName: 'decision.json', description: 'Versioned start, amend, progress, finding, gap or complete decision with expected revision and replay ID, or - to read that JSON from stdin' },
       { name: '--status', type: 'string', valueName: 'name', description: 'open|planned|in-progress|review|done|blocked-capability|needs-info', required: false, default: null, tui: 'prompt' },
       { name: '--activity', type: 'string', valueName: 'line', description: 'append one activity line (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
       { name: '--review-completed', type: 'string', valueName: 'id', description: 'add a reviews.completed id (repeatable)', required: false, default: null, tui: 'prompt' },
@@ -1115,6 +1116,7 @@ registerCommand({
     positionals: [],
     flags: [
             { name: '--docid', type: 'string', valueName: 'id', description: 'manifest doc id', required: false, default: null, tui: 'prompt' },
+      { name: '--reference', type: 'string', valueName: 'id', description: 'installed corpus file, for example skills/code-review/references/findings-schema.md. Prints that file. Does not search the workspace.', required: false, default: null, tui: 'cli-only' },
       { name: '--path', type: 'string', valueName: 'rel', description: 'relative file path', required: false, default: null, tui: 'prompt', choices: 'path' },
       { name: '--lines', type: 'number', valueName: 'n', description: `max lines (default ${GET_DEFAULT_LINES})`, required: false, default: GET_DEFAULT_LINES, tui: 'prompt' },
       { name: '--offset', type: 'number', valueName: 'n', description: 'first line of the window, 1-indexed (default 1)', required: false, default: 1, tui: 'prompt' },
@@ -1614,7 +1616,7 @@ registerCommand({
   sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-  usage: '[show|set|clear] [provider] [model] [--scope <scope>]',
+  usage: '[show|set|clear|refresh] [provider] [model] [--scope <scope>]',
   verbs: [
     { verb: 'show', summary: 'the active provider and model, and every provider you can reach', sideEffect: 'read' },
     { verb: 'set', summary: 'make a provider (and optionally a model) the default', positionals: ['provider', 'model'] },
@@ -1766,6 +1768,7 @@ registerCommand({
     ],
     flags: [
       { name: '--depth', type: 'number', valueName: 'n', description: 'tree depth (default 3, max 10)', required: false, default: 3, tui: 'prompt' },
+      { name: '--files', type: 'boolean', description: 'flat git ls-files list for the workspace, including untracked files git does not ignore', required: false, default: false, tui: 'cli-only' },
     ],
   },
   handler: cmdTree,

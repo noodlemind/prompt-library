@@ -149,6 +149,62 @@ export function planSlugFromPath(planPath) {
   return match ? match[1] : 'issue';
 }
 
+export function isolatedWorktreeDestination(workspace, slug) {
+  return path.join(primaryRoot(workspace), '.worktrees', slug);
+}
+
+function resolvedGitPath(workspace, raw) {
+  const abs = path.resolve(workspace, raw);
+  try {
+    return fs.realpathSync(abs);
+  } catch {
+    return abs;
+  }
+}
+
+function gitCommonDir(workspace) {
+  const raw = gitOut(workspace, ['rev-parse', '--git-common-dir']);
+  return raw ? resolvedGitPath(workspace, raw) : null;
+}
+
+function worktreeRecordFile(workspace) {
+  const common = gitCommonDir(workspace);
+  return common ? path.join(common, 'ae-worktrees') : null;
+}
+
+export function recordAeWorktree(primary, dest) {
+  const file = worktreeRecordFile(primary);
+  if (!file) return;
+  let real = path.resolve(dest);
+  try {
+    real = fs.realpathSync(dest);
+  } catch {
+    real = path.resolve(dest);
+  }
+  const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+  if (!current.includes(real)) fs.appendFileSync(file, `${real}\n`);
+}
+
+/** Primary checkout when this path is a linked worktree recorded by `ae worktree`. */
+export function aeWorktreePrimary(workspace) {
+  const primary = linkedPrimaryCheckout(workspace);
+  if (!primary) return null;
+  const file = worktreeRecordFile(workspace);
+  if (!file || !fs.existsSync(file)) return null;
+  let real = path.resolve(workspace);
+  try {
+    real = fs.realpathSync(workspace);
+  } catch {
+    real = path.resolve(workspace);
+  }
+  const listed = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  if (!listed.includes(real)) return null;
+  const primaryCommon = gitCommonDir(primary);
+  const here = gitCommonDir(workspace);
+  if (!primaryCommon || primaryCommon !== here) return null;
+  return primary;
+}
+
 export function inspectIsolation({ workspace, home, env = process.env, allowInplace = false } = {}) {
   const ctx = deriveGitContext({ workspace, home });
   if (!ctx.worktree) {
@@ -186,7 +242,7 @@ export function inspectIsolation({ workspace, home, env = process.env, allowInpl
   };
 }
 
-export function addIsolatedWorktree({ workspace, slug, from, dryRun = false } = {}) {
+export function addIsolatedWorktree({ workspace, slug, from, dryRun = false, record = true } = {}) {
   if (!slug || !SLUG_RE.test(slug)) {
     throw usage('worktree: --slug is required and must be lowercase-hyphen (a-z0-9-)');
   }
@@ -221,6 +277,7 @@ export function addIsolatedWorktree({ workspace, slug, from, dryRun = false } = 
     });
     if (listedHit || isLinkedWorktree(dest)) {
       carryCheckoutPlans(root, dest);
+      if (record) recordAeWorktree(root, dest);
       return { path: dest, branch: currentBranch(dest) || branch, created: false, isolated: true };
     }
     throw usage(`worktree: ${dest} exists and is not a worktree`);
@@ -258,6 +315,7 @@ export function addIsolatedWorktree({ workspace, slug, from, dryRun = false } = 
     fs.rmSync(hooksDir, { recursive: true, force: true });
   }
   carryCheckoutPlans(root, dest);
+  if (record) recordAeWorktree(root, dest);
   return { path: dest, branch, created: true, isolated: true };
 }
 

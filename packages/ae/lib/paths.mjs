@@ -15,6 +15,7 @@ export function resolveCopilotHome(override) {
 }
 
 export function resolveIntelliJHome() {
+  if (process.env.AE_INTELLIJ_HOME) return path.resolve(process.env.AE_INTELLIJ_HOME);
   if (process.platform === 'win32') {
     const base = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
     return path.join(base, 'github-copilot', 'intellij');

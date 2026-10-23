@@ -67,6 +67,6 @@ test('orient names the learning decision and completion steps for an implement-r
   const value = JSON.parse(result.stdout);
   assert.equal(value.gateStatus, 'pass', JSON.stringify(value));
   assert.ok(value.nextTools.some(tool => /ae compound.*--plan .*--learning-decision/.test(tool)), JSON.stringify(value.nextTools));
-  assert.ok(value.nextTools.some(tool => /ae plan-update.*--plan .*--file <complete-decision\.json>/.test(tool)), JSON.stringify(value.nextTools));
+  assert.ok(value.nextTools.some(tool => /ae plan-update.*--plan .*--file -/.test(tool)), JSON.stringify(value.nextTools));
   assert.ok(!value.nextTools.includes('ae compound'));
 });

@@ -34,7 +34,7 @@ A cluster is a category group and a grouping hint. Choose multiple ops when it c
 
 ## Submit the semantic proposal
 
-Follow [learning-operations.md](../references/learning-operations.md). Submit schema 2 with the returned packet ID, a logical operation ID, attempt 1, and authored ops using episode IDs. Harness expands evidence paths, hashes and kinds and checks currentness under the store transaction. It owns byte and delta limits, domain projections, lint, governance, indexing, and operation receipts. Do not copy hashes or reproduce those algorithms.
+Follow learning-operations.md (`ae get --reference skills/references/learning-operations.md --json`). Submit schema 2 with the returned packet ID, a logical operation ID, attempt 1, and authored ops using episode IDs. Harness expands evidence paths, hashes and kinds and checks currentness under the store transaction. It owns byte and delta limits, domain projections, lint, governance, indexing, and operation receipts. Do not copy hashes or reproduce those algorithms.
 
 Use `ae consolidate --apply --ops <file> --dry-run --json` to obtain diagnostics without spending a repair attempt. Apply after the proposal is ready. The existing mode gate remains authoritative: `on` allows apply; `suggest` requires the human's explicit approval and then `--yes`; `off`, `freeze` and `capture-only` refuse it. A payload cannot grant authority or change mode.
 

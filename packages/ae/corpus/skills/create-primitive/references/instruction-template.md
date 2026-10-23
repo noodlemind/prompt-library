@@ -4,7 +4,7 @@ Use this template when creating an instruction. A personal instruction is `ae re
 
 Create an instruction when a concise standard should load automatically for matching files. Do not use instructions for multi-step workflows, review-only criteria, or long reference material.
 
-Use `resources scaffold instruction <name> --json` for canonical metadata. Follow [resource-operations.md](../../references/resource-operations.md) for validation and creation. Author narrow activation and source-backed examples.
+Use `resources scaffold instruction <name> --json` for canonical metadata. Follow resource-operations.md (`ae get --reference skills/references/resource-operations.md --json`) for validation and creation. Author narrow activation and source-backed examples.
 
 ```markdown
 # <Standard Name>

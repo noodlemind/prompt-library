@@ -67,6 +67,8 @@ test('doctor on an empty home fails H1-H7 instead of passing from package files'
   const result = run(['doctor'], { home, copilot, workspace });
   assert.notEqual(result.status, 0, result.stdout);
   const body = checks(result);
+  assert.equal(body.checks.find((check) => check.id === 'R1').pass, true, 'Node 20 or newer is present');
+  assert.equal(body.checks.find((check) => check.id === 'R2').pass, true, body.checks.find((check) => check.id === 'R2')?.hint);
   const failed = new Set(body.checks.filter((check) => check.pass === false).map((check) => check.id));
   for (const id of ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7']) {
     assert.equal(failed.has(id), true, `${id} should fail on an empty home; failed=${[...failed].join(',')}`);

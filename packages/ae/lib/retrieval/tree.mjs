@@ -3,7 +3,7 @@ import path from 'node:path';
 import { EXIT } from '../style.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
 import { safeResolveUnderRoot } from '../path-safe.mjs';
-import { trackedSourceFiles } from '../repo-map/scan.mjs';
+import { listRepoFiles, trackedSourceFiles } from '../repo-map/scan.mjs';
 import { loadManifest } from '../recall-rank.mjs';
 import { loadCollections, entryMatchesCollection } from '../recall-config.mjs';
 import { storeDir, listLearnings } from '../knowledge/store.mjs';
@@ -315,7 +315,7 @@ function knowledgeTree({ workspace, copilotHome, home, target, depth, maxNodes }
   };
 }
 
-export function runTree({ subject, target = null, depth, workspace, copilotHome, home, maxNodes } = {}) {
+export function runTree({ subject, target = null, depth, workspace, copilotHome, home, maxNodes, files = false } = {}) {
   // Default subject for bare `tree` — the workspace map is the common case.
   let resolvedSubject = subject || 'workspace';
   let resolvedTarget = target;
@@ -343,6 +343,25 @@ export function runTree({ subject, target = null, depth, workspace, copilotHome,
   }
   subject = resolvedSubject;
   target = resolvedTarget;
+  if (files && subject !== 'workspace') {
+    throw usageError('tree --files lists the workspace checkout', 'ae tree workspace --files --json');
+  }
+  if (files) {
+    const listed = listRepoFiles(workspace);
+    const scope = target ? normalizeRelative(target) : '';
+    const filtered = scope ? listed.files.filter((rel) => rel === scope || rel.startsWith(`${scope}/`)) : listed.files;
+    return {
+      schema: TREE_SCHEMA,
+      subject: 'workspace',
+      target: scope || null,
+      files: filtered,
+      total: listed.total,
+      truncated: listed.truncated,
+      unavailable: listed.unavailable,
+      fallback: listed.unavailable ? listed.fallback : 'git ls-files --cached --others --exclude-standard',
+      emptyReason: listed.unavailable ? (listed.fallback || 'git ls-files failed; use the host search/codebase tool') : filtered.length ? null : 'no tracked or untracked files',
+    };
+  }
   const levels = resolveDepth(depth);
   if (subject === 'workspace') return workspaceTree({ workspace, target, depth: levels, maxNodes });
   return knowledgeTree({ workspace, copilotHome, home, target, depth: levels, maxNodes });

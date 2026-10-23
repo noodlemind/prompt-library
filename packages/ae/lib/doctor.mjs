@@ -621,8 +621,29 @@ function routingPolicyCheck(workspace) {
   };
 }
 
+function prerequisiteChecks() {
+  const major = Number(String(process.versions.node).split('.')[0]);
+  const nodeOk = Number.isInteger(major) && major >= 20;
+  const git = spawnSync('git', ['--version'], { encoding: 'utf8', timeout: 5_000 });
+  const gitOk = !git.error && git.status === 0 && Boolean(String(git.stdout || '').trim());
+  return [
+    {
+      id: 'R1',
+      name: 'Node.js',
+      pass: nodeOk,
+      hint: nodeOk ? `Node ${process.versions.node}` : `Node ${process.versions.node} is older than 20`,
+    },
+    {
+      id: 'R2',
+      name: 'git',
+      pass: gitOk,
+      hint: gitOk ? String(git.stdout).trim() : 'git is not installed or not on PATH',
+    },
+  ];
+}
+
 export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
-  const checks = [];
+  const checks = [...prerequisiteChecks()];
 
   const manifest = path.join(copilotHome, 'knowledge', 'manifest.yaml');
   checks.push({

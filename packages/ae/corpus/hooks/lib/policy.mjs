@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { authorityBin } from './authority-bin.mjs';
+import { nodeAuthority } from './authority-bin.mjs';
 import { harnessHome } from './external-plans.mjs';
 import { policySourceBinding, snapshotRel, validPolicySnapshot, readPolicySource } from './policy-snapshot.mjs';
 
@@ -17,8 +17,9 @@ export function loadHookPolicy(workspace, { ttlKey = 'gate_ttl_minutes', ttlDefa
     snapshot = JSON.parse(readPolicySource(full)?.toString('utf8') || 'null');
   } catch { /* A cold or invalid cache must be refreshed by the authority. */ }
   if (!validPolicySnapshot(snapshot, binding)) {
-    const bin = authorityBin();
-    const result = spawnSync(bin ? process.execPath : 'ae', [...(bin ? [bin] : []), 'status', '--effective-policy', '--json', '--no-events', '--workspace', workspace], {
+    const node = nodeAuthority();
+    if (!node) return safe;
+    const result = spawnSync(node.command, [...node.args, 'status', '--effective-policy', '--json', '--no-events', '--workspace', workspace], {
       cwd: workspace, encoding: 'utf8', timeout: 2500, maxBuffer: 128 * 1024,
     });
     if (result.error || result.status !== 0) return safe;
@@ -37,8 +38,9 @@ export function enforcementExitCode(enforcement) {
 }
 
 export function projectTrustIsCurrent(workspace) {
-  const bin = authorityBin();
-  const result = spawnSync(bin ? process.execPath : 'ae', [...(bin ? [bin] : []), 'trust', 'status', '--json', '--no-events', '--workspace', workspace], {
+  const node = nodeAuthority();
+  if (!node) return false;
+  const result = spawnSync(node.command, [...node.args, 'trust', 'status', '--json', '--no-events', '--workspace', workspace], {
     cwd: workspace, encoding: 'utf8', timeout: 2500, maxBuffer: 128 * 1024,
   });
   if (result.error || result.status !== 0) return false;

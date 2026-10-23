@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { commandHelpRequested, dispatch, listCommands } from '../lib/registry.mjs';
+import { commandHelpRequested, dispatch, getCommand, listCommands } from '../lib/registry.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
@@ -44,6 +44,23 @@ test('every registered command accepts --help and -h', () => {
       assert.equal(help.status, 0, help.stderr);
     }
   }
+});
+
+test('every verb form accepts --help and -h', () => {
+  for (const name of listCommands()) {
+    const verbs = getCommand(name)?.verbs || [];
+    for (const verb of verbs) {
+      for (const flag of ['--help', '-h']) {
+        const direct = run([name, verb.verb, flag]);
+        assert.equal(direct.status, 0, `${name} ${verb.verb} ${flag}\n${direct.stdout}\n${direct.stderr}`);
+        assert.match(direct.stdout, new RegExp(verb.verb), `${name} ${verb.verb} ${flag} names the verb`);
+      }
+    }
+  }
+  const review = run(['review', '--help']);
+  assert.equal(review.status, 0, review.stderr);
+  assert.match(review.stdout, /prepare/);
+  assert.match(review.stdout, /assemble/);
 });
 
 test('a help flag after -- is not command help', () => {

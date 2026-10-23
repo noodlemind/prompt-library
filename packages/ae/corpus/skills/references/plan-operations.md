@@ -2,11 +2,21 @@
 
 The agent chooses intent, scope, tasks, acceptance criteria, check adequacy, research, risk, and whether observed work satisfies the goal. Harness writes their representation and applies state transitions. It does not infer authorization from a payload field.
 
-Put structured decision files under `.harness/decisions/` and pass them with `--file`. Inputs are bounded JSON files. Use `ae help plan-new` and `ae help plan-update` for the installed contract. Keep plan operations separate from product mutations.
+Pipe the decision JSON on stdin with `--file -`. Do not write that JSON into the repo, a worktree, or the system temp folder. Pass the JSON as the standard input of the host execute tool. Do not use a shell heredoc.
+
+```text
+ae plan-new --file - --json
+```
+
+```json
+{"version":1,"format":"full","goal":"Reject invalid parser input."}
+```
+
+`.harness/decisions/` remains a valid on-disk location when a person already has a file there. Inputs are bounded JSON. Use `ae help plan-new` and `ae help plan-update` for the installed contract. Keep plan operations separate from product mutations.
 
 ## Create
 
-Use `ae plan-new --file <creation.json> --json`. A creation decision has version 1, format `full|short`, and a goal. Supply acceptance text, constraints, scope paths, the inspected named check, and selected intent-source paths. Optional full-plan fields include type, slug, title, risk, outputs, authored notes, phases, and `skillsUsed`. Record only skills actually loaded. Primitive maintenance requires `create-primitive`; its declaration does not replace the successful skill read recorded for the session. Omit slug to let Harness derive it. Use open or needs-info status for an unlocked capture; such a draft can omit a check. Missing proof remains explicit.
+Use `ae plan-new --file - --json` and pipe the creation JSON. `scope` is an array of repo-relative paths; Harness writes one path per line under `## Impacted Files`. A creation decision has version 1, format `full|short`, and a goal. Supply acceptance text, constraints, scope paths, the inspected named check, and selected intent-source paths. Copy the delivery classifier's `playbook` into this JSON. `ae plan-new --classification` validates the legacy flag form and cannot be combined with `--file`. Optional full-plan fields include type, slug, title, risk, outputs, authored notes, phases, and `skillsUsed`. Record only skills actually loaded. Primitive maintenance requires `create-primitive`; its declaration does not replace the successful skill read recorded for the session. Omit slug to let Harness derive it. Use open or needs-info status for an unlocked capture; such a draft can omit a check. Missing proof remains explicit.
 
 ```json
 {
@@ -22,11 +32,11 @@ Use `ae plan-new --file <creation.json> --json`. A creation decision has version
 }
 ```
 
-The example check must exist in the product's trusted configuration. A short plan requires acceptance and constraints. Harness chooses storage, writes the date, headings, IDs, unchecked task state, initial status and source bindings, and returns `path`, `revision`, `planState`, `missing`, and `allowedNextActions`.
+The example check must exist in the product's trusted configuration. A short plan requires acceptance and constraints. `scope` renders as one `` `- \`path\`` `` line per file under `## Impacted Files`. A hand-written section may also use `*` or numbered markers, several paths separated by commas or spaces, or a trailing description after the path. Scope failure names the parsed paths. Harness chooses storage, writes the date, headings, IDs, unchecked task state, initial status and source bindings, and returns `path`, `revision`, `planState`, `missing`, and `allowedNextActions`.
 
 ## Update
 
-Use `ae plan-update --plan <path> --file <decision.json> --json`. Every operation supplies version 1, a stable decision `id`, an `action`, and `expect` copied from the observed revision. Get that revision from plan creation, a preceding operation, or `ae status --contract-digest --plan <path> --json`. Do not calculate it in the model.
+Use `ae plan-update --workspace <checkout> --plan <path> --file - --json` and pipe the decision JSON. Every operation supplies version 1, a stable decision `id`, an `action`, and `expect` copied from the observed revision. Supported actions are start, amend, progress, finding, gap, and complete. Get that revision from plan creation, a preceding operation, or `ae status --contract-digest --plan <path> --json`. Do not calculate it in the model.
 
 ```json
 {"version":1,"id":"start-accepted-work","action":"start","expect":"<observed revision>"}

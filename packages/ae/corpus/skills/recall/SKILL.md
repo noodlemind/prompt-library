@@ -7,7 +7,7 @@ argument-hint: "[task description]"
 
 # Recall (CLI-first)
 
-**Phase 0** — load bounded context before investigation. Contract: [`harness-tool-contract.md`](../references/harness-tool-contract.md).
+**Phase 0** — load bounded context before investigation. Contract: `harness-tool-contract.md` (`ae get --reference skills/references/harness-tool-contract.md --json`).
 
 ## Steps
 
@@ -25,7 +25,7 @@ Read **only** `.harness/context-pack.md` (≤2 KB) — it also carries the top-3
 ae recall "<keywords>" --limit 3 --workspace . --json
 ```
 
-`read` returned paths only — ≤25 lines per solution per [`context-budget.md`](../references/context-budget.md).
+`read` returned paths only — ≤25 lines per solution per `context-budget.md` (`ae get --reference skills/references/context-budget.md --json`).
 
 ### 3. Summarize
 
