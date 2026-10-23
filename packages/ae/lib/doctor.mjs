@@ -37,8 +37,6 @@ import { planReadDirs } from './project-layout.mjs';
 
 const require = createRequire(import.meta.url);
 
-const MIN_ENRICHED_RATIO = 0.5;
-
 function isEntryEnriched(e) {
   return Boolean((e.symptom && e.symptom.trim()) || (e.module && e.module.trim()));
 }
@@ -92,7 +90,9 @@ function vscodeDiscoveryConfigured(settingsPaths) {
     if (!fs.existsSync(settingsPath)) continue;
     try {
       const settings = parseVSCodeSettings(fs.readFileSync(settingsPath, 'utf8'));
-      if (settings['chat.hookFilesLocations']?.['~/.copilot/hooks'] === true) return true;
+      const hooks = settings['chat.hookFilesLocations']?.['~/.copilot/hooks'] === true;
+      const nested = settings['chat.subagents.allowInvocationsFromSubagents'] === true;
+      if (hooks && nested) return true;
     } catch {
       // A parseable-settings check is represented by this false result.
     }
@@ -351,7 +351,7 @@ async function vscodeChecks({ copilotHome, settingsPaths }) {
   return [
     { id: 'V1', name: 'VS Code hook bundle installed', pass: installed, hint: 'Run: ae upgrade --configure-vscode' },
     { id: 'V2', name: 'VS Code hook configuration and commands resolvable', pass: Boolean(loaded.config), hint: loaded.error || 'Reinstall hooks' },
-    { id: 'V3', name: 'VS Code user hook discovery configured', pass: discovery, hint: 'Run: ae install --configure-vscode' },
+    { id: 'V3', name: 'VS Code user hook discovery configured', pass: discovery, hint: 'Run: ae install --configure-vscode (sets hook locations and chat.subagents.allowInvocationsFromSubagents)' },
     { id: 'V4', name: 'Known VS Code mutation payload recognized', pass: Boolean(probe.recognized), hint: 'Inspect payload normalization and hook events' },
     { id: 'V5', name: 'Missing-gate mutation denied', pass: Boolean(probe.missingGateDenied), hint: 'Inspect PreToolUse policy output' },
     { id: 'V6', name: 'Gated scoped mutation allowed', pass: Boolean(probe.gatedAllowed), hint: 'Inspect plan gate and scope handling' },
@@ -613,11 +613,10 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   const checks = [];
 
   const manifest = path.join(copilotHome, 'knowledge', 'manifest.yaml');
-  const manifestRepo = path.join(assetsRoot, 'knowledge', 'manifest.yaml');
   checks.push({
     id: 'H1',
     name: 'Global knowledge manifest',
-    pass: fs.existsSync(manifest) || fs.existsSync(manifestRepo),
+    pass: fs.existsSync(manifest),
     hint: 'Run: ae install',
   });
 
@@ -630,11 +629,10 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   });
 
   const engineer = path.join(copilotHome, 'agents', 'engineer.agent.md');
-  const engineerAsset = path.join(assetsRoot, 'agents', 'engineer.agent.md');
   checks.push({
     id: 'H3',
     name: 'Engineer agent',
-    pass: fs.existsSync(engineer) || fs.existsSync(engineerAsset),
+    pass: fs.existsSync(engineer),
     hint: 'Run: ae install',
   });
 
@@ -647,9 +645,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   checks.push({
     id: 'H4',
     name: 'Capture gate reference',
-    pass:
-      fs.existsSync(captureGate) ||
-      fs.existsSync(path.join(assetsRoot, 'skills', 'references', 'capture-gate.md')),
+    pass: fs.existsSync(captureGate),
     hint: 'Re-run install',
   });
 
@@ -668,7 +664,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   checks.push({
     id: 'H6',
     name: 'Enterprise overlay (optional)',
-    pass: fs.existsSync(entReg) || fs.existsSync(path.join(assetsRoot, 'enterprise', 'capability-registry.enterprise.yaml')),
+    pass: fs.existsSync(entReg),
     hint: 'Optional: add enterprise pack or install base harness',
     optional: true,
   });
@@ -678,7 +674,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     checks.push({
       id: 'H7',
       name: `Autopilot skill /${skill}`,
-      pass: fs.existsSync(p) || fs.existsSync(path.join(assetsRoot, 'skills', skill, 'SKILL.md')),
+      pass: fs.existsSync(p),
       hint: 'Run: ae upgrade',
     });
   }
@@ -710,36 +706,46 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     optional: true,
   });
 
-  const manifestPath = fs.existsSync(manifest)
-    ? manifest
-    : fs.existsSync(path.join(flags.workspace, 'knowledge', 'manifest.yaml'))
-      ? path.join(flags.workspace, 'knowledge', 'manifest.yaml')
-      : manifestRepo;
-  const { entries: manifestEntries, updated: manifestUpdated } = loadManifestEntries(manifestPath);
-  const enrichedCount = manifestEntries.filter(isEntryEnriched).length;
-  const hasEnrichedFields =
-    manifestEntries.length === 0 ||
-    enrichedCount / manifestEntries.length >= MIN_ENRICHED_RATIO;
-  checks.push({
-    id: 'H10',
-    name: 'Manifest enriched fields (symptom/module)',
-    pass: hasEnrichedFields,
-    hint: 'Run: ae index — rebuild manifest with symptom/module/excerpt',
-    optional: manifestEntries.length === 0,
-  });
-
-  const indexDir = resolveIndexDir(copilotHome, flags.workspace, flags.harnessHome || flags.home);
-  const indexFresh =
-    manifestEntries.length === 0 || !fs.existsSync(path.join(indexDir, 'meta.json'))
-      ? false
-      : !isIndexStale(indexDir, manifestUpdated);
-  checks.push({
-    id: 'H11',
-    name: 'BM25 postings index fresh',
-    pass: indexFresh,
-    hint: 'Run: ae index — rebuild the knowledge postings index',
-    optional: manifestEntries.length === 0,
-  });
+  const { entries: manifestEntries, updated: manifestUpdated } = loadManifestEntries(manifest);
+  if (manifestEntries.length === 0) {
+    checks.push({
+      id: 'H10',
+      name: 'Manifest enriched fields (symptom/module)',
+      pass: true,
+      optional: true,
+      hint: 'n/a — no learnings to enrich',
+    });
+    checks.push({
+      id: 'H11',
+      name: 'BM25 postings index fresh',
+      pass: true,
+      optional: true,
+      hint: 'n/a — no learnings to index',
+    });
+  } else {
+    const enrichedCount = manifestEntries.filter(isEntryEnriched).length;
+    const thin = manifestEntries.filter((entry) => !isEntryEnriched(entry));
+    const backfill = thin.some((entry) => typeof entry.trigger === 'string' && entry.trigger.trim());
+    const names = thin.map((entry) => entry.path || entry.id).filter(Boolean).slice(0, 8);
+    checks.push({
+      id: 'H10',
+      name: 'Manifest enriched fields (symptom/module)',
+      pass: thin.length === 0,
+      hint: thin.length === 0
+        ? `${enrichedCount}/${manifestEntries.length} entries have symptom or module`
+        : backfill
+          ? 'Run: ae index — backfills symptom from trigger'
+          : `Add symptom or module frontmatter to ${names.join(', ')}, then run: ae index`,
+    });
+    const indexDir = resolveIndexDir(copilotHome, flags.workspace, flags.harnessHome || flags.home);
+    const indexFresh = Boolean(manifestUpdated) && !isIndexStale(indexDir, manifestUpdated);
+    checks.push({
+      id: 'H11',
+      name: 'BM25 postings index fresh',
+      pass: indexFresh,
+      hint: 'Run: ae index — rebuild the knowledge postings index',
+    });
+  }
 
   const resolved = resolveHarnessBin({ workspace: flags.workspace, copilotHome });
   const runnerPath = path.join(flags.workspace, '.harness', 'run.mjs');
@@ -773,11 +779,10 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   });
 
   const hooksJson = path.join(copilotHome, 'hooks', 'hooks.json');
-  const hooksAsset = path.join(assetsRoot, 'hooks', 'hooks.json');
   checks.push({
     id: 'H14',
     name: 'Lifecycle hooks bundle',
-    pass: fs.existsSync(hooksJson) || fs.existsSync(hooksAsset),
+    pass: fs.existsSync(hooksJson),
     hint: 'Re-run ae install to sync hooks/',
     optional: true,
   });
@@ -834,7 +839,16 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
 
   checks.push(routingPolicyCheck(workspace));
   const effectivePolicy = loadPolicy(workspace, flags.enforcement, { copilotHome });
-  checks.push({ id: 'P0', name: `Installed effective policy: ${effectivePolicy.enforcement}`, pass: true, optional: true, hint: `${effectivePolicy.enforcementSource}; critical=${effectivePolicy.rules.critical}; destructive=${effectivePolicy.rules.destructive}`, policy: effectivePolicy });
+  const policyEnforced = effectivePolicy.enforcement === 'enforce';
+  checks.push({
+    id: 'P0',
+    name: `Installed effective policy: ${effectivePolicy.enforcement}`,
+    pass: policyEnforced,
+    hint: policyEnforced
+      ? `${effectivePolicy.enforcementSource}; critical=${effectivePolicy.rules.critical}; destructive=${effectivePolicy.rules.destructive}`
+      : `Effective enforcement is ${effectivePolicy.enforcement} (${effectivePolicy.enforcementSource}). Doctor requires enforce. Set enforcement: enforce in .github/harness/policy.yaml or unset HARNESS_ENFORCEMENT. This check does not change the policy.`,
+    policy: effectivePolicy,
+  });
   checks.push(...knowledgeChecks({ workspace, copilotHome }));
   checks.push(...structuralChecks({ workspace }));
 

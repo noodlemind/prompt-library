@@ -92,6 +92,14 @@ function renderHelp() {
   return lines.join('\n');
 }
 
+function helpRequested(argv) {
+  for (const token of argv) {
+    if (token === '--') return false;
+    if (token === '--help' || token === '-h') return true;
+  }
+  return false;
+}
+
 function renderCommandHelp(name) {
   const c = describeCommand(name);
   if (!c) return null;
@@ -191,6 +199,8 @@ export async function main() {
         workspace: path.resolve(flags.workspace),
         copilotHome: resolveCopilotHome(flags.copilotHome),
       })));
+    } else if (hasCommand(command) && helpRequested(args)) {
+      console.log(renderCommandHelp(command));
     } else if (hasCommand(command)) {
       const { args: laneArgs, output } = extractOutputLane(args);
       const runFlags = parseFlags(args);

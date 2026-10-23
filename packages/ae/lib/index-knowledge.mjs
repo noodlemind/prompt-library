@@ -88,7 +88,7 @@ function collectSolutions(dir, scope, base) {
         category: fm.category || cat.name,
         tags: fm.tags ? fm.tags.split(',').map((t) => t.trim()) : [],
         module: fm.module || '',
-        symptom: fm.symptom || '',
+        symptom: (fm.symptom || '').trim() || (fm.trigger || '').trim(),
         trigger: fm.trigger || '',
         claim: fm.claim || '',
         summary: summaryFromBody(text),

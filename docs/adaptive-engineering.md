@@ -12,8 +12,10 @@ Plans for a product repository live in `~/.ae/projects/<repo-id>/plans/`. `--ae-
 
 After `ae verify` passes, compounding records what the task taught. A detail that matters only for this task stays on the plan. A fact worth seeing again becomes a solution episode. A new skill or agent is a proposal. A person approves it before it is installed.
 
+The package is not on the public npm registry. From the repository root:
+
 ```bash
-npm install -g ae-harness
+npm install -g ./packages/ae
 ae install --configure-vscode
 ```
 
