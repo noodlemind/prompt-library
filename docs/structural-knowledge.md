@@ -12,9 +12,11 @@ ae graph explain src/api/orders.ts src/orders/service.ts --json
 ae graph impact src/orders/service.ts --depth 2 --limit 40 --json
 ```
 
-These are directed module-import relationships. `explain` returns supporting occurrences and resolver details. `impact` traverses reverse imports to affected candidates; it does not claim every caller or affected test. Live CLI/native paths prepare the shipped AST index when necessary. Direct synchronous library queries can report a degraded lexical tier without a compatible prepared index. Read tier, scope, omissions and unresolved relationships before acting.
+These are directed module-import relationships. `explain` returns supporting occurrences and resolver details. `impact` traverses reverse imports to affected candidates; it does not claim every caller or affected test. Live CLI/native paths prepare the shipped AST index when necessary; publication refusal, including the 10 MB table bound, returns explicitly labeled lexical evidence and a preparation reason. Source mutation still fails closed. Direct synchronous library queries can report a degraded lexical tier without a compatible prepared index. Read tier, scope, omissions and unresolved relationships before acting.
 
 The default structural inventory covers recognized **Git-tracked source**, capped at 4,000 files and 200,000 bytes per file. Untracked callers are outside it. Complete inventory under this scope is not semantic completeness. AST syntax, lexical observations, resolver deductions and runtime observations have different guarantees. Qualified definitions and import bindings narrow candidates, but unsupported DI, Spring profiles, reflection, dynamic imports and generated code require further evidence.
+
+JavaScript/TypeScript call candidates require an unshadowed imported name and a supported direct named export. Private declarations, nested methods, default-export aliases, re-export routes and CommonJS export surfaces without supported provenance remain unresolved. Module-import observations remain available independently.
 
 ## Select evidence for the task
 

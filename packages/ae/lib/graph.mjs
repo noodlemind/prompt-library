@@ -47,7 +47,10 @@ export async function prepareGraph(options) {
     && JSON.stringify(prior.meta.webTreeSitter || null) === JSON.stringify(extractor.webTreeSitter || null);
   if (sameExtractor && structuralIndexIsCurrent(workspace, prior)) return { generation: prior.generation, refreshed: false, tier: extractor.tier };
   const built = await buildStructuralIndex({ workspace, home, extractor });
-  if (!built.written) throw Object.assign(new Error(built.sourceChanged ? 'graph source changed during preparation; retry' : 'graph index preparation could not publish a complete generation'), { code: 'E_GRAPH_PREPARE', exit: 1 });
+  if (!built.written) {
+    if (built.sourceChanged) throw Object.assign(new Error('graph source changed during preparation; retry'), { code: 'E_GRAPH_PREPARE', exit: 1 });
+    return { generation: null, refreshed: false, degraded: true, tier: 'lexical', reason: built.reason || { code: 'E_STRUCTURAL_PREPARE', message: 'A complete structural generation could not be published.' } };
+  }
   return { generation: built.meta.generation, refreshed: true, reparsed: built.reparsed, reused: built.reused, tier: extractor.tier };
 }
 
@@ -102,7 +105,7 @@ function indexedAdjacency(graph, reverse) {
   return map;
 }
 
-export function queryGraph({ workspace, home, operation = 'deps', files = [], depth = routeOperation(operation) ? 8 : 1, limit = 50, generation = null }) {
+export function queryGraph({ workspace, home, operation = 'deps', files = [], depth = routeOperation(operation) ? 8 : 1, limit = 50, generation = null, lexicalFallback = false }) {
   const roots = validateGraphQuery({ workspace, operation, files, depth, limit, generation });
   let facts, graph, coverage, cached, reused, sourceIdentity = null, currentGeneration = null, adjacencyReused = false;
   if (generation) {
@@ -122,7 +125,7 @@ export function queryGraph({ workspace, home, operation = 'deps', files = [], de
     };
   } else {
     const inventory = trackedSourceFiles(workspace);
-    cached = readStructuralIndex(workspace, { home });
+    cached = lexicalFallback ? null : readStructuralIndex(workspace, { home });
     const source = cached?.meta?.sourceState ? captureWorkingSources(workspace) : null;
     sourceIdentity = source?.state || null;
     const compatible = source?.valid && cached.meta.sourceState.version === source.state.version

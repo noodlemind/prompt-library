@@ -246,6 +246,14 @@ function nodeDetails(node) {
 }
 
 function importOccurrence(node, specifier, rel) {
+  if (node.type === 'call_expression' && node.childForFieldName('function')?.text === 'require') {
+    let declaration = node.parent;
+    while (declaration && !['variable_declarator', 'lexical_declaration', 'variable_declaration', 'expression_statement', 'program', 'statement_block'].includes(declaration.type)) declaration = declaration.parent;
+    const name = declaration?.type === 'variable_declarator' && declaration.childForFieldName('name');
+    const value = declaration?.type === 'variable_declarator' && declaration.childForFieldName('value');
+    const bindings = name && value?.id === node.id ? importBindings(rel, `const ${name.text} = ${value.text}`, specifier) : [];
+    return { specifier, range: nodeRange(node), bindings, method: 'ast' };
+  }
   let statement = node;
   for (let parent = node.parent; parent; parent = parent.parent) {
     if (['lexical_declaration', 'variable_declaration', 'expression_statement'].includes(parent.type)) { statement = parent; break; }
@@ -256,18 +264,25 @@ function importOccurrence(node, specifier, rel) {
 
 const JS_FUNCTION_SCOPES = new Set(['function_declaration', 'function_expression', 'generator_function_declaration', 'generator_function', 'arrow_function', 'method_definition']);
 
-function shadowedRequire(node, imported, cache) {
-  if (imported.has('require')) return true;
+function bindingContains(node, identifier) {
+  if (!node) return false;
+  if (['identifier', 'shorthand_property_identifier_pattern'].includes(node.type)) return node.text === identifier;
+  if (node.type === 'pair_pattern') return bindingContains(node.childForFieldName('value'), identifier);
+  return (node.namedChildren || []).some(child => bindingContains(child, identifier));
+}
+
+function shadowedIdentifier(node, identifier, cache, importedDeclarations = new Set()) {
   for (let scope = node.parent; scope; scope = scope.parent) {
     if (!JS_FUNCTION_SCOPES.has(scope.type) && !['program', 'statement_block', 'catch_clause'].includes(scope.type)) continue;
-    const key = scope.id;
+    const key = `${scope.id}\0${identifier}`;
     if (!cache.has(key)) {
       const parameters = scope.childForFieldName('parameters') || scope.childForFieldName('parameter');
-      let shadowed = parameters && /\brequire\b/.test(parameters.text);
-      if (JS_FUNCTION_SCOPES.has(scope.type) && scope.childForFieldName('name')?.text === 'require') shadowed = true;
+      let shadowed = bindingContains(parameters, identifier);
+      if (JS_FUNCTION_SCOPES.has(scope.type) && scope.childForFieldName('name')?.text === identifier) shadowed = true;
       if (!shadowed) for (const declaration of scope.descendantsOfType(['variable_declarator', 'function_declaration', 'class_declaration'])) {
+        if (importedDeclarations.has(declaration.id)) continue;
         const name = declaration.childForFieldName('name');
-        if (!name || !/\brequire\b/.test(name.text)) continue;
+        if (!bindingContains(name, identifier)) continue;
         let contained = true;
         for (let parent = declaration.parent; parent && parent.id !== scope.id; parent = parent.parent) {
           if (JS_FUNCTION_SCOPES.has(parent.type)) { contained = false; break; }
@@ -281,6 +296,18 @@ function shadowedRequire(node, imported, cache) {
   return false;
 }
 
+function shadowedRequire(node, imported, cache) {
+  return imported.has('require') || shadowedIdentifier(node, 'require', cache);
+}
+
+function jsExportDetails(node) {
+  let declaration = node;
+  if (node.type === 'variable_declarator' && ['lexical_declaration', 'variable_declaration'].includes(node.parent?.type)) declaration = node.parent;
+  const statement = declaration.parent;
+  if (statement?.type !== 'export_statement') return {};
+  return { exportKind: statement.children.some(child => child.type === 'default') ? 'default' : 'named' };
+}
+
 function walkJs(root, rel) {
   const defs = [];
   for (const node of root.descendantsOfType(JS_DEF_TYPES)) {
@@ -292,7 +319,7 @@ function walkJs(root, rel) {
       const fnValue = value && (value.type === 'arrow_function' || value.type === 'function_expression' || value.type === 'generator_function');
       const exported = hasAncestorOfType(node, 'export_statement');
       if (!fnValue && !exported) continue;
-      defs.push({ name: nameNode.text, kind: fnValue ? 'function' : 'const', line: node.startPosition.row + 1, exported, ...nodeDetails(node) });
+      defs.push({ name: nameNode.text, kind: fnValue ? 'function' : 'const', line: node.startPosition.row + 1, exported, ...jsExportDetails(node), ...nodeDetails(node) });
       continue;
     }
     defs.push({
@@ -300,6 +327,7 @@ function walkJs(root, rel) {
       kind: defKind(node.type),
       line: node.startPosition.row + 1,
       exported: hasAncestorOfType(node, 'export_statement'),
+      ...jsExportDetails(node),
       ...nodeDetails(node),
     });
   }
@@ -315,6 +343,8 @@ function walkJs(root, rel) {
     }
   }
   const refs = [];
+  const bindingRefs = [];
+  const importedDeclarations = new Set();
   const imported = new Set(importOccurrences.flatMap(occurrence => occurrence.bindings.map(binding => binding.local)));
   const shadowCache = new Map();
   for (const node of root.descendantsOfType(['call_expression', 'new_expression'])) {
@@ -329,15 +359,24 @@ function walkJs(root, rel) {
         if (arg && arg.type === 'string' && imports.length < MAX_IMPORTS_PER_FILE) {
           const specifier = arg.text.replace(/^['"`]|['"`]$/g, '');
           imports.push(specifier);
-          importOccurrences.push(importOccurrence(node, specifier, rel));
+          const occurrence = importOccurrence(node, specifier, rel);
+          importOccurrences.push(occurrence);
+          if (occurrence.bindings.length && node.parent?.type === 'variable_declarator') importedDeclarations.add(node.parent.id);
         }
         continue;
       }
       refs.push({ name: target.text, line: node.startPosition.row + 1, ...nodeDetails(node) });
+      bindingRefs.push([refs.at(-1), node, target.text]);
     } else if (target.type === 'member_expression') {
       const prop = target.childForFieldName('property');
       if (prop) refs.push({ name: prop.text, line: node.startPosition.row + 1, receiver: target.childForFieldName('object')?.text?.slice(0, MAX_IDENTIFIER_LENGTH) || null, ...nodeDetails(node) });
+      if (prop) bindingRefs.push([refs.at(-1), node, target.childForFieldName('object')?.text]);
     }
+  }
+  const bindingCache = new Map();
+  for (const occurrence of importOccurrences) for (const binding of occurrence.bindings) imported.add(binding.local);
+  for (const [ref, node, local] of bindingRefs) {
+    if (imported.has(local) && shadowedIdentifier(node, local, bindingCache, importedDeclarations)) ref.importBinding = 'shadowed';
   }
   return { defs, imports, importOccurrences, refs };
 }

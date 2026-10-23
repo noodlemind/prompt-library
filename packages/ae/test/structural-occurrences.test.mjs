@@ -8,6 +8,7 @@ import { lexicalV2, createTreesitterExtract } from '../lib/repo-map/treesitter-e
 import { readFileFacts } from '../lib/repo-map/facts.mjs';
 import { buildImportGraph, importResolver, resolveImportBinding } from '../lib/repo-map/imports.mjs';
 import { spawnSync } from 'node:child_process';
+import { buildStructuralIndex, readStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 
 test('lexical imports ignore comments, quoted examples, template text and member import methods', () => {
   const source = [
@@ -163,6 +164,107 @@ test('AST require calls shadowed by function parameters or local bindings are no
   ].join('\n'));
   assert.equal(result.tier, 'treesitter');
   assert.deepEqual(result.imports, ['./real.mjs']);
+});
+
+test('AST CommonJS bindings belong to their own variable declarators', async () => {
+  const extractor = await createTreesitterExtract();
+  const result = extractor.extract('main.cjs', [
+    "const a = require('./a.cjs'), b = require('./b.cjs');",
+    "let { foo: first } = require('./first.cjs'), { foo: second } = require('./second.cjs');",
+    "var member = require('./member.cjs').foo, wrapped = wrap(require('./wrapped.cjs'));",
+  ].join('\n'));
+  assert.equal(result.tier, 'treesitter');
+  assert.deepEqual(result.importOccurrences.map(({ specifier, bindings }) => ({ specifier, bindings })), [
+    { specifier: './a.cjs', bindings: [{ imported: '*', local: 'a', kind: 'namespace' }] },
+    { specifier: './b.cjs', bindings: [{ imported: '*', local: 'b', kind: 'namespace' }] },
+    { specifier: './first.cjs', bindings: [{ imported: 'foo', local: 'first', kind: 'named' }] },
+    { specifier: './second.cjs', bindings: [{ imported: 'foo', local: 'second', kind: 'named' }] },
+    { specifier: './member.cjs', bindings: [] },
+    { specifier: './wrapped.cjs', bindings: [] },
+  ]);
+});
+
+test('lexical CommonJS bindings abstain on ambiguous declarations and transformed values', () => {
+  const result = extract('main.cjs', [
+    "const a = require('./a.cjs'), b = require('./b.cjs');",
+    "const single = require('./single.cjs');",
+    "const { foo: named } = require('./named.cjs');",
+    "const member = require('./member.cjs').foo;",
+    "const wrapped = wrap(require('./wrapped.cjs'));",
+  ].join('\n'));
+  assert.deepEqual(result.importOccurrences.map(({ specifier, bindings }) => ({ specifier, bindings })), [
+    { specifier: './a.cjs', bindings: [] },
+    { specifier: './b.cjs', bindings: [] },
+    { specifier: './single.cjs', bindings: [{ imported: '*', local: 'single', kind: 'namespace' }] },
+    { specifier: './named.cjs', bindings: [{ imported: 'foo', local: 'named', kind: 'named' }] },
+    { specifier: './member.cjs', bindings: [] },
+    { specifier: './wrapped.cjs', bindings: [] },
+  ]);
+});
+
+test('lexical ESM bindings use the matching declaration when imports share a line', () => {
+  const fact = lexicalV2('main.mjs', "import { first } from './a.mjs'; import { second } from './b.mjs';");
+  assert.deepEqual(fact.importOccurrences.map(row => [row.specifier, row.bindings.map(binding => binding.local)]), [['./a.mjs', ['first']], ['./b.mjs', ['second']]]);
+});
+
+test('AST imported call observations mark bindings shadowed in their lexical scopes', async () => {
+  const extractor = await createTreesitterExtract();
+  const result = extractor.extract('main.mjs', [
+    "import { run as execute } from './run.mjs';",
+    "import * as api from './api.mjs';",
+    "const cjs = require('./cjs.cjs');",
+    'function shadowed(execute) { execute(); }',
+    'function clear() { execute(); }',
+    'function namespace(api) { api.run(); }',
+    'function local() { const execute = custom; execute(); }',
+    'function cjsClear() { cjs.run(); }',
+    'function cjsShadow(cjs) { cjs.run(); }',
+  ].join('\n'));
+  assert.equal(result.tier, 'treesitter');
+  assert.deepEqual(result.refs.map(ref => [ref.owner, ref.importBinding]), [
+    ['shadowed', 'shadowed'], ['clear', undefined], ['namespace', 'shadowed'],
+    ['local', 'shadowed'], ['cjsClear', undefined], ['cjsShadow', 'shadowed'],
+  ]);
+});
+
+test('AST JavaScript export metadata identifies only direct declaration surfaces', async () => {
+  const extractor = await createTreesitterExtract();
+  const result = extractor.extract('main.mjs', [
+    'export function visible() { function nested() {} }',
+    'export default function primary() {}',
+    'export const arrow = () => {}, value = 1;',
+    'export class Api { run() {} }',
+    'export const object = { method() {} };',
+    'function reexported() {}',
+    'export { reexported };',
+  ].join('\n'));
+  assert.equal(result.tier, 'treesitter');
+  assert.deepEqual(result.defs.map(def => [def.name, def.exportKind]), [
+    ['visible', 'named'], ['nested', undefined], ['primary', 'default'],
+    ['arrow', 'named'], ['value', 'named'], ['Api', 'named'], ['run', undefined],
+    ['object', 'named'], ['method', undefined], ['reexported', undefined],
+  ]);
+});
+
+test('AST structural index keeps CommonJS bindings on the matching modules', async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-cjs-bindings-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-cjs-bindings-home-'));
+  t.after(() => { fs.rmSync(workspace, { recursive: true, force: true }); fs.rmSync(home, { recursive: true, force: true }); });
+  const git = args => spawnSync('git', ['-C', workspace, ...args], { encoding: 'utf8' });
+  assert.equal(git(['init', '-q']).status, 0);
+  fs.writeFileSync(path.join(workspace, 'main.cjs'), "const a = require('./a.cjs'), b = require('./b.cjs');\na.foo();\nb.foo();\n");
+  for (const name of ['a', 'b']) fs.writeFileSync(path.join(workspace, `${name}.cjs`), 'function foo() {}\nmodule.exports = { foo };\n');
+  assert.equal(git(['add', '.']).status, 0);
+  assert.equal(git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']).status, 0);
+  const extractor = await createTreesitterExtract();
+  const result = await buildStructuralIndex({ workspace, home, extractor });
+  assert.equal(result.written, true);
+  const index = readStructuralIndex(workspace, { home });
+  const tracked = new Set(['main.cjs', 'a.cjs', 'b.cjs']);
+  assert.deepEqual(resolveImportBinding('main.cjs', 'a', index.files['main.cjs'], tracked).targets, ['a.cjs']);
+  assert.deepEqual(resolveImportBinding('main.cjs', 'b', index.files['main.cjs'], tracked).targets, ['b.cjs']);
+  const calls = index.graph.calls.filter(call => call.from === 'main.cjs' && call.symbol === 'foo');
+  assert.deepEqual(calls, [], 'unsupported CommonJS export surfaces cannot establish call candidates');
 });
 
 test('canonical tsconfig selection cannot be overridden by an unrelated same-directory variant', (t) => {

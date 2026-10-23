@@ -115,6 +115,7 @@ function sanitizeEntry(res, { hash, mtime, size }) {
       kind: String(d.kind || 'symbol').slice(0, 24),
       line: Number.isFinite(d.line) ? d.line : 0,
       exported: Boolean(d.exported),
+      ...(['named', 'default'].includes(d.exportKind) ? { exportKind: d.exportKind } : {}),
       ...(typeof d.owner === 'string' ? { owner: cleanName(d.owner) } : {}),
       ...(typeof d.id === 'string' ? { id: redactSecrets(d.id).slice(0, 2048) } : {}),
       ...(range(d.range) ? { range: range(d.range) } : {}),
@@ -126,6 +127,7 @@ function sanitizeEntry(res, { hash, mtime, size }) {
       ...(range(r.range) ? { range: range(r.range) } : {}),
       ...(typeof r.owner === 'string' ? { owner: cleanName(r.owner) } : {}),
       ...(typeof r.receiver === 'string' ? { receiver: cleanName(r.receiver) } : {}),
+      ...(r.importBinding === 'shadowed' ? { importBinding: 'shadowed' } : {}),
     })),
     tier: res.tier === 'treesitter' ? 'treesitter' : 'lexical',
     limitsReached: res.limitsReached || {},
@@ -162,6 +164,7 @@ function buildSymbolTable(files, truncation) {
       }
       if (symbols[d.name].defs.length < MAX_DEFS_PER_SYMBOL) {
         symbols[d.name].defs.push({ file: rel, line: d.line, kind: d.kind, exported: d.exported,
+          ...(d.exportKind ? { exportKind: d.exportKind } : {}),
           ...(d.id ? { id: d.id } : {}), ...(d.owner ? { owner: d.owner } : {}),
           ...(d.range ? { range: d.range } : {}), ...(d.signature ? { signature: d.signature } : {}) });
       } else {
@@ -200,13 +203,18 @@ function buildGraph(files, symbols, truncation, workspace) {
       if (perFile.has(occurrenceKey)) continue;
       perFile.set(occurrenceKey, true);
       const entry = symbols[r.name];
-      const binding = resolveImportBinding(rel, r.receiver || r.name, files[rel], trackedSet, { workspace, resolve });
+      const binding = r.importBinding === 'shadowed'
+        ? { reason: 'shadowed-import-binding', bindings: [], evidence: [] }
+        : resolveImportBinding(rel, r.receiver || r.name, files[rel], trackedSet, { workspace, resolve });
       const bound = binding.reason !== 'no-explicit-binding';
       const definitions = bound ? binding.bindings.flatMap(imported => {
         if (imported.kind === 'type') return [];
         const name = r.receiver || imported.imported === '*' || imported.imported === 'default' ? r.name : imported.imported;
-        return (symbols[name]?.defs || []).filter(def => def.file === imported.target).map(def => ({ ...def, name }));
+        return (symbols[name]?.defs || []).filter(def => def.file === imported.target
+          && (!/\.[cm]?[jt]sx?$/i.test(imported.target) || imported.imported !== 'default' && def.exportKind === 'named' && !def.owner))
+          .map(def => ({ ...def, name }));
       }) : r.receiver ? [] : (entry?.defs || []).map(def => ({ ...def, name: r.name }));
+      if (bound && binding.bindings.length && !definitions.length && binding.reason === 'explicit-import-binding') binding.reason = 'unsupported-export-binding';
       const targets = [...new Set(definitions.map(def => def.file))].filter(file => file !== rel);
       const to = targets.slice(0, 5);
       const candidates = definitions.filter(def => to.includes(def.file)).slice(0, MAX_DEFS_PER_SYMBOL);
@@ -419,14 +427,17 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
   const finalSnapshot = captureWorkingSources(workspace);
   const finalHashes = readSourceHashes(workspace, tracked);
   const sourceChanged = inventory.unavailable || finalInventory.unavailable || inventory.inventoryHash !== finalInventory.inventoryHash || sourceSha !== git(workspace, ['rev-parse', 'HEAD']) || [...initialHashes].some(([rel, hash]) => hash !== finalHashes.get(rel)) || Object.entries(nextFiles).some(([rel, row]) => row.hash !== initialHashes.get(rel));
-  if (sourceChanged || !snapshot.valid || !finalSnapshot.valid || snapshot.state.digest !== finalSnapshot.state.digest) {
+  const sourceStateChanged = snapshot.valid !== finalSnapshot.valid || snapshot.state && finalSnapshot.state && snapshot.state.digest !== finalSnapshot.state.digest;
+  if (sourceChanged || !snapshot.valid || !finalSnapshot.valid || sourceStateChanged) {
     log('structural index not published: source inventory or content changed during extraction');
-    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn, sourceChanged: true };
+    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn,
+      sourceChanged: Boolean(sourceChanged || sourceStateChanged),
+      reason: { code: 'E_STRUCTURAL_SOURCE_STATE', message: snapshot.reason || finalSnapshot.reason || 'Source inventory or content changed during extraction.' } };
   }
 
   if (!meta.sha) {
     log('structural index not published — git HEAD could not be read');
-    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
+    return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn, reason: { code: 'E_STRUCTURAL_HEAD', message: 'Git HEAD could not be read.' } };
   }
 
   if (!dryRun) {
@@ -439,7 +450,7 @@ export async function buildStructuralIndex({ workspace, home, extractor, since =
     ]);
     if (!published.ok) {
       log(`structural index write refused: ${published.failed}`);
-      return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn };
+      return { dir, written: false, reparsed, reused, removedFiles, delta, meta, sinceIgnored, priorUnreadable, basedOn, reason: { code: 'E_STRUCTURAL_PUBLISH', message: published.failed } };
     }
     dir = published.dir;
     meta.generation = published.generation;

@@ -7,6 +7,8 @@ import { test } from 'node:test';
 import { harnessControlCommand } from '../corpus/hooks/lib/tool-payload.mjs';
 import { beforeDeliveryTool } from '../lib/agent-delivery.mjs';
 import { createTreesitterExtract, packageGrammarRoots } from '../lib/repo-map/treesitter-extractor.mjs';
+import { prepareGraph } from '../lib/graph.mjs';
+import { readStructuralIndex } from '../lib/repo-map/structural-index.mjs';
 
 const bin = path.resolve(import.meta.dirname, '../bin/ae.mjs');
 const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
@@ -142,6 +144,59 @@ test('cold graph dry runs never publish an index in JSON or envelope output', t 
   }
 });
 
+test('over-budget AST publication keeps small CLI queries available with labelled lexical evidence', t => {
+  const body = Array.from({ length: 150 }, (_, i) => `export function f${i}() { return ${i}; }`).join('\n');
+  const files = Object.fromEntries(Array.from({ length: 450 }, (_, i) => [`m${i}.mjs`, `${i === 0 ? "import './m1.mjs';\n" : ''}${body}\n`]));
+  const f = fixture(t, files);
+  const result = f.json('graph', 'deps', 'm0.mjs');
+  assert.deepEqual(result.edges.map(edge => edge.to), ['m1.mjs']);
+  assert.equal(result.preparation.degraded, true);
+  assert.equal(result.preparation.refreshed, false);
+  assert.equal(result.preparation.tier, 'lexical');
+  assert.equal(result.preparation.reason.code, 'E_STRUCTURAL_PUBLISH');
+  assert.match(result.preparation.reason.message, /bounded files\.json/);
+  assert.equal(result.generation, null);
+  assert.equal(result.producer.extractorTier, 'lexical');
+  assert.deepEqual(result.producer.grammarVersions, {});
+  assert.ok(result.edges.every(edge => edge.method === 'lexical'));
+  assert.equal(readStructuralIndex(f.workspace, { home: f.home }), null);
+  const historical = f.cli('graph', 'deps', 'm0.mjs', '--generation', 'f'.repeat(32), '--json');
+  assert.equal(historical.status, 1);
+  assert.match(historical.stderr, /E_GRAPH_SNAPSHOT/);
+});
+
+test('an unborn HEAD keeps live CLI graph queries available with a preparation reason', t => {
+  const f = fixture(t);
+  fs.rmSync(path.join(f.workspace, '.git', 'refs', 'heads'), { recursive: true });
+  const result = f.json('graph', 'deps', 'a.mjs');
+  assert.deepEqual(result.edges.map(edge => edge.to), ['b.mjs']);
+  assert.equal(result.preparation.degraded, true);
+  assert.match(result.preparation.reason.message, /HEAD|source state/);
+  assert.equal(result.generation, null);
+  const envelope = f.cli('graph', 'deps', 'a.mjs', '--output', 'json-envelope');
+  assert.equal(envelope.status, 0, envelope.stderr);
+  assert.match(envelope.stdout, /"degraded":true/);
+  assert.match(envelope.stdout, /"code":"E_STRUCTURAL_SOURCE_STATE"/);
+});
+
+test('source mutation during parser preparation still fails closed', async t => {
+  const f = fixture(t);
+  const original = fs.statSync;
+  let changed = false;
+  fs.statSync = function (file, ...args) {
+    const result = original.call(this, file, ...args);
+    if (!changed && file === path.join(f.workspace, 'a.mjs')) {
+      changed = true;
+      f.write('a.mjs', "import './c.mjs';\n");
+    }
+    return result;
+  };
+  try {
+    await assert.rejects(prepareGraph({ ...f, operation: 'deps', files: ['a.mjs'] }), { code: 'E_GRAPH_PREPARE' });
+    assert.equal(changed, true);
+  } finally { fs.statSync = original; }
+});
+
 test('long default imports, side effects and reexports agree before and after indexing', (t) => {
   const target = `${'nested/'.repeat(25)}target.mjs`;
   const f = fixture(t, {
@@ -177,7 +232,8 @@ for (const [extension, language] of [['mjs', 'javascript'], ['ts', 'typescript']
     const f = fixture(t, { [loader]: "export const load = () => import('./b.mjs');\n" });
     const cold = f.json('graph', 'path', loader, 'c.mjs');
     assert.deepEqual(cold.path, [loader, 'b.mjs', 'c.mjs']);
-    assert.equal(f.cli('index', '--structural').status, 0);
+    const indexed = f.cli('index', '--structural');
+    assert.equal(indexed.status, 0, indexed.stderr + indexed.stdout);
     const warm = f.json('graph', 'path', loader, 'c.mjs');
     assert.equal(warm.outcome, 'found');
     assert.deepEqual(warm.path, [loader, 'b.mjs', 'c.mjs']);

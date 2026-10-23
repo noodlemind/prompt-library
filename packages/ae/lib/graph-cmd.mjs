@@ -33,10 +33,11 @@ export function parseGraphArguments(argv) {
 }
 
 export function graphResultOf(argv, preparation = null) {
-  const result = queryGraph(parseGraphArguments(argv));
+  const result = queryGraph({ ...parseGraphArguments(argv), lexicalFallback: preparation?.degraded === true });
   if (preparation?.refreshed) Object.assign(result.cache, { reused: preparation.reused, refreshed: preparation.reparsed, prepared: true });
   if (preparation?.dryRun) result.preparation = { dryRun: true, refreshed: false, degraded: result.coverage.lexicalFiles > 0, reason: 'Dry-run skips parser preparation; existing facts or labelled lexical evidence are read without publishing an index.' };
-  return { ...result, summary: `${result.operation} ${result.roots.join(' -> ')}: ${result.outcome}${result.coverage.complete ? '' : ' with incomplete coverage'} [git-tracked-source; ${result.freshness.state}${result.source === 'snapshot' ? ` generation ${result.generation}; no live validation` : ''}; import declarations only${preparation?.dryRun ? '; dry-run, parser preparation skipped' : ''}]` };
+  if (preparation?.degraded) result.preparation = preparation;
+  return { ...result, summary: `${result.operation} ${result.roots.join(' -> ')}: ${result.outcome}${result.coverage.complete ? '' : ' with incomplete coverage'} [git-tracked-source; ${result.freshness.state}${result.source === 'snapshot' ? ` generation ${result.generation}; no live validation` : ''}; import declarations only${preparation?.dryRun ? '; dry-run, parser preparation skipped' : ''}${preparation?.degraded ? `; lexical fallback: ${preparation.reason.message}` : ''}]` };
 }
 
 export async function cmdGraph(argv) {

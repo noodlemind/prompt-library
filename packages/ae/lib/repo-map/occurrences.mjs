@@ -92,8 +92,8 @@ export function importBindings(rel, statement, specifier) {
     if (defaultName) bindings.unshift({ imported: 'default', local: defaultName, kind: 'default' });
     return /\bimport\s+type\b/.test(statement) ? bindings.map(binding => ({ ...binding, kind: 'type' })) : bindings;
   }
-  const require = /(?:const|let|var)\s+(\{[^}]+\}|[\w$]+)\s*=\s*require\s*\(/.exec(statement);
-  if (require) return require[1].startsWith('{') ? namedBindings(require[1].slice(1, -1), 'cjs') : [{ imported: '*', local: require[1], kind: 'namespace' }];
+  const require = /^\s*(?:const|let|var)\s+(\{[^}]+\}|[\w$]+)\s*=\s*require\s*\(\s*(['"])([^'"\n]+)\2\s*\)\s*;?\s*$/.exec(statement);
+  if (require && require[3] === specifier) return require[1].startsWith('{') ? namedBindings(require[1].slice(1, -1), 'cjs') : [{ imported: '*', local: require[1], kind: 'namespace' }];
   return [];
 }
 
@@ -143,7 +143,9 @@ export function lexicalImportOccurrences(rel, input, masks = sourceMasks(rel, in
     ];
     for (const pattern of patterns) while ((match = pattern.exec(text))) {
       const lineStart = text.lastIndexOf('\n', match.index) + 1;
-      add(match, match[1], text.slice(lineStart, match.index + match[0].length));
+      const lineEnd = text.indexOf('\n', match.index + match[0].length);
+      const statement = /^(?:require|import)\s*\(/.test(match[0]) ? text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd) : match[0];
+      add(match, match[1], statement);
     }
   }
   return result.sort((a, b) => a.offset - b.offset).map(({ offset, ...value }) => value);

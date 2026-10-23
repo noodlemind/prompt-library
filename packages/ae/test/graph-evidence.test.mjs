@@ -115,7 +115,8 @@ test('explicit bindings narrow same-name call candidates and keep call-site unce
   f.write('a.mjs', "import { run } from './b.mjs';\nexport function a() { return run(); }\n");
   f.write('b.mjs', 'export function run() {}\n');
   f.write('c.mjs', 'export function run() {}\n');
-  await buildStructuralIndex(f);
+  const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
+  await buildStructuralIndex({ ...f, extractor });
   const index = readStructuralIndex(f.workspace, f);
   const candidate = index.graph.calls.find(row => row.from === 'a.mjs' && row.symbol === 'run');
   assert.deepEqual(candidate.to, ['b.mjs']);
@@ -174,4 +175,20 @@ test('renamed imports retain the actual target declaration identity in normalize
   const normalized = readShapeIndex(f.workspace, f).graph.calls.find(row => row.from === 'a.mjs#execute');
   assert.equal(normalized.to, 'b.mjs#run');
   assert.equal(normalized.candidates[0].name, 'run');
+});
+
+test('AST call candidates require an unshadowed import and a supported direct named export', async t => {
+  const f = fixture(t);
+  const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
+  f.write('a.mjs', "import { execute, hidden, step, DefaultName } from './b.mjs';\nimport * as api from './b.mjs';\nexport function shadow(execute) { execute(); }\nexport function live() { execute(); hidden(); step(); DefaultName(); api.execute(); }\n");
+  f.write('b.mjs', 'export function execute() {}\nfunction hidden() {}\nexport class Controller { step() {} }\nexport default function DefaultName() {}\n');
+  await buildStructuralIndex({ ...f, extractor });
+  const index = readStructuralIndex(f.workspace, f);
+  const calls = index.graph.calls.filter(row => row.from === 'a.mjs');
+  assert.equal(calls.filter(row => row.symbol === 'execute').length, 2);
+  assert.ok(calls.every(row => row.evidence[0].range.startLine === 4));
+  assert.equal(calls.some(row => ['hidden', 'step', 'DefaultName'].includes(row.symbol)), false);
+  const unresolved = index.graph.unresolvedCalls.filter(row => row.from === 'a.mjs');
+  assert.ok(unresolved.some(row => row.symbol === 'execute' && row.reason === 'shadowed-import-binding'));
+  for (const name of ['hidden', 'step', 'DefaultName']) assert.ok(unresolved.some(row => row.symbol === name && row.reason === 'unsupported-export-binding'));
 });
