@@ -104,6 +104,7 @@ function normalizeGraph(parsed) {
           relation: edge.relation || 'call-candidate', method: edge.method || 'unknown',
           resolutionStatus: edge.resolutionStatus || (edge.to.length > 1 ? 'ambiguous' : 'candidate'),
           authority: 'descriptive-context',
+          ...(['call-site', 'imported-name-reference'].includes(edge.observation) ? { observation: edge.observation } : {}),
           ...(edge.id ? { id: edge.id } : {}), ...(edge.reason ? { reason: edge.reason } : {}),
           ...(Array.isArray(edge.evidence) ? { evidence: edge.evidence } : {}),
           ...(candidates.length ? { candidates } : {}),

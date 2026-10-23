@@ -54,7 +54,7 @@ test('lexicalV2 preserves v1 fields and adds approximate defs, real export flags
   const r = lexicalV2('a.ts', 'export function hi(){ if (x) {} }\nfunction Local(){}\n');
   assert.deepEqual(r.symbols, ['hi', 'Local']);
   assert.deepEqual(r.defs, [
-    { name: 'hi', kind: 'symbol', line: 1, exported: true },
+    { name: 'hi', kind: 'symbol', line: 1, exported: true, exportKind: 'named' },
     { name: 'Local', kind: 'symbol', line: 2, exported: false },
   ]);
   assert.deepEqual(r.refs, [], 'no imports means no references — never a guessed call');

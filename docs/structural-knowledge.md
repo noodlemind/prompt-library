@@ -16,7 +16,7 @@ These are directed module-import relationships. `explain` returns supporting occ
 
 The default structural inventory covers recognized **Git-tracked source**, capped at 4,000 files and 200,000 bytes per file. Untracked callers are outside it. Complete inventory under this scope is not semantic completeness. AST syntax, lexical observations, resolver deductions and runtime observations have different guarantees. Qualified definitions and import bindings narrow candidates, but unsupported DI, Spring profiles, reflection, dynamic imports and generated code require further evidence.
 
-JavaScript/TypeScript call candidates require an unshadowed imported name and a supported direct named export. Private declarations, nested methods, default-export aliases, re-export routes and CommonJS export surfaces without supported provenance remain unresolved. Module-import observations remain available independently.
+AST JavaScript/TypeScript call candidates reject detected import shadows and require a supported direct named export. Private declarations, nested methods, default-export aliases, re-export routes and CommonJS export surfaces without supported provenance remain unresolved. Lexical named-import references remain labeled approximations for existing structural warnings; they do not establish call sites. Module-import observations remain available independently.
 
 ## Select evidence for the task
 

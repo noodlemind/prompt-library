@@ -73,18 +73,36 @@ function firstLines(text, names) {
   return found;
 }
 
+function lexicalNamedExports(rel, code) {
+  const names = new Set();
+  if (!/\.[cm]?[jt]sx?$/i.test(rel)) return names;
+  const declarations = /\bexport\s+(?:(?:async|declare|abstract)\s+)*(?:function\s*\*?\s+|class\s+|(?:const|let|var)\s+)([\w$]+)/g;
+  const braces = /[{}]/g;
+  let depth = 0, brace = braces.exec(code), declaration;
+  while ((declaration = declarations.exec(code))) {
+    while (brace && brace.index < declaration.index) {
+      depth += brace[0] === '{' ? 1 : -1;
+      brace = braces.exec(code);
+    }
+    if (depth === 0) names.add(declaration[1]);
+  }
+  return names;
+}
+
 export function lexicalV2(rel, content) {
   const masks = sourceMasks(rel, String(content || ''));
   const { symbols, imports, exported, references, limitsReached, importOccurrences } = lexicalExtract(rel, content, { masks });
   const kept = symbols.slice(0, MAX_DEFS_PER_FILE);
   const referenced = (references || []).slice(0, MAX_REFS_PER_FILE);
   const exportedSet = new Set(exported || []);
+  const namedExports = lexicalNamedExports(rel, masks.code);
   const lines = firstLines(/\.(?:sql|tf)$/i.test(rel) ? masks.text : masks.code, [...kept, ...referenced]);
   const defs = kept.map((name) => ({
     name: capName(name),
     kind: 'symbol',
     line: lines.get(name) ?? 0,
     exported: exportedSet.has(name),
+    ...(namedExports.has(name) ? { exportKind: 'named' } : {}),
   }));
   return {
     symbols: kept.map(capName),

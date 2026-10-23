@@ -103,6 +103,9 @@ test('removed-symbol-with-callers fires end to end from real builder output in t
     index.graph.calls.some((edge) => edge.to === 'a.mjs#beta' && edge.from.startsWith('caller.mjs')),
     `the named import is a recorded edge: ${JSON.stringify(index.graph.calls)}`
   );
+  const reference = index.graph.calls.find(edge => edge.to === 'a.mjs#beta' && edge.from.startsWith('caller.mjs'));
+  assert.equal(reference.method, 'lexical');
+  assert.equal(reference.observation, 'imported-name-reference');
 
   fs.writeFileSync(path.join(ws, 'a.mjs'), 'export function alpha() { return 1; }\n');
   const result = runStructuralExpectations({ workspace: ws, plan: PLAN, changedFiles: ['a.mjs'], home });

@@ -248,3 +248,24 @@ test('a shadowed call cannot suppress a later imported call in the same function
   assert.ok(index.graph.unresolvedCalls.some(row => row.from === 'a.mjs' && row.reason === 'shadowed-import-binding'));
   assert.ok(calls[0].evidence[0].range.startColumn > index.graph.unresolvedCalls.find(row => row.from === 'a.mjs' && row.reason === 'shadowed-import-binding').evidence[0].range.startColumn);
 });
+
+test('lexical named-import references retain approximate provenance and exclude private definitions', async t => {
+  const f = fixture(t);
+  f.write('a.mjs', "import { visible as alias, hidden as secret, named, nested } from './b.ts';\nimport fallback from './fallback.mjs';\n");
+  f.write('b.ts', 'export function visible() {}\nfunction hidden() {}\nexport default function named() {}\nexport namespace Api { export function nested() {} }\n');
+  f.write('c.mjs', 'export function visible() {}\nexport function fallback() {}\n');
+  f.write('fallback.mjs', 'export default function actual() {}\n');
+  f.git('add', '.');
+  await buildStructuralIndex(f);
+  const index = readStructuralIndex(f.workspace, f);
+  const references = index.graph.calls.filter(row => row.from === 'a.mjs');
+  assert.equal(references.length, 1);
+  assert.equal(references[0].symbol, 'visible');
+  assert.deepEqual(references[0].to, ['b.ts']);
+  assert.equal(references[0].method, 'lexical');
+  assert.equal(references[0].observation, 'imported-name-reference');
+  assert.equal(references[0].reason, 'imported-name-reference');
+  assert.equal(references[0].candidates[0].name, 'visible');
+  for (const name of ['hidden', 'named', 'nested']) assert.ok(index.graph.unresolvedCalls.some(row => row.from === 'a.mjs' && row.symbol === name && row.reason === 'unsupported-export-binding'));
+  assert.ok(index.graph.unresolvedCalls.some(row => row.from === 'a.mjs' && row.symbol === 'fallback' && row.reason === 'unsupported-import-binding'));
+});

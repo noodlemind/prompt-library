@@ -151,16 +151,17 @@ function occurrenceEvidence(from, fact, specifier) {
 /** Bind a local identifier to explicit import sources, never to same-name globals. */
 export function resolveImportBinding(from, local, fact, trackedSet, options = {}) {
   const resolve = options.resolve || importResolver(trackedSet, options), bindings = [], evidence = [];
-  const occurrences = (fact.importOccurrences || []).filter(occurrence => occurrence?.bindings?.some(binding => binding.local === local));
+  const matches = binding => options.referenceKind === 'imported-name' ? binding.imported === local : binding.local === local;
+  const occurrences = (fact.importOccurrences || []).filter(occurrence => occurrence?.bindings?.some(matches));
   for (const occurrence of occurrences) {
     const match = resolve(from, occurrence.specifier, { occurrence });
-    for (const binding of occurrence.bindings.filter(binding => binding.local === local && binding.kind !== 'type')) {
+    for (const binding of occurrence.bindings.filter(binding => matches(binding) && binding.kind !== 'type')) {
       for (const target of match.targets) bindings.push({ ...binding, target, specifier: occurrence.specifier, resolution: match.resolution });
     }
     evidence.push(...occurrenceEvidence(from, fact, occurrence.specifier), ...(match.evidence || []));
   }
   const targets = [...new Set(bindings.map(binding => binding.target))];
-  const typeOnly = occurrences.length && occurrences.every(occurrence => occurrence.bindings.filter(binding => binding.local === local).every(binding => binding.kind === 'type'));
+  const typeOnly = occurrences.length && occurrences.every(occurrence => occurrence.bindings.filter(matches).every(binding => binding.kind === 'type'));
   return { targets, bindings, evidence: evidence.slice(0, 32), method: 'static-resolver', resolutionStatus: targets.length === 1 ? 'candidate' : targets.length > 1 ? 'ambiguous' : 'unresolved', reason: typeOnly ? 'type-only-import' : targets.length ? 'explicit-import-binding' : occurrences.length ? 'unresolved-import-binding' : 'no-explicit-binding' };
 }
 

@@ -203,15 +203,19 @@ function buildGraph(files, symbols, truncation, workspace) {
       if (perFile.has(occurrenceKey)) continue;
       perFile.set(occurrenceKey, true);
       const entry = symbols[r.name];
+      const lexicalReference = files[rel].tier === 'lexical';
+      const importedNameReference = lexicalReference && /\.[cm]?[jt]sx?$/i.test(rel);
       const binding = r.importBinding === 'shadowed'
         ? { reason: 'shadowed-import-binding', bindings: [], evidence: [] }
-        : resolveImportBinding(rel, r.receiver || r.name, files[rel], trackedSet, { workspace, resolve });
+        : resolveImportBinding(rel, r.receiver || r.name, files[rel], trackedSet, { workspace, resolve,
+          ...(importedNameReference ? { referenceKind: 'imported-name' } : {}) });
+      if (importedNameReference && binding.reason === 'no-explicit-binding') binding.reason = 'unsupported-import-binding';
       const bound = binding.reason !== 'no-explicit-binding';
       const definitions = bound ? binding.bindings.flatMap(imported => {
         if (imported.kind === 'type') return [];
         const name = r.receiver || imported.imported === '*' || imported.imported === 'default' ? r.name : imported.imported;
         return (symbols[name]?.defs || []).filter(def => def.file === imported.target
-          && (!/\.[cm]?[jt]sx?$/i.test(imported.target) || imported.imported !== 'default' && def.exportKind === 'named' && !def.owner))
+          && (!/\.[cm]?[jt]sx?$/i.test(imported.target) || imported.imported !== 'default' && !def.owner && def.exportKind === 'named'))
           .map(def => ({ ...def, name }));
       }) : r.receiver ? [] : (entry?.defs || []).map(def => ({ ...def, name: r.name }));
       if (bound && binding.bindings.length && !definitions.length && binding.reason === 'explicit-import-binding') binding.reason = 'unsupported-export-binding';
@@ -224,9 +228,9 @@ function buildGraph(files, symbols, truncation, workspace) {
       ].slice(0, 32);
       if (to.length) {
         if (calls.length < MAX_CALL_EDGES) calls.push({ id: sha256(JSON.stringify(['call-candidate', rel, r.owner || '', r.receiver || '', r.name, to])), from: rel, symbol: r.name, to,
-          relation: 'call-candidate', method: bound ? 'static-resolver' : files[rel].tier === 'treesitter' ? 'ast' : 'lexical',
+          relation: 'call-candidate', method: bound && !lexicalReference ? 'static-resolver' : files[rel].tier === 'treesitter' ? 'ast' : 'lexical',
           resolutionStatus: targets.length > 1 || candidates.length > 1 ? 'ambiguous' : 'candidate', candidates,
-          reason: bound ? binding.reason : 'name-reference-approximation',
+          reason: bound ? lexicalReference ? 'imported-name-reference' : binding.reason : 'name-reference-approximation',
           observation: files[rel].tier === 'treesitter' ? 'call-site' : 'imported-name-reference', evidence,
           ...(targets.length > to.length ? { candidatesOmitted: targets.length - to.length } : {}),
         });
