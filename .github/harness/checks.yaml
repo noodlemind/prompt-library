@@ -35,6 +35,15 @@ checks:
     command: ["node", ".cursor/skills/verify-harness/scripts/prove-installed-release.mjs"]
     timeout_seconds: 300
     proof: behavior
+  structural-package-tests:
+    command: ["node", "--test", "packages/ae/test/release-version.test.mjs", "packages/ae/test/package-standalone.test.mjs"]
+    timeout_seconds: 180
+    proof: behavior
+  verify-structural-context:
+    artifacts: ["structural-context/drive.json"]
+    command: ["node", ".cursor/skills/verify-harness/scripts/prove-structural-context.mjs"]
+    timeout_seconds: 120
+    proof: behavior
   adaptive-verification-tests:
     command: ["node", "--test", "packages/ae/test/check-artifacts.test.mjs", "packages/ae/test/verification-location.test.mjs", "packages/ae/test/verification-recipes.test.mjs", "packages/ae/test/cli-evidence-verify.test.mjs"]
     timeout_seconds: 300

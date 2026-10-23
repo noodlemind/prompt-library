@@ -40,6 +40,13 @@ function parseContextVersion(raw) {
   return Number(raw);
 }
 
+function parseQuestionKind(raw) {
+  if (!['lookup', 'dependency-path', 'change-impact', 'prior-lesson'].includes(raw)) {
+    invalidFlag('--question-kind', raw, 'must be lookup, dependency-path, change-impact or prior-lesson');
+  }
+  return raw;
+}
+
 function parseLayer(raw) {
   if (!['golden', 'branch'].includes(raw)) {
     invalidFlag('--layer', raw, 'must be golden or branch');
@@ -76,6 +83,8 @@ export function parseFlags(argv) {
     query: null,
     files: null,
     contextVersion: 1,
+    questionKind: null,
+    generation: null,
     explain: false,
     read: false,
     phase: 'implement',
@@ -148,6 +157,13 @@ export function parseFlags(argv) {
     else if (a === '--read') flags.read = true;
     else if (a === '--context-version') flags.contextVersion = parseContextVersion(scan[++i]);
     else if (a.startsWith('--context-version=')) flags.contextVersion = parseContextVersion(a.slice('--context-version='.length));
+    else if (a === '--question-kind') flags.questionKind = parseQuestionKind(scan[++i]);
+    else if (a.startsWith('--question-kind=')) flags.questionKind = parseQuestionKind(a.slice('--question-kind='.length));
+    else if (a === '--generation' || a.startsWith('--generation=')) {
+      const value = a === '--generation' ? scan[++i] : a.slice('--generation='.length);
+      if (!/^[a-f0-9]{32}$/.test(value || '')) invalidFlag('--generation', value, 'must be a 32-character generation identifier');
+      flags.generation = value;
+    }
     else if (a === '--refresh') flags.refresh = true;
     else if (a === '--semantic') flags.semantic = true;
     else if (a === '--include-plans') flags.includePlans = true;

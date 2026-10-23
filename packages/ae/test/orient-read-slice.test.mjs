@@ -115,8 +115,8 @@ function sliceFrom(additionalContext) {
   return JSON.parse(line);
 }
 
-function assertColdSlice(slice) {
-  assert.deepEqual(Object.keys(slice), SLICE_KEYS);
+function assertColdSlice(slice, { contextVersion = 1 } = {}) {
+  assert.deepEqual(Object.keys(slice), contextVersion === 2 ? [...SLICE_KEYS, 'contextEvidence'] : SLICE_KEYS);
   assert.equal(slice.neighborhood, null);
   assert.deepEqual(slice.learnings, []);
   assert.deepEqual(slice.skills, []);
@@ -125,6 +125,21 @@ function assertColdSlice(slice) {
   assert.deepEqual(slice.index, { knowledge: 'missing', structural: 'missing' });
   assert.equal(slice.gateStatus, 'blocked');
   assert.equal(slice.activePlan, null);
+  if (contextVersion === 2) {
+    const evidence = slice.contextEvidence;
+    assert.equal(evidence.schema, 'harness.context.v2');
+    assert.match(evidence.contextId, /^[a-f0-9]{64}$/);
+    assert.equal(evidence.sourceState.version, 1);
+    assert.match(evidence.sourceState.digest, /^[a-f0-9]{64}$/);
+    assert.deepEqual(evidence.task, { plan: null, contractDigest: null });
+    assert.deepEqual(evidence.evidence, []);
+    assert.equal(evidence.coverage.sourceState, 'validated');
+    assert.equal(evidence.coverage.semanticCompleteness, 'unverified');
+    assert.equal(evidence.coverage.renderBarrier, false);
+    assert.deepEqual(evidence.coverage.failures, []);
+    assert.equal(evidence.expansion.command, 'ae orient --read --context-version 2');
+    assert.equal(evidence.expansion.sourceChanged, false);
+  }
 }
 
 function assertNoOrientWrites(ws) {
@@ -145,7 +160,7 @@ test('SessionStart injects the cold orient slice and does not write orient files
     assert.match(output.additionalContext, /Mode: Answer\|Investigate\|Review\|Deliver/);
     const slice = sliceFrom(output.additionalContext);
     assert.deepEqual(slice, sliceFrom(output.hookSpecificOutput.additionalContext));
-    assertColdSlice(slice);
+    assertColdSlice(slice, { contextVersion: 2 });
     assertNoOrientWrites(c.ws);
   } finally {
     removeRepo(c);

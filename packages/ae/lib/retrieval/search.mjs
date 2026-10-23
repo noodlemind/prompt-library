@@ -9,8 +9,9 @@ import { tokenize, FIELD_BOOSTS } from '../tokenize.mjs';
 import { loadPostingsIndex, isIndexStale } from '../postings-index.mjs';
 import { loadManifest, rankRecall, findMatchingPlans } from '../recall-rank.mjs';
 import { loadCollections, entryMatchesCollection, resolveIndexDir } from '../recall-config.mjs';
-import { storeDir, inertLine, readStaleExclusions } from '../knowledge/store.mjs';
+import { storeDir, inertLine, readStaleExclusions, repoId } from '../knowledge/store.mjs';
 import { rankLearnings, retrievalExclusion } from '../knowledge/retrieve.mjs';
+import { learningApplicability } from '../knowledge/applicability.mjs';
 import { loadLayeredLearnings } from '../knowledge/overlay.mjs';
 import { trackedSourceFiles, readFileSafe } from '../repo-map/scan.mjs';
 import { readStructuralIndex } from '../structural/shape.mjs';
@@ -471,6 +472,7 @@ function learningsSource({ mode, query, workspace, home, explain, queryTokens })
         snippet: snippetOf(entry.claimLine),
         kind: 'learning',
         score: entry.score,
+        applicability: entry.applicability,
         generation,
         reason: explain
           ? fieldHits(queryTokens, [
@@ -485,6 +487,8 @@ function learningsSource({ mode, query, workspace, home, explain, queryTokens })
 
   const match = lineMatcher(mode, query);
     const { excluded } = readStaleExclusions(dir);
+  const applicabilityCache = new Map();
+  const repository = repoId(workspace);
   const results = [];
   for (const learning of learnings) {
         if (retrievalExclusion(learning, excluded)) continue;
@@ -500,6 +504,7 @@ function learningsSource({ mode, query, workspace, home, explain, queryTokens })
         snippet: snippetOf(firstText),
         kind: 'learning',
         score: hits,
+        applicability: learningApplicability({ workspace, fm: learning.fm, repository, cache: applicabilityCache }),
         generation,
         reason: explain ? `${mode} match on ${hits} line(s) of trigger or claim` : null,
       }),

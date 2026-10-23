@@ -1,8 +1,9 @@
 import fs from 'node:fs';
-import { storeDir, listLearnings, inertLine } from './store.mjs';
+import { storeDir, listLearnings, inertLine, repoId } from './store.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
 import { readEvents, EVENTS_MAX_LIMIT } from '../events.mjs';
 import { verifiedAndPlans, isPromotionEligible, consolidateStatus } from './consolidate.mjs';
+import { APPLICABILITY_VERSION, learningApplicability } from './applicability.mjs';
 
 function failureCounts(workspace) {
   const counts = new Map();
@@ -53,6 +54,8 @@ export function listingView({ workspace, copilotHome, domain, home }) {
   const all = listLearnings(dir);
   const scoped = domain ? all.filter((l) => l.domain === domain) : all;
   const failures = failureCounts(workspace);
+  const repository = scoped.some(learning => String(learning.fm.applicability_version) === String(APPLICABILITY_VERSION)) ? repoId(workspace) : null;
+  const sourceCache = new Map();
 
   const learnings = scoped
     .map((l) => {
@@ -66,6 +69,7 @@ export function listingView({ workspace, copilotHome, domain, home }) {
         plans,
                 promotionEligible: l.fm.promoted_to ? false : isPromotionEligible(verified, plans),
         failures: failures.get(l.id) || 0,
+        applicability: learningApplicability({ workspace, repository, cache: sourceCache, fm: l.fm }),
       };
     })
     .sort((a, b) => a.id.localeCompare(b.id));
@@ -88,6 +92,7 @@ export function whyView({ workspace, id, home }) {
   const { verified, plans } = verifiedAndPlans(fm);
     const claimLine = inertLine(redactSecrets((body.split('\n').find((line) => line.trim()) || '').trim())).slice(0, 140);
   const failures = failureCounts(workspace).get(id) || 0;
+  const repository = String(fm.applicability_version) === String(APPLICABILITY_VERSION) ? repoId(workspace) : null;
 
   return {
     // `id` is the caller's lookup string echoed back into a rendered row.
@@ -109,6 +114,7 @@ export function whyView({ workspace, id, home }) {
     plans,
         promotionEligible: fm.promoted_to ? false : isPromotionEligible(verified, plans),
     failures,
+    applicability: learningApplicability({ workspace, repository, fm }),
   };
 }
 

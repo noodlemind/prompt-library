@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { extract as lexicalExtract } from './lexical-extractor.mjs';
+import { importBindings, sourceMasks } from './occurrences.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,11 +74,12 @@ function firstLines(text, names) {
 }
 
 export function lexicalV2(rel, content) {
-  const { symbols, imports, exported, references, limitsReached } = lexicalExtract(rel, content);
+  const masks = sourceMasks(rel, String(content || ''));
+  const { symbols, imports, exported, references, limitsReached, importOccurrences } = lexicalExtract(rel, content, { masks });
   const kept = symbols.slice(0, MAX_DEFS_PER_FILE);
   const referenced = (references || []).slice(0, MAX_REFS_PER_FILE);
   const exportedSet = new Set(exported || []);
-  const lines = firstLines(String(content || ''), [...kept, ...referenced]);
+  const lines = firstLines(/\.(?:sql|tf)$/i.test(rel) ? masks.text : masks.code, [...kept, ...referenced]);
   const defs = kept.map((name) => ({
     name: capName(name),
     kind: 'symbol',
@@ -87,6 +89,7 @@ export function lexicalV2(rel, content) {
   return {
     symbols: kept.map(capName),
     imports: imports.slice(0, MAX_IMPORTS_PER_FILE),
+    importOccurrences,
     limitsReached,
     defs,
     refs: referenced.map((name) => ({ name: capName(name), line: lines.get(name) ?? 0 })),
@@ -121,13 +124,13 @@ function sha256(bytes) {
 }
 
 export function packageGrammarRoots() {
-  return [path.join(path.resolve(__dirname, '..', '..'), 'node_modules')];
+  return [path.join(__dirname, 'vendor'), path.join(path.resolve(__dirname, '..', '..'), 'node_modules')];
 }
 
 /** Default roots searched for `<package>/<file>` grammar wasm files. */
 function defaultGrammarRoots() {
     const pkgRoot = path.resolve(__dirname, '..', '..');
-  const roots = [path.join(pkgRoot, 'node_modules')];
+  const roots = packageGrammarRoots();
   let cur = path.dirname(pkgRoot);
   for (let i = 0; i < 6; i++) {
     roots.push(path.join(cur, 'node_modules'));
@@ -139,12 +142,6 @@ function defaultGrammarRoots() {
 }
 
 function resolveLoaderPath(roots, lock) {
-  try {
-    const url = import.meta.resolve?.(lock.runtime.package);
-    if (typeof url === 'string' && url.startsWith('file:')) return fileURLToPath(url);
-  } catch {
-    // fall through to the root-scoped lookup
-  }
   return findWasm(roots, lock.runtime.package, lock.runtime.loader.file);
 }
 
@@ -228,7 +225,63 @@ function defKind(type) {
   return 'function';
 }
 
-function walkJs(root) {
+function nodeRange(node) {
+  return {
+    startLine: (node.startPosition?.row || 0) + 1,
+    startColumn: (node.startPosition?.column || 0) + 1,
+    endLine: (node.endPosition?.row || 0) + 1,
+    endColumn: (node.endPosition?.column || 0) + 1,
+  };
+}
+
+function nodeDetails(node) {
+  const owners = [];
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (!/(?:class|function|method|interface|record|enum|constructor)_?(?:declaration|definition)?$/.test(parent.type)) continue;
+    const name = parent.childForFieldName('name')?.text;
+    if (name) owners.unshift(capName(name));
+  }
+  const parameters = node.childForFieldName('parameters')?.text;
+  return { owner: owners.join('.'), range: nodeRange(node), ...(parameters ? { signature: parameters.slice(0, 512) } : {}) };
+}
+
+function importOccurrence(node, specifier, rel) {
+  let statement = node;
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (['lexical_declaration', 'variable_declaration', 'expression_statement'].includes(parent.type)) { statement = parent; break; }
+    if (['program', 'module', 'block'].includes(parent.type)) break;
+  }
+  return { specifier, range: nodeRange(node), bindings: importBindings(rel, statement.text, specifier), method: 'ast' };
+}
+
+const JS_FUNCTION_SCOPES = new Set(['function_declaration', 'function_expression', 'generator_function_declaration', 'generator_function', 'arrow_function', 'method_definition']);
+
+function shadowedRequire(node, imported, cache) {
+  if (imported.has('require')) return true;
+  for (let scope = node.parent; scope; scope = scope.parent) {
+    if (!JS_FUNCTION_SCOPES.has(scope.type) && !['program', 'statement_block', 'catch_clause'].includes(scope.type)) continue;
+    const key = scope.id;
+    if (!cache.has(key)) {
+      const parameters = scope.childForFieldName('parameters') || scope.childForFieldName('parameter');
+      let shadowed = parameters && /\brequire\b/.test(parameters.text);
+      if (JS_FUNCTION_SCOPES.has(scope.type) && scope.childForFieldName('name')?.text === 'require') shadowed = true;
+      if (!shadowed) for (const declaration of scope.descendantsOfType(['variable_declarator', 'function_declaration', 'class_declaration'])) {
+        const name = declaration.childForFieldName('name');
+        if (!name || !/\brequire\b/.test(name.text)) continue;
+        let contained = true;
+        for (let parent = declaration.parent; parent && parent.id !== scope.id; parent = parent.parent) {
+          if (JS_FUNCTION_SCOPES.has(parent.type)) { contained = false; break; }
+        }
+        if (contained) { shadowed = true; break; }
+      }
+      cache.set(key, Boolean(shadowed));
+    }
+    if (cache.get(key)) return true;
+  }
+  return false;
+}
+
+function walkJs(root, rel) {
   const defs = [];
   for (const node of root.descendantsOfType(JS_DEF_TYPES)) {
     if (defs.length >= MAX_DEFS_PER_FILE) break;
@@ -239,7 +292,7 @@ function walkJs(root) {
       const fnValue = value && (value.type === 'arrow_function' || value.type === 'function_expression' || value.type === 'generator_function');
       const exported = hasAncestorOfType(node, 'export_statement');
       if (!fnValue && !exported) continue;
-      defs.push({ name: nameNode.text, kind: fnValue ? 'function' : 'const', line: node.startPosition.row + 1, exported });
+      defs.push({ name: nameNode.text, kind: fnValue ? 'function' : 'const', line: node.startPosition.row + 1, exported, ...nodeDetails(node) });
       continue;
     }
     defs.push({
@@ -247,38 +300,49 @@ function walkJs(root) {
       kind: defKind(node.type),
       line: node.startPosition.row + 1,
       exported: hasAncestorOfType(node, 'export_statement'),
+      ...nodeDetails(node),
     });
   }
   const imports = [];
+  const importOccurrences = [];
   for (const node of root.descendantsOfType(['import_statement', 'export_statement'])) {
     if (imports.length >= MAX_IMPORTS_PER_FILE) break;
     const source = node.childForFieldName('source');
-    if (source) imports.push(source.text.replace(/^['"`]|['"`]$/g, ''));
+    if (source) {
+      const specifier = source.text.replace(/^['"`]|['"`]$/g, '');
+      imports.push(specifier);
+      importOccurrences.push(importOccurrence(node, specifier, rel));
+    }
   }
   const refs = [];
+  const imported = new Set(importOccurrences.flatMap(occurrence => occurrence.bindings.map(binding => binding.local)));
+  const shadowCache = new Map();
   for (const node of root.descendantsOfType(['call_expression', 'new_expression'])) {
     if (refs.length >= MAX_REFS_PER_FILE) break;
     const target = node.childForFieldName(node.type === 'new_expression' ? 'constructor' : 'function');
     if (!target) continue;
     if (target.type === 'import' || target.type === 'identifier') {
       if (target.type === 'import' || target.text === 'require') {
+        if (target.text === 'require' && shadowedRequire(node, imported, shadowCache)) continue;
         const args = node.childForFieldName('arguments');
         const arg = args?.namedChildren?.[0];
         if (arg && arg.type === 'string' && imports.length < MAX_IMPORTS_PER_FILE) {
-          imports.push(arg.text.replace(/^['"`]|['"`]$/g, ''));
+          const specifier = arg.text.replace(/^['"`]|['"`]$/g, '');
+          imports.push(specifier);
+          importOccurrences.push(importOccurrence(node, specifier, rel));
         }
         continue;
       }
-      refs.push({ name: target.text, line: node.startPosition.row + 1 });
+      refs.push({ name: target.text, line: node.startPosition.row + 1, ...nodeDetails(node) });
     } else if (target.type === 'member_expression') {
       const prop = target.childForFieldName('property');
-      if (prop) refs.push({ name: prop.text, line: node.startPosition.row + 1 });
+      if (prop) refs.push({ name: prop.text, line: node.startPosition.row + 1, receiver: target.childForFieldName('object')?.text?.slice(0, MAX_IDENTIFIER_LENGTH) || null, ...nodeDetails(node) });
     }
   }
-  return { defs, imports, refs };
+  return { defs, imports, importOccurrences, refs };
 }
 
-function walkPython(root) {
+function walkPython(root, rel) {
   const defs = [];
   for (const node of root.descendantsOfType(['class_definition', 'function_definition'])) {
     if (defs.length >= MAX_DEFS_PER_FILE) break;
@@ -292,18 +356,21 @@ function walkPython(root) {
       kind: node.type === 'class_definition' ? 'class' : 'function',
       line: node.startPosition.row + 1,
       exported: topLevel && !nameNode.text.startsWith('_'),
+      ...nodeDetails(node),
     });
   }
   const imports = [];
+  const importOccurrences = [];
   for (const node of root.descendantsOfType(['import_from_statement', 'import_statement'])) {
     if (imports.length >= MAX_IMPORTS_PER_FILE) break;
     if (node.type === 'import_from_statement') {
       const mod = node.childForFieldName('module_name');
-      if (mod) imports.push(mod.text);
+      if (mod) { imports.push(mod.text); importOccurrences.push(importOccurrence(node, mod.text, rel)); }
     } else {
       for (const name of node.namedChildren) {
         if (name.type === 'dotted_name' || name.type === 'aliased_import') {
-          imports.push(name.type === 'aliased_import' ? name.childForFieldName('name')?.text || name.text : name.text);
+          const specifier = name.type === 'aliased_import' ? name.childForFieldName('name')?.text || name.text : name.text;
+          imports.push(specifier); importOccurrences.push(importOccurrence(node, specifier, rel));
         }
       }
     }
@@ -313,13 +380,13 @@ function walkPython(root) {
     if (refs.length >= MAX_REFS_PER_FILE) break;
     const fn = node.childForFieldName('function');
     if (!fn) continue;
-    if (fn.type === 'identifier') refs.push({ name: fn.text, line: node.startPosition.row + 1 });
+    if (fn.type === 'identifier') refs.push({ name: fn.text, line: node.startPosition.row + 1, ...nodeDetails(node) });
     else if (fn.type === 'attribute') {
       const attr = fn.childForFieldName('attribute');
-      if (attr) refs.push({ name: attr.text, line: node.startPosition.row + 1 });
+      if (attr) refs.push({ name: attr.text, line: node.startPosition.row + 1, receiver: fn.childForFieldName('object')?.text?.slice(0, MAX_IDENTIFIER_LENGTH) || null, ...nodeDetails(node) });
     }
   }
-  return { defs, imports, refs };
+  return { defs, imports, importOccurrences, refs };
 }
 
 const JAVA_DEF_TYPES = [
@@ -332,7 +399,7 @@ const JAVA_DEF_TYPES = [
   'constructor_declaration',
 ];
 
-function walkJava(root) {
+function walkJava(root, rel) {
   const defs = [];
   for (const node of root.descendantsOfType(JAVA_DEF_TYPES)) {
     if (defs.length >= MAX_DEFS_PER_FILE) break;
@@ -344,20 +411,23 @@ function walkJava(root) {
       kind: defKind(node.type),
       line: node.startPosition.row + 1,
       exported: Boolean(modifiers && /\bpublic\b/.test(modifiers.text)),
+      ...nodeDetails(node),
     });
   }
   const imports = [];
+  const importOccurrences = [];
   for (const node of root.descendantsOfType('import_declaration')) {
     if (imports.length >= MAX_IMPORTS_PER_FILE) break;
-    imports.push(node.text.replace(/^import\s+(static\s+)?/, '').replace(/;?\s*$/, ''));
+    const specifier = node.text.replace(/^import\s+(static\s+)?/, '').replace(/;?\s*$/, '');
+    imports.push(specifier); importOccurrences.push(importOccurrence(node, specifier, rel));
   }
   const refs = [];
   for (const node of root.descendantsOfType(['method_invocation', 'object_creation_expression'])) {
     if (refs.length >= MAX_REFS_PER_FILE) break;
     const target = node.childForFieldName(node.type === 'method_invocation' ? 'name' : 'type');
-    if (target) refs.push({ name: target.text, line: node.startPosition.row + 1 });
+    if (target) refs.push({ name: target.text, line: node.startPosition.row + 1, receiver: node.childForFieldName('object')?.text?.slice(0, MAX_IDENTIFIER_LENGTH) || null, ...nodeDetails(node) });
   }
-  return { defs, imports, refs };
+  return { defs, imports, importOccurrences, refs };
 }
 
 const WALKERS = {
@@ -368,12 +438,13 @@ const WALKERS = {
   java: walkJava,
 };
 
-function capResult(walked) {
-  const defs = walked.defs.slice(0, MAX_DEFS_PER_FILE).map((d) => ({ ...d, name: capName(d.name) }));
+function capResult(walked, rel) {
+  const defs = walked.defs.slice(0, MAX_DEFS_PER_FILE).map((d) => ({ ...d, name: capName(d.name), id: `${rel}#${d.owner ? `${d.owner}.` : ''}${capName(d.name)}@${d.line}:${d.range?.startColumn || 1}` }));
   const imports = [...new Set(walked.imports)].slice(0, MAX_IMPORTS_PER_FILE);
   const refs = walked.refs.slice(0, MAX_REFS_PER_FILE).map((r) => ({ ...r, name: capName(r.name) }));
   const symbols = [...new Set(defs.map((d) => d.name))];
-  return { symbols, imports, defs, refs, limitsReached: { defs: walked.defs.length >= MAX_DEFS_PER_FILE, refs: walked.refs.length >= MAX_REFS_PER_FILE, imports: walked.imports.length >= MAX_IMPORTS_PER_FILE } };
+  const importOccurrences = (walked.importOccurrences || []).slice(0, MAX_IMPORTS_PER_FILE);
+  return { symbols, imports, importOccurrences, defs, refs, limitsReached: { defs: walked.defs.length >= MAX_DEFS_PER_FILE, refs: walked.refs.length >= MAX_REFS_PER_FILE, imports: walked.imports.length >= MAX_IMPORTS_PER_FILE, importOccurrences: (walked.importOccurrences?.length || 0) > MAX_IMPORTS_PER_FILE } };
 }
 
 export function makeStructuralExtract({ parseForLanguage, counters = { parseFailures: 0, parsed: 0, errorFiles: 0 } }) {
@@ -390,11 +461,11 @@ export function makeStructuralExtract({ parseForLanguage, counters = { parseFail
     }
     if (!tree || !tree.rootNode) return lexicalV2(rel, content);
     try {
-      const walked = WALKERS[language](tree.rootNode);
+      const walked = WALKERS[language](tree.rootNode, rel);
       const hasErrors = Boolean(tree.rootNode.hasError);
       counters.parsed += 1;
       if (hasErrors) counters.errorFiles += 1;
-      return { ...capResult(walked), complexity: branchComplexity(text), tier: 'treesitter', hasErrors };
+      return { ...capResult(walked, rel), complexity: branchComplexity(text), tier: 'treesitter', hasErrors };
     } catch {
       counters.parseFailures += 1;
       return lexicalV2(rel, content);
@@ -458,7 +529,7 @@ export async function createTreesitterExtract({ grammarRoots, lockPath, loaderPa
   let Parser;
   let Language;
   try {
-    ({ Parser, Language } = await import('web-tree-sitter'));
+    ({ Parser, Language } = await import(pathToFileURL(loaderFull).href));
     await Parser.init({ wasmBinary: runtimeBytes });
   } catch {
     return lexicalOnly('web-tree-sitter init failed');

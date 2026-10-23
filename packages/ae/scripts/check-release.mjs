@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { estimateTokens } from '../lib/token-meter.mjs';
 import { CONTEXT_PACK_MAX_BYTES } from '../lib/context-pack.mjs';
+import { assertNoSymlinkAncestors } from '../lib/fs-safe.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-z-][\da-z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-z-][\da-z-]*))*)?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?$/i;
@@ -33,6 +35,35 @@ export function validateRelease() {
     assert.ok(fs.existsSync(path.join(packageRoot, rel)), `missing release asset: ${rel}`);
   }
   assert.ok(Array.isArray(json('retired.json').retired), 'retired asset manifest is invalid');
+
+  const grammarLock = json('lib/repo-map/grammars.lock');
+  const vendorRoot = path.join(packageRoot, 'lib/repo-map/vendor');
+  const parserManifest = json('lib/repo-map/vendor/manifest.json');
+  assert.equal(parserManifest.schema, 1, 'parser asset manifest is invalid');
+  assert.ok(Array.isArray(parserManifest.assets), 'parser asset records are missing');
+  for (const recorded of parserManifest.assets) {
+    assert.match(recorded.path, /^[a-z0-9-]+\/[A-Za-z0-9.-]+$/, 'invalid bundled parser path');
+    const full = assertNoSymlinkAncestors(packageRoot, `lib/repo-map/vendor/${recorded.path}`);
+    assert.ok(full && fs.lstatSync(full).isFile(), `bundled parser asset is not a regular file: ${recorded.path}`);
+    const bytes = fs.readFileSync(full);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), recorded.sha256, `bundled parser integrity mismatch: ${recorded.path}`);
+    assert.equal(bytes.length, recorded.bytes, `bundled parser size drift: ${recorded.path}`);
+  }
+  assert.ok(fs.statSync(path.join(vendorRoot, 'THIRD_PARTY_NOTICES.md')).isFile(), 'bundled parser notices are missing');
+  const parserAssets = [grammarLock.runtime, { ...grammarLock.runtime.loader, package: grammarLock.runtime.package }, ...Object.values(grammarLock.grammars)];
+  for (const asset of parserAssets) {
+    assert.match(asset.package, /^[a-z0-9-]+$/, 'invalid parser package identity');
+    assert.match(asset.file, /^[a-z0-9.-]+$/, 'invalid parser asset identity');
+    const relative = `${asset.package}/${asset.file}`;
+    const full = path.join(vendorRoot, asset.package, asset.file);
+    assert.ok(fs.lstatSync(full).isFile(), `bundled parser asset is not a regular file: ${relative}`);
+    const bytes = fs.readFileSync(full);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), asset.sha256, `bundled parser integrity mismatch: ${relative}`);
+    const recorded = parserManifest.assets.find(item => item.path === relative);
+    assert.equal(recorded?.sha256, asset.sha256, `bundled parser manifest drift: ${relative}`);
+    assert.equal(recorded.bytes, bytes.length, `bundled parser size drift: ${relative}`);
+    assert.ok(fs.statSync(path.join(vendorRoot, asset.package, 'LICENSE')).isFile(), `bundled parser license missing: ${asset.package}`);
+  }
 
   // npm intentionally excludes package-lock.json from archives. Source releases
   // check it; installed distributions check the dependency bytes they will bundle.

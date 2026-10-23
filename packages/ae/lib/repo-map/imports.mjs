@@ -1,10 +1,13 @@
 import path from 'node:path';
 import { builtinModules } from 'node:module';
+import { createHash } from 'node:crypto';
 import { SOURCE_EXTENSIONS } from './lexical-extractor.mjs';
+import { loadResolverConfigs, configuredTargets } from './resolver-config.mjs';
 
-export const IMPORT_RESOLVER_VERSION = 1;
+export const IMPORT_RESOLVER_VERSION = 2;
 const IMPORT_SUFFIX = /\.(?:js|jsx|mjs|cjs|ts|tsx|py|java)$/i;
 const NODE_BUILTINS = new Set(builtinModules);
+const edgeId = (...parts) => `edge:${createHash('sha256').update(JSON.stringify(parts)).digest('hex')}`;
 
 function uniqueOther(rels, fromRel) {
   const hits = [...(rels || [])];
@@ -14,7 +17,11 @@ function uniqueOther(rels, fromRel) {
 function pathCandidates(normalized, fromRel, trackedSet) {
   if (!normalized || normalized === '..' || normalized.startsWith('../')) return [];
   if (trackedSet.has(normalized)) return normalized === fromRel ? [] : [normalized];
-  if (path.posix.extname(normalized)) return [];
+  const extension = path.posix.extname(normalized);
+  if (extension) {
+    const substitutions = { '.js': ['.ts', '.tsx'], '.jsx': ['.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'] }[extension] || [];
+    return substitutions.map(ext => normalized.slice(0, -extension.length) + ext).filter(file => trackedSet.has(file));
+  }
   const files = [];
   const indexes = [];
   for (const ext of SOURCE_EXTENSIONS) {
@@ -98,10 +105,26 @@ function targetsFor(fromRel, specifier, lookup, trackedSet) {
 }
 
 
-export function importResolver(trackedSet) {
+export function importResolver(trackedSet, { workspace } = {}) {
   const lookup = moduleIndex(trackedSet);
-  return (from, specifier) => {
+  const configs = loadResolverConfigs(workspace);
+  return (from, specifier, { occurrence } = {}) => {
     const cleaned = String(specifier).replace(/['"]/g, '').trim();
+    if (!cleaned || cleaned.startsWith('node:') || NODE_BUILTINS.has(cleaned)) return { targets: [], resolution: null, reason: 'external' };
+    const configured = configuredTargets(from, cleaned, configs, normalized => pathCandidates(normalized, from, trackedSet));
+    if (configured) return {
+      targets: configured.candidates.length === 1 ? configured.candidates : [],
+      candidates: configured.candidates.slice(0, 32),
+      resolution: configured.candidates.length === 1 ? 'configured-path' : null,
+      reason: configured.unsupported ? 'unsupported-configuration' : configured.candidates.length > 1 ? 'ambiguous' : configured.candidates.length ? null : 'configured-path-unresolved',
+      evidence: configured.evidence,
+    };
+    if (/\.java$/i.test(from) && occurrence?.bindings?.some(binding => binding.kind === 'static')) {
+      const owner = cleaned.slice(0, cleaned.lastIndexOf('.'));
+      const matches = [...(lookup.suffix.get(owner.split('.').join('/')) || [])].filter(file => file !== from);
+      if (matches.length === 1) return { targets: matches, resolution: 'unique-local', reason: null };
+      if (matches.length > 1) return { targets: [], candidates: matches, resolution: null, reason: 'ambiguous' };
+    }
     const targets = targetsFor(from, cleaned, lookup, trackedSet);
     const relative = cleaned.startsWith('.');
     if (targets.length) return { targets, resolution: relative ? 'relative' : 'unique-local', reason: null };
@@ -117,38 +140,68 @@ export function importResolver(trackedSet) {
     } else {
       candidates = lookup.suffix.get(cleaned.replace(IMPORT_SUFFIX, '').split('.').filter(Boolean).join('/'));
     }
-    return { targets, resolution: null, reason: (candidates?.size ?? candidates?.length ?? 0) > 1 ? 'ambiguous' : 'unresolved' };
+    return { targets, candidates: [...(candidates || [])].filter(file => file !== from).slice(0, 32), resolution: null, reason: (candidates?.size ?? candidates?.length ?? 0) > 1 ? 'ambiguous' : 'unresolved' };
   };
 }
 
-export function buildImportGraph(facts, trackedSet, { maxEdges = 20_000, maxUnresolved = 4_000 } = {}) {
-  const resolve = importResolver(trackedSet);
+function occurrenceEvidence(from, fact, specifier) {
+  return (fact.importOccurrences || []).filter(item => item?.specifier === specifier && item.range && Number.isSafeInteger(item.range.startLine) && item.range.startLine > 0).map(item => ({ path: from, sha256: fact.hash || null, range: item.range }));
+}
+
+/** Bind a local identifier to explicit import sources, never to same-name globals. */
+export function resolveImportBinding(from, local, fact, trackedSet, options = {}) {
+  const resolve = options.resolve || importResolver(trackedSet, options), bindings = [], evidence = [];
+  const occurrences = (fact.importOccurrences || []).filter(occurrence => occurrence?.bindings?.some(binding => binding.local === local));
+  for (const occurrence of occurrences) {
+    const match = resolve(from, occurrence.specifier, { occurrence });
+    for (const binding of occurrence.bindings.filter(binding => binding.local === local && binding.kind !== 'type')) {
+      for (const target of match.targets) bindings.push({ ...binding, target, specifier: occurrence.specifier, resolution: match.resolution });
+    }
+    evidence.push(...occurrenceEvidence(from, fact, occurrence.specifier), ...(match.evidence || []));
+  }
+  const targets = [...new Set(bindings.map(binding => binding.target))];
+  const typeOnly = occurrences.length && occurrences.every(occurrence => occurrence.bindings.filter(binding => binding.local === local).every(binding => binding.kind === 'type'));
+  return { targets, bindings, evidence: evidence.slice(0, 32), method: 'static-resolver', resolutionStatus: targets.length === 1 ? 'candidate' : targets.length > 1 ? 'ambiguous' : 'unresolved', reason: typeOnly ? 'type-only-import' : targets.length ? 'explicit-import-binding' : occurrences.length ? 'unresolved-import-binding' : 'no-explicit-binding' };
+}
+
+export function buildImportGraph(facts, trackedSet, { maxEdges = 20_000, maxUnresolved = 4_000, workspace } = {}) {
+  const resolve = importResolver(trackedSet, { workspace });
   const modules = [];
   const unresolvedImports = [];
   let moduleEdgesTruncated = false;
   let unresolvedTruncated = false;
   for (const [from, fact] of facts) {
-    const seen = new Set();
+    const seen = new Map();
     const unresolved = new Set();
     for (const specifier of fact.imports) {
-      const match = resolve(from, specifier);
+      const occurrence = fact.importOccurrences?.find(item => item.specifier === specifier);
+      const match = resolve(from, specifier, { occurrence });
+      const evidence = [...occurrenceEvidence(from, fact, specifier), ...(match.evidence || [])];
+      const method = fact.tier === 'treesitter' ? 'ast' : 'lexical';
       for (const to of match.targets) {
         if (!facts.has(to) || facts.get(to).tier === 'unreadable') {
           if (!unresolved.has(specifier)) {
             unresolved.add(specifier);
-            if (unresolvedImports.length < maxUnresolved) unresolvedImports.push({ from, import: specifier, reason: 'unreadable' });
+            if (unresolvedImports.length < maxUnresolved) unresolvedImports.push({ id: edgeId('unresolved-import', from, specifier), from, import: specifier, reason: 'unreadable', method, resolutionStatus: 'unresolved', candidates: [to], evidence: evidence.slice(0, 32) });
             else unresolvedTruncated = true;
           }
           continue;
         }
-        if (seen.has(to)) continue;
-        seen.add(to);
-        if (modules.length < maxEdges) modules.push({ from, to, via: specifier, resolution: match.resolution });
-        else moduleEdgesTruncated = true;
+        const prior = seen.get(to);
+        if (prior) {
+          const room = Math.max(0, 32 - prior.evidence.length);
+          prior.evidence.push(...evidence.slice(0, room));
+          prior.evidenceOmitted = (prior.evidenceOmitted || 0) + Math.max(0, evidence.length - room);
+          continue;
+        }
+        if (modules.length < maxEdges) {
+          const edge = { id: edgeId('module-import', from, to), from, to, via: specifier, resolution: match.resolution, method, resolutionStatus: ['relative', 'configured-path'].includes(match.resolution) ? 'exact-under-rule' : 'candidate', resolverVersion: IMPORT_RESOLVER_VERSION, evidence: evidence.slice(0, 32), ...(evidence.length > 32 ? { evidenceOmitted: evidence.length - 32 } : {}) };
+          seen.set(to, edge); modules.push(edge);
+        } else moduleEdgesTruncated = true;
       }
       if (!match.targets.length && !['self', 'external'].includes(match.reason) && !unresolved.has(specifier)) {
         unresolved.add(specifier);
-        if (unresolvedImports.length < maxUnresolved) unresolvedImports.push({ from, import: specifier, reason: match.reason });
+        if (unresolvedImports.length < maxUnresolved) unresolvedImports.push({ id: edgeId('unresolved-import', from, specifier), from, import: specifier, reason: match.reason, method, resolutionStatus: match.reason === 'ambiguous' ? 'ambiguous' : 'unresolved', candidates: match.candidates || [], evidence: evidence.slice(0, 32) });
         else unresolvedTruncated = true;
       }
     }

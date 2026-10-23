@@ -1,0 +1,459 @@
+{
+  "schema": 1,
+  "kind": "mechanical",
+  "note": "Separate multi-language relationship evidence fixtures. Development and held-out labels protect this corpus from accidental tuning reuse, but scripted packet assertions are not model task success or policy promotion. Runtime-unknown cases test explicit limits, not runtime resolution.",
+  "cases": [
+    {
+      "id": "ts-import-path",
+      "language": "typescript",
+      "split": "development",
+      "family": "dependency-path",
+      "questionKind": "dependency-path",
+      "query": "Find the source dependency from service to processor",
+      "files": {
+        "src/service.ts": "import { process } from './processor';\nexport const submit = process;\n",
+        "src/processor.ts": "export function process() { return 1; }\n"
+      },
+      "seeds": [
+        "src/service.ts",
+        "src/processor.ts"
+      ],
+      "requiredSources": [
+        "src/service.ts",
+        "src/processor.ts"
+      ],
+      "expectedEdges": [
+        [
+          "src/service.ts",
+          "src/processor.ts"
+        ]
+      ]
+    },
+    {
+      "id": "ts-explicit-lookup",
+      "language": "typescript",
+      "split": "development",
+      "family": "lookup",
+      "questionKind": "lookup",
+      "query": "Read the request shape",
+      "files": {
+        "src/request.ts": "export interface Request { readonly id: string; }\n"
+      },
+      "seeds": [
+        "src/request.ts"
+      ],
+      "requiredSources": [
+        "src/request.ts"
+      ]
+    },
+    {
+      "id": "java-interface-path",
+      "language": "java",
+      "split": "development",
+      "family": "dependency-path",
+      "questionKind": "dependency-path",
+      "query": "Trace the service import of its processor interface",
+      "files": {
+        "src/main/java/com/acme/LoanService.java": "package com.acme;\nimport com.acme.LoanProcessor;\npublic class LoanService { private LoanProcessor processor; }\n",
+        "src/main/java/com/acme/LoanProcessor.java": "package com.acme;\npublic interface LoanProcessor { void process(); }\n"
+      },
+      "seeds": [
+        "src/main/java/com/acme/LoanService.java",
+        "src/main/java/com/acme/LoanProcessor.java"
+      ],
+      "requiredSources": [
+        "src/main/java/com/acme/LoanService.java",
+        "src/main/java/com/acme/LoanProcessor.java"
+      ],
+      "expectedEdges": [
+        [
+          "src/main/java/com/acme/LoanService.java",
+          "src/main/java/com/acme/LoanProcessor.java"
+        ]
+      ]
+    },
+    {
+      "id": "java-spring-unknown",
+      "language": "java",
+      "split": "development",
+      "family": "runtime-unknown",
+      "questionKind": "change-impact",
+      "query": "Which processor is used in the active profile?",
+      "files": {
+        "src/main/java/com/acme/LoanProcessor.java": "package com.acme;\npublic interface LoanProcessor { void process(); }\n",
+        "src/main/java/com/acme/RetailProcessor.java": "package com.acme;\n@Profile(\"retail\") public class RetailProcessor implements LoanProcessor { public void process() {} }\n",
+        "src/main/java/com/acme/WholesaleProcessor.java": "package com.acme;\n@Profile(\"wholesale\") public class WholesaleProcessor implements LoanProcessor { public void process() {} }\n"
+      },
+      "seeds": [
+        "src/main/java/com/acme/LoanProcessor.java"
+      ],
+      "requiredSources": [
+        "src/main/java/com/acme/LoanProcessor.java"
+      ],
+      "requiredGaps": [
+        "runtime-relationships-unverified"
+      ]
+    },
+    {
+      "id": "python-relative-path",
+      "language": "python",
+      "split": "development",
+      "family": "dependency-path",
+      "questionKind": "dependency-path",
+      "query": "Find the source import from service to processor",
+      "files": {
+        "pkg/service.py": "from .processor import process\n\ndef submit():\n    return process()\n",
+        "pkg/processor.py": "def process():\n    return 1\n"
+      },
+      "seeds": [
+        "pkg/service.py",
+        "pkg/processor.py"
+      ],
+      "requiredSources": [
+        "pkg/service.py",
+        "pkg/processor.py"
+      ],
+      "expectedEdges": [
+        [
+          "pkg/service.py",
+          "pkg/processor.py"
+        ]
+      ]
+    },
+    {
+      "id": "python-lookup",
+      "language": "python",
+      "split": "development",
+      "family": "lookup",
+      "questionKind": "lookup",
+      "query": "Read the retry cap",
+      "files": {
+        "pkg/config.py": "MAX_ATTEMPTS = 3\n"
+      },
+      "seeds": [
+        "pkg/config.py"
+      ],
+      "requiredSources": [
+        "pkg/config.py"
+      ]
+    },
+    {
+      "id": "ts-comment-is-not-import",
+      "language": "typescript",
+      "split": "held-out",
+      "family": "negative-syntax",
+      "questionKind": "change-impact",
+      "query": "Find source dependents without accepting the stale comment",
+      "files": {
+        "src/processor.ts": "export const process = () => 1;\n",
+        "src/stale.ts": "// import { process } from './processor';\nexport const unrelated = 2;\n"
+      },
+      "seeds": [
+        "src/processor.ts"
+      ],
+      "requiredSources": [
+        "src/processor.ts"
+      ],
+      "forbiddenEdges": [
+        [
+          "src/stale.ts",
+          "src/processor.ts"
+        ]
+      ]
+    },
+    {
+      "id": "ts-transitive-impact",
+      "language": "typescript",
+      "split": "held-out",
+      "family": "change-impact",
+      "questionKind": "change-impact",
+      "query": "Find supported transitive source dependents of processor",
+      "files": {
+        "src/processor.ts": "export const process = () => 1;\n",
+        "src/service.ts": "import { process } from './processor';\nexport const submit = process;\n",
+        "src/controller.ts": "import { submit } from './service';\nexport const handle = submit;\n",
+        "src/unrelated.ts": "export const noop = 0;\n"
+      },
+      "seeds": [
+        "src/processor.ts"
+      ],
+      "depth": 3,
+      "requiredSources": [
+        "src/processor.ts",
+        "src/service.ts",
+        "src/controller.ts"
+      ],
+      "expectedEdges": [
+        [
+          "src/service.ts",
+          "src/processor.ts"
+        ],
+        [
+          "src/controller.ts",
+          "src/service.ts"
+        ]
+      ]
+    },
+    {
+      "id": "ts-dynamic-import-unknown",
+      "language": "typescript",
+      "split": "held-out",
+      "family": "runtime-unknown",
+      "questionKind": "change-impact",
+      "query": "Can the runtime implementation be resolved from the graph?",
+      "files": {
+        "src/runtime.ts": "export async function load(name: string) { return import(name); }\n",
+        "src/retail.ts": "export const process = () => 1;\n"
+      },
+      "seeds": [
+        "src/runtime.ts"
+      ],
+      "requiredSources": [
+        "src/runtime.ts"
+      ],
+      "requiredGaps": [
+        "runtime-relationships-unverified"
+      ]
+    },
+    {
+      "id": "ts-new-import-target",
+      "language": "typescript",
+      "split": "held-out",
+      "family": "incremental-new-target",
+      "questionKind": "dependency-path",
+      "query": "Resolve an unchanged caller after its missing target is created",
+      "files": {
+        "src/caller.ts": "import { created } from './created';\nexport const value = created;\n"
+      },
+      "seeds": [
+        "src/caller.ts",
+        "src/created.ts"
+      ],
+      "mutations": [
+        {
+          "path": "src/created.ts",
+          "content": "export const created = 1;\n"
+        }
+      ],
+      "requiredSources": [
+        "src/caller.ts",
+        "src/created.ts"
+      ],
+      "expectedEdges": [
+        [
+          "src/caller.ts",
+          "src/created.ts"
+        ]
+      ]
+    },
+    {
+      "id": "java-comment-is-not-import",
+      "language": "java",
+      "split": "held-out",
+      "family": "negative-syntax",
+      "questionKind": "change-impact",
+      "query": "Find real source import dependents",
+      "files": {
+        "src/com/acme/Processor.java": "package com.acme;\npublic interface Processor {}\n",
+        "src/com/acme/Stale.java": "package com.acme;\n/*\nimport com.acme.Processor;\n*/\npublic class Stale {}\n"
+      },
+      "seeds": [
+        "src/com/acme/Processor.java"
+      ],
+      "requiredSources": [
+        "src/com/acme/Processor.java"
+      ],
+      "forbiddenEdges": [
+        [
+          "src/com/acme/Stale.java",
+          "src/com/acme/Processor.java"
+        ]
+      ]
+    },
+    {
+      "id": "java-overload-runtime-unknown",
+      "language": "java",
+      "split": "held-out",
+      "family": "runtime-unknown",
+      "questionKind": "lookup",
+      "query": "Read overloaded declarations without asserting a runtime target",
+      "files": {
+        "src/com/acme/Processor.java": "package com.acme;\npublic class Processor { public int process(String value) { return 1; } public int process(Object value) { return 2; } }\n"
+      },
+      "seeds": [
+        "src/com/acme/Processor.java"
+      ],
+      "requiredSources": [
+        "src/com/acme/Processor.java"
+      ]
+    },
+    {
+      "id": "java-transitive-path",
+      "language": "java",
+      "split": "held-out",
+      "family": "dependency-path",
+      "questionKind": "dependency-path",
+      "query": "Trace the controller to processor through service imports",
+      "files": {
+        "src/com/acme/Controller.java": "package com.acme;\nimport com.acme.Service;\npublic class Controller { private Service service; }\n",
+        "src/com/acme/Service.java": "package com.acme;\nimport com.acme.Processor;\npublic class Service { private Processor processor; }\n",
+        "src/com/acme/Processor.java": "package com.acme;\npublic interface Processor {}\n"
+      },
+      "seeds": [
+        "src/com/acme/Controller.java",
+        "src/com/acme/Processor.java"
+      ],
+      "depth": 3,
+      "requiredSources": [
+        "src/com/acme/Controller.java",
+        "src/com/acme/Service.java",
+        "src/com/acme/Processor.java"
+      ],
+      "expectedEdges": [
+        [
+          "src/com/acme/Controller.java",
+          "src/com/acme/Service.java"
+        ],
+        [
+          "src/com/acme/Service.java",
+          "src/com/acme/Processor.java"
+        ]
+      ]
+    },
+    {
+      "id": "java-config-invalidation",
+      "language": "java",
+      "split": "held-out",
+      "family": "incremental-config",
+      "questionKind": "dependency-path",
+      "query": "Retain equivalent structural meaning after a resolver input changes",
+      "files": {
+        "src/com/acme/Service.java": "package com.acme;\nimport com.acme.Processor;\npublic class Service { private Processor processor; }\n",
+        "src/com/acme/Processor.java": "package com.acme;\npublic interface Processor {}\n",
+        "pom.xml": "<project><version>1</version></project>\n"
+      },
+      "seeds": [
+        "src/com/acme/Service.java",
+        "src/com/acme/Processor.java"
+      ],
+      "mutations": [
+        {
+          "path": "pom.xml",
+          "content": "<project><version>2</version></project>\n"
+        }
+      ],
+      "requiredSources": [
+        "src/com/acme/Service.java",
+        "src/com/acme/Processor.java"
+      ],
+      "expectedEdges": [
+        [
+          "src/com/acme/Service.java",
+          "src/com/acme/Processor.java"
+        ]
+      ]
+    },
+    {
+      "id": "python-string-is-not-import",
+      "language": "python",
+      "split": "held-out",
+      "family": "negative-syntax",
+      "questionKind": "change-impact",
+      "query": "Do not treat a string example as an executed import",
+      "files": {
+        "pkg/processor.py": "def process():\n    return 1\n",
+        "pkg/example.py": "example = '''\nfrom .processor import process\n'''\n"
+      },
+      "seeds": [
+        "pkg/processor.py"
+      ],
+      "requiredSources": [
+        "pkg/processor.py"
+      ],
+      "forbiddenEdges": [
+        [
+          "pkg/example.py",
+          "pkg/processor.py"
+        ]
+      ]
+    },
+    {
+      "id": "python-import-alias",
+      "language": "python",
+      "split": "held-out",
+      "family": "dependency-path",
+      "questionKind": "dependency-path",
+      "query": "Trace a module import despite a local binding alias",
+      "files": {
+        "pkg/service.py": "from .processor import process as selected\n\ndef submit():\n    return selected()\n",
+        "pkg/processor.py": "def process():\n    return 1\n"
+      },
+      "seeds": [
+        "pkg/service.py",
+        "pkg/processor.py"
+      ],
+      "requiredSources": [
+        "pkg/service.py",
+        "pkg/processor.py"
+      ],
+      "expectedEdges": [
+        [
+          "pkg/service.py",
+          "pkg/processor.py"
+        ]
+      ]
+    },
+    {
+      "id": "python-new-import-target",
+      "language": "python",
+      "split": "held-out",
+      "family": "incremental-new-target",
+      "questionKind": "dependency-path",
+      "query": "Resolve the unchanged Python caller after a target appears",
+      "files": {
+        "pkg/caller.py": "from .created import created\n\ndef run():\n    return created\n"
+      },
+      "seeds": [
+        "pkg/caller.py",
+        "pkg/created.py"
+      ],
+      "mutations": [
+        {
+          "path": "pkg/created.py",
+          "content": "created = 1\n"
+        }
+      ],
+      "requiredSources": [
+        "pkg/caller.py",
+        "pkg/created.py"
+      ],
+      "expectedEdges": [
+        [
+          "pkg/caller.py",
+          "pkg/created.py"
+        ]
+      ]
+    },
+    {
+      "id": "python-monkey-patch-unknown",
+      "language": "python",
+      "split": "held-out",
+      "family": "runtime-unknown",
+      "questionKind": "change-impact",
+      "query": "Explain why static imports do not prove the active implementation",
+      "files": {
+        "pkg/service.py": "def invoke(processor):\n    return processor.process()\n",
+        "pkg/bootstrap.py": "def configure(processor, override):\n    processor.process = override\n"
+      },
+      "seeds": [
+        "pkg/service.py"
+      ],
+      "requiredSources": [
+        "pkg/service.py"
+      ],
+      "requiredGaps": [
+        "runtime-relationships-unverified"
+      ]
+    }
+  ]
+}

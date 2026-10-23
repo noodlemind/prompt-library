@@ -8,7 +8,7 @@ import { SOURCE_EXTENSIONS } from './lexical-extractor.mjs';
 export const SOURCE_STATE_VERSION = 1;
 const RESOLVER_FILE = /^(?:package\.json|[jt]sconfig[^/]*\.json|pyproject\.toml|setup\.cfg|pom\.xml|build\.gradle(?:\.kts)?|\.gitignore|\.gitattributes)$/;
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
-const EXTRACTOR_REVISION = digest(JSON.stringify(['scan.mjs', 'facts.mjs', 'imports.mjs', 'index.mjs', 'structural-index.mjs', 'working-sources.mjs', 'lexical-extractor.mjs', 'treesitter-extractor.mjs', 'grammars.lock'].map((rel) => {
+const EXTRACTOR_REVISION = digest(JSON.stringify(['scan.mjs', 'facts.mjs', 'imports.mjs', 'occurrences.mjs', 'resolver-config.mjs', 'index.mjs', 'structural-index.mjs', 'working-sources.mjs', 'lexical-extractor.mjs', 'treesitter-extractor.mjs', 'grammars.lock'].map((rel) => {
   try {
     return [rel, digest(fs.readFileSync(new URL(rel, import.meta.url)))];
   } catch (error) {

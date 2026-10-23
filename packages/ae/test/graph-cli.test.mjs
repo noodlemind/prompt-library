@@ -57,7 +57,8 @@ test('deps, dependents and path produce bounded directed relationships in every 
     assert.match(result.stdout, /a\.mjs/);
     if (lane === 'json-envelope') assert.equal(JSON.parse(result.stdout).command, 'graph');
   }
-  assert.equal(fs.existsSync(f.home), false, 'an uncached query publishes no index');
+  assert.equal(fs.existsSync(f.home), true, 'a cold CLI query prepares its parser-backed structural generation');
+  assert.match(deps.generation, /^[a-f0-9]{32}$/);
 });
 
 test('dirty edits and removed files change live graph queries without rebuilding the index', (t) => {
@@ -91,7 +92,10 @@ test('cycles terminate and ambiguous imports qualify negative path results', (t)
   assert.equal(cycle.edges.length, 3);
   assert.equal(cycle.nodes.length, 3);
   assert.equal(f.json('graph', 'path', 'd.mjs', 'one/helper.mjs').outcome, 'unknown');
-  assert.deepEqual(f.json('graph', 'deps', 'd.mjs').unresolved, [{ from: 'd.mjs', import: 'helper', reason: 'ambiguous' }]);
+  const unresolved = f.json('graph', 'deps', 'd.mjs').unresolved;
+  assert.deepEqual(unresolved.map(({ from, import: specifier, reason }) => ({ from, import: specifier, reason })), [{ from: 'd.mjs', import: 'helper', reason: 'ambiguous' }]);
+  assert.equal(unresolved[0].resolutionStatus, 'ambiguous');
+  assert.deepEqual(unresolved[0].candidates, ['one/helper.mjs', 'two/helper.mjs']);
 });
 
 test('invalid queries fail at the boundary and graph commands are available to agents', (t) => {
@@ -102,6 +106,40 @@ test('invalid queries fail at the boundary and graph commands are available to a
   const argv = ['graph', 'deps', 'a.mjs'];
   assert.equal(harnessControlCommand(['harness', ...argv], f.workspace), 'graph');
   assert.equal(beforeDeliveryTool({ name: 'harness', input: { argv } }, { workspace: f.workspace }).pass, true);
+});
+
+test('explain and impact use source evidence while named generations stay historical in every lane', t => {
+  const f = fixture(t);
+  const explanation = f.json('graph', 'explain', 'a.mjs', 'c.mjs');
+  assert.deepEqual(explanation.path, ['a.mjs', 'b.mjs', 'c.mjs']);
+  assert.equal(explanation.explanation[0].evidence[0].path, 'a.mjs');
+  assert.equal(explanation.explanation[0].evidence[0].range.startLine, 1);
+  const impact = f.json('graph', 'impact', 'c.mjs', '--depth', '2');
+  assert.deepEqual(impact.affected.map(row => row.file), ['b.mjs', 'a.mjs']);
+  const generation = explanation.generation;
+  f.write('a.mjs', "import { c } from './c.mjs';\n");
+  for (const lane of ['ledger', 'json-envelope', 'agent']) {
+    const args = ['graph', 'explain', 'a.mjs', 'c.mjs', '--generation', generation];
+    const result = lane === 'ledger' ? f.cli(...args, '--json') : f.cli(...args, '--output', lane);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /b\.mjs/);
+    assert.match(result.stdout, /historical/);
+  }
+  const invalid = f.cli('graph', 'deps', 'a.mjs', '--generation', '../outside', '--json');
+  assert.equal(invalid.status, 2);
+});
+
+test('cold graph dry runs never publish an index in JSON or envelope output', t => {
+  for (const lane of ['ledger', 'json-envelope']) {
+    const f = fixture(t);
+    const args = ['graph', 'deps', 'a.mjs', '--dry-run'];
+    const result = lane === 'ledger' ? f.cli(...args, '--json') : f.cli(...args, '--output', lane);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(f.home), false, 'dry-run must not create a home or structural generation');
+    assert.match(result.stdout, /"dryRun":true/);
+    assert.doesNotMatch(result.stdout, /"prepared":true/);
+    assert.match(result.stdout, /"extractorTier":"lexical"/);
+  }
 });
 
 test('long default imports, side effects and reexports agree before and after indexing', (t) => {

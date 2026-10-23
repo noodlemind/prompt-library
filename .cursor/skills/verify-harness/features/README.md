@@ -36,11 +36,13 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 ## Features
 
+- [Structural evidence and impact context](./structural-context.md) covers real AST import evidence, bounded impact, historical snapshots and source packets through `verify-structural-context`.
 - [Intent lock](./intent-lock.md), named check `verify-intent-lock`, covers spec discovery, accepted hashes, changed/missing-source rejection, frozen selections, and explicit amendments.
 - [Issue worktree](./issue-worktree.md) covers isolation from the default-branch checkout and `ae worktree --slug`.
 - [Prepare](./prepare.md) covers starter spec and ADR files, orient discovery, skip-on-edit, and gitignored `docs/`.
 - [Journey performance](./performance.md) covers a disposable domain, linked analysis views, stale measurements and scoped authoring/review context through `verify-performance`.
 - [Installed release](./installed-release.md) covers a packed fresh installation, predecessor upgrade, matching hydrated runtime and corpus, and completed bounded experiment delivery.
+- [Self-contained diagrams](./diagrams.md), named check `adaptive-diagram-tests`, covers authored views, import and flow projections, source freshness, native tool admission, and offline renderer installation.
 - [Formal models](./formal-models.md), named check `verify-formal-flows`, covers committed-default-branch preparation, authored map publication, relevant bounded orientation, freshness, obsolete-candidate rejection, and explicit maintenance. It needs ordinary Node/Git readiness; deeper checking is opt-in.
 - [Workflow invariants](./workflow-invariants.md), named checks `verify-workflow-invariants` and `verify-workflow-invariants-negative`, cover actual mutation/recovery/completion authority and deliberate-break detection in an owned package copy. They do not require TLC.
 - The optional [delivery-evidence pilot](../formal/delivery-evidence/SKILL.md), named check `verify-formal-delivery`, needs Java 17+ and the approved TLC JAR. It reports finite model scope separately from implementation proof.

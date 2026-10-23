@@ -15,7 +15,7 @@ function safeRoot(root) {
 function table(dir, name, digest = null) {
   const full = path.join(dir, name);
   if (!fs.existsSync(full)) return { value: null, error: digest || TABLES.includes(name) && name !== 'meta.json' ? `${name} is missing` : null };
-  const body = readFileNoFollow(full, { root: dir, maxBytes: ['current.json', 'owner.json'].includes(name) ? 16_384 : DEFAULT_MAX_BYTES });
+  const body = readFileNoFollow(full, { root: dir, maxBytes: ['current.json', 'manifest.json', 'owner.json'].includes(name) ? 16_384 : DEFAULT_MAX_BYTES });
   if (body === null) return { value: null, error: `${name} is unreadable (oversized, symlink, or open failure)` };
   if (digest && hash(body) !== digest) return { value: null, error: `${name} integrity mismatch` };
   try {
@@ -87,22 +87,30 @@ function withSnapshotLock(root, fn) {
   }
 }
 
-export function readSnapshot(root, { expectedSha = null } = {}) {
+export function readSnapshot(root, { expectedSha = null, generation: selectedGeneration = null } = {}) {
   if (!fs.existsSync(root)) return null;
   const broken = (error) => ({ root, dir: root, meta: null, files: {}, symbols: {}, graph: {}, unreadable: [error], generation: null, legacy: false });
   try {
     return withSnapshotLock(root, () => {
-      const current = manifest(root);
+      if (selectedGeneration !== null && !GENERATION.test(selectedGeneration)) return broken('invalid selected structural generation');
+      const current = selectedGeneration === null ? manifest(root) : { value: null, error: null };
       if (current.error) return broken(current.error);
-      const generation = current.value?.generation || null;
+      const generation = selectedGeneration || current.value?.generation || null;
       const dir = generation ? path.join(root, 'generations', generation) : root;
       if (!assertNoSymlinkAncestors(root, path.relative(root, dir))) return broken('unsafe structural generation directory');
-      const meta = table(dir, 'meta.json', current.value?.tables['meta.json']);
+      let hashes = current.value?.tables;
+      if (selectedGeneration) {
+        const retained = table(dir, 'manifest.json');
+        if (retained.error || retained.value?.version !== 1 || retained.value.generation !== generation
+          || TABLES.some(name => !/^[a-f0-9]{64}$/.test(retained.value.tables?.[name]))) return broken(retained.error || 'selected structural generation has no valid integrity manifest');
+        hashes = retained.value.tables;
+      }
+      const meta = table(dir, 'meta.json', hashes?.['meta.json']);
       if (!meta.value && !meta.error) return null;
       if (meta.error) return broken(meta.error);
       if (generation && meta.value.generation !== generation) return broken('meta.json generation mismatch');
       if (expectedSha && meta.value.sha !== expectedSha) return null;
-      const values = TABLES.slice(1).map(name => table(dir, name, current.value?.tables[name]));
+      const values = TABLES.slice(1).map(name => table(dir, name, hashes?.[name]));
       const unreadable = values.map(value => value.error).filter(Boolean);
       if (!generation) {
         const after = table(dir, 'meta.json');
@@ -138,6 +146,7 @@ export function publishSnapshot(root, writes) {
       tables[name] = hash(body);
     }
     if (TABLES.some(name => !tables[name])) throw new Error('incomplete structural snapshot');
+    if (!writeFileContained(staging, 'manifest.json', JSON.stringify({ version: 1, generation, tables }) + '\n')) throw new Error('cannot write structural generation manifest');
     return withSnapshotLock(root, () => {
       const previous = manifest(root).value?.generation || null;
       const generations = assertNoSymlinkAncestors(root, 'generations');

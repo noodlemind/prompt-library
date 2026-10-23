@@ -79,8 +79,9 @@ import { cmdDomain, domainResultOf, parseDomainArguments, DOMAIN_VERBS } from '.
 import { cmdExperiment, experimentResultOf, parseExperimentArguments, EXPERIMENT_VERBS } from './experiment-cmd.mjs';
 import { cmdInventory, inventoryResultOf, INVENTORY_VERBS } from './inventory-cmd.mjs';
 import { cmdPerformance, performanceResultOf, PERFORMANCE_VERBS } from './performance-cmd.mjs';
+import { cmdGraph, graphResultOf, parseGraphArguments, GRAPH_OPERATIONS } from './graph-cmd.mjs';
+import { prepareGraph } from './graph.mjs';
 import { cmdFlows, flowsResultOf, FLOW_VERBS } from './flow-model-cmd.mjs';
-import { cmdGraph, graphResultOf, GRAPH_OPERATIONS } from './graph-cmd.mjs';
 import { cmdDiagrams, diagramsResultOf, DIAGRAM_VERBS } from './diagram-cmd.mjs';
 
 const REGISTRY = new Map();
@@ -480,6 +481,7 @@ async function learningsResultOf(argv) {
     flags,
     workspace: path.resolve(flags.workspace),
     copilotHome: resolveCopilotHome(flags.copilotHome),
+    home: flags.harnessHome || flags.home,
     hasFlag,
   });
 
@@ -649,6 +651,7 @@ registerCommand({
       { name: '--file', type: 'string', valueName: 'path', description: 'one file to place in the change neighborhood (repeatable)', required: false, default: null, tui: 'prompt' },
       { name: '--read', type: 'boolean', description: 'print the bounded session slice and write no context pack', required: false, default: false, tui: 'cli-only' },
       { name: '--context-version', type: 'number', valueName: '1|2', description: 'select legacy facts or source-bound context evidence', required: false, default: 1, tui: 'cli-only' },
+      { name: '--question-kind', type: 'string', valueName: 'kind', description: 'explicit lookup, dependency-path, change-impact or prior-lesson packet; requires --read --context-version 2', required: false, default: null, tui: 'cli-only' },
     ],
   },
   handler: cmdOrient,
@@ -837,14 +840,14 @@ registerCommand({
 
 registerCommand({
   name: 'graph',
-  summary: 'bounded file dependencies, dependents and directed paths from current worktree facts',
+  summary: 'bounded cited dependencies, explanations and impact from current facts or an immutable generation',
   group: 'workspace',
   sideEffect: 'read',
   capabilities: [],
   outputModes: ['ledger', 'json'],
   surfaces: ['cli', 'tui', 'agent'],
-  usage: '<deps|dependents> <file> [--depth <n>] [--limit <n>] | path <file> <target>',
-  verbs: GRAPH_OPERATIONS.map(verb => ({ verb, summary: verb === 'path' ? 'find a bounded directed dependency path' : `read file ${verb}`, sideEffect: 'read', positionals: verb === 'path' ? ['file', 'target'] : ['file'] })),
+  usage: '<deps|dependents|impact> <file> [--depth <n>] [--limit <n>] [--generation <id>] | <path|explain> <file> <target>',
+  verbs: GRAPH_OPERATIONS.map(verb => ({ verb, summary: ['path', 'explain'].includes(verb) ? 'read a bounded directed relationship with evidence' : `read file ${verb}`, sideEffect: 'read', positionals: ['path', 'explain'].includes(verb) ? ['file', 'target'] : ['file'] })),
   args: {
     positionals: [
       { name: 'operation', description: GRAPH_OPERATIONS.join('|'), required: true },
@@ -854,10 +857,11 @@ registerCommand({
     flags: [
       { name: '--depth', type: 'number', valueName: 'n', description: 'traversal depth, 1 to 32; default 1, or 8 for path', required: false, default: null, tui: 'prompt' },
       { name: '--limit', type: 'number', valueName: 'n', description: 'maximum returned edges and unresolved imports, 1 to 200', required: false, default: 50, tui: 'prompt' },
+      { name: '--generation', type: 'string', valueName: 'id', description: 'read a retained immutable historical generation without claiming live freshness', required: false, default: null, tui: 'prompt' },
     ],
   },
   handler: cmdGraph,
-  resultOf: graphResultOf,
+  resultOf: async argv => graphResultOf(argv, await prepareGraph(parseGraphArguments(argv))),
 });
 
 registerCommand({
@@ -883,7 +887,7 @@ registerCommand({
         name: '--structural',
         type: 'boolean',
         description:
-          'build the persistent structural code index under ~/.harness/index/<repo-id>/<worktree-id>/structural (optional tree-sitter tier, lexical fallback)',
+          'build the persistent structural code index with bundled AST assets; unsupported inputs retain a labeled lexical tier',
         required: false,
         default: false,
         tui: 'verb',

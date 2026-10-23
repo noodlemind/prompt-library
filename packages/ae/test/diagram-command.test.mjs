@@ -266,3 +266,24 @@ test('real CLI graph uses current import facts and participates in command envel
   assert.equal(envelope.status, 0, envelope.stderr || envelope.stdout);
   assert.equal(JSON.parse(envelope.stdout).command, 'diagrams');
 });
+
+test('cold graph diagrams disclose lexical provenance and status never prepares a structural index', async t => {
+  const workspace = fixture(t), home = path.join(workspace, 'uncreated-ae-home');
+  fs.writeFileSync(path.join(workspace, 'src/a.mjs'), "import { value } from './input.mjs';\nconsole.log(value);\n");
+  git(workspace, 'init', '-q'); git(workspace, 'add', '.');
+  const options = ['--workspace', workspace, '--ae-home', home, '--no-events'];
+  const result = await diagramsResultOf(['graph', '--root', 'src/a.mjs', ...options]);
+  const receipt = JSON.parse(fs.readFileSync(path.join(workspace, result.artifacts.receipt), 'utf8'));
+  assert.equal(receipt.projection.generation, null);
+  assert.equal(receipt.projection.producer.extractorTier, 'lexical');
+  assert.equal(receipt.projection.freshness.state, 'current');
+  assert.equal(receipt.projection.coverage.scope, 'git-tracked-source');
+  assert.equal(receipt.projection.edges[0].method, 'lexical');
+  assert.equal(receipt.projection.edges[0].evidence[0].path, 'src/a.mjs');
+  const check = () => diagramsResultOf(['status', '--receipt', result.artifacts.receipt, ...options]);
+  assert.equal((await check()).state, 'current');
+  assert.equal(fs.existsSync(home), false, 'rendering and status must preserve the query-only graph contract');
+  fs.writeFileSync(path.join(workspace, 'src/input.mjs'), 'export const value = 2;\n');
+  assert.equal((await check()).state, 'stale');
+  assert.equal(fs.existsSync(home), false, 'status must not publish an index while checking changed sources');
+});

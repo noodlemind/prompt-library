@@ -1,6 +1,6 @@
 ---
 name: verify-harness
-description: Prove AE CLI intent lock, preparation, worktree isolation, flows, workflow invariants, and installed release behavior with real commands. Use for runtime verification. Not for code review or general CLI questions.
+description: Prove AE CLI intent lock, preparation, worktree isolation, structural context, diagrams, flows, workflow invariants, and installed release behavior with real commands. Use for runtime verification. Not for code review or general CLI questions.
 ---
 
 # Verify Harness
@@ -73,6 +73,7 @@ Delete temp workspaces, temp `AE_HOME` dirs, and linked git worktrees the drive 
 - Prepare proof: `node .cursor/skills/verify-harness/scripts/prove-prepare.mjs`
 - Journey performance: `ae checks run verify-performance --json`; the [feature recipe](./features/performance.md) records the CLI and separate browser proof.
 - Installed release proof: `ae checks run verify-installed-release --json` from a trusted checkout on macOS; see [the installed-release recipe](./features/installed-release.md).
+- Structural evidence and impact: `ae checks run verify-structural-context --json`; see [the feature recipe](features/structural-context.md).
 - Shared flow models: `node .cursor/skills/verify-harness/scripts/prove-formal-flows.mjs`, named check `verify-formal-flows`; see [formal models](./features/formal-models.md).
 - Self-contained diagrams: `ae checks run adaptive-diagram-tests --json`; see [diagram rendering](./features/diagrams.md) for real CLI, native tool, offline installation, freshness and negative-control coverage.
 - Workflow conformance: `node .cursor/skills/verify-harness/scripts/prove-workflow-invariants.mjs`, named check `verify-workflow-invariants`.

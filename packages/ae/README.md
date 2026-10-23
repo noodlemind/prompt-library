@@ -116,7 +116,9 @@ initialize this repo (`init-repo`) from the palette
 | `compound --insight` | Investigation capture (not promotable) |
 | `report --growth` | AE growth scoreboard from events (**no LLM**) |
 | `recall` / `get` / `search` / `lookup` / `tree` | Retrieval |
+| `graph deps` / `dependents` / `path` / `explain` / `impact` | Bounded structural evidence and change-impact candidates |
 | `flows prepare` / `flows publish` / `flows status` / `flows show` | Optional source-bound descriptive application model |
+| `diagrams render` / `graph` / `flow` / `status` | Local SVG/HTML views with source freshness receipts |
 | `edit` / `write` / `apply` / `undo` | Mutations (`undo` operator-only) |
 | `exec` / `bash` | Governed process / shell |
 | `todo` | Durable worklist (`.harness/todo.json`) |
@@ -324,7 +326,19 @@ The bundled VS Code bridge has its own version in `vscode-extension/package.json
 bin/ae.mjs   lib/   test/   eval/   corpus/   config/
 ```
 
-Node 20+. Runtime: `yaml`. Optional tree-sitter packages for structural index only (lexical fallback if missing).
+Node 20+. Runtime libraries: `yaml`, Pele and D2/WASM. Pinned Tree-sitter loader/runtime and Java, JavaScript, TypeScript, TSX and Python WASM grammars ship inside the package. No native parser build, optional dependency installation or runtime parser download is required. Unsupported inputs and unavailable/corrupt assets remain explicitly degraded; release checks reject damaged shipped assets. Diagram rendering uses bundled assets without a renderer executable, browser, server or runtime download.
+
+## Structural evidence and impact
+
+```bash
+ae graph explain src/caller.ts src/processor.ts --json
+ae graph impact src/processor.ts --depth 2 --json
+ae orient --read --context-version 2 --question-kind change-impact --file src/processor.ts --query 'change retry behavior' --json
+```
+
+Graph output carries occurrence citations, extraction method, resolver status, inventory scope and omissions. Live CLI queries prepare the bundled AST index when needed. `--generation <id>` selects a retained immutable historical generation and never silently falls back to current source. See [the structural knowledge guide](../../docs/structural-knowledge.md) for snapshots, applicability and evaluation limits.
+
+Impact suggestions are descriptive and do not select or waive accepted checks. Learning applicability compares selected source bytes separately from historical proof. Context policies remain opt-in until qualified model studies support a default change.
 
 ## Deterministic work operations (since 0.10.0)
 

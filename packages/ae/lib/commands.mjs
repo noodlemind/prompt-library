@@ -58,6 +58,7 @@ import { writeCodebaseMap } from './repo-map/index.mjs';
 import { KNOWLEDGE_COMMIT_MODES, KNOWLEDGE_MODES, inertLine, listLearnings, readStoreConfig, storeDir, writeStaleExclusions, writeStoreConfig } from './knowledge/store.mjs';
 import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { readOrientSlice } from './orient-read.mjs';
+import { prepareGraph } from './graph.mjs';
 import { runOrient } from './orient.mjs';
 import { exitCodeForOutcome, isGatingCheck, runVerify, statusForVerifyResult, unifiedStatusForCheck } from './verify.mjs';
 import { createJsonlStream } from './envelope.mjs';
@@ -139,6 +140,7 @@ function learningNote(l) {
     note += ` · evidence contradicts (${l.failures} failures) — confirm or retire`;
   }
   if (l.promotionEligible) note += ' · promotable → /create-primitive';
+  if (l.applicability) note += ` · source applicability ${['current', 'needs-review', 'unknown'].includes(l.applicability.state) ? l.applicability.state : 'unknown'} (source bytes only)`;
   return note;
 }
 
@@ -773,6 +775,12 @@ export async function computeOrientResult(argv) {
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
   const query = parseQueryFromArgv(argv, flags);
+  if (flags.questionKind) {
+    if (!flags.read || flags.contextVersion !== 2) throw Object.assign(new Error('--question-kind requires --read --context-version 2'), { code: 'E_USAGE', exit: 2 });
+    if (!flags.dryRun && ['dependency-path', 'change-impact'].includes(flags.questionKind)) {
+      await prepareGraph({ workspace, home: flags.harnessHome || flags.home });
+    }
+  }
   if (flags.read) {
     const result = readOrientSlice({ workspace, copilotHome, flags, query, files: flags.files });
     return { flags, workspace, copilotHome, query, result, read: true };
@@ -1503,7 +1511,7 @@ export async function cmdLearnings(argv) {
   const workspace = path.resolve(flags.workspace);
   const copilotHome = resolveCopilotHome(flags.copilotHome);
 
-    const view = resolveLearningsView({ argv, flags, workspace, copilotHome, hasFlag });
+    const view = resolveLearningsView({ argv, flags, workspace, copilotHome, home: flags.harnessHome || flags.home, hasFlag });
 
   if (view.outcome === 'usage') {
     const blockedReason = view.message;

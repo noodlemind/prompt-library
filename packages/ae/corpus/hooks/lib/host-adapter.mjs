@@ -4,13 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeRuntimeEnvironment } from './runtime-identity.mjs';
 import { preToolDenyOutput, stopBlockOutput } from './hook-output.mjs';
+import { unwrapOrientSlice } from './orient-slice.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const SLICE_KEYS = ['neighborhood', 'learnings', 'skills', 'instructions', 'contacts', 'index', 'gateStatus', 'activePlan'];
 
 function emptySlice() {
   return {
     neighborhood: null,
+    graph: null,
     intentSources: [],
     intentDiscovery: null,
     intentDetail: null,
@@ -44,16 +45,12 @@ function takeFlag(argv, name) {
 }
 
 function sliceFrom(parsed) {
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptySlice();
-  for (const key of SLICE_KEYS) {
-    if (!Object.hasOwn(parsed, key)) return emptySlice();
-  }
-  return { ...emptySlice(), ...parsed };
+  return unwrapOrientSlice(parsed, emptySlice());
 }
 
 function orientSlice(workspace, { query = '', files = [], readOnly = true } = {}) {
   const { command, prefix } = harnessCommand();
-  const args = [...prefix, 'orient', ...(readOnly ? ['--read'] : []), '--json', '--no-events', '--workspace', workspace];
+  const args = [...prefix, 'orient', ...(readOnly ? ['--read', '--context-version', '2'] : []), '--json', '--no-events', '--workspace', workspace];
   if (query) args.push('--query', query);
   for (const file of files) args.push('--file', file);
   if (process.env.COPILOT_HOME) args.push('--copilot-home', process.env.COPILOT_HOME);

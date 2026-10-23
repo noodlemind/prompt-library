@@ -136,7 +136,7 @@ test('AC8: the audit does not flag a fully declared usage line', () => {
 // a `tui: 'verb'` disposition quietly downgraded) removes a capability from
 // the palette without any usage line changing. These fixtures are the pin.
 const DECLARED_VERBS = Object.freeze({
-  graph: ['deps', 'dependents', 'path'],
+  graph: ['deps', 'dependents', 'path', 'explain', 'impact'],
   knowledge: ['on', 'suggest', 'off', 'freeze', 'capture-only', 'status', 'promote', 'prune', 'purge', 'commit', 'migrate-store'],
   learning: ['retire', 'dispute', 'confirm', 'promote'],
   // `lookup`'s eleven entity kinds are verbs rather than a free-text
@@ -194,7 +194,7 @@ const VERB_FLAGS = Object.freeze({
  * same failure mode as a verb that never reached the index at all.
  */
 const VERB_POSITIONALS = Object.freeze({
-  graph: { deps: ['file'], dependents: ['file'], path: ['file', 'target'] },
+  graph: { deps: ['file'], dependents: ['file'], path: ['file', 'target'], explain: ['file', 'target'], impact: ['file'] },
   knowledge: { purge: ['target'], commit: ['target'] },
   learning: { retire: ['id'], dispute: ['id'], confirm: ['id'], promote: ['id'] },
   // Every lookup kind names exactly one entity, so all eleven consume the

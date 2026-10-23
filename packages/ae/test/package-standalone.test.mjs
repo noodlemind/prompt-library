@@ -128,17 +128,58 @@ test('standalone source and its offline-installed archive validate and pack with
   const [packed] = JSON.parse(ok(source, ['pack', '--json', '--pack-destination', archives]).stdout);
   assert.equal(packed.name, 'ae-harness');
   assert.ok(packed.files.some(file => file.path === 'scripts/check-release.mjs'));
-  const prefix = path.join(root, 'installed');
+  assert.ok(packed.files.some(file => file.path === 'lib/repo-map/vendor/tree-sitter-java/tree-sitter-java.wasm'));
+  assert.equal(packed.files.some(file => file.path.endsWith('.node')), false, 'the archive must not ship native Node parser bindings');
+  const prefix = path.join(root, 'installed path with spaces');
   ok(root, ['install', '--prefix', prefix, '--offline', '--ignore-scripts=false', '--omit=optional', '--no-audit', '--no-fund', path.join(archives, packed.filename)]);
   const installed = path.join(prefix, 'node_modules/ae-harness');
   assert.equal(fs.existsSync(path.join(installed, 'test')), false);
   assert.equal(fs.existsSync(path.join(installed, 'package-lock.json')), false);
   assert.ok(fs.existsSync(path.join(prefix, 'node_modules/.bin', process.platform === 'win32' ? 'ae.cmd' : 'ae')), 'archive installation must expose the ae command');
   assert.equal(ok(root, ['exec', '--prefix', prefix, '--offline', '--', 'ae', '--version']).stdout.trim(), packed.version);
+  const proveAst = runtime => {
+    const astProbe = `
+    import assert from 'node:assert/strict';
+    globalThis.fetch = () => { throw new Error('parser extraction must not fetch assets'); };
+    const { createTreesitterExtract, packageGrammarRoots } = await import(${JSON.stringify(pathToFileURL(path.join(runtime, 'lib/repo-map/treesitter-extractor.mjs')).href)});
+    const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
+    assert.equal(extractor.tier, 'treesitter', JSON.stringify(extractor));
+    assert.deepEqual(extractor.missingGrammars, []);
+    const cases = [
+      ['probe.js', 'export function jsFunction() {}', 'jsFunction'],
+      ['probe.ts', 'export interface Item { id: string }; export function tsFunction(value: Item) { return value.id; }', 'tsFunction'],
+      ['probe.tsx', 'export function Component() { return <span/>; }', 'Component'],
+      ['probe.py', 'def py_function():\\n    return 1\\n', 'py_function'],
+      ['Probe.java', 'public class Probe { public int javaMethod() { return 1; } }', 'javaMethod'],
+    ];
+    for (const [file, source, symbol] of cases) {
+      const facts = extractor.extract(file, source);
+      assert.equal(facts.tier, 'treesitter', file);
+      assert.equal(Boolean(facts.hasErrors || facts.errors), false, file + ' must parse without errors');
+      assert.ok(facts.symbols.includes(symbol), file + ': ' + JSON.stringify(facts));
+    }
+    console.log('installed-ast-five-languages');
+  `;
+    const parsed = spawnSync(process.execPath, ['--input-type=module', '-e', astProbe], { cwd: root, env, encoding: 'utf8', timeout: 30_000 });
+    assert.ifError(parsed.error);
+    assert.equal(parsed.status, 0, parsed.stdout + parsed.stderr);
+    assert.equal(parsed.stdout.trim(), 'installed-ast-five-languages');
+  };
+  proveAst(installed);
+  const globalPrefix = path.join(root, 'global path with spaces');
+  ok(root, ['install', '--global', '--prefix', globalPrefix, '--offline', '--ignore-scripts=false', '--omit=optional', '--no-audit', '--no-fund', path.join(archives, packed.filename)]);
+  proveAst(path.join(globalPrefix, process.platform === 'win32' ? 'node_modules' : 'lib/node_modules', 'ae-harness'));
   ok(installed, ['run', 'prepack']);
   const repacked = path.join(root, 'repacked');
   fs.mkdirSync(repacked);
   ok(installed, ['pack', '--json', '--pack-destination', repacked]);
+  const grammarPath = path.join(installed, 'lib/repo-map/vendor/tree-sitter-java/tree-sitter-java.wasm');
+  const grammarBytes = fs.readFileSync(grammarPath);
+  fs.writeFileSync(grammarPath, 'corrupt bundled parser');
+  const corruptParser = run(installed, ['run', 'check:release']);
+  assert.notEqual(corruptParser.status, 0, 'installed release validation must reject changed parser bytes');
+  assert.match(corruptParser.stdout + corruptParser.stderr, /bundled parser integrity mismatch/);
+  fs.writeFileSync(grammarPath, grammarBytes);
 
   const wasm = path.join(installed, 'node_modules/@d2lang/d2/dist/node-esm/d2.wasm');
   fs.renameSync(wasm, `${wasm}-missing`);

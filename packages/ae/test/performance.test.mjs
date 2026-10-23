@@ -128,8 +128,18 @@ test('bounded lexical lists retain their truncation flags and disclose incomplet
   const source = report.implementation.nodes.find(node => node.id === 'start-source');
   assert.equal(source.imports.length, 256);
   assert.equal(source.symbols.length, 512);
-  assert.deepEqual(source.limitsReached, { symbols: true, imports: true, refs: true });
-  assert.ok(report.unknowns.some(message => message.includes('start-source') && /truncat/i.test(message)));
+  assert.deepEqual(source.limitsReached, { symbols: true, imports: true, importOccurrences: true, refs: true });
+  assert.ok(report.unknowns.some(message => message.includes('start-source') && /truncat/i.test(message) && message.includes('importOccurrences')));
+});
+
+test('bounded repeated import sites disclose omitted evidence even when the module list fits', t => {
+  const f = fixture(t);
+  f.write('src/start.mjs', Array.from({ length: 257 }, () => "import './finish.mjs';").join('\n'));
+  const report = f.analyze();
+  const source = report.implementation.nodes.find(node => node.id === 'start-source');
+  assert.deepEqual(source.imports, ['./finish.mjs']);
+  assert.deepEqual(source.limitsReached, { symbols: false, imports: false, importOccurrences: true, refs: false });
+  assert.ok(report.unknowns.some(message => message.includes('start-source') && /truncated for importOccurrences/.test(message)));
 });
 
 test('a forbidden direct edge does not become a forbidden transitive path', t => {

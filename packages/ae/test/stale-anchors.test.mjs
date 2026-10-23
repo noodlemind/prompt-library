@@ -6,7 +6,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { ensureStore, listLearnings, storeDir } from '../lib/knowledge/store.mjs';
+import { ensureStore, listLearnings, storeDir, parseLearningFrontmatter, serializeLearning } from '../lib/knowledge/store.mjs';
+import { rankLearnings, retrievalExclusion } from '../lib/knowledge/retrieve.mjs';
+import { runSearch } from '../lib/retrieval/search.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
@@ -41,7 +43,7 @@ function sha256Of(text) {
 
 const TRIGGER = 'orders endpoint timing out under load';
 
-function seedAnchoredLearning(c) {
+function seedAnchoredLearning(c, { legacy = false } = {}) {
   // The anchor target: a real source file the episode doc talks about.
   writeFile(c.ws, 'src/orders.mjs', 'export function listOrders() {}\n');
   // The episode doc (the evidence file cited by the op) mentions that path.
@@ -58,6 +60,13 @@ function seedAnchoredLearning(c) {
   };
   const res = run(c, ['consolidate', '--apply', '--ops', writeOps(c.ws, [op])]);
   assert.equal(res.status, 0, res.stderr || res.stdout);
+  if (legacy) {
+    const learning = listLearnings(storeDir(c.ws, { home: c.harnessHome })).find(row => row.id === 'perf/orders-endpoint');
+    const { fm, body } = parseLearningFrontmatter(fs.readFileSync(learning.file, 'utf8'));
+    delete fm.applicability_version;
+    delete fm.source_bindings;
+    fs.writeFileSync(learning.file, serializeLearning(fm, body), 'utf8');
+  }
   return 'perf/orders-endpoint';
 }
 
@@ -88,7 +97,7 @@ test('(b) orient surfaces a freshly anchored learning', () => {
 
 test('(c) deleting an anchor target excludes the learning at the next index', () => {
   const c = ctx();
-  seedAnchoredLearning(c);
+  seedAnchoredLearning(c, { legacy: true });
   fs.rmSync(path.join(c.ws, 'src/orders.mjs'), { force: true });
 
   const idx = run(c, ['index']);
@@ -102,7 +111,7 @@ test('(c) deleting an anchor target excludes the learning at the next index', ()
 
 test('(d) restoring the anchor target re-includes the learning at the next index', () => {
   const c = ctx();
-  seedAnchoredLearning(c);
+  seedAnchoredLearning(c, { legacy: true });
   const target = path.join(c.ws, 'src/orders.mjs');
   fs.rmSync(target, { force: true });
   assert.equal(JSON.parse(run(c, ['index']).stdout).staleLearnings, 1);
@@ -144,12 +153,13 @@ test('(e) a learning with anchors: [] is never excluded, even after unrelated fi
   assert.ok(orientLearningIds(c, otherTrigger).includes('perf/plain-claim'));
 });
 
-test('(f) an anchor escaping the workspace via `..` is treated as stale — the learning is excluded even though the outside file exists', () => {
+test('(f) an anchor escaping the workspace via `..` is treated as stale — the learning is excluded even though the outside file exists', t => {
   const c = ctx();
   const id = seedAnchoredLearning(c);
 
     const outsideName = `outside-anchor-${path.basename(c.ws)}.md`;
   fs.writeFileSync(path.join(c.ws, '..', outsideName), 'outside the workspace\n');
+  t.after(() => fs.rmSync(path.join(c.ws, '..', outsideName), { force: true }));
 
   const { dir } = ensureStore(c.ws, { home: c.harnessHome });
   const learning = listLearnings(dir).find((l) => l.id === id);
@@ -162,8 +172,70 @@ test('(f) an anchor escaping the workspace via `..` is treated as stale — the 
   assert.equal(idx.status, 0, idx.stderr || idx.stdout);
   assert.equal(JSON.parse(idx.stdout).staleLearnings, 1, 'the escaping anchor counts as stale');
   assert.ok(!orientLearningIds(c, TRIGGER).includes(id), 'the learning is excluded from retrieval');
+  let outsideReads = 0;
+  const outside = path.resolve(c.ws, '..', outsideName);
+  const open = fs.openSync;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (path.resolve(String(file)) === outside) outsideReads += 1;
+    return open(file, ...args);
+  });
+  assert.deepEqual(rankLearnings({ workspace: c.ws, home: c.harnessHome, query: TRIGGER }), []);
+  for (const mode of ['ranked', 'literal']) {
+    assert.deepEqual(runSearch({ workspace: c.ws, copilotHome: c.home, home: c.harnessHome, query: TRIGGER, sources: ['learnings'], mode }).results, [], `${mode} federation preserves the stale exclusion`);
+  }
+  assert.equal(outsideReads, 0, 'tampered binding metadata never causes an outside read');
+});
 
-  fs.rmSync(path.join(c.ws, '..', outsideName), { force: true });
+test('a valid source-bound learning with a symlinked target stays reviewable without reading outside bytes', t => {
+  const c = ctx();
+  const id = seedAnchoredLearning(c);
+  const target = path.join(c.ws, 'src/orders.mjs');
+  const outside = path.resolve(c.ws, '..', `outside-bound-${path.basename(c.ws)}.mjs`);
+  const secret = 'UNRELATED_OUTSIDE_BYTES_MUST_NEVER_BE_READ';
+  fs.writeFileSync(outside, secret);
+  t.after(() => fs.rmSync(outside, { force: true }));
+  fs.unlinkSync(target);
+  try { fs.symlinkSync(outside, target); }
+  catch (error) { if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) return t.skip('symlinks unavailable'); throw error; }
+  const indexed = run(c, ['index']);
+  assert.equal(indexed.status, 0, indexed.stderr || indexed.stdout);
+  assert.equal(JSON.parse(indexed.stdout).staleLearnings, 1);
+  const oriented = run(c, ['orient', '--query', TRIGGER]);
+  assert.equal(oriented.status, 0, oriented.stderr || oriented.stdout);
+  const row = JSON.parse(oriented.stdout).learnings.find(learning => learning.id === id);
+  assert.equal(row.applicability.state, 'needs-review');
+  assert.equal(row.applicability.bindings[0].reason, 'source-unsafe');
+  assert.ok(!oriented.stdout.includes(secret));
+  let outsideReads = 0;
+  const open = fs.openSync;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    if ([target, outside].includes(path.resolve(String(file)))) outsideReads += 1;
+    return open(file, ...args);
+  });
+  assert.equal(rankLearnings({ workspace: c.ws, home: c.harnessHome, query: TRIGGER })[0].applicability.state, 'needs-review');
+  for (const mode of ['ranked', 'literal']) {
+    const found = runSearch({ workspace: c.ws, copilotHome: c.home, home: c.harnessHome, query: TRIGGER, sources: ['learnings'], mode }).results.find(learning => learning.id === id);
+    assert.equal(found.applicability.state, 'needs-review', `${mode} federation exposes the safe review state`);
+  }
+  assert.equal(outsideReads, 0, 'the binding checker rejects the symlink before any source open');
+});
+
+test('cached stale exclusion cannot be bypassed with malformed or unsupported binding metadata', () => {
+  const binding = { path: 'src/orders.mjs', sha256: 'a'.repeat(64) };
+  const fm = { applicability_version: 1, source_bindings: [binding], anchors: [binding.path] };
+  const excluded = { 'perf/orders-endpoint': [binding.path] };
+  assert.equal(retrievalExclusion({ id: 'perf/orders-endpoint', fm }, excluded), null);
+  for (const changed of [
+    { source_bindings: null },
+    { source_bindings: [] },
+    { applicability_version: 2 },
+    { source_bindings: [{ ...binding, sha256: null }] },
+    { source_bindings: [binding, binding] },
+    { anchors: ['../outside.mjs'] },
+    { source_bindings: [{ ...binding, path: '../outside.mjs' }], anchors: ['../outside.mjs'] },
+  ]) {
+    assert.equal(retrievalExclusion({ id: 'perf/orders-endpoint', fm: { ...fm, ...changed } }, excluded), 'stale-anchor', JSON.stringify(changed));
+  }
 });
 
 test('index on a workspace with no knowledge store yet stays store-read-only', () => {

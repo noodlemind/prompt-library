@@ -46,6 +46,8 @@ Orient shows trust, constraints, acceptance criteria, review coverage and an imp
 
 ## Product verification recipes
 
+Structural questions can use `ae graph explain`, `ae graph impact`, and explicit question kinds in `ae orient --read --context-version 2`. Packets combine relationships, source excerpts and learning applicability with visible gaps; they grant no check or mutation authority. Selected AST assets ship inside AE. Historical generations remain distinct from current worktree evidence. See [Structural knowledge](structural-knowledge.md) for commands and limits.
+
 Orient returns bounded verification paths and coverage metadata. It prefers an explicitly selected recipe on the accepted plan, otherwise the sole existing `.cursor/skills/verify-*/SKILL.md`, otherwise `docs/verification/SKILL.md`. Several candidates produce an ambiguity result. Enumeration that reaches its bound reports an incomplete inventory and requires explicit selection. The Engineer reads the selected recipe before using it. A returned path does not prove a read or native editor registration. An extra `docs/features/` directory is reported and preserved.
 
 Missing recipes are created only as scoped Deliver work with a locked plan and successful implement gate. Installation does not write product recipes. The existing `create-primitive` skill owns the creation and upkeep procedure in `references/product-verification.md`. The recipe has Launch, Doctor, Drive, Evidence, Cleanup, and Helpers sections. Its map has `features/README.md` and one file per feature with Sub-features, How a person reaches it, Driving it, and Gotchas sections. The initial top-three seed reports partial coverage.

@@ -30,6 +30,7 @@ export function createRetrievalResult({
   generation = null,
   reason = null,
   kind = null,
+  applicability = null,
 }) {
   if (!SOURCE_RANK.has(source)) {
     throw new Error(`createRetrievalResult: unknown source ${JSON.stringify(source)} (expected ${SOURCES.join(' | ')})`);
@@ -54,6 +55,11 @@ export function createRetrievalResult({
     reason,
   };
   for (const field of UNTRUSTED_FIELDS) record[field] = redactField(record[field]);
+  if (applicability) record.applicability = {
+    state: ['current', 'needs-review', 'unknown'].includes(applicability.state) ? applicability.state : 'unknown',
+    semantics: 'source-bindings-only',
+    reason: redactField(String(applicability.reason || '').slice(0, 512)),
+  };
   return record;
 }
 

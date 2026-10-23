@@ -16,6 +16,7 @@ import { caffeinatedPointer } from './playbook-binding.mjs';
 import { locateVerification } from './verification-location.mjs';
 import { resolveObligation, intentPage } from './intent-sources.mjs';
 import { performanceContext } from './performance.mjs';
+import { buildChangeImpactContext } from './change-impact.mjs';
 import { flowModelContext } from './flow-model.mjs';
 
 function indexPlane(plane) {
@@ -61,7 +62,7 @@ export function collectOrientationFacts({ workspace, copilotHome, flags = {}, qu
     ...(flowModel ? { flowModel } : {}),
     ...(performance ? { performance } : {}),
     neighborhood,
-    graph: { commands: ['ae graph deps', 'ae graph dependents', 'ae graph path'], source: 'current-worktree', bounded: true, calls: 'approximate references only' },
+    graph: { commands: ['ae graph deps', 'ae graph dependents', 'ae graph path', 'ae graph explain', 'ae graph impact'], source: 'current-worktree', scope: 'git-tracked-source', semanticCompleteness: 'unverified', bounded: true, calls: 'approximate references only' },
     intentSources: obligation.paths,
     intentDiscovery: obligation.metadata,
     intentDetail: flags.intentPage ? intentPage(workspace, active?.fm?.intent || q, { page: flags.intentPage, pageSize: flags.intentPageSize || 8 }) : null,
@@ -74,5 +75,6 @@ export function collectOrientationFacts({ workspace, copilotHome, flags = {}, qu
     gateStatus: gate.pass ? 'pass' : 'blocked',
     activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
   };
+  if (flags.questionKind) slice.impactContext = buildChangeImpactContext({ workspace, copilotHome, home, query: q, files: flags.files || [], questionKind: flags.questionKind });
   return { slice, active, session, namedFiles, matches, gate, status, routingLines, failures, sourceSnapshot, query: q, procedure, obligation };
 }

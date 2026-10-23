@@ -25,7 +25,6 @@ function commitAll(ws, message) {
   execFileSync('git', ['commit', '-qm', message], { cwd: ws, env: GIT_ENV });
 }
 
-/** The DEFAULT tier: what every install without the optional grammars uses. */
 function lexicalExtractor() {
   return {
     counters: { parseFailures: 0, parsed: 0, errorFiles: 0 },
@@ -90,7 +89,7 @@ test('builder output round-trips through the shape reader (AST tier, grammars in
   );
 });
 
-test('removed-symbol-with-callers fires end to end from real builder output in the default lexical tier', async (t) => {
+test('removed-symbol-with-callers fires end to end from real builder output in the explicit lexical tier', async (t) => {
   const { ws, home } = fixtureRepo(t, 'struct-compat-lex-');
     await buildStructuralIndex({ workspace: ws, home, extractor: lexicalExtractor() });
 

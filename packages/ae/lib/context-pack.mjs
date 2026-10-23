@@ -21,8 +21,9 @@ export function buildLearningsLines(learnings) {
         const layerMark = l.layer === 'branch' ? (l.subordinate ? ' [branch-local, subordinate]' : ' [branch-local]') : '';
         const applies = l.applies ? ` applies ${inertLine(redactSecrets(l.applies))}` : '';
     const doesNot = l.does_not_apply ? ` does not apply ${inertLine(redactSecrets(l.does_not_apply))}` : '';
+    const applicability = l.applicability ? ` [applicability: ${['current', 'needs-review', 'unknown'].includes(l.applicability.state) ? l.applicability.state : 'unknown'}; source bindings only]` : '';
     lines.push(
-      `- [${l.id}]${layerMark}${fence} ${inertLine(redactSecrets(l.trigger))} → ${inertLine(redactSecrets(l.claimLine))}${applies}${doesNot}`
+      `- [${l.id}]${layerMark}${fence}${applicability} ${inertLine(redactSecrets(l.trigger))} → ${inertLine(redactSecrets(l.claimLine))}${applies}${doesNot}`
     );
   }
   return lines;
