@@ -1,6 +1,37 @@
 import { EXIT } from './style.mjs';
 import { validStorageSourceId } from './storage-aliases.mjs';
 
+export const INSTALLED_TARGETS = Object.freeze(['vscode', 'cli', 'intellij']);
+export const RECOGNIZED_UNINSTALLED_TARGETS = Object.freeze(['cursor', 'codex', 'grok']);
+
+function parseTargets(raw) {
+  const parts = String(raw).split(',');
+  const names = [];
+  for (const part of parts) {
+    const name = part.trim();
+    if (!name) invalidFlag('--target', raw, 'target names cannot be empty');
+    names.push(name);
+  }
+  const installed = new Set(INSTALLED_TARGETS);
+  const recognized = new Set(RECOGNIZED_UNINSTALLED_TARGETS);
+  const unknown = [];
+  const notInstalled = [];
+  for (const name of names) {
+    if (installed.has(name)) continue;
+    if (recognized.has(name)) notInstalled.push(name);
+    else unknown.push(name);
+  }
+  if (unknown.length || notInstalled.length) {
+    const problems = [];
+    if (unknown.length) problems.push(`unknown target ${unknown.map((name) => JSON.stringify(name)).join(', ')}`);
+    for (const name of notInstalled) {
+      problems.push(`${JSON.stringify(name)} is recognized but ae install does not install it`);
+    }
+    invalidFlag('--target', raw, `${problems.join('; ')}. Installed targets: ${INSTALLED_TARGETS.join(', ')}`);
+  }
+  return new Set(names);
+}
+
 function invalidFlag(name, value, hint) {
   throw Object.assign(new Error(`invalid ${name}: ${JSON.stringify(value)} — ${hint}`), {
     code: 'E_USAGE',
@@ -78,7 +109,7 @@ export function parseFlags(argv) {
     copilotHome: null,
     harnessHome: null,
     fromId: null,
-    targets: new Set(['vscode', 'cli', 'intellij']),
+    targets: new Set(INSTALLED_TARGETS),
     workspace: process.cwd(),
     query: null,
     files: null,
@@ -229,13 +260,13 @@ export function parseFlags(argv) {
       flags.home = next;
     }
         else if (a.startsWith('--target=')) {
-      const value = a.split('=')[1];
+      const value = a.split('=').slice(1).join('=');
       if (!value) invalidFlag('--target', value, 'requires a comma-separated target list');
-      flags.targets = new Set(value.split(',').map((t) => t.trim()));
+      flags.targets = parseTargets(value);
     } else if (a === '--target') {
       const next = scan[++i];
             if (next === undefined || next === '' || next.startsWith('--')) invalidFlag('--target', next, 'requires a comma-separated target list');
-      flags.targets = new Set(next.split(',').map((t) => t.trim()));
+      flags.targets = parseTargets(next);
     } else if (a.startsWith('--plan=')) flags.plan = a.split('=').slice(1).join('=');
     else if (a === '--plan') flags.plan = scan[++i];
     else if (a.startsWith('--base=')) flags.base = a.split('=').slice(1).join('=');
