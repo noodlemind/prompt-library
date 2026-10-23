@@ -79,7 +79,7 @@ export function importBindings(rel, statement, specifier) {
     if (from) return namedBindings(from[1].replace(/[()]/g, ''), 'py');
     const escaped = specifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const alias = new RegExp(`(?:^|[,\\s])${escaped}\\s+as\\s+(\\w+)`).exec(statement);
-    return [{ imported: '*', local: alias?.[1] || specifier.split('.')[0], kind: 'module' }];
+    return [{ imported: '*', local: alias?.[1] || specifier.split('.')[0], kind: !alias && specifier.includes('.') ? 'module-root' : 'module' }];
   }
   const clause = /\bimport\s+(?:type\s+)?([\s\S]*?)\s+from\s*['"]/.exec(statement)?.[1];
   if (clause !== undefined) {

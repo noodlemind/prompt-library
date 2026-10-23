@@ -263,6 +263,35 @@ test('imported object members cannot bind unrelated module exports while namespa
   assert.deepEqual(index.graph.calls.find(row => row.from === 'py_module.py' && row.symbol === 'close')?.to, ['py_api.py']);
 });
 
+test('unaliased dotted Python imports do not bind root-package calls to the submodule', async t => {
+  const f = fixture(t);
+  const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
+  fs.mkdirSync(path.join(f.workspace, 'pkg'));
+  f.write('pkg/__init__.py', 'def close():\n    return "root"\n');
+  f.write('pkg/api.py', 'def close():\n    return "api"\n');
+  const cases = [
+    ['dotted.py', 'import pkg.api\ndef run():\n    pkg.close()\n', 'module-root', null],
+    ['aliased.py', 'import pkg.api as api\ndef run():\n    api.close()\n', 'module', 'pkg/api.py'],
+    ['root_alias.py', 'import pkg.api as pkg\ndef run():\n    pkg.close()\n', 'module', 'pkg/api.py'],
+    ['simple.py', 'import pkg\ndef run():\n    pkg.close()\n', 'module', 'pkg/__init__.py'],
+  ];
+  for (const [file, source] of cases) f.write(file, source);
+  f.git('add', '.');
+  await buildStructuralIndex({ ...f, extractor });
+  const index = readStructuralIndex(f.workspace, f);
+  for (const [file, source, kind, target] of cases) {
+    const calls = index.graph.calls.filter(row => row.from === file && row.symbol === 'close');
+    if (target) assert.deepEqual(calls.map(row => row.to), [[target]], file);
+    else {
+      assert.deepEqual(calls, [], file);
+      assert.ok(index.graph.unresolvedCalls.some(row => row.from === file && row.symbol === 'close' && row.reason === 'unsupported-receiver-binding'), file);
+    }
+    assert.equal(index.files[file].importOccurrences[0].bindings[0].kind, kind, file);
+    assert.equal(lexicalV2(file, source).importOccurrences[0].bindings[0].kind, kind, file);
+  }
+  assert.ok(index.graph.modules.some(edge => edge.from === 'dotted.py' && edge.to === 'pkg/api.py'));
+});
+
 test('a shadowed call cannot suppress a later imported call in the same function', async t => {
   const f = fixture(t);
   const extractor = await createTreesitterExtract({ grammarRoots: packageGrammarRoots() });
