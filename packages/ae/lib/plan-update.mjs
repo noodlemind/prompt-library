@@ -13,7 +13,7 @@ import { parseFlags } from './flags.mjs';
 import { loadPlan, parsePlanFrontmatter, planFromText } from './plan-parse.mjs';
 import { completeWork, completionPrerequisites, validateCompletion } from './completion.mjs';
 import { bindLockedIntentSources, lockIntentSources, sourcePath, hashIntentFile, intentSourcesCheck } from './intent-sources.mjs';
-import { readFileNoFollow, assertNoSymlinkAncestors, writeFileContainedExclusive, canonicalPath } from './fs-safe.mjs';
+import { readBoundedInput, readFileNoFollow, assertNoSymlinkAncestors, writeFileContainedExclusive, canonicalPath } from './fs-safe.mjs';
 import { applyPlanDecision, validatePlanDecision, planRevision, planState } from './plan-decisions.mjs';
 import { runGate, publishGateSession } from './gate.mjs';
 import { loadPolicy } from './policy.mjs';
@@ -407,7 +407,7 @@ function structuredPlanUpdate({ workspace, full, input, flags, dryRun, domainCon
       const prerequisites = completionPrerequisites({ workspace, plan: proposed, copilotHome });
       if (!prerequisites.pass) missing.push(prerequisites.message);
     }
-    if (missing.length || gate && (!gate.pass || gate.exitCode !== 0)) return { status: 'blocked', path: full, missing: [...new Set(missing)], allowedNextActions: ['Repair the named prerequisites, then retry the same decision if the revision is unchanged'], updated: false };
+    if (missing.length || gate && (!gate.pass || gate.exitCode !== 0)) return { status: 'blocked', path: full, missing: [...new Set(missing)], allowedNextActions: ['Repair the named prerequisites, then retry the same decision if the revision is unchanged'], ...(gate?.nextTools ? { nextTools: gate.nextTools } : {}), updated: false };
     if (!decision.amendments.every(source => source.newHash === null || hashIntentFile(workspace, source.path) === source.newHash)) throw usage('intent source changed while applying the amendment');
     if (input.intentSelection && !intentSourcesCheck(proposed, workspace).pass) throw usage('selected intent source changed before amendment publication');
     if (gate && !intentSourcesCheck(proposed, workspace).pass) throw usage('selected intent source changed before start publication');
@@ -539,8 +539,10 @@ export async function cmdPlanUpdate(argv) {
 
   for (let i = 0; i < scan.length; i++) {
     const token = scan[i];
-    if (token === '--file') {
-      ({ value: fileArg, index: i } = take(scan, i));
+    if (token === '--file' || token.startsWith('--file=')) {
+      if (token === '--file') ({ value: fileArg, index: i } = take(scan, i));
+      else fileArg = token.slice('--file='.length);
+      if (!fileArg) throw usage('plan-update: --file requires a path or - for stdin');
     } else if (token === '--plan') {
       ({ value: planArg, index: i } = take(scan, i));
     } else if (token === '--status') {
@@ -588,9 +590,12 @@ export async function cmdPlanUpdate(argv) {
       ({ value: change.old, index: i } = take(scan, i));
     } else if (token === '--new') {
       ({ value: change.next, index: i } = take(scan, i));
-    } else if (token === '--workspace') {
-      ({ value: workspace, index: i } = take(scan, i));
-      workspace = path.resolve(workspace);
+    } else if (token === '--workspace' || token.startsWith('--workspace=')) {
+      let value;
+      if (token === '--workspace') ({ value, index: i } = take(scan, i));
+      else value = token.slice('--workspace='.length);
+      if (!value || value.startsWith('--')) throw usage('plan-update: --workspace requires a path');
+      workspace = path.resolve(value);
     } else if (token === '--json') json = true;
     else if (token === '--dry-run') dryRun = true;
     else if (token === '--ae-home' || token === '--harness-home' || token === '--copilot-home' || token === '--no-events' || token === '--verbose' || token === '--no-color') {
@@ -619,8 +624,8 @@ export async function cmdPlanUpdate(argv) {
   const home = flags.harnessHome || harnessGlobalHome();
   if (fileArg) {
     if (hasChange) throw usage('--file cannot be combined with legacy mutation flags');
-    const content = readFileNoFollow(path.resolve(workspace, fileArg), { maxBytes: 1024 * 1024 });
-    if (content === null) throw usage('decision file is missing, unsafe or over 1 MiB');
+    const content = fileArg === '-' ? readBoundedInput() : readFileNoFollow(path.resolve(workspace, fileArg), { maxBytes: 1024 * 1024 });
+    if (content === null || content === '') throw usage(fileArg === '-' ? 'decision on stdin is missing, unreadable, or over 1 MiB' : 'decision file is missing, unsafe or over 1 MiB');
     let input;
     try { input = JSON.parse(content); } catch { throw usage('decision file must contain JSON'); }
     const result = updatePlanDecision({ workspace, home, planPath: planArg, input, flags, copilotHome: flags.copilotHome, dryRun });

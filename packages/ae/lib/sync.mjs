@@ -61,6 +61,19 @@ function fileHash(filePath) {
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
 
+function hashBytes(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+const PROMPT_LIBRARY_PROJECT = '\n## Project\n\nSkill-driven prompt library for software development using GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Install hydrates agents, skills, and instructions into the user profile. Product repositories do not receive a copy of that corpus.\n';
+
+/** Installed global instructions describe the user's host, not this repository's own project blurb. */
+export function installedCopilotInstructions(source) {
+  const text = String(source).replace(/\r\n/g, '\n');
+  if (!text.includes(PROMPT_LIBRARY_PROJECT)) return source;
+  return text.replace(PROMPT_LIBRARY_PROJECT, '\n');
+}
+
 function renderTargetAsset(src, rel, targetRoot) {
   if (rel !== 'hooks/hooks.json') return null;
   const config = JSON.parse(fs.readFileSync(src, 'utf8'));
@@ -214,12 +227,13 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
   if (fs.existsSync(copilotMd)) {
     const rel = 'copilot-instructions.md';
     const dest = path.join(targetRoot, rel);
-    const srcHash = fileHash(copilotMd);
+    const rendered = Buffer.from(installedCopilotInstructions(fs.readFileSync(copilotMd, 'utf8')), 'utf8');
+    const srcHash = hashBytes(rendered);
     const destHash = fs.existsSync(dest) ? fileHash(dest) : null;
     if (srcHash !== destHash) {
       if (!flags.dryRun) {
         fs.mkdirSync(targetRoot, { recursive: true });
-        fs.copyFileSync(copilotMd, dest);
+        fs.writeFileSync(dest, rendered);
       }
       stats[destHash ? 'updated' : 'created']++;
       log(flags.dryRun ? `would update: ${rel}` : `update: ${rel}`);

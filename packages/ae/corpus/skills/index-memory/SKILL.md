@@ -7,7 +7,7 @@ argument-hint: "[optional — ignored; use ae index]"
 
 # Index Memory (CLI-first)
 
-Rebuild `knowledge/manifest.yaml` deterministically. Contract: [`harness-tool-contract.md`](../references/harness-tool-contract.md).
+Rebuild `ae get --reference knowledge/manifest.yaml --json` deterministically. Contract: `harness-tool-contract.md` (`ae get --reference skills/references/harness-tool-contract.md --json`).
 
 ## Step
 

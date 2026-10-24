@@ -63,7 +63,7 @@ Let the user choose an approach or combine elements from multiple approaches.
 
 ### Phase 3: Capture
 
-Capture the problem, chosen approach, rationale, constraints, open questions and scope boundaries as authored notes through [plan-operations.md](../references/plan-operations.md). Reuse an existing work identity with an `amend` decision. For new work, use `plan-new --file` with format `full`, status `open`, a goal and tentative acceptance text. Keep it unlocked while implementation intent or proof remains unresolved.
+Capture the problem, chosen approach, rationale, constraints, open questions and scope boundaries as authored notes through plan-operations.md (`ae get --reference skills/references/plan-operations.md --json`). Reuse an existing work identity with an `amend` decision. For new work, use `plan-new --file` with format `full`, status `open`, a goal and tentative acceptance text. Keep it unlocked while implementation intent or proof remains unresolved.
 
 Use `notes.context` for framing and `notes.research` for alternatives and sources. Harness owns storage, dates, headings, IDs and activity; brainstorming supplies the meaning. Do not create a second dated YAML brainstorm record. A separately requested narrative document can remain an authored document, with its relationship to the work record explicit.
 

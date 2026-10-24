@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { parseFlags, hasFlag } from './flags.mjs';
 import { resolveCopilotHome, resolveIntelliJHome } from './paths.mjs';
@@ -90,13 +90,10 @@ function log(flags, msg) {
 }
 
 function spawnSyncHead(workspace) {
-  const r = execSyncSafe('git rev-parse HEAD', workspace);
-  return r ? r.trim() : null;
-}
-
-function execSyncSafe(cmd, cwd) {
   try {
-    return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const result = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: workspace, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (result.error?.code === 'ENOENT') return null;
+    return result.status === 0 ? result.stdout.trim() : null;
   } catch {
     return null;
   }

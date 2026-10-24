@@ -3,7 +3,10 @@ import { planRecordRoot } from './domain-context.mjs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { readGitArgs, gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
+import { parseImpactedText } from '../corpus/hooks/lib/impacted-files.mjs';
 import { readPlanRecord } from './plan-record.mjs';
+
+export { parseImpactedText };
 
 function runGit(workspace, args, prefix) {
   return spawnSync('git', [...prefix, ...args], { cwd: workspace, encoding: 'utf8', timeout: 30_000, env: gitMetadataEnvironment() });
@@ -17,11 +20,12 @@ function lines(output) {
 }
 
 export function parseImpactedFiles(plan) {
-  return (plan.sections?.impactedFiles || '')
-    .split(/\r?\n/)
-    .map((line) => line.match(/^\s*-\s+`?([^`#]+?)`?\s*(?:#.*)?$/)?.[1]?.trim())
-    .filter(Boolean)
-    .map((entry) => entry.replace(/^\.\//, '').replace(/\\/g, '/'));
+  return parseImpactedText(plan.sections?.impactedFiles || '');
+}
+
+function withParsed(message, allowed) {
+  const parsed = allowed.length ? allowed.join(', ') : '(none)';
+  return `${message} Parsed impacted files: ${parsed}.`;
 }
 
 export function matchesScope(file, allowed) {
@@ -71,7 +75,7 @@ export function validatePlanScope({ workspace, plan, base = null }) {
   if (plan.fm?.domain_parent) {
     planRecordRoot(workspace, plan);
     const pass = allowed.length === 0 && governedFiles.length === 0;
-    return { status: pass ? 'passed' : 'failed', allowed, changedFiles: changed.files, violations: governedFiles, message: pass ? 'Domain coordinator is unchanged and grants no product scope' : 'Domain parent requires an unchanged coordinator and empty product scope' };
+    return { status: pass ? 'passed' : 'failed', allowed, changedFiles: changed.files, violations: governedFiles, message: pass ? 'Domain coordinator is unchanged and grants no product scope' : withParsed('Domain parent requires an unchanged coordinator and empty product scope', allowed) };
   }
   if (allowed.length === 0) {
     if (readPlanRecord(plan.text)) {
@@ -83,7 +87,7 @@ export function validatePlanScope({ workspace, plan, base = null }) {
         message: 'Short plan record has no Impacted Files list',
       };
     }
-    return { status: 'failed', allowed, changedFiles: changed.files, violations: governedFiles, message: 'No Impacted Files allowlist' };
+    return { status: 'failed', allowed, changedFiles: changed.files, violations: governedFiles, message: withParsed('No Impacted Files allowlist', allowed) };
   }
   const violations = governedFiles.filter((file) => !matchesScope(file, allowed));
   return {
@@ -91,6 +95,6 @@ export function validatePlanScope({ workspace, plan, base = null }) {
     allowed,
     changedFiles: changed.files,
     violations,
-    message: violations.length ? `${violations.length} changed files outside plan scope` : 'Changed files match plan scope',
+    message: violations.length ? withParsed(`${violations.length} changed files outside plan scope: ${violations.join(', ')}`, allowed) : 'Changed files match plan scope',
   };
 }

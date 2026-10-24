@@ -29,14 +29,14 @@ Installed to `~/.copilot/bin/ae` on every `ae install`. Add to PATH with `ae ins
 
 | Method | Command |
 |--------|---------|
-| Registry | `npm install -g ae-harness@latest` then `ae install` |
-| Local clone | `npm install -g ./packages/ae` or `node packages/ae/bin/ae.mjs install --configure-path` |
+| Checkout | `npm install -g ./packages/ae` from the repository root, then `ae install` |
+| Local clone | `node packages/ae/bin/ae.mjs install --configure-path` |
 
 **Per-repo bootstrap:** `ae init-repo` creates `.harness/run.mjs` (delegates to global harness + sets `--workspace`).
 
 - Pin version in product repos: `devDependencies`, a globally installed package, or `.harness-version` (see harness README).
-- If `ae` is not on `PATH`, install from the registry with `npm install -g ae-harness@latest`, then `ae install --configure-path`.
-- Do not use `npx ae-harness` in agent runtime instructions; reserve `npx` for one-off bootstrap or pinned CI when a registry package is available.
+- If `ae` is not on `PATH`, install from a checkout of this repository with `npm install -g ./packages/ae` at the repository root, then `ae install --configure-path`. The package is not on the npm registry.
+- Do not use `npx ae-harness` in agent runtime instructions. There is no published registry package to execute.
 - Start with `.harness/context-pack.md` after `orient`. Expand missing evidence with `orient --read --context-version 2`; keep source identities and reported limits.
 - Developers use Copilot agents/skills; they do not prompt the CLI directly.
 
@@ -108,7 +108,7 @@ Context accounting uses existing events and reports. Artifact estimates, runtime
 
 `graph explain <file> <target>` and `graph impact <file>` return bounded observed imports, occurrence citations, method and resolution status. Live CLI/native paths prepare the shipped AST index as needed; `--dry-run` does not publish an index. `--generation <id>` reads only a retained immutable historical generation, with independent table hashes and no fallback to current source. Coverage is bounded Git-tracked inventory rather than semantic completeness. Candidate calls cannot establish runtime behavior.
 
-`orient --read --context-version 2 --question-kind change-impact|dependency-path|lookup|prior-lesson` selects a bounded source packet in `slice.impactContext`. Select up to four explicit `--file` seeds. The packet includes graph relationships, hash-validated occurrence excerpts, applicability-bearing learning records, omissions and advisory verification areas. It grants no check or mutation authority. SessionStart/host adapters retain v2 evidence beside their flat slice. Learning applicability compares selected source bytes; historical proof and governance remain separate. Legacy records remain unknown until explicitly bound. See [Structural evidence](../codebase-context/references/structural-evidence.md).
+`orient --read --context-version 2 --question-kind change-impact|dependency-path|lookup|prior-lesson` selects a bounded source packet in `slice.impactContext`. Select up to four explicit `--file` seeds. The packet includes graph relationships, hash-validated occurrence excerpts, applicability-bearing learning records, omissions and advisory verification areas. It grants no check or mutation authority. SessionStart/host adapters retain v2 evidence beside their flat slice. Learning applicability compares selected source bytes; historical proof and governance remain separate. Legacy records remain unknown until explicitly bound. See Structural evidence (`ae get --reference skills/codebase-context/references/structural-evidence.md --json`).
 
 **index --structural**
 ```json
@@ -233,7 +233,7 @@ Every check in the `verify` payload carries its effective `severity`; non-passin
 
 **compound**
 
-For delivery completion, submit a publish or explicit no-learning decision with `ae compound --plan <path> --learning-decision <file> --json`; see [learning-operations.md](learning-operations.md). A bare legacy compound call does not record the required decision. Then submit a revision-bound complete decision with `ae plan-update --plan <path> --file <complete-decision.json> --json`; see [plan-operations.md](plan-operations.md). The legacy result shape below remains readable; use the returned decision/publication record for the current operation.
+For delivery completion, submit a publish or explicit no-learning decision with `ae compound --plan <path> --learning-decision <file> --json`; see [learning-operations.md](learning-operations.md). A bare legacy compound call does not record the required decision. Then pipe a revision-bound complete decision to `ae plan-update --plan <path> --file - --json`; see [plan-operations.md](plan-operations.md). The legacy result shape below remains readable; use the returned decision/publication record for the current operation.
 
 ```json
 {

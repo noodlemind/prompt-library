@@ -1,6 +1,6 @@
 ---
 name: engineer
-description: "Route questions, substantial investigation, or end-to-end software delivery to @engineer, which selects Answer, Investigate, Review, or Deliver mode. Not for review-only requests — use /code-review."
+description: "Route questions, substantial investigation, or end-to-end software delivery to @engineer, which selects Answer, Investigate, Review, or Deliver mode. Not for review-only requests."
 argument-hint: "[describe the engineering outcome]"
 ---
 
@@ -8,7 +8,7 @@ argument-hint: "[describe the engineering outcome]"
 
 Route the user's outcome and any explicit plan path to `@engineer`. The agent selects Answer, Investigate, Deliver, or Review mode; its nine-step lifecycle is canonical only for Deliver mode. It loads detailed skills only when their procedure is needed.
 
-Apply the [performance code principles](references/performance-engineering.md#code-principles) during applicable code authoring and review. Read the full reference for journey goals, architecture/flow gaps, or implementation/dependency investigations.
+Apply the performance code principles (`ae get --reference skills/engineer/references/performance-engineering.md --json`) during applicable code authoring and review. Read the full reference for journey goals, architecture/flow gaps, or implementation/dependency investigations.
 
 ## Trigger Examples
 
@@ -22,7 +22,7 @@ Apply the [performance code principles](references/performance-engineering.md#co
 
 **Should not trigger:**
 
-- "Review this diff only." → use `/code-review`
+- "Review this diff only." → use the code-review skill
 - "Diagnose the installed Harness hooks." → use `/harness-doctor`
 - "Refresh the project README only." → use `/project-readme`
 
@@ -31,12 +31,12 @@ Apply the [performance code principles](references/performance-engineering.md#co
 - `/engineer` routes questions, substantial investigation, or full-cycle delivery to the accountable agent.
 - `@engineer` Answer mode owns quick read-only answers without ceremony.
 - `@engineer` Deliver mode owns execution of an explicit locked plan.
-- `/code-review` owns review-only requests.
+- The code-review skill owns review-only requests.
 
 - Locked-plan execution → `@engineer` Deliver mode
-- Review only → `/code-review`
+- Review only → the code-review skill
 - Quick answer without edits → `@engineer` Answer mode
 - Substantial evidence-only diagnosis → `@engineer` Investigate mode
 - Setup diagnosis → `/harness-doctor`
 
-Do not duplicate runtime steps here. Contract: `@engineer` and `../references/harness-tool-contract.md`.
+Do not duplicate runtime steps here. Contract: `@engineer` and `ae get --reference skills/references/harness-tool-contract.md --json`.

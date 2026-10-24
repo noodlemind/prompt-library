@@ -1,6 +1,6 @@
 ---
 name: triage-issues
-description: Analyze and prioritize the issue backlog. Use when sorting through multiple issues, deciding what to work on next, or assessing backlog state. Not for individual issue planning — use /plan-issue.
+description: Analyze and prioritize the issue backlog. Use when sorting through multiple issues, deciding what to work on next, or assessing backlog state. Not for individual issue planning.
 argument-hint: "[path to issues directory or GitHub issues URL]"
 ---
 
@@ -22,9 +22,9 @@ Activate when the user wants to:
 - "Which issues should we tackle first?"
 
 **Should not trigger:**
-- "Plan this specific issue" → use /plan-issue
+- "Plan this specific issue" → ask @engineer to plan it
 - "Fix this bug" → use @engineer Deliver mode
-- "Create a new issue" → use /capture-issue
+- "Create a new issue" → ask @engineer to capture it
 
 ## Steps
 

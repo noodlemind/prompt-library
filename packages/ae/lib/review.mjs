@@ -155,7 +155,7 @@ export async function reviewResultOf(argv) {
     return { ...packet, packetPath: `.harness/reviews/packets/${packet.id}.json`, persisted: !flags.dryRun };
   }
   if (verb !== 'assemble') throw usage('review requires prepare or assemble');
-  const text = flags.files?.length ? readFileNoFollow(path.resolve(workspace, flags.files[0]), { maxBytes: 1024 * 1024 }) : readBoundedInput();
+  const text = flags.files?.length && flags.files[0] !== '-' ? readFileNoFollow(path.resolve(workspace, flags.files[0]), { maxBytes: 1024 * 1024 }) : readBoundedInput();
   if (!text || Buffer.byteLength(text) > 1024 * 1024) throw usage('Review input is absent, unreadable, or too large');
   let input;
   try { input = JSON.parse(text); } catch { throw usage('Review input must be JSON'); }

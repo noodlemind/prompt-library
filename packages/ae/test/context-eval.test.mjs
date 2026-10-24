@@ -54,7 +54,7 @@ test('fixture subprocesses resolve the candidate CLI and keep private homes afte
   const orient = run(['orient', '--read', '--json']);
   assert.ifError(orient.error);
   assert.equal(orient.status, 0, orient.stderr);
-  assert.equal(Object.keys(JSON.parse(orient.stdout)).length, 16);
+  assert.equal(Object.keys(JSON.parse(orient.stdout)).length, 17);
   assert.equal(fs.existsSync(path.join(fixture.workspace, '.harness/events.jsonl')), false);
   assert.equal(fs.existsSync(path.join(fixture.workspace, '.harness/runs.jsonl')), false);
   const configured = run(['config', 'set', 'agent.enabled', 'true', '--scope', 'user', '--json']);

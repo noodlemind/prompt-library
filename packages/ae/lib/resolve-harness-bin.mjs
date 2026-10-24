@@ -78,7 +78,7 @@ export function agentHarnessCommand(resolved) {
   return `node "${resolved.bin}"`;
 }
 
-export const RUNNER_VERSION = 6;
+export const RUNNER_VERSION = 7;
 
 export function harnessRunnerSource() {
   const home = os.homedir().replace(/\\/g, '/');
@@ -98,9 +98,19 @@ const workspace = path.resolve(__dirname, '..');
 const COPILOT_HOME = process.env.COPILOT_HOME || path.join(os.homedir(), '.copilot');
 
 function whichHarness() {
-  const cmd = process.platform === 'win32' ? 'where' : 'which';
-  const r = spawnSync(cmd, ['ae'], { encoding: 'utf8' });
-  if (r.status === 0 && r.stdout?.trim()) return r.stdout.trim().split(/\\r?\\n/)[0].trim();
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH');
+  const entries = String(process.env[pathKey] || '').split(path.delimiter).filter(Boolean);
+  const names = process.platform === 'win32' ? ['ae.cmd', 'ae.exe', 'ae.mjs', 'ae'] : ['ae'];
+  for (const dir of entries) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // This PATH entry does not contain the shim.
+      }
+    }
+  }
   return null;
 }
 

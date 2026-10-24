@@ -207,7 +207,11 @@ export async function cmdPrepare(argv) {
   for (let i = 0; i < scan.length; i++) {
     const token = scan[i];
     const next = () => scan[++i];
-    if (token === '--workspace') workspace = path.resolve(next());
+    if (token === '--workspace' || token.startsWith('--workspace=')) {
+      const value = token === '--workspace' ? next() : token.slice('--workspace='.length);
+      if (!value || value.startsWith('--')) throw Object.assign(new Error('prepare: --workspace requires a path'), { code: 'E_USAGE', exit: 2 });
+      workspace = path.resolve(value);
+    }
     else if (token === '--json') json = true;
     else if (token === '--dry-run') dryRun = true;
   }

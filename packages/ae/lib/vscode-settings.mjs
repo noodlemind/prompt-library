@@ -9,6 +9,7 @@ const MERGE_KEYS = {
   'chat.hookFilesLocations': { '~/.copilot/hooks': true },
   'chat.customAgentInSubagent.enabled': true,
   'chat.useAgentSkills': true,
+  'chat.subagents.allowInvocationsFromSubagents': true,
 };
 
 function stripJsonComments(text) {

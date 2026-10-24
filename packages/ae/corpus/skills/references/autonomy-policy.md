@@ -2,7 +2,7 @@
 
 Default: **run the pipeline autonomously**. Human consent is for **Tier 3** only.
 
-Profiles in `~/.copilot/knowledge/profile.md`:
+Profiles install as knowledge/profile.md from this template. Print it with `ae get --reference knowledge/profile.md.template --json`. Do not search the product workspace for it:
 
 ```yaml
 autonomy: full   # full | balanced | strict

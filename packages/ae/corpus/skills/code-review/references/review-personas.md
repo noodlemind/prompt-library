@@ -69,5 +69,6 @@ Engage these when the diff contains files of the matching language.
 
 ### spec-flow-analyzer
 - **Trigger:** Diff references a plan file or spec document
-- **Focus:** Spec completeness, edge cases, flow gaps
+- **Focus:** Spec completeness, edge cases, flow gaps, test scenario design
 - **Look for:** Missing error states in flows, unhandled edge cases in specs, gaps between what the spec says and what the code implements.
+- **Files:** `ae tree workspace --files --json`, then the host search tool if git is missing. Search text with `ae search <query> --match literal --source code --json`. Do not run rg, grep, find, or any program other than `ae`, `node`, and `git`.

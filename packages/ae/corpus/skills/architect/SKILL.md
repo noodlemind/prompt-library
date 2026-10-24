@@ -34,7 +34,7 @@ Sketch the shape of a product change before writing it, when that shape is not a
 
 Read the code the change would sit beside. Name the module that already owns this job, or say that none does. Record the local pattern in a few lines: the type, the function that callers already use, and the file that owns the decision.
 
-Apply the [performance code principles](../engineer/references/performance-engineering.md#code-principles) when choosing algorithms, queries, concurrency, or dependencies. For journey design, assess both architecture/flow and implementation/dependency choices using the full reference.
+Apply the performance code principles (`ae get --reference skills/engineer/references/performance-engineering.md --json`) when choosing algorithms, queries, concurrency, or dependencies. For journey design, assess both architecture/flow and implementation/dependency choices using the full reference.
 
 ### 2. Sketch
 
@@ -49,7 +49,7 @@ No implementation in this step.
 
 ### 3. Screen
 
-Read `references/design-red-flags.md`. Check the sketch for a shallow module, leaked knowledge, a split that follows time instead of knowledge, and a pass-through. If one of those is the structure, scrap the sketch. Remove a module before adding one, then draw the boundary again.
+Read `ae get --reference skills/architect/references/design-red-flags.md --json`. Check the sketch for a shallow module, leaked knowledge, a split that follows time instead of knowledge, and a pass-through. If one of those is the structure, scrap the sketch. Remove a module before adding one, then draw the boundary again.
 
 ### 4. Proceed
 
@@ -63,4 +63,4 @@ Code follows the sketch. If the code needs a type, signature, or owner the sketc
 
 - **No local pattern to read** — say what is absent, then sketch the smallest boundary that hides one decision.
 - **The user rejects the sketch** — scrap it and draw one alternative. Do not keep both.
-- For a missing file or a failed plan update, follow `~/.copilot/skills/references/error-handling-patterns.md`.
+- For a missing file or a failed plan update, follow `ae get --reference skills/references/error-handling-patterns.md --json`.

@@ -32,11 +32,11 @@ Read relevant intent sources and /recall results. Retrieve existing plans throug
 
 ## Record the capture
 
-Use `ae plan-new --file <creation.json> --json` with full format and open status. Supply the goal, measurable acceptance, known scope, and authored notes. Add reproduction and expected-versus-actual evidence to contextual notes. For unresolved intent, use needs-info status and state the missing decision.
+Pipe the creation JSON to `ae plan-new --file - --json` with full format and open status. Do not write the decision JSON to a file. Supply the goal, measurable acceptance, known scope, and authored notes. Add reproduction and expected-versus-actual evidence to contextual notes. For unresolved intent, use needs-info status and state the missing decision.
 
-Harness chooses the current storage root and dated path, writes the canonical headings and initial status, and returns the revision and readiness diagnostics. See `../references/plan-operations.md`. Do not generate YAML, dates, IDs, or activity entries. An unlocked capture can omit a check; missing proof remains explicit and blocks starting work.
+Harness chooses the current storage root and dated path, writes the canonical headings and initial status, and returns the revision and readiness diagnostics. See `ae get --reference skills/references/plan-operations.md --json`. Do not generate YAML, dates, IDs, or activity entries. An unlocked capture can omit a check; missing proof remains explicit and blocks starting work.
 
-Use `ae plan-update --plan <path> --file <decision.json> --json` to record accepted findings or amend an existing capture. Preserve its identity. Report the returned path and missing inputs.
+Pipe the decision JSON to `ae plan-update --plan <path> --file - --json` to record accepted findings or amend an existing capture. Preserve its identity. Report the returned path and missing inputs.
 
 ## Guardrails
 

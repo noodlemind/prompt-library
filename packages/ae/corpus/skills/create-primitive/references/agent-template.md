@@ -29,7 +29,7 @@ For reviews, define severity, impact, correction, residual risks, and testing ga
 
 ## Metadata and authority
 
-Use `ae resources scaffold agent <name> --json` for metadata and the supported tool contract, then supply the smallest sufficient tools and delegation targets. Validate through [resource-operations.md](../../references/resource-operations.md). Every agent needs meaningful guardrails for its inputs, including researchers and coordinators. A declaration of tools or reviewer identity does not prove actual host enforcement.
+Use `ae resources scaffold agent <name> --json` for metadata and the supported tool contract, then supply the smallest sufficient tools and delegation targets. Validate through resource-operations.md (`ae get --reference skills/references/resource-operations.md --json`). Every agent needs meaningful guardrails for its inputs, including researchers and coordinators. A declaration of tools or reviewer identity does not prove actual host enforcement.
 
 ## Agent Design Principles
 

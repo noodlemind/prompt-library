@@ -72,7 +72,7 @@ test('Windows consolidation retains the native probes and the final fail-closed 
   assert.match(suite(windows.jobs.tests).run, /Tee-Object -FilePath windows-tests\.log/);
   assert.match(suite(windows.jobs.tests).run, /exit \$LASTEXITCODE/);
   assert.equal(suite(windows.jobs.tests)['continue-on-error'], undefined);
-  for (const name of ['CLI scenarios', 'Redaction on Windows', 'Runner descendant termination via taskkill', 'Environment fingerprint']) {
+  for (const name of ['CLI scenarios', 'Redaction on Windows', 'Runner cancellation terminates the owned process', 'Environment fingerprint']) {
     assert.ok(job.steps.some(step => step.name === name), name);
   }
   const gate = job.steps.at(-1);

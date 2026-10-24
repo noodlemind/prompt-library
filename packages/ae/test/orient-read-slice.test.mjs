@@ -27,6 +27,7 @@ const SLICE_KEYS = [
   'reviewCoverage',
   'learnings',
   'skills',
+  'procedure',
   'instructions',
   'contacts',
   'index',

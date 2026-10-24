@@ -13,6 +13,7 @@ import { trustStatus } from './trust.mjs';
 import { reviewCoverageFacts } from './report-facts.mjs';
 import { captureWorkingSources } from './repo-map/working-sources.mjs';
 import { caffeinatedPointer } from './playbook-binding.mjs';
+import { PLAYBOOKS } from './routing-policy.mjs';
 import { locateVerification } from './verification-location.mjs';
 import { resolveObligation, intentPage } from './intent-sources.mjs';
 import { performanceContext } from './performance.mjs';
@@ -55,6 +56,17 @@ export function collectOrientationFacts({ workspace, copilotHome, flags = {}, qu
   }
   const neighborhood = namedFiles.length ? advisory('neighborhood', null, () => buildNeighborhood({ workspace, files: namedFiles, home, includeEvidence: flags.contextVersion === 2 })) : null;
   const procedure = caffeinatedPointer(active, { copilotHome });
+  const activating = PLAYBOOKS.filter((id) => id !== 'investigation');
+  const procedureFact = procedure
+    ? { id: procedure.id, path: procedure.path, command: 'ae get --reference skills/caffeinated/SKILL.md --json' }
+    : {
+        id: null,
+        reason: active?.fm?.playbook === 'investigation'
+          ? `Playbook investigation does not activate caffeinated. The playbooks that activate it are ${activating.join(', ')}.`
+          : active?.fm?.playbook
+            ? `Playbook ${active.fm.playbook} does not activate caffeinated. The playbooks that activate it are ${activating.join(', ')}. investigation does not.`
+            : `No playbook is bound. caffeinated activates when the plan playbook is ${activating.join(', ')}. investigation does not. The CLI does not choose a playbook.`,
+      };
   const obligation = resolveObligation(workspace, active, q);
   const performance = performanceContext({ workspace, home, files: namedFiles || [] });
   const flowModel = advisory('flow-model', null, () => flowModelContext({ workspace, home, files: namedFiles || [], query: q }));
@@ -70,7 +82,7 @@ export function collectOrientationFacts({ workspace, copilotHome, flags = {}, qu
     planGoal: active ? extractGoalFromPlan(active) : null,
     trust: trustStatus({ workspace, copilotHome, home }),
     reviewCoverage: reviewCoverageFacts({ workspace, plan: active, copilotHome }),
-    learnings, skills: procedure && !skills.some(skill => skill.id === procedure.id) ? [...skills, procedure] : skills, instructions, contacts,
+    learnings, skills: procedure && !skills.some(skill => skill.id === procedure.id) ? [...skills, procedure] : skills, procedure: procedureFact, instructions, contacts,
     index: { knowledge: indexPlane(status?.knowledge), structural: indexPlane(status?.structural) },
     gateStatus: gate.pass ? 'pass' : 'blocked',
     activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
