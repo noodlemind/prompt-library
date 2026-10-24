@@ -29,7 +29,7 @@ These personas are engaged on every review regardless of project type or diff co
 ### pattern-recognition-specialist
 - **Focus:** Consistency with established codebase patterns, naming conventions, duplication, anti-patterns
 - **Severity calibration:** P1 for anti-patterns that create maintenance traps (copy-paste inheritance, stringly-typed interfaces). P2 for naming inconsistencies that cause confusion. P3 for minor style deviations.
-- **Look for:** Naming inconsistencies, duplicated logic that should be extracted, deviation from established patterns, code that reimplements existing utilities.
+- **Look for:** Naming inconsistencies, duplicated logic that should be extracted, deviation from established patterns, code that reimplements existing utilities. When the same condition changes in two places, print `ae get --reference skills/references/duplicate-guards.md --json`. Use title `Redundant guard` when an outer check already covers every path to an inner check. Name both sites, the call path, and one owner.
 
 ## Conditional Personas — Language-Specific
 
