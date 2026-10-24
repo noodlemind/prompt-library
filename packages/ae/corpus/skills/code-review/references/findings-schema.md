@@ -104,7 +104,3 @@ Before submitting findings, each persona should verify:
 4. **Line numbers are accurate** — verified against the actual file content
 5. **Confidence is honest** — don't inflate confidence to get past the threshold
 6. **Evidence supports the claim** — each finding has at least one concrete code reference
-
-## Redundant guard
-
-When the same condition change lands in more than one place, and an outer check already covers every path to the inner check, use title `Redundant guard`. Name both locations, the call path, and one owner. Set `autofix_class` to `gated_auto` because removing the inner guard changes behavior for callers that skip the outer check.
