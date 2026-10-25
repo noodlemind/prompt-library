@@ -867,7 +867,7 @@ function filesUnder(relDir, found) {
   const abs = path.join(repoRoot, relDir);
   if (!fs.existsSync(abs)) return;
   for (const name of fs.readdirSync(abs)) {
-    if (name === 'node_modules' || name === '.git') continue;
+    if (name === 'node_modules' || name === '.git' || name === '.harness') continue;
     const rel = `${relDir}/${name}`;
     const stat = fs.statSync(path.join(repoRoot, rel));
     if (stat.isDirectory()) filesUnder(rel, found);
