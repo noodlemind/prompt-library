@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { approveProject } from '../lib/trust.mjs';
+import { globalBin, npmCommand } from './helpers/npm-launch.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
@@ -157,6 +158,28 @@ entries:
   assert.equal(rebuilt.checks.find((check) => check.id === 'H11').pass, true);
 });
 
+test('a damaged knowledge manifest is not an empty one', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-doctor-manifest-'));
+  const home = path.join(root, 'home');
+  const copilot = path.join(root, 'copilot');
+  const workspace = freshWorkspace();
+  assert.equal(run(['install', '--target', 'cli'], { home, copilot, workspace }).status, 0);
+  const manifestPath = path.join(copilot, 'knowledge', 'manifest.yaml');
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, 'entries: [\n');
+  const damaged = checks(run(['doctor'], { home, copilot, workspace }));
+  for (const id of ['H10', 'H11']) {
+    const check = damaged.checks.find((row) => row.id === id);
+    assert.equal(check.pass, false, JSON.stringify(check));
+    assert.equal(check.status, undefined);
+    assert.match(check.hint, /ae index/);
+  }
+  fs.writeFileSync(manifestPath, 'entries: []\n');
+  const empty = checks(run(['doctor'], { home, copilot, workspace }));
+  assert.equal(empty.checks.find((row) => row.id === 'H10').status, 'n/a');
+  assert.equal(empty.checks.find((row) => row.id === 'H11').status, 'n/a');
+});
+
 test('P0 fails when the effective policy is observe', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-doctor-p0-'));
   const home = path.join(root, 'home');
@@ -188,7 +211,8 @@ test('the README install command installs ae', () => {
   assert.equal(command, 'npm install -g ./packages/ae');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-readme-install-'));
   const prefix = path.join(root, 'prefix');
-  const result = spawnSync('npm', ['install', '-g', './packages/ae'], {
+  const launched = npmCommand(['install', '-g', './packages/ae']);
+  const result = spawnSync(launched.command, launched.args, {
     cwd: repoRoot,
     encoding: 'utf8',
     timeout: 180000,
@@ -200,7 +224,8 @@ test('the README install command installs ae', () => {
     },
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  const version = spawnSync(path.join(prefix, 'bin', 'ae'), ['--version'], { encoding: 'utf8', env: { ...process.env, HOME: root } });
+  const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+  const version = spawnSync(globalBin(prefix, 'ae'), ['--version'], { encoding: 'utf8', env: { ...process.env, HOME: root } });
   assert.equal(version.status, 0, version.stdout + version.stderr);
-  assert.match(version.stdout, /0\.14\.0/);
+  assert.match(version.stdout, new RegExp(pkg.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });

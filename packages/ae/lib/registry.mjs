@@ -277,11 +277,23 @@ function flagIndex(entry) {
   return index;
 }
 
-/** `--help` and `-h` before `--` ask for command help. They are not command flags. */
-export function commandHelpRequested(argv) {
+/** `--help` and `-h` before `--` ask for command help. A value consumed by a flag does not. */
+export function commandHelpRequested(argv, entry = null) {
   const end = argv.indexOf('--');
   const scan = end === -1 ? argv : argv.slice(0, end);
-  return scan.some((token) => token === '--help' || token === '-h');
+  const known = entry ? flagIndex(entry) : null;
+  for (let i = 0; i < scan.length; i++) {
+    const token = scan[i];
+    if (token === '--help' || token === '-h') return true;
+    if (!known || token === '-' || !token.startsWith('-')) continue;
+    const eq = token.indexOf('=');
+    if (eq !== -1) continue;
+    const def = known.get(token);
+    if (!def || def.type === 'boolean') continue;
+    const next = scan[i + 1];
+    if (next !== undefined && (def.valueIsLiteral === true || !next.startsWith('--'))) i++;
+  }
+  return false;
 }
 
 export function validateArgs(entry, argv) {
@@ -344,7 +356,7 @@ export async function dispatch(argv, ctx = {}) {
   if (!entry) {
     throw usageError(`unknown command: ${name}`, 'ae help');
   }
-  if (commandHelpRequested(rest)) return EXIT.ok;
+  if (commandHelpRequested(rest, entry)) return EXIT.ok;
   validateArgs(entry, rest);
   const lane = ctx.output;
   assertLaneSupported(entry, lane);

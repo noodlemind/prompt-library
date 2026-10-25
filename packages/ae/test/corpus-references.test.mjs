@@ -76,7 +76,7 @@ test('slash commands in always-on instructions, agents, and invocable skills res
 test('the Investigate confirmation rule lives in one place', () => {
   const phrase = 'confirmed only when evidence demonstrates';
   const hits = filesUnder(corpus).filter((file) => /\.(md|mjs)$/.test(file) && read(file).includes(phrase));
-  assert.deepEqual(hits.map((file) => path.relative(corpus, file)), ['agents/engineer.agent.md']);
+  assert.deepEqual(hits.map((file) => path.relative(corpus, file).replaceAll('\\', '/')), ['agents/engineer.agent.md']);
   const contradicted = filesUnder(corpus).filter((file) => /\.(md|mjs)$/.test(file) && read(file).includes('confirmed race/retry defect'));
   assert.deepEqual(contradicted, []);
 });

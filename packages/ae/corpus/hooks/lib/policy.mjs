@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { nodeAuthority } from './authority-bin.mjs';
+import { PROOF_AUTHORITY_TIMEOUT_MS } from './proof-authority.mjs';
 import { harnessHome } from './external-plans.mjs';
 import { policySourceBinding, snapshotRel, validPolicySnapshot, readPolicySource } from './policy-snapshot.mjs';
 
@@ -20,7 +21,7 @@ export function loadHookPolicy(workspace, { ttlKey = 'gate_ttl_minutes', ttlDefa
     const node = nodeAuthority();
     if (!node) return safe;
     const result = spawnSync(node.command, [...node.args, 'status', '--effective-policy', '--json', '--no-events', '--workspace', workspace], {
-      cwd: workspace, encoding: 'utf8', timeout: 2500, maxBuffer: 128 * 1024,
+      cwd: workspace, encoding: 'utf8', timeout: PROOF_AUTHORITY_TIMEOUT_MS, maxBuffer: 128 * 1024,
     });
     if (result.error || result.status !== 0) return safe;
     try {
@@ -41,7 +42,7 @@ export function projectTrustIsCurrent(workspace) {
   const node = nodeAuthority();
   if (!node) return false;
   const result = spawnSync(node.command, [...node.args, 'trust', 'status', '--json', '--no-events', '--workspace', workspace], {
-    cwd: workspace, encoding: 'utf8', timeout: 2500, maxBuffer: 128 * 1024,
+    cwd: workspace, encoding: 'utf8', timeout: PROOF_AUTHORITY_TIMEOUT_MS, maxBuffer: 128 * 1024,
   });
   if (result.error || result.status !== 0) return false;
   try {

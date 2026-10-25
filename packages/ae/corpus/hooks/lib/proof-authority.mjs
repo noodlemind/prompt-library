@@ -2,7 +2,9 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { authorityBin } from './authority-bin.mjs';
 
-export function callProofAuthority(workspace, args, { timeout = 2500, spawnFn = spawnSync } = {}) {
+export const PROOF_AUTHORITY_TIMEOUT_MS = 10000;
+
+export function callProofAuthority(workspace, args, { timeout = PROOF_AUTHORITY_TIMEOUT_MS, spawnFn = spawnSync } = {}) {
   const bin = authorityBin();
   const started = Date.now();
   const result = spawnFn(bin ? process.execPath : 'ae', [...(bin ? [bin] : []), 'status', ...args, '--json', '--no-events', '--workspace', workspace], {

@@ -68,3 +68,19 @@ test('a help flag after -- is not command help', () => {
   const literal = run(['exec', '--', '--help']);
   assert.notEqual(literal.stdout, help.stdout);
 });
+
+test('an edit value that looks like help is still an edit', () => {
+  const edit = getCommand('edit');
+  assert.equal(commandHelpRequested(['--path', 'args.txt', '--old', '--help', '--new', '--version'], edit), false);
+  assert.equal(commandHelpRequested(['--old=--help'], edit), false);
+  assert.equal(commandHelpRequested(['--help'], edit), true);
+  assert.equal(commandHelpRequested(['--workspace', '--help'], edit), true);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-help-edit-'));
+  const ws = path.join(root, 'ws');
+  fs.mkdirSync(ws);
+  fs.writeFileSync(path.join(ws, 'args.txt'), '--help\n');
+  const result = run(['edit', '--path', 'args.txt', '--old', '--help', '--new', '--version', '--workspace', ws, '--no-events']);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.doesNotMatch(result.stdout, /Usage:/);
+  assert.equal(fs.readFileSync(path.join(ws, 'args.txt'), 'utf8'), '--version\n');
+});

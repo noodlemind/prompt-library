@@ -215,7 +215,11 @@ test('gate directs a planned plan to the atomic start operation', () => {
 
   assert.equal(result.status, 0, result.stderr);
   const body = JSON.parse(result.stdout);
-  assert.match(body.nextTools[0], new RegExp(`ae plan-update --workspace ${workspace} --plan docs/plans/2026-05-22-fix-example-plan.md --file -`));
+  const line = body.nextTools[0].split('\n')[0];
+  const match = line.match(/^ae plan-update --workspace (?:"([^"]*)"|(\S+)) --plan (?:"([^"]*)"|(\S+)) --file - --json$/);
+  assert.ok(match, line);
+  assert.equal(match[1] ?? match[2], path.resolve(workspace));
+  assert.equal(match[3] ?? match[4], 'docs/plans/2026-05-22-fix-example-plan.md');
   assert.match(body.nextTools[0], /"action":"start"/);
 });
 

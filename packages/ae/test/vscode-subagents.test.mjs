@@ -12,6 +12,12 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
 const SETTING = 'chat.subagents.allowInvocationsFromSubagents';
 
+function vscodeUserDir(root) {
+  if (process.platform === 'win32') return path.join(root, 'AppData', 'Roaming', 'Code', 'User');
+  if (process.platform === 'darwin') return path.join(root, 'Library', 'Application Support', 'Code', 'User');
+  return path.join(root, '.config', 'Code', 'User');
+}
+
 test('merged VS Code settings enable nested subagent invocations', () => {
   const settings = mergeVSCodeSettings({});
   assert.equal(settings[SETTING], true);
@@ -20,12 +26,22 @@ test('merged VS Code settings enable nested subagent invocations', () => {
 
 test('install --configure-vscode writes the nested subagent setting and doctor V3 checks it', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-vscode-home-'));
-  const userDir = path.join(root, '.config', 'Code', 'User');
+  const userDir = vscodeUserDir(root);
   fs.mkdirSync(userDir, { recursive: true });
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-vscode-ws-'));
   const copilot = path.join(root, 'copilot');
   const aeHome = path.join(root, 'ae');
-  const env = { ...process.env, HOME: root, NO_COLOR: '1', AE_HOME: aeHome, HARNESS_HOME: aeHome, COPILOT_HOME: copilot };
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    APPDATA: path.join(root, 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join(root, 'AppData', 'Local'),
+    NO_COLOR: '1',
+    AE_HOME: aeHome,
+    HARNESS_HOME: aeHome,
+    COPILOT_HOME: copilot,
+  };
   const installed = spawnSync(process.execPath, [
     binPath, 'install', '--target', 'vscode', '--configure-vscode',
     '--workspace', workspace, '--copilot-home', copilot, '--ae-home', aeHome, '--no-events',

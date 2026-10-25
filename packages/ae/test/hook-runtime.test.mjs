@@ -11,7 +11,7 @@ import YAML from 'yaml';
 import { planContractText } from '../lib/evidence.mjs';
 import { publishGateSession } from '../lib/gate.mjs';
 import { externalPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
-import { callProofAuthority } from '../corpus/hooks/lib/proof-authority.mjs';
+import { PROOF_AUTHORITY_TIMEOUT_MS, callProofAuthority } from '../corpus/hooks/lib/proof-authority.mjs';
 import {
   activatedSkillFromPayload,
   analyzeShellMutation,
@@ -29,6 +29,7 @@ test('proof authority retains bounded failure cause without command output or cr
   assert.equal(timedOut.pass, false);
   assert.equal(timedOut.authority.reason, 'timeout');
   assert.equal(timedOut.authority.timeoutMs, 2500);
+  assert.equal(PROOF_AUTHORITY_TIMEOUT_MS, 10000);
   assert.equal(timedOut.authority.errorCode, 'ETIMEDOUT');
   assert.equal(timedOut.authority.signalName, 'SIGTERM');
   const failed = callProofAuthority(repoRoot, [], { spawnFn: () => ({ status: 3, signal: null, stdout: '', stderr: 'token=private-value' }) });

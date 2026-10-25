@@ -192,7 +192,7 @@ export async function main() {
         workspace: path.resolve(flags.workspace),
         copilotHome: resolveCopilotHome(flags.copilotHome),
       })));
-    } else if (hasCommand(command) && commandHelpRequested(args)) {
+    } else if (hasCommand(command) && commandHelpRequested(args, getCommand(command))) {
       console.log(renderCommandHelp(command));
     } else if (hasCommand(command)) {
       const { args: laneArgs, output } = extractOutputLane(args);

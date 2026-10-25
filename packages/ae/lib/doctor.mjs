@@ -54,13 +54,17 @@ function manifestStamp(value) {
 }
 
 function loadManifestEntries(manifestPath) {
-  if (!fs.existsSync(manifestPath)) return { entries: [], updated: null };
+  if (!fs.existsSync(manifestPath)) return { entries: [], updated: null, error: null };
   try {
     const yaml = require('yaml');
     const doc = yaml.parse(fs.readFileSync(manifestPath, 'utf8'));
-    return { entries: doc.entries || [], updated: doc.updated || null };
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { entries: [], updated: null, error: 'unreadable' };
+    // A bare `entries:` key parses as null. That is the packaged empty index, not a damaged file.
+    if (doc.entries === null || doc.entries === undefined) return { entries: [], updated: doc.updated || null, error: null };
+    if (!Array.isArray(doc.entries)) return { entries: [], updated: null, error: 'unreadable' };
+    return { entries: doc.entries, updated: doc.updated || null, error: null };
   } catch {
-    return { entries: [], updated: null };
+    return { entries: [], updated: null, error: 'unreadable' };
   }
 }
 
@@ -745,10 +749,23 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     : fs.existsSync(workspaceManifest)
       ? workspaceManifest
       : manifest;
-  const { entries: manifestEntries, updated: manifestUpdatedRaw } = loadManifestEntries(manifestPath);
+  const { entries: manifestEntries, updated: manifestUpdatedRaw, error: manifestError } = loadManifestEntries(manifestPath);
   const manifestUpdated = manifestStamp(manifestUpdatedRaw);
   const indexDir = resolveIndexDir(copilotHome, flags.workspace, flags.harnessHome || flags.home);
-  if (manifestEntries.length === 0) {
+  if (manifestError) {
+    checks.push({
+      id: 'H10',
+      name: 'Manifest enriched fields (symptom/module)',
+      pass: false,
+      hint: 'Run: ae index — rebuilds symptom, module, trigger, summary, and excerpt from solution files',
+    });
+    checks.push({
+      id: 'H11',
+      name: 'BM25 postings index fresh',
+      pass: false,
+      hint: 'Run: ae index — rebuild the knowledge postings index',
+    });
+  } else if (manifestEntries.length === 0) {
     checks.push({
       id: 'H10',
       name: 'Manifest enriched fields (symptom/module)',
