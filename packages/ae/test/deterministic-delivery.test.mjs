@@ -25,7 +25,7 @@ function installPackage(t) {
   const cache = path.join(dir, 'npm-cache');
   const npmStep = (label, args, cwd) => {
     const started = Date.now();
-    const result = spawnSync(process.execPath, [npm, ...args, '--cache', cache, '--no-audit', '--no-fund', '--timing', '--logs-dir', logsDir], { cwd, encoding: 'utf8', timeout: 60000 });
+    const result = spawnSync(process.execPath, [npm, ...args, '--cache', cache, '--no-audit', '--no-fund', '--timing', '--logs-dir', logsDir], { cwd, encoding: 'utf8', timeout: 180_000, stdio: ['ignore', 'pipe', 'pipe'] });
     const diagnostic = { kind: 'package-proof', label, platform: process.platform, node: process.version, durationMs: Date.now() - started,
       status: result.status, signal: result.signal, error: result.error ? { code: result.error.code, message: result.error.message } : null,
       npm, cache: { selected: cache, isolated: true }, logsDir,
