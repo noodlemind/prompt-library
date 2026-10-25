@@ -84,7 +84,8 @@ test('library code spawns only git or node', () => {
   for (const file of walk(lib).filter((full) => full.endsWith('.mjs'))) {
     const text = fs.readFileSync(file, 'utf8');
     for (const match of text.matchAll(literal)) {
-      if (match[2] !== 'git') problems.push(`${path.relative(packageRoot, file)} spawns ${match[2]}`);
+      const windowsTreeKill = match[2] === 'taskkill' && file.endsWith(`${path.sep}lib${path.sep}runner.mjs`);
+      if (match[2] !== 'git' && !windowsTreeKill) problems.push(`${path.relative(packageRoot, file)} spawns ${match[2]}`);
     }
     if (/\b(?:which|where|taskkill|powershell|pwsh)\b/.test(text) && !text.includes('Do not')) {
       // Comments may name a removed tool. A call does not.

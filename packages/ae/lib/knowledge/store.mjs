@@ -25,7 +25,7 @@ _Rebuilt by \`ae consolidate --apply\`. One line per active learning._
 `;
 
 function gitOut(cwd, args) {
-  const res = spawnSync('git', args, { cwd, encoding: 'utf8', env: gitMetadataEnvironment() });
+  const res = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 30_000, env: gitMetadataEnvironment() });
   return res.status === 0 ? res.stdout.trim() : null;
 }
 

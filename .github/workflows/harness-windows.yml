@@ -1,7 +1,7 @@
 # Exercises the harness CLI on a real Windows runner. The repository's primary
 # consumption platform is Windows (AGENTS.md), but every check until now ran on
 # ubuntu-latest, so the win32 branches shipped untested: runner.mjs terminates
-# the owned process with Node process.kill instead of a POSIX process group, paths.mjs
+# the owned process tree with taskkill /T /F instead of a POSIX process group, paths.mjs
 # resolves LOCALAPPDATA/USERPROFILE, style.mjs only enables Unicode glyphs when
 # a modern terminal announces itself, and global-bin.mjs writes a .cmd shim.
 #
@@ -217,10 +217,10 @@ jobs:
 
           // A parent that spawns a NON-detached grandchild, so termination has to reach
           // the whole tree: on POSIX the grandchild stays inside the process group
-          // runProcess created for the direct child (detached: true), and on win32 it
-          // Node process.kill ends the owned process. It does not walk a Windows
-          // process tree, so a grandchild can outlive its parent. The probe reaps
-          // that grandchild itself and still requires the owned process to cancel.
+          // runProcess created for the direct child (detached: true). On win32,
+          // taskkill /T /F ends the owned process and its descendants. A grandchild
+          // that still outlives that stop is reaped by the probe. The owned process
+          // must still cancel.
           const childSource = `
           const { spawn } = require('node:child_process');
           const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, ${SLEEP_MS})'], { stdio: 'ignore' });
