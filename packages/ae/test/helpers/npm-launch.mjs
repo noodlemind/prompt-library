@@ -26,3 +26,20 @@ export function globalBin(prefix, name) {
   if (process.platform === 'win32') return path.join(prefix, `${name}.cmd`);
   return path.join(prefix, 'bin', name);
 }
+
+function quoteCmdArg(value) {
+  const text = String(value);
+  if (text.length === 0) return '""';
+  if (!/[\s"&|<>^]/.test(text)) return text;
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+/** Node cannot CreateProcess a .cmd shim. cmd.exe /d /s /c runs it without a nested shell. */
+export function launchShim(prefix, name, args) {
+  const shim = globalBin(prefix, name);
+  if (process.platform === 'win32') {
+    const comspec = process.env.ComSpec || 'cmd.exe';
+    return { command: comspec, args: ['/d', '/s', '/c', [shim, ...args].map(quoteCmdArg).join(' ')] };
+  }
+  return { command: shim, args };
+}

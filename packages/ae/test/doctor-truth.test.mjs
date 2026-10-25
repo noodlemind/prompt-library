@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { approveProject } from '../lib/trust.mjs';
-import { globalBin, npmCommand } from './helpers/npm-launch.mjs';
+import { globalBin, launchShim, npmCommand } from './helpers/npm-launch.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
@@ -223,9 +223,12 @@ test('the README install command installs ae', () => {
       npm_config_cache: path.join(root, 'npm-cache'),
     },
   });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(result.status, 0, [result.error?.code, result.stdout, result.stderr].filter(Boolean).join('\n'));
+  const shim = globalBin(prefix, 'ae');
+  assert.equal(fs.existsSync(shim), true, shim);
   const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
-  const version = spawnSync(globalBin(prefix, 'ae'), ['--version'], { encoding: 'utf8', env: { ...process.env, HOME: root } });
-  assert.equal(version.status, 0, version.stdout + version.stderr);
+  const launchedShim = launchShim(prefix, 'ae', ['--version']);
+  const version = spawnSync(launchedShim.command, launchedShim.args, { encoding: 'utf8', env: { ...process.env, HOME: root } });
+  assert.equal(version.status, 0, [version.error?.code, version.stdout, version.stderr].filter(Boolean).join('\n'));
   assert.match(version.stdout, new RegExp(pkg.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
