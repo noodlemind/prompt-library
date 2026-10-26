@@ -29,8 +29,9 @@ export function parseImpactedText(section) {
     const marked = line.match(LIST_MARK);
     const body = marked ? marked[1] : line;
     const ticked = [...body.matchAll(/`([^`]+)`/g)].map((match) => match[1].trim()).filter(Boolean);
+    // One backtick pair is one path, including spaces and commas. Unquoted lists still split.
     const pieces = ticked.length
-      ? ticked.flatMap(splitPiece)
+      ? ticked
       : (marked || body.includes(','))
         ? splitPiece(body)
         : [];
