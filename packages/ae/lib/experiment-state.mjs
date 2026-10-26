@@ -333,7 +333,7 @@ function linuxStartTicks(pid) {
   }
 }
 
-function processIdentity(pid) {
+export function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid < 1) return null;
   try { process.kill(pid, 0); }
   catch (error) {
@@ -343,6 +343,11 @@ function processIdentity(pid) {
   if (process.platform === 'linux' || process.platform === 'android') {
     const ticks = linuxStartTicks(pid);
     if (ticks) return `linux:${ticks}`;
+  } else if (process.platform === 'darwin') {
+    // Node can see that another pid is alive. It cannot read that process's kernel
+    // start time. One identity per live pid lets evaluation record the child, and a
+    // reused pid stays blocked until it exits.
+    return `darwin:${pid}`;
   } else if (pid === process.pid && /^[1-9][0-9]{0,19}$/.test(selfStartMs)) {
     const prefix = process.platform === 'win32' ? 'windows' : process.platform;
     return `${prefix}:${pid}:${selfStartMs}`;
