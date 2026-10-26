@@ -347,8 +347,9 @@ export function runTree({ subject, target = null, depth, workspace, copilotHome,
     throw usageError('tree --files lists the workspace checkout', 'ae tree workspace --files --json');
   }
   if (files) {
-    const listed = listRepoFiles(workspace);
     const scope = target ? normalizeRelative(target) : '';
+    // Scope git before the 4,000 path cap. Filtering afterward hides a late folder.
+    const listed = listRepoFiles(workspace, scope ? { prefix: scope } : {});
     const filtered = scope ? listed.files.filter((rel) => rel === scope || rel.startsWith(`${scope}/`)) : listed.files;
     return {
       schema: TREE_SCHEMA,

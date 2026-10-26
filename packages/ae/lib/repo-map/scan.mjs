@@ -8,8 +8,19 @@ import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 export const MAX_FILES_SCANNED = 4000;
 export const MAX_FILE_BYTES = 200_000;
 
-export function listRepoFiles(workspace) {
-  const res = spawnSync('git', ['-C', workspace, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+function filePrefix(prefix) {
+  if (typeof prefix !== 'string' || !prefix) return '';
+  const scope = prefix.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (!scope || scope.startsWith('/') || /^[A-Za-z]:/.test(scope) || scope.includes('\0')) return '';
+  if (scope.split('/').includes('..')) return '';
+  return scope;
+}
+
+export function listRepoFiles(workspace, { prefix = '' } = {}) {
+  const scope = filePrefix(prefix);
+  const args = ['-C', workspace, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'];
+  if (scope) args.push('--', scope);
+  const res = spawnSync('git', args, {
     encoding: 'utf8',
     timeout: 15_000,
     maxBuffer: 64 * 1024 * 1024,
