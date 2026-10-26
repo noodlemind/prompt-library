@@ -269,12 +269,12 @@ export function runGate({ workspace, flags, query = '', planOverride = null, dom
           ? [stdinDecision(workspace, 'start')]
           : ['editFiles (scoped)', `ae verify --workspace ${quote(path.resolve(workspace))} --plan ${quote(plan?.path || '<path>')}`]
       : plan?.status === 'blocked-capability'
-        ? ['ae get --reference skills/ensure-capability/SKILL.md --json']
+        ? ['Read <copilot-home>/skills/ensure-capability/SKILL.md with the host read tool']
         : // Lock the plan before primitive governance: an unlocked plan must
           // recover through /ensure-plan even if primitive checks also fail.
           plan && plan.plan_lock && primitiveGovernanceFailed
           ? [
-              'ae get --reference skills/create-primitive/SKILL.md --json',
+              'Read <copilot-home>/skills/create-primitive/SKILL.md with the host read tool. A not-truncated read of that SKILL.md is activation',
               `update ${plan?.path || '<plan>'} with the create-primitive decision and evidence contract`,
               `ae gate --phase implement --plan ${plan?.path || '<plan>'}`,
             ]

@@ -58,7 +58,7 @@ export function collectOrientationFacts({ workspace, copilotHome, flags = {}, qu
   const procedure = caffeinatedPointer(active, { copilotHome });
   const activating = PLAYBOOKS.filter((id) => id !== 'investigation');
   const procedureFact = procedure
-    ? { id: procedure.id, path: procedure.path, command: 'ae get --reference skills/caffeinated/SKILL.md --json' }
+    ? { id: procedure.id, path: procedure.path, command: 'Read <copilot-home>/skills/caffeinated/SKILL.md with the host read tool. A not-truncated read of that SKILL.md is activation' }
     : {
         id: null,
         reason: active?.fm?.playbook === 'investigation'

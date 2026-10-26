@@ -79,7 +79,7 @@ export function primitivePlanGovernance(plan) {
   ].filter(Boolean).join(' ');
   const javaAwsMigration = /java/i.test(intentSurface) && /aws/i.test(intentSurface) && /(?:migration|upgrade)/i.test(intentSurface);
   const requirements = [
-    ['PR1', skills.includes('create-primitive'), 'Print ae get --reference skills/create-primitive/SKILL.md --json and record create-primitive in skills_used'],
+    ['PR1', skills.includes('create-primitive'), 'Read <copilot-home>/skills/create-primitive/SKILL.md with the host read tool and record create-primitive in skills_used'],
     ['PR2', /Primitive classification\s*:/i.test(text), 'Plan must state primitive classification'],
     ['PR3', /(?:Existing-capability )?overlap analysis\s*:/i.test(text), 'Plan must state existing-capability overlap analysis'],
     ['PR4', /(?:Intended )?artifact structure\s*:/i.test(text), 'Plan must state intended artifact structure'],

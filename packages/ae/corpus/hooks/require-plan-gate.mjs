@@ -19,7 +19,7 @@ const startedAt = Date.now();
 let payload = {};
 let normalized = null;
 let policy = { enforcement: 'enforce', ttl: 30 };
-const RECOVER_MISSING_GATE = 'Print the skill with ae get --reference skills/ensure-plan/SKILL.md --json; create or amend only the canonical plan, then submit a standalone ae plan-update --file start decision. Harness binds state and the implement gate. Wait for explicit success before retrying the product mutation in a later tool call';
+const RECOVER_MISSING_GATE = 'Read <copilot-home>/skills/ensure-plan/SKILL.md with the host read tool. A not-truncated read of that SKILL.md is activation. Create or amend only the canonical plan, then submit a standalone ae plan-update --file start decision. Harness binds state and the implement gate. Wait for explicit success before retrying the product mutation in a later tool call';
 const NEW_PLAN_PATH = /^(?:docs|\.harness)\/plans\/\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.md$/;
 
 function output(value) {
@@ -360,7 +360,7 @@ if (!normalized.mutation) {
 }
 const opaque = normalized.terminalEffects.hasOpaque;
 if (!normalized.targetResolved && !opaque) {
-  deny('unresolved-mutation-target', 'Mutation target could not be resolved for scope validation; next: retry the edit with an explicit file path, or print the skill with ae get --reference skills/ensure-plan/SKILL.md --json', 'unresolved');
+  deny('unresolved-mutation-target', 'Mutation target could not be resolved for scope validation; next: retry the edit with an explicit file path, or read <copilot-home>/skills/ensure-plan/SKILL.md with the host read tool', 'unresolved');
 }
 
 const relatives = normalized.targets.map((target) => {
@@ -377,7 +377,7 @@ for (const relative of relatives) {
   if (!NEW_PLAN_PATH.test(relative)) {
     deny(
       'invalid-plan-path',
-      'New plans must use docs/plans/ or .harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md with type feat|fix|docs|refactor|chore; print the skill with ae get --reference skills/ensure-plan/SKILL.md --json and do not create an undated shortcut',
+      'New plans must use docs/plans/ or .harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md with type feat|fix|docs|refactor|chore; read <copilot-home>/skills/ensure-plan/SKILL.md with the host read tool and do not create an undated shortcut',
       'invalid'
     );
   }
@@ -507,14 +507,14 @@ if (governed.some(isPrimitivePath)) {
   if (!planUsesCreatePrimitive(planText)) {
     deny(
       'missing-create-primitive',
-      'Print ae get --reference skills/create-primitive/SKILL.md --json and follow it before planning or editing primitive paths; then record create-primitive in plan skills_used',
+      'Read <copilot-home>/skills/create-primitive/SKILL.md with the host read tool and follow it before planning or editing primitive paths; then record create-primitive in plan skills_used',
       'passed'
     );
   }
   if (!sessionActivatedSkill(session, 'create-primitive', normalized.sessionId, policy.ttl)) {
     deny(
       'missing-create-primitive-activation',
-      'Print ae get --reference skills/create-primitive/SKILL.md --json now and follow it; naming create-primitive in skills_used is not activation, so retry this mutation only after the successful skill read is recorded for this chat session',
+      'Read <copilot-home>/skills/create-primitive/SKILL.md with the host read tool and follow it. A not-truncated read of that SKILL.md is activation. Naming create-primitive in skills_used is not activation, so retry this mutation only after that skill read is recorded for this chat session',
       'passed'
     );
   }

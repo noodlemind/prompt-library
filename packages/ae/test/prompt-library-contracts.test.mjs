@@ -8,6 +8,7 @@ import YAML from 'yaml';
 import { estimateTokens } from '../lib/token-meter.mjs';
 import { CONTEXT_PACK_MAX_BYTES } from '../lib/context-pack.mjs';
 import { hasCommand, describeCommand } from '../lib/registry.mjs';
+import { harnessControlCommand } from '../corpus/hooks/lib/tool-payload.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -146,7 +147,9 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   assert.match(engineer, /requested file mutation enters Deliver before the first edit/i);
   assert.match(engineer, /blocked[\s\S]*ensure-plan[\s\S]*start decision[\s\S]*implement gate before editing/i);
   assert.match(engineer, /skill, agent, instruction, prompt, check, reference, or solution[\s\S]{0,100}create-primitive/i);
-  assert.match(engineer, /ae get --reference skills\/create-primitive\/SKILL\.md[\s\S]{0,180}not activation/i);
+  assert.match(engineer, /skills\/create-primitive\/SKILL\.md[\s\S]{0,180}not activation/i);
+  assert.match(engineer, /host read tool[\s\S]{0,220}not activation/i);
+  assert.doesNotMatch(engineer, /ae get --reference skills\/create-primitive\/SKILL\.md/);
   assert.match(engineer, /Capture for Later[\s\S]{0,120}Plan and Fix[\s\S]{0,120}Leave in Chat/i);
   assert.match(engineer, /Name the mode first/i);
   assert.match(engineer, /shared state and interleavings[\s\S]{0,100}confirmed only when evidence demonstrates/i);
@@ -159,6 +162,36 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   assert.match(globalWorkflow, /@engineer[\s\S]{0,160}name the mode first/i);
   assert.doesNotMatch(globalWorkflow, /confirmed only when evidence demonstrates/i);
   assert.doesNotMatch(globalWorkflow, /confirmed race/i);
+});
+
+test('gated reads name a host file read the hook already records', () => {
+  const engineer = read('packages/ae/corpus/agents/engineer.agent.md');
+  const gate = read('packages/ae/corpus/hooks/require-plan-gate.mjs');
+  const context = read('packages/ae/corpus/hooks/load-context.mjs');
+  const review = read('packages/ae/corpus/skills/code-review/SKILL.md');
+  const personas = read('packages/ae/corpus/skills/code-review/references/review-personas.md');
+  const loop = read('packages/ae/corpus/skills/references/tool-native-loop.md');
+  const spec = read('packages/ae/corpus/agents/spec-flow-analyzer.agent.md');
+  for (const source of [engineer, gate, context]) {
+    assert.match(source, /host read tool/);
+    assert.match(source, /not-truncated/);
+    assert.match(source, /<copilot-home>\/skills\/create-primitive\/SKILL\.md/);
+  }
+  assert.match(gate, /skills\/create-primitive\/SKILL\.md[\s\S]{0,240}not activation/);
+  assert.doesNotMatch(gate, /ae get --reference skills\/create-primitive\/SKILL\.md/);
+  assert.doesNotMatch(context, /ae get --reference skills\/ensure-plan\/SKILL\.md/);
+  for (const source of [review, personas, loop, spec]) {
+    assert.match(source, /host search/);
+    assert.match(source, /outside the enforce hook/i);
+    assert.match(source, /ae tree workspace --files --json/);
+  }
+  for (const args of [
+    ['ae', 'get', '--reference', 'skills/create-primitive/SKILL.md', '--json'],
+    ['ae', 'tree', 'workspace', '--files', '--json'],
+    ['ae', 'search', 'plan', '--match', 'literal', '--source', 'code', '--json'],
+  ]) {
+    assert.equal(harnessControlCommand(args, process.cwd()), null, args.join(' '));
+  }
 });
 
 test('every agent handoff declares a target agent that exists', () => {

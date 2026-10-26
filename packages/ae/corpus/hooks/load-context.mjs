@@ -138,8 +138,8 @@ try {
 
 const parts = [
   'When @engineer is active, start every reply `Mode: Answer|Investigate|Review|Deliver` — mode selection is the intake router for every request. Follow the Investigate contract in engineer.agent.md. Report evidence, impact, confidence, recommendation, and Capture for Later / Plan and Fix / Leave in Chat.',
-  'When a Deliver mutation is denied missing-implement-gate, print ae get --reference skills/ensure-plan/SKILL.md --json; create or lock only the canonical plan in a standalone mutation with no product paths, pass the standalone implement gate, then retry the product mutation and verify.',
-  'Before planning or editing a skill, agent, instruction, check, reference, or solution, print ae get --reference skills/create-primitive/SKILL.md --json and follow it. A plan label is not skill activation.',
+  'When a Deliver mutation is denied missing-implement-gate, read <copilot-home>/skills/ensure-plan/SKILL.md with the host read tool. A not-truncated read of that SKILL.md is activation. Create or lock only the canonical plan in a standalone mutation with no product paths, pass the standalone implement gate, then retry the product mutation and verify.',
+  'Before planning or editing a skill, agent, instruction, check, reference, or solution, read <copilot-home>/skills/create-primitive/SKILL.md with the host read tool and follow it. A not-truncated read of that SKILL.md is activation. A plan label is not skill activation.',
   'During Deliver verification, run only checks named in the plan verification.required list. Report unrelated check failures; do not repair them or expand Impacted Files for them.',
 ];
 const pack = path.join(workspace, '.harness', 'context-pack.md');

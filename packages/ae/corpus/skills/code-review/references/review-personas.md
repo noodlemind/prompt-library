@@ -71,4 +71,4 @@ Engage these when the diff contains files of the matching language.
 - **Trigger:** Diff references a plan file or spec document
 - **Focus:** Spec completeness, edge cases, flow gaps, test scenario design
 - **Look for:** Missing error states in flows, unhandled edge cases in specs, gaps between what the spec says and what the code implements.
-- **Files:** `ae tree workspace --files --json`, then the host search tool if git is missing. Search text with `ae search <query> --match literal --source code --json`. Do not run rg, grep, find, or any program other than `ae`, `node`, and `git`.
+- **Files:** List candidate files with the host search or list tool. Search text with the host search tool. Do not run rg, grep, find, or any program other than `node` and `git`. Outside the enforce hook, `ae tree workspace --files --json` and `ae search <query> --match literal --source code --json` are optional.

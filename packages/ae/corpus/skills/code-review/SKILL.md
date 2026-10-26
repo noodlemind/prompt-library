@@ -35,10 +35,10 @@ Activate when the user wants to:
 
 ## References
 
-Print these installed files with the command. Do not search the product workspace for them, and do not open them with a workspace read tool. They are outside the checkout.
+Read these installed files with the host read tool. Do not search the product workspace for them, and do not open a checkout-relative path. They live under `<copilot-home>/skills/`.
 
-- **Persona definitions:** `ae get --reference skills/code-review/references/review-personas.md --json`
-- **Findings schema:** `ae get --reference skills/code-review/references/findings-schema.md --json`
+- **Persona definitions:** `<copilot-home>/skills/code-review/references/review-personas.md`. Outside the enforce hook, `ae get --reference skills/code-review/references/review-personas.md --json` prints the same file.
+- **Findings schema:** `<copilot-home>/skills/code-review/references/findings-schema.md`. Outside the enforce hook, `ae get --reference skills/code-review/references/findings-schema.md --json` prints the same file.
 
 ## Workflow
 
@@ -52,35 +52,35 @@ Read the full packet at `packetPath` and retrieve omitted source content before 
 
 - Read modified files and understand the changes
 - Check available repository context for accumulated codebase knowledge: `README.md`, `.harness/agent-context.md` or `docs/agent-context.md`, and `docs/codebase-snapshot.md`.
-- Use `/recall` for prior solutions and current-project private episodes; follow `ae get --reference skills/references/knowledge-locations.md --json`. Legacy committed `docs/solutions/` remains readable. Do not search only the checkout's solution directory.
+- Use `/recall` for prior solutions and current-project private episodes. Read `<copilot-home>/skills/references/knowledge-locations.md` with the host read tool. Legacy committed `docs/solutions/` remains readable. Do not search only the checkout's solution directory. Outside the enforce hook, `ae get --reference skills/references/knowledge-locations.md --json` prints the same file.
 - If a plan file is referenced, read `## Implementation Notes` for decisions and trade-offs
 - Detect project type (Java, Python, TypeScript, SQL/data, AWS) from project files
 - Read related code and dependencies touched by the changes
 - Write a 2-3 line intent summary: what the change is trying to accomplish
 
-Apply the performance code principles (`ae get --reference skills/engineer/references/performance-engineering.md --json`) to applicable code and dependency choices in every review. When the packet includes performance context or journey goals, read the full reference and assess both lenses. Missing telemetry permits static gap analysis; it cannot support a measured bottleneck claim.
+Read `<copilot-home>/skills/engineer/references/performance-engineering.md` with the host read tool and apply it to applicable code and dependency choices in every review. Outside the enforce hook, `ae get --reference skills/engineer/references/performance-engineering.md --json` prints the same file. When the packet includes performance context or journey goals, read the full reference and assess both lenses. Missing telemetry permits static gap analysis; it cannot support a measured bottleneck claim.
 
 ### 3. Choose Additional Perspectives
 
-The CLI preserves the five mandatory perspectives and selects bundled/product checks from declared globs. Read `ae get --reference skills/code-review/references/review-personas.md --json` and decide whether the change needs additional language or domain judgment. Add each selected specialist with `--reviewer <id>` when preparing the packet. Explain the relevance of additional perspectives before dispatch.
+The CLI preserves the five mandatory perspectives and selects bundled/product checks from declared globs. Read `<copilot-home>/skills/code-review/references/review-personas.md` with the host read tool and decide whether the change needs additional language or domain judgment. Add each selected specialist with `--reviewer <id>` when preparing the packet. Explain the relevance of additional perspectives before dispatch.
 
 ### 4. Dispatch Personas and Checks
 
 **Orchestration:** If the `agent` tool is available, the Engineer may send the prepared packet, intent summary, and retrieved full sources to `code-review-coordinator` for isolated dispatch in batches of 3-4. Return all packet-required perspective/check results to the Engineer. A coordinator cannot run CLI commands through `terminalLastCommand`. Otherwise, the Engineer applies each required perspective sequentially within this session and preserves the actual provenance.
 
 Each persona receives:
-1. Their persona definition from `ae get --reference skills/code-review/references/review-personas.md --json`
-2. The findings schema from `ae get --reference skills/code-review/references/findings-schema.md --json`
+1. Their persona definition from `<copilot-home>/skills/code-review/references/review-personas.md`, read with the host read tool
+2. The findings schema from `<copilot-home>/skills/code-review/references/findings-schema.md`, read with the host read tool
 3. Review context: intent summary, file list, diff, project type
 4. Instruction to return structured JSON matching the schema
 
 ### Test scenario design
 
-Owned by `spec-flow-analyzer` and by any review check whose criteria ask whether tests cover the change. List candidate files with `ae tree workspace --files --json`. That command uses `git ls-files --cached --others --exclude-standard`. If git is missing, use the host `search/codebase` tool. Search file text with `ae search <query> --match literal --source code --json`. Do not run rg, grep, find, sed, awk, jq, or any other program that is not `ae`, `node`, or `git`.
+Owned by `spec-flow-analyzer` and by any review check whose criteria ask whether tests cover the change. List candidate files with the host search or list tool. Search file text with the host search tool. Do not run rg, grep, find, sed, awk, jq, or any program other than `node` and `git`. Outside the enforce hook, `ae tree workspace --files --json` and `ae search <query> --match literal --source code --json` are optional.
 
 **Check dispatch:** Each discovered check is dispatched as a focused subagent. The subagent receives:
 1. The check's full content (criteria, examples)
-2. The findings schema from `ae get --reference skills/code-review/references/findings-schema.md --json`
+2. The findings schema from `<copilot-home>/skills/code-review/references/findings-schema.md`, read with the host read tool
 3. The same review context as personas
 4. The check's `severity-default` as the default severity for findings
 
