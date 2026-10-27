@@ -1105,13 +1105,14 @@ function gitCapture(cwd, args) {
 
 function migrationBackupHome(selected) {
   try {
-    const receiptPath = path.join(selected, '.ae-home-migration.json');
-    const stat = fs.lstatSync(receiptPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) return null;
-    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+    if (!assertNoSymlinkAncestors(selected, '.ae-home-migration.json')) return null;
+    const text = readFileNoFollow(path.join(selected, '.ae-home-migration.json'), { root: selected, maxBytes: 8192 });
+    if (!text) return null;
+    const receipt = JSON.parse(text);
     if (receipt?.schema !== 1 || typeof receipt.source !== 'string') return null;
     const source = path.resolve(receipt.source);
-    if (source === path.resolve(selected) || !fs.statSync(source).isDirectory()) return null;
+    if (source === path.resolve(selected) || !fs.existsSync(source)) return null;
+    fs.readdirSync(source);
     return source;
   } catch {
     return null;
@@ -1140,10 +1141,8 @@ function storeLearningItems(dir) {
   }
   for (const rel of ['consolidated.jsonl', 'governance.jsonl']) {
     const full = path.join(dir, rel);
-    let stat;
-    try { stat = fs.lstatSync(full); } catch { continue; }
-    if (!stat.isFile() || stat.isSymbolicLink()) continue;
-    const text = readFileNoFollow(full, { root: dir, maxBytes: 1024 * 1024 });
+    if (storeFileState(full) !== 'file') continue;
+    const text = readStoreFile(full);
     if (!text || !text.trim()) continue;
     items.push({ from: full, rel, text });
   }
@@ -1156,14 +1155,17 @@ function mirrorItems(workspace) {
   const items = [];
   const walk = (rel) => {
     const full = path.join(workspace, rel);
-    let stat;
-    try { stat = fs.lstatSync(full); } catch { return; }
-    if (stat.isSymbolicLink() || !assertNoSymlinkAncestors(workspace, rel)) return;
-    if (stat.isDirectory()) {
-      for (const name of fs.readdirSync(full)) walk(path.join(rel, name));
+    if (!assertNoSymlinkAncestors(workspace, rel)) return;
+    let entries;
+    try { entries = fs.readdirSync(full, { withFileTypes: true }); } catch { entries = null; }
+    if (entries) {
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue;
+        walk(path.join(rel, entry.name));
+      }
       return;
     }
-    if (!stat.isFile() || !full.endsWith('.md') || path.basename(full) === 'INDEX.md') return;
+    if (!full.endsWith('.md') || path.basename(full) === 'INDEX.md') return;
     const posix = rel.split(path.sep).join('/');
     const marker = 'docs/knowledge/learnings/';
     if (!posix.startsWith(marker)) return;

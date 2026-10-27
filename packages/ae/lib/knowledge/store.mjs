@@ -605,26 +605,27 @@ const SAVED_LEARNING_REL = /^(?:branches\/[^/]+\/)?learnings\/[^/]+\/[^/]+\.md$/
 
 export function readSavedLearningFiles(dir) {
   const out = new Map();
-  if (!dir) return out;
+  if (!dir || !fs.existsSync(dir)) return out;
   const walk = (rel) => {
     const full = path.join(dir, rel);
-    let stat;
-    try { stat = fs.lstatSync(full); } catch { return; }
-    if (stat.isSymbolicLink()) return;
-    if (stat.isDirectory()) {
-      if (rel === '.git' || rel === '.lock' || rel === QUARANTINE_DIR) return;
-      for (const name of fs.readdirSync(full)) walk(rel ? path.join(rel, name) : name);
-      return;
+    let entries;
+    try { entries = fs.readdirSync(full, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const child = rel ? path.join(rel, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name === '.git' || entry.name === '.lock' || entry.name === QUARANTINE_DIR) continue;
+        walk(child);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const posix = child.split(path.sep).join('/');
+      if (!SAVED_LEARNING_REL.test(posix)) continue;
+      const text = readLearningFile(path.join(dir, child));
+      if (text !== null) out.set(posix, text);
     }
-    if (!stat.isFile()) return;
-    const posix = rel.split(path.sep).join('/');
-    if (!SAVED_LEARNING_REL.test(posix)) return;
-    const text = readLearningFile(full);
-    if (text !== null) out.set(posix, text);
   };
-  try {
-    if (fs.existsSync(dir)) walk('');
-  } catch { /* an unreadable store contributes nothing */ }
+  try { walk(''); } catch { /* an unreadable store contributes nothing */ }
   return out;
 }
 
