@@ -4,7 +4,9 @@ import path from 'node:path';
 
 /** Point a process at a fresh home so default AE state cannot land in the real one. */
 export function isolateTestHome(env = process.env) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-test-home-'));
+  const created = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-test-home-'));
+  let home = created;
+  try { home = fs.realpathSync.native(created); } catch { /* the created path is already usable */ }
   env.HOME = home;
   env.USERPROFILE = home;
   env.XDG_CONFIG_HOME = path.join(home, '.config');
