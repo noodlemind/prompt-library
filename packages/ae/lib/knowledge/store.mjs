@@ -120,6 +120,7 @@ function walkCheckoutDirs(root) {
       if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
       if (WALK_SKIP.has(entry.name)) continue;
       const full = path.join(current, entry.name);
+      if (gitFileKind(full) !== 'absent') continue;
       found.push(full);
       stack.push(full);
     }

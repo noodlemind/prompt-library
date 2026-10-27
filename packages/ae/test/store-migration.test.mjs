@@ -345,6 +345,44 @@ test('migrate-store copies a stranded learning into an empty shell, keeps the so
   assert.equal(fs.readFileSync(source, 'utf8'), text);
 });
 
+test('migrate-store locks a missing destination before it copies a learning there', () => {
+  const c = ctx();
+  git(c.ws, ['init', '-q']);
+  const text = '---\nschema: 1\ntrigger: lock\nstatus: active\nsource: auto\nepisodes: []\nanchors: []\n---\n\nlocked copy\n';
+  const legacy = ensureStore(c.ws, { home: c.harnessHome }).dir;
+  const source = path.join(legacy, 'learnings', 'sql', 'locked.md');
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, text);
+  git(c.ws, ['remote', 'add', 'origin', 'https://github.com/acme/lock.git']);
+  const current = storeDirForId(repoId(c.ws), { home: c.harnessHome });
+  assert.equal(fs.existsSync(current), false);
+  const events = [];
+  const mkdir = fs.mkdirSync;
+  const rename = fs.renameSync;
+  fs.mkdirSync = (...args) => {
+    const target = String(args[0]);
+    if (path.basename(target) === '.lock' && path.resolve(path.dirname(target)) === path.resolve(current)) events.push('dest-lock');
+    return mkdir.apply(fs, args);
+  };
+  fs.renameSync = (...args) => {
+    const dest = path.resolve(String(args[1]));
+    const root = path.resolve(current) + path.sep;
+    if (dest.startsWith(root) && dest.includes(`${path.sep}learnings${path.sep}`) && dest.endsWith('.md')) events.push('learning');
+    return rename.apply(fs, args);
+  };
+  try {
+    const result = migrateStrandedStore({ workspace: c.ws, home: c.harnessHome });
+    assert.equal(result.pass, true, result.blockedReason);
+    assert.ok(events.includes('dest-lock'), events.join(','));
+    assert.ok(events.indexOf('learning') > events.indexOf('dest-lock'), events.join(','));
+    assert.equal(fs.readFileSync(path.join(current, 'learnings', 'sql', 'locked.md'), 'utf8'), text);
+    assert.equal(fs.readFileSync(source, 'utf8'), text);
+  } finally {
+    fs.mkdirSync = mkdir;
+    fs.renameSync = rename;
+  }
+});
+
 test('migrate-store restores a learning that remains only in store git history and leaves that git object in place', () => {
   const c = ctx();
   git(c.ws, ['init', '-q']);
@@ -361,6 +399,54 @@ test('migrate-store restores a learning that remains only in store git history a
   assert.equal(result.pass, true, result.blockedReason);
   assert.equal(fs.readFileSync(source, 'utf8'), text);
   assert.equal(storeGit(['cat-file', '-e', 'HEAD:learnings/sql/history.md']).status, 0);
+});
+
+test('migrate-store restores a learning whose deletion was committed and leaves that git object in place', () => {
+  const c = ctx();
+  git(c.ws, ['init', '-q']);
+  const dir = ensureStore(c.ws, { home: c.harnessHome }).dir;
+  const text = '---\nschema: 1\ntrigger: deleted\nstatus: active\nsource: auto\nepisodes: []\nanchors: []\n---\n\nfrom a parent commit\n';
+  const source = path.join(dir, 'learnings', 'sql', 'deleted.md');
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, text);
+  const storeGit = (args) => git(dir, ['-c', 'user.email=store@example.test', '-c', 'user.name=Store', ...args]);
+  assert.equal(storeGit(['add', '-A']).status, 0);
+  assert.equal(storeGit(['commit', '-qm', 'save learning']).status, 0);
+  fs.rmSync(source);
+  assert.equal(storeGit(['add', '-A']).status, 0);
+  assert.equal(storeGit(['commit', '-qm', 'delete learning']).status, 0);
+  assert.notEqual(storeGit(['cat-file', '-e', 'HEAD:learnings/sql/deleted.md']).status, 0);
+  const result = migrateStrandedStore({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(result.pass, true, result.blockedReason);
+  assert.equal(fs.readFileSync(source, 'utf8'), text);
+  const parent = storeGit(['rev-parse', 'HEAD~1']).stdout.trim();
+  assert.equal(storeGit(['cat-file', '-e', `${parent}:learnings/sql/deleted.md`]).status, 0);
+  assert.notEqual(storeGit(['cat-file', '-e', 'HEAD:learnings/sql/deleted.md']).status, 0);
+});
+
+test('migrate-store restores a learning that exists only on another store branch', () => {
+  const c = ctx();
+  git(c.ws, ['init', '-q']);
+  const dir = ensureStore(c.ws, { home: c.harnessHome }).dir;
+  const storeGit = (args) => git(dir, ['-c', 'user.email=store@example.test', '-c', 'user.name=Store', ...args]);
+  assert.equal(storeGit(['add', '-A']).status, 0);
+  assert.equal(storeGit(['commit', '-qm', 'seed']).status, 0);
+  const branch = storeGit(['symbolic-ref', '--short', 'HEAD']).stdout.trim();
+  assert.ok(branch);
+  assert.equal(storeGit(['checkout', '-q', '-b', 'side']).status, 0);
+  const text = '---\nschema: 1\ntrigger: side\nstatus: active\nsource: auto\nepisodes: []\nanchors: []\n---\n\nfrom another branch\n';
+  const source = path.join(dir, 'learnings', 'sql', 'side.md');
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, text);
+  assert.equal(storeGit(['add', 'learnings/sql/side.md']).status, 0);
+  assert.equal(storeGit(['commit', '-qm', 'side learning']).status, 0);
+  assert.equal(storeGit(['checkout', '-q', branch]).status, 0);
+  assert.equal(fs.existsSync(source), false);
+  const result = migrateStrandedStore({ workspace: c.ws, home: c.harnessHome });
+  assert.equal(result.pass, true, result.blockedReason);
+  assert.equal(fs.readFileSync(source, 'utf8'), text);
+  assert.equal(storeGit(['cat-file', '-e', 'side:learnings/sql/side.md']).status, 0);
+  assert.notEqual(storeGit(['cat-file', '-e', 'HEAD:learnings/sql/side.md']).status, 0);
 });
 
 test('migrate-store carries a docs/knowledge mirror forward without an origin and does not delete the mirror', () => {

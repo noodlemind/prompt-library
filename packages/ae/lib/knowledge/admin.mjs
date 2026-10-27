@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
 import { gitMetadataEnvironment } from '../../corpus/hooks/lib/product-diff.mjs';
-import { adoptStorageAlias } from '../storage-aliases.mjs';
+import { adoptStorageAlias, storageIdForRepo } from '../storage-aliases.mjs';
 import {
   withStoreTransaction,
   StoreTransactionAbort,
@@ -1105,6 +1105,18 @@ function gitCapture(cwd, args) {
   return result.status === 0 ? result.stdout : null;
 }
 
+function revisionWithFile(dir, rel) {
+  const listed = gitCapture(dir, ['rev-list', '--all', '--', rel]);
+  if (!listed) return null;
+  for (const line of listed.split('\n')) {
+    const rev = line.trim();
+    if (!/^[0-9a-f]{40}$/.test(rev)) continue;
+    const text = gitCapture(dir, ['cat-file', '-p', `${rev}:${rel}`]);
+    if (text !== null) return { rev, text };
+  }
+  return null;
+}
+
 function migrationBackupHome(selected) {
   try {
     if (!assertNoSymlinkAncestors(selected, '.ae-home-migration.json')) return null;
@@ -1133,11 +1145,9 @@ function storeLearningItems(dir) {
     const paths = [...new Set(names.split('\n').map((line) => line.trim()).filter((line) => LEARNING_REL.test(line)))].slice(0, 2000);
     for (const rel of paths) {
       if (seen.has(rel)) continue;
-      const rev = gitCapture(dir, ['log', '-1', '--format=%H', '--', rel])?.trim();
-      if (!rev || !/^[0-9a-f]{40}$/.test(rev)) continue;
-      const text = gitCapture(dir, ['cat-file', '-p', `${rev}:${rel}`]);
-      if (text === null) continue;
-      items.push({ from: `git:${dir}:${rev}:${rel}`, rel, text });
+      const found = revisionWithFile(dir, rel);
+      if (!found) continue;
+      items.push({ from: `git:${dir}:${found.rev}:${rel}`, rel, text: found.text });
       seen.add(rel);
     }
   }
@@ -1204,6 +1214,17 @@ function classifyProject(targetRoot, item) {
   return { action: 'conflict', full, reason: existing === null ? 'destination is not a regular file' : 'destination differs' };
 }
 
+function noteSharedPath(seen, item, decision) {
+  const prior = seen.get(item.rel);
+  if (prior === undefined) {
+    if (decision.action === 'copy' || decision.action === 'present') seen.set(item.rel, item.text);
+    return decision;
+  }
+  if (prior !== item.text) return { action: 'conflict', full: decision.full, reason: 'destination differs' };
+  if (decision.action !== 'conflict') return { action: 'present', full: decision.full };
+  return decision;
+}
+
 function mergeReport(rows) {
   const grouped = new Map();
   for (const row of rows) {
@@ -1237,7 +1258,8 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
   }
   const legacyDir = storeDirForId(localRepoId(workspace), { home: resolvedHome });
   const targetDir = storeDirForId(currentId, { home: resolvedHome });
-  const targetProject = path.join(resolvedHome, 'projects', currentId);
+  const projectStorageId = storageIdForRepo(currentId, { home: resolvedHome });
+  const targetProject = path.join(resolvedHome, 'projects', projectStorageId);
   const backup = migrationBackupHome(resolvedHome);
   const found = matchingLocalStoreIds(workspace, { homes: [resolvedHome, backup] });
   const extraIds = found.ids.filter((id) => id !== currentId);
@@ -1248,28 +1270,39 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
       if (fs.existsSync(dir) && !knowledgeDirs.includes(dir)) knowledgeDirs.push(dir);
     }
   }
-  const queued = new Map();
+  const queued = [];
+  const seenRel = new Set();
   for (const dir of knowledgeDirs) {
     if (path.resolve(dir) === path.resolve(targetDir)) continue;
     const id = path.basename(dir);
     for (const item of storeLearningItems(dir)) {
-      if (!queued.has(item.rel)) queued.set(item.rel, { ...item, fromId: id, namespace: 'knowledge' });
+      queued.push({ ...item, fromId: id, namespace: 'knowledge' });
+      seenRel.add(item.rel);
     }
   }
   for (const item of storeLearningItems(targetDir)) {
-    if (!queued.has(item.rel) && String(item.from).startsWith('git:')) queued.set(item.rel, { ...item, fromId: null, namespace: 'knowledge' });
-  }
-  for (const item of mirrorItems(workspace)) {
-    if (!queued.has(item.rel)) queued.set(item.rel, { ...item, fromId: null, namespace: 'knowledge' });
-  }
-  const projectQueue = [];
-  for (const id of extraIds) {
-    const dir = path.join(resolvedHome, 'projects', id);
-    for (const [rel, text] of savedProjectFiles(dir)) {
-      projectQueue.push({ from: path.join(dir, ...rel.split('/')), rel, text, fromId: id, namespace: 'projects' });
+    if (!seenRel.has(item.rel) && String(item.from).startsWith('git:')) {
+      queued.push({ ...item, fromId: null, namespace: 'knowledge' });
+      seenRel.add(item.rel);
     }
   }
-  if (!queued.size && !projectQueue.length && !extraIds.length) {
+  for (const item of mirrorItems(workspace)) {
+    if (!seenRel.has(item.rel)) {
+      queued.push({ ...item, fromId: null, namespace: 'knowledge' });
+      seenRel.add(item.rel);
+    }
+  }
+  const projectQueue = [];
+  for (const root of [resolvedHome, backup].filter(Boolean)) {
+    for (const id of [currentId, ...extraIds]) {
+      const dir = path.join(root, 'projects', id);
+      if (path.resolve(dir) === path.resolve(targetProject)) continue;
+      for (const [rel, text] of savedProjectFiles(dir)) {
+        projectQueue.push({ from: path.join(dir, ...rel.split('/')), rel, text, fromId: id, namespace: 'projects' });
+      }
+    }
+  }
+  if (!queued.length && !projectQueue.length && !extraIds.length) {
     return {
       pass: false,
       exitCode: 2,
@@ -1281,13 +1314,23 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
   }
   const held = [];
   let staleLockNote = null;
+  let createdDestination = false;
   if (!dryRun) {
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+      createdDestination = true;
+    }
+    const targetKey = path.resolve(targetDir);
+    if (!knowledgeDirs.some((dir) => path.resolve(dir) === targetKey)) knowledgeDirs.unshift(targetDir);
     for (const dir of knowledgeDirs) {
       const lockPath = path.join(dir, '.lock');
       const lock = acquireStoreLock(lockPath);
       if (!lock.acquired) {
         for (const heldLock of held) {
           try { releaseStoreLock(heldLock.lockPath, heldLock.token); } catch { /* a later attempt takes a stale lock */ }
+        }
+        if (createdDestination) {
+          try { fs.rmdirSync(targetDir); } catch { /* the destination was not empty */ }
         }
         const ageNote = lock.ageMs ? ` (${Math.round(lock.ageMs / 60000)}m old)` : '';
         return {
@@ -1300,7 +1343,7 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
     }
   }
   try {
-    if (!dryRun && (queued.size || extraIds.some((id) => fs.existsSync(path.join(resolvedHome, 'knowledge', id))))) ensureStore(workspace, { home: resolvedHome });
+    if (!dryRun && (queued.length || extraIds.some((id) => fs.existsSync(path.join(resolvedHome, 'knowledge', id))))) ensureStore(workspace, { home: resolvedHome });
     const copied = [];
     const alreadyPresent = [];
     const conflicts = [];
@@ -1317,16 +1360,18 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
       }
       if (item.fromId) rows.push({ ...item, action: decision.action, to: decision.full, reason: decision.reason, dir, example: dir });
     };
-    for (const item of queued.values()) {
-      const decision = classifyCarry(targetDir, item);
+    const sharedKnowledge = new Map();
+    for (const item of queued) {
+      const decision = noteSharedPath(sharedKnowledge, item, classifyCarry(targetDir, item));
       if (decision.action === 'copy' && !dryRun) {
         const wrote = item.rel.endsWith('.md') ? writeLearningFile(decision.full, item.text) : writeStoreFile(decision.full, item.text);
         if (!wrote) throw new Error(`refused to copy ${item.rel}`);
       }
       record(item, decision, path.join(resolvedHome, 'knowledge', item.fromId || ''));
     }
+    const sharedProjects = new Map();
     for (const item of projectQueue) {
-      const decision = classifyProject(targetProject, item);
+      const decision = noteSharedPath(sharedProjects, item, classifyProject(targetProject, item));
       if (decision.action === 'copy' && !dryRun) {
         if (!writeFileContained(targetProject, item.rel, item.text)) throw new Error(`refused to copy ${item.rel}`);
       }
