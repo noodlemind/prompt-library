@@ -168,13 +168,32 @@ for (const lexicalFallback of [false, true]) {
         assert.deepEqual(live.edges.map(edge => edge.to), ['left.ts']);
         assert.deepEqual(live.freshness, { state: 'current', liveValidated: true });
       }
-      const configStat = fs.statSync(path.join(f.workspace, 'tsconfig.json'));
+      const configPath = path.resolve(f.workspace, 'tsconfig.json');
+      const configFds = new Set();
+      const sameConfig = file => {
+        if (typeof file !== 'string') return false;
+        const opened = path.resolve(file);
+        return process.platform === 'win32' ? opened.toLowerCase() === configPath.toLowerCase() : opened === configPath;
+      };
+      const originalOpen = fs.openSync;
+      const originalClose = fs.closeSync;
       const originalRead = fs.readSync;
       let changed = false;
-      fs.readSync = function (fd, ...args) {
-        const read = originalRead.call(this, fd, ...args);
-        const stat = fs.fstatSync(fd);
-        if (!changed && stat.dev === configStat.dev && stat.ino === configStat.ino) {
+      fs.openSync = function (file, ...args) {
+        const fd = originalOpen.call(this, file, ...args);
+        if (sameConfig(file)) configFds.add(fd);
+        return fd;
+      };
+      fs.closeSync = function (fd) {
+        configFds.delete(fd);
+        return originalClose.call(this, fd);
+      };
+      const priorConfig = Buffer.from(config('left'));
+      fs.readSync = function (fd, buffer, ...args) {
+        const read = originalRead.call(this, fd, buffer, ...args);
+        const sawConfig = configFds.has(fd)
+          || (Buffer.isBuffer(buffer) && buffer.subarray(0, typeof read === 'number' ? read : buffer.length).includes(priorConfig));
+        if (!changed && sawConfig) {
           changed = true;
           f.write('tsconfig.json', config('right'));
         }
@@ -182,7 +201,11 @@ for (const lexicalFallback of [false, true]) {
       };
       let result;
       try { result = queryGraph({ ...f, files: ['alias.ts'], lexicalFallback }); }
-      finally { fs.readSync = originalRead; }
+      finally {
+        fs.openSync = originalOpen;
+        fs.closeSync = originalClose;
+        fs.readSync = originalRead;
+      }
       assert.equal(changed, true);
       assert.equal(result.coverage.sourceChanged, true);
       assert.equal(result.outcome, 'unknown');
