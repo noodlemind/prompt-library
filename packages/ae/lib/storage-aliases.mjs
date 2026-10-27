@@ -90,10 +90,9 @@ export function storageIdForRepo(id, { home = harnessGlobalHome(), legacyIds = [
     hasData(recorded, home);
     return recorded;
   }
+  if (hasData(id, home)) return id;
   const candidates = [...new Set(legacyIds)].filter((candidate) => candidate !== id && LOCAL_ID.test(candidate) && hasData(candidate, home));
-  if (candidates.length > 1) throw failure('multiple legacy stores exist; select one with knowledge migrate-store --from-id');
-  if (!candidates.length) return id;
-  refuseCanonicalData(id, home);
+  if (candidates.length !== 1) return id;
   return candidates[0];
 }
 

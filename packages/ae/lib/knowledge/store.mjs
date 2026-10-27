@@ -54,8 +54,136 @@ export function linkedPrimaryCheckout(workspace) {
   return path.resolve(resolvedGitPath(workspace, common), '..');
 }
 
+const WALK_SKIP = new Set(['.git', 'node_modules', '.harness', 'dist', 'build', 'coverage', '.next', 'vendor', 'target']);
+const WALK_CAP = 2000;
+
+function localLayout(workspace) {
+  const listed = gitOut(workspace, ['worktree', 'list', '--porcelain', '-z']);
+  const worktrees = [];
+  if (listed) {
+    for (const record of listed.split('\0')) {
+      if (record.startsWith('worktree ')) worktrees.push(resolvedGitPath(workspace, record.slice('worktree '.length)));
+    }
+  }
+  const toplevelRaw = gitOut(workspace, ['rev-parse', '--show-toplevel']);
+  const toplevel = toplevelRaw ? resolvedGitPath(workspace, toplevelRaw) : null;
+  let primary = worktrees[0] || toplevel || null;
+  if (!primary) {
+    const common = gitOut(workspace, ['rev-parse', '--git-common-dir']);
+    if (common) {
+      const resolved = resolvedGitPath(workspace, common);
+      if (path.basename(resolved) === '.git') primary = path.resolve(resolved, '..');
+    }
+  }
+  if (!primary) {
+    try { primary = fs.realpathSync.native(workspace); } catch { primary = path.resolve(workspace); }
+  }
+  return {
+    primary,
+    paths: [workspace, primary, ...(toplevel ? [toplevel] : []), ...worktrees],
+    worktrees: worktrees.length ? worktrees : [primary],
+  };
+}
+
+function walkCheckoutDirs(root) {
+  const found = [];
+  const stack = [root];
+  while (stack.length && found.length < WALK_CAP) {
+    const current = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (found.length >= WALK_CAP) break;
+      if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
+      if (WALK_SKIP.has(entry.name)) continue;
+      const full = path.join(current, entry.name);
+      found.push(full);
+      stack.push(full);
+    }
+  }
+  return found;
+}
+
+function storeNames(home, namespace) {
+  const names = new Set();
+  try {
+    for (const entry of fs.readdirSync(path.join(home, namespace), { withFileTypes: true })) {
+      if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
+      names.add(entry.name);
+    }
+  } catch { /* a home with no such directory has no stores */ }
+  return names;
+}
+
+export function matchingLocalStoreIds(workspace, { home, homes } = {}) {
+  const layout = localLayout(workspace);
+  const paths = [...layout.paths];
+  for (const root of layout.worktrees) paths.push(...walkCheckoutDirs(root));
+  const indexes = (homes || [home || harnessGlobalHome()]).filter(Boolean).map((root) => ({
+    knowledge: storeNames(root, 'knowledge'),
+    projects: storeNames(root, 'projects'),
+  }));
+  const ids = [];
+  const seen = new Set();
+  for (const file of paths) {
+    for (const id of legacyLocalIdsForPath(file)) {
+      if (seen.has(id)) continue;
+      if (!indexes.some((index) => index.knowledge.has(id) || index.projects.has(id))) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return { primary: layout.primary, ids };
+}
+
+function savedText(dir, name) {
+  const text = readStoreFile(path.join(dir, name));
+  return text && text.trim() ? text : '';
+}
+
+export function savedProjectFiles(dir) {
+  const out = new Map();
+  const walk = (rel) => {
+    let entries;
+    try { entries = fs.readdirSync(rel ? path.join(dir, rel) : dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      if (entry.name === '.git' || entry.name === '.lock' || entry.name === QUARANTINE_DIR) continue;
+      const child = rel ? path.join(rel, entry.name) : entry.name;
+      if (entry.isDirectory()) { walk(child); continue; }
+      if (!entry.isFile()) continue;
+      const posix = child.split(path.sep).join('/');
+      const text = readFileNoFollow(path.join(dir, ...posix.split('/')), { root: dir, maxBytes: 1024 * 1024 });
+      if (text !== null) out.set(posix, text);
+    }
+  };
+  if (dir && fs.existsSync(dir)) walk('');
+  return out;
+}
+
+export function carriedBytesDiffer(home, fromId, toId) {
+  const fromKnowledge = path.join(home, 'knowledge', fromId);
+  const toKnowledge = path.join(home, 'knowledge', toId);
+  if (fs.existsSync(fromKnowledge)) {
+    const dest = readSavedLearningFiles(toKnowledge);
+    for (const [rel, text] of readSavedLearningFiles(fromKnowledge)) {
+      if (dest.get(rel) !== text) return true;
+    }
+    for (const name of ['consolidated.jsonl', 'governance.jsonl', 'config.json', 'stale.json']) {
+      const source = savedText(fromKnowledge, name);
+      if (source && savedText(toKnowledge, name) !== source) return true;
+    }
+  }
+  const fromProjects = savedProjectFiles(path.join(home, 'projects', fromId));
+  const toProjects = savedProjectFiles(path.join(home, 'projects', toId));
+  for (const [rel, text] of fromProjects) {
+    if (toProjects.get(rel) !== text) return true;
+  }
+  return false;
+}
+
 export function localRepoId(workspace) {
-  return localIdForRoot(linkedPrimaryCheckout(workspace) || workspace);
+  return localIdForRoot(localLayout(workspace).primary);
 }
 
 function localIdForRoot(basis) {
@@ -90,26 +218,23 @@ export function legacyLocalIdsForPath(file) {
 }
 
 export function legacyLocalRepoIds(workspace) {
-  return legacyIdsForRoot(workspace, linkedPrimaryCheckout(workspace) || workspace);
-}
-
-function legacyIdsForRoot(workspace, primary) {
-  const candidates = [workspace, primary];
-  try {
-    candidates.push(path.resolve(workspace, path.relative(fs.realpathSync.native(workspace), fs.realpathSync.native(primary))));
-  } catch { /* the existing path is the only candidate */ }
-  return [...new Set(candidates.flatMap((candidate) => legacyLocalIdsForPath(candidate)))];
+  return [...new Set(localLayout(workspace).paths.flatMap((candidate) => legacyLocalIdsForPath(candidate)))];
 }
 
 export function workspaceStorageId(workspace, { home } = {}) {
-  const { id, primary } = observeRepoIdentity(workspace);
-  const legacyIds = id.startsWith('local-')
-    ? legacyIdsForRoot(workspace, primary || linkedPrimaryCheckout(workspace) || workspace) : [];
-  return storageIdForRepo(id, { home, legacyIds });
+  const observed = observeRepoIdentity(workspace);
+  const legacyIds = observed.id.startsWith('local-')
+    ? [...new Set(observed.legacyPaths.flatMap((candidate) => legacyLocalIdsForPath(candidate)))]
+    : [];
+  return storageIdForRepo(observed.id, { home, legacyIds });
 }
 
 export function repoId(workspace) {
   return observeRepoIdentity(workspace).id;
+}
+
+export function repositoryLabel(workspace) {
+  return observeRepoIdentity(workspace).repo;
 }
 
 function observeRepoIdentity(workspace) {
@@ -125,11 +250,11 @@ function observeRepoIdentity(workspace) {
     const slug = canonical.replace(/[^a-z0-9.]+/g, '-').replace(/^-+|-+$/g, '');
     if (slug) {
       const suffix = crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 8);
-      return { id: `${slug}-${suffix}`, primary: null };
+      return { id: `${slug}-${suffix}`, primary: null, legacyPaths: [], repo: remote.trim() };
     }
   }
-  const primary = linkedPrimaryCheckout(workspace) || workspace;
-  return { id: localIdForRoot(primary), primary };
+  const layout = localLayout(workspace);
+  return { id: localIdForRoot(layout.primary), primary: layout.primary, legacyPaths: layout.paths, repo: layout.primary };
 }
 
 export function storeDirForId(id, { home } = {}) {

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { harnessGlobalHome } from '../paths.mjs';
 import { gitMetadataEnvironment } from '../../corpus/hooks/lib/product-diff.mjs';
-import { adoptStorageAlias, storageIdForRepo } from '../storage-aliases.mjs';
+import { adoptStorageAlias } from '../storage-aliases.mjs';
 import {
   withStoreTransaction,
   StoreTransactionAbort,
@@ -15,7 +15,9 @@ import {
   ensureStore,
   repoId,
   localRepoId,
-  legacyLocalRepoIds,
+  repositoryLabel,
+  matchingLocalStoreIds,
+  savedProjectFiles,
   acquireStoreLock,
   releaseStoreLock,
   listLearnings,
@@ -1139,7 +1141,7 @@ function storeLearningItems(dir) {
       seen.add(rel);
     }
   }
-  for (const rel of ['consolidated.jsonl', 'governance.jsonl']) {
+  for (const rel of ['consolidated.jsonl', 'governance.jsonl', 'config.json', 'stale.json']) {
     const full = path.join(dir, rel);
     if (storeFileState(full) !== 'file') continue;
     const text = readStoreFile(full);
@@ -1194,44 +1196,80 @@ function classifyCarry(targetDir, item) {
   return { action: 'copy', full };
 }
 
+function classifyProject(targetRoot, item) {
+  const full = path.join(targetRoot, ...item.rel.split('/'));
+  if (!fs.existsSync(full)) return { action: 'copy', full };
+  const existing = readFileNoFollow(full, { root: targetRoot, maxBytes: 1024 * 1024 });
+  if (existing === item.text) return { action: 'present', full };
+  return { action: 'conflict', full, reason: existing === null ? 'destination is not a regular file' : 'destination differs' };
+}
+
+function mergeReport(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    if (!row.fromId) continue;
+    const key = `${row.namespace}\0${row.fromId}`;
+    if (!grouped.has(key)) grouped.set(key, { fromId: row.fromId, toId: row.toId, namespace: row.namespace, example: row.example, copied: [], alreadyPresent: [], conflicts: [] });
+    const bucket = grouped.get(key);
+    if (row.action === 'copy') bucket.copied.push({ from: row.from, to: row.to });
+    else if (row.action === 'present') bucket.alreadyPresent.push({ from: row.from, to: row.to });
+    else if (row.action === 'conflict') bucket.conflicts.push({ from: row.from, to: row.to, reason: row.reason });
+    if (row.from && bucket.example === row.dir) bucket.example = row.from;
+  }
+  return [...grouped.values()];
+}
+
 export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, log = () => {} }) {
   const resolvedHome = home || harnessGlobalHome();
   const currentId = repoId(workspace);
-  try {
-    const sourceId = fromId || (currentId.startsWith('local-')
-      ? storageIdForRepo(currentId, { home: resolvedHome, legacyIds: legacyLocalRepoIds(workspace) }) : currentId);
-    if (sourceId !== currentId) {
-      const adopted = adoptStorageAlias(currentId, sourceId, { home: resolvedHome, dryRun });
-      const preserved = [...readSavedLearningFiles(path.join(resolvedHome, 'knowledge', sourceId))].map(([rel]) => rel);
+  if (fromId) {
+    try {
+      if (fromId === currentId) throw new Error('source storage ID is already the canonical ID');
+      const adopted = adoptStorageAlias(currentId, fromId, { home: resolvedHome, dryRun });
+      const preserved = [...readSavedLearningFiles(path.join(resolvedHome, 'knowledge', fromId))].map(([rel]) => rel);
       for (const rel of preserved) log(`${dryRun ? 'would preserve' : 'preserved'} ${rel}`);
-      log(`${dryRun ? 'would preserve' : 'preserved'} saved knowledge and plans in storage ${sourceId}`);
-      return { pass: true, exitCode: 0, migrated: !dryRun, preservedInPlace: true, repoId: currentId, fromId: sourceId,
-        ...adopted, preserved, from: sourceId, to: currentId, blockedReason: null };
+      log(`${dryRun ? 'would preserve' : 'preserved'} saved knowledge and plans in storage ${fromId}`);
+      return { pass: true, exitCode: 0, migrated: !dryRun, preservedInPlace: true, repoId: currentId, fromId,
+        ...adopted, preserved, from: fromId, to: currentId, blockedReason: null };
+    } catch (error) {
+      return { pass: false, exitCode: 1, migrated: false, blockedReason: error.message };
     }
-    if (fromId) throw new Error('source storage ID is already the canonical ID');
-  } catch (error) {
-    return { pass: false, exitCode: 1, migrated: false, blockedReason: error.message };
   }
   const legacyDir = storeDirForId(localRepoId(workspace), { home: resolvedHome });
   const targetDir = storeDirForId(currentId, { home: resolvedHome });
-  const ids = [...new Set([currentId, localRepoId(workspace), ...legacyLocalRepoIds(workspace)])];
-  const dirs = [];
-  for (const root of [resolvedHome, migrationBackupHome(resolvedHome)].filter(Boolean)) {
-    for (const id of ids) {
+  const targetProject = path.join(resolvedHome, 'projects', currentId);
+  const backup = migrationBackupHome(resolvedHome);
+  const found = matchingLocalStoreIds(workspace, { homes: [resolvedHome, backup] });
+  const extraIds = found.ids.filter((id) => id !== currentId);
+  const knowledgeDirs = [];
+  for (const root of [resolvedHome, backup].filter(Boolean)) {
+    for (const id of [currentId, ...extraIds]) {
       const dir = path.join(root, 'knowledge', id);
-      if (fs.existsSync(dir) && !dirs.includes(dir)) dirs.push(dir);
+      if (fs.existsSync(dir) && !knowledgeDirs.includes(dir)) knowledgeDirs.push(dir);
     }
   }
   const queued = new Map();
-  for (const dir of dirs) {
+  for (const dir of knowledgeDirs) {
     if (path.resolve(dir) === path.resolve(targetDir)) continue;
-    for (const item of storeLearningItems(dir)) if (!queued.has(item.rel)) queued.set(item.rel, item);
+    const id = path.basename(dir);
+    for (const item of storeLearningItems(dir)) {
+      if (!queued.has(item.rel)) queued.set(item.rel, { ...item, fromId: id, namespace: 'knowledge' });
+    }
   }
   for (const item of storeLearningItems(targetDir)) {
-    if (!queued.has(item.rel) && String(item.from).startsWith('git:')) queued.set(item.rel, item);
+    if (!queued.has(item.rel) && String(item.from).startsWith('git:')) queued.set(item.rel, { ...item, fromId: null, namespace: 'knowledge' });
   }
-  for (const item of mirrorItems(workspace)) if (!queued.has(item.rel)) queued.set(item.rel, item);
-  if (!queued.size) {
+  for (const item of mirrorItems(workspace)) {
+    if (!queued.has(item.rel)) queued.set(item.rel, { ...item, fromId: null, namespace: 'knowledge' });
+  }
+  const projectQueue = [];
+  for (const id of extraIds) {
+    const dir = path.join(resolvedHome, 'projects', id);
+    for (const [rel, text] of savedProjectFiles(dir)) {
+      projectQueue.push({ from: path.join(dir, ...rel.split('/')), rel, text, fromId: id, namespace: 'projects' });
+    }
+  }
+  if (!queued.size && !projectQueue.length && !extraIds.length) {
     return {
       pass: false,
       exitCode: 2,
@@ -1244,7 +1282,7 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
   const held = [];
   let staleLockNote = null;
   if (!dryRun) {
-    for (const dir of dirs) {
+    for (const dir of knowledgeDirs) {
       const lockPath = path.join(dir, '.lock');
       const lock = acquireStoreLock(lockPath);
       if (!lock.acquired) {
@@ -1262,27 +1300,45 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
     }
   }
   try {
-    if (!dryRun) ensureStore(workspace, { home: resolvedHome });
+    if (!dryRun && (queued.size || extraIds.some((id) => fs.existsSync(path.join(resolvedHome, 'knowledge', id))))) ensureStore(workspace, { home: resolvedHome });
     const copied = [];
     const alreadyPresent = [];
     const conflicts = [];
+    const rows = [];
+    const record = (item, decision, dir) => {
+      const entry = { from: item.from, to: decision.full, ...(decision.reason ? { reason: decision.reason } : {}) };
+      if (decision.action === 'present') alreadyPresent.push(entry);
+      else if (decision.action === 'conflict') {
+        conflicts.push(entry);
+        log(`conflict ${item.from} -> ${decision.full} (${decision.reason})`);
+      } else {
+        copied.push(entry);
+        log(`${dryRun ? 'would copy' : 'copied'} ${item.from} -> ${decision.full}`);
+      }
+      if (item.fromId) rows.push({ ...item, action: decision.action, to: decision.full, reason: decision.reason, dir, example: dir });
+    };
     for (const item of queued.values()) {
       const decision = classifyCarry(targetDir, item);
-      if (decision.action === 'present') {
-        alreadyPresent.push({ from: item.from, to: decision.full });
-        continue;
-      }
-      if (decision.action === 'conflict') {
-        conflicts.push({ from: item.from, to: decision.full, reason: decision.reason });
-        log(`conflict ${item.from} -> ${decision.full} (${decision.reason})`);
-        continue;
-      }
-      if (!dryRun) {
+      if (decision.action === 'copy' && !dryRun) {
         const wrote = item.rel.endsWith('.md') ? writeLearningFile(decision.full, item.text) : writeStoreFile(decision.full, item.text);
         if (!wrote) throw new Error(`refused to copy ${item.rel}`);
       }
-      copied.push({ from: item.from, to: decision.full });
-      log(`${dryRun ? 'would copy' : 'copied'} ${item.from} -> ${decision.full}`);
+      record(item, decision, path.join(resolvedHome, 'knowledge', item.fromId || ''));
+    }
+    for (const item of projectQueue) {
+      const decision = classifyProject(targetProject, item);
+      if (decision.action === 'copy' && !dryRun) {
+        if (!writeFileContained(targetProject, item.rel, item.text)) throw new Error(`refused to copy ${item.rel}`);
+      }
+      record(item, decision, path.join(resolvedHome, 'projects', item.fromId));
+    }
+    for (const id of extraIds) {
+      for (const namespace of ['knowledge', 'projects']) {
+        const dir = path.join(resolvedHome, namespace, id);
+        if (!fs.existsSync(dir)) continue;
+        if (rows.some((row) => row.fromId === id && row.namespace === namespace)) continue;
+        rows.push({ fromId: id, toId: currentId, namespace, example: dir, action: null, dir });
+      }
     }
     return {
       pass: true,
@@ -1295,6 +1351,9 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
       conflicts,
       from: legacyDir,
       to: targetDir,
+      stableId: currentId,
+      repo: repositoryLabel(workspace),
+      merges: mergeReport(rows.map((row) => ({ ...row, toId: currentId }))),
       blockedReason: null,
       ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
     };

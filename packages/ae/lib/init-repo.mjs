@@ -12,7 +12,7 @@ import { runMigrateLayout } from './migrate-layout.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
-Repository-specific conventions for AI agents. Keep thin — cross-repo learnings belong in global \`knowledge/solutions/\` after compound.
+Repository-specific conventions for AI agents. Keep this file thin. Cross-repo learnings compound into \`~/.copilot/knowledge/solutions/\`.
 
 ## Conventions
 

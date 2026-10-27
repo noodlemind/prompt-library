@@ -165,8 +165,10 @@ test('Windows path aliases find old records before adoption and preserve canonic
   assert.match(k4.hint, new RegExp(oldId));
   const migrated = run({ ...c, ws: aliased }, ['knowledge', 'migrate-store']);
   assert.equal(migrated.status, 0, migrated.stdout + migrated.stderr);
-  assert.equal(storeDir(fs.realpathSync.native(c.ws), { home: c.home }), knowledge);
+  const stable = path.join(c.home, 'knowledge', repoId(fs.realpathSync.native(c.ws)));
+  assert.equal(storeDir(fs.realpathSync.native(c.ws), { home: c.home }), stable);
   assert.equal(fs.readFileSync(path.join(knowledge, 'consolidated.jsonl'), 'utf8'), 'saved ledger\n');
+  assert.equal(fs.readFileSync(path.join(stable, 'consolidated.jsonl'), 'utf8'), 'saved ledger\n');
 });
 
 test('storage adoption supports plans alone and refuses replacement or corrupt bindings', () => {

@@ -20,8 +20,7 @@ import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { harnessGlobalHome, resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
-import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings, readSavedLearningFiles } from './knowledge/store.mjs';
-import { storageIdForRepo } from './storage-aliases.mjs';
+import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings, readSavedLearningFiles, matchingLocalStoreIds, carriedBytesDiffer } from './knowledge/store.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { loadRoutingPolicy } from './routing-policy.mjs';
 import { listBuckets } from './knowledge/overlay.mjs';
@@ -439,9 +438,13 @@ function knowledgeChecks({ workspace, copilotHome }) {
     let hint = 'ae knowledge migrate-store';
     if (!hasRemote) {
       const selected = workspaceStorageId(workspace);
-      if (selected !== storageIdForRepo(currentId)) {
+      const currentHome = harnessGlobalHome();
+      const pending = selected !== currentId
+        ? [selected]
+        : matchingLocalStoreIds(workspace, { home: currentHome }).ids.filter((id) => id !== currentId && carriedBytesDiffer(currentHome, id, currentId));
+      if (pending.length) {
         stranded = true;
-        hint = `saved knowledge or plans use the old path ID ${selected}; preserve the binding with: ae knowledge migrate-store --from-id ${selected}`;
+        hint = `saved knowledge or plans use the old path ID ${pending[0]}; ae knowledge migrate-store copies them into ${currentId} and leaves the source in place`;
       }
     } else {
       const legacyDir = storeDirForId(localRepoId(workspace));
