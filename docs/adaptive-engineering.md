@@ -30,7 +30,7 @@ ae prepare
 
 Then select `@engineer` in Copilot Chat.
 
-Windows checkouts use one canonical repository ID across long paths, short aliases, casing, and linked worktrees. Existing local storage under a known older spelling remains discoverable. Run `ae knowledge migrate-store` from that spelling to bind it permanently. If the old spelling is unavailable, run `ae knowledge migrate-store --from-id local-<12 hex digits>`. The command preserves knowledge, plans, and their absolute references in place. It refuses a non-empty canonical destination, unsafe paths, and replacement of an existing binding. The CLI and installed hooks share the project-layout resolver.
+Every checkout uses one canonical repository ID across path spellings and linked worktrees. Windows also folds long paths, short aliases, and casing. Existing local storage under a known older spelling remains discoverable. Run `ae knowledge migrate-store` from that spelling to bind it permanently. If the old spelling is unavailable, run `ae knowledge migrate-store --from-id local-<12 hex digits>`. That binding preserves knowledge, plans, and their absolute references in place. It refuses a canonical destination that already holds records, unsafe paths, and replacement of an existing binding. The CLI and installed hooks share the project-layout resolver. When an origin remote replaces a path-keyed id, `ae knowledge migrate-store` copies missing learning files into the current store, leaves the source untouched, and reports each file.
 
 ## How a task runs
 

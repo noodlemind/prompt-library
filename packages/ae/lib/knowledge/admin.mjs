@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { copyDirectorySync } from '../fs-copy.mjs';
+import { harnessGlobalHome } from '../paths.mjs';
+import { gitMetadataEnvironment } from '../../corpus/hooks/lib/product-diff.mjs';
 import { adoptStorageAlias, storageIdForRepo } from '../storage-aliases.mjs';
 import {
   withStoreTransaction,
@@ -11,12 +12,14 @@ import {
   parsePorcelainZ,
   storeDir,
   storeDirForId,
+  ensureStore,
   repoId,
   localRepoId,
   legacyLocalRepoIds,
   acquireStoreLock,
   releaseStoreLock,
   listLearnings,
+  readSavedLearningFiles,
   readLedger,
   appendLedger,
   writeLedger,
@@ -36,12 +39,13 @@ import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained, 
 import { projectStoreDir } from '../project-layout.mjs';
 import {
   readLearningFile,
+  readStoreFile,
   writeLearningFile,
+  storeFileState,
+  writeStoreFile,
   removeLearningFile,
   quarantineSymlinkedLearning,
-  writeStoreFile,
   removeStoreFile,
-  storeFileState,
 } from './store-io.mjs';
 import { runIndexKnowledge } from '../index-knowledge.mjs';
 import { loadManifest } from '../recall-rank.mjs';
@@ -1090,103 +1094,203 @@ export function rebuildStore({ workspace, home, yes, copilotHome, log = () => {}
   };
 }
 
-function isNonEmptyDir(dir) {
-  return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
+const LEARNING_REL = /^(?:branches\/[^/]+\/)?learnings\/[^/]+\/[^/]+\.md$/;
+
+function gitCapture(cwd, args) {
+  const result = spawnSync('git', ['-c', 'core.fsmonitor=false', ...args], {
+    cwd, encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024, env: gitMetadataEnvironment(),
+  });
+  return result.status === 0 ? result.stdout : null;
+}
+
+function migrationBackupHome(selected) {
+  try {
+    const receiptPath = path.join(selected, '.ae-home-migration.json');
+    const stat = fs.lstatSync(receiptPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+    if (receipt?.schema !== 1 || typeof receipt.source !== 'string') return null;
+    const source = path.resolve(receipt.source);
+    if (source === path.resolve(selected) || !fs.statSync(source).isDirectory()) return null;
+    return source;
+  } catch {
+    return null;
+  }
+}
+
+function storeLearningItems(dir) {
+  if (!dir || !fs.existsSync(dir)) return [];
+  const items = [];
+  for (const [rel, text] of readSavedLearningFiles(dir)) {
+    items.push({ from: path.join(dir, ...rel.split('/')), rel, text });
+  }
+  const seen = new Set(items.map((item) => item.rel));
+  const names = gitCapture(dir, ['log', '--all', '--name-only', '--pretty=format:']);
+  if (names) {
+    const paths = [...new Set(names.split('\n').map((line) => line.trim()).filter((line) => LEARNING_REL.test(line)))].slice(0, 2000);
+    for (const rel of paths) {
+      if (seen.has(rel)) continue;
+      const rev = gitCapture(dir, ['log', '-1', '--format=%H', '--', rel])?.trim();
+      if (!rev || !/^[0-9a-f]{40}$/.test(rev)) continue;
+      const text = gitCapture(dir, ['cat-file', '-p', `${rev}:${rel}`]);
+      if (text === null) continue;
+      items.push({ from: `git:${dir}:${rev}:${rel}`, rel, text });
+      seen.add(rel);
+    }
+  }
+  for (const rel of ['consolidated.jsonl', 'governance.jsonl']) {
+    const full = path.join(dir, rel);
+    let stat;
+    try { stat = fs.lstatSync(full); } catch { continue; }
+    if (!stat.isFile() || stat.isSymbolicLink()) continue;
+    const text = readFileNoFollow(full, { root: dir, maxBytes: 1024 * 1024 });
+    if (!text || !text.trim()) continue;
+    items.push({ from: full, rel, text });
+  }
+  return items;
+}
+
+function mirrorItems(workspace) {
+  const rootRel = path.join('docs', 'knowledge', 'learnings');
+  if (!assertNoSymlinkAncestors(workspace, rootRel)) return [];
+  const items = [];
+  const walk = (rel) => {
+    const full = path.join(workspace, rel);
+    let stat;
+    try { stat = fs.lstatSync(full); } catch { return; }
+    if (stat.isSymbolicLink() || !assertNoSymlinkAncestors(workspace, rel)) return;
+    if (stat.isDirectory()) {
+      for (const name of fs.readdirSync(full)) walk(path.join(rel, name));
+      return;
+    }
+    if (!stat.isFile() || !full.endsWith('.md') || path.basename(full) === 'INDEX.md') return;
+    const posix = rel.split(path.sep).join('/');
+    const marker = 'docs/knowledge/learnings/';
+    if (!posix.startsWith(marker)) return;
+    const storeRel = `learnings/${posix.slice(marker.length)}`;
+    if (!LEARNING_REL.test(storeRel)) return;
+    const text = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024 });
+    if (text === null) return;
+    items.push({ from: full, rel: storeRel, text });
+  };
+  walk(rootRel);
+  return items;
+}
+
+function classifyCarry(targetDir, item) {
+  const full = path.join(targetDir, ...item.rel.split('/'));
+  const state = storeFileState(full);
+  if (state === 'blocked' || state === 'symlink' || state === 'other') {
+    return { action: 'conflict', full, reason: 'destination is not a regular file' };
+  }
+  if (state === 'file') {
+    const existing = readStoreFile(full);
+    if (item.rel.endsWith('.jsonl') && !(existing || '').trim()) return { action: 'copy', full };
+    if (existing === item.text) return { action: 'present', full };
+    return { action: 'conflict', full, reason: 'destination differs' };
+  }
+  return { action: 'copy', full };
 }
 
 export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, log = () => {} }) {
+  const resolvedHome = home || harnessGlobalHome();
   const currentId = repoId(workspace);
   try {
     const sourceId = fromId || (currentId.startsWith('local-')
-      ? storageIdForRepo(currentId, { home, legacyIds: legacyLocalRepoIds(workspace) }) : currentId);
+      ? storageIdForRepo(currentId, { home: resolvedHome, legacyIds: legacyLocalRepoIds(workspace) }) : currentId);
     if (sourceId !== currentId) {
-      const adopted = adoptStorageAlias(currentId, sourceId, { home, dryRun });
+      const adopted = adoptStorageAlias(currentId, sourceId, { home: resolvedHome, dryRun });
+      const preserved = [...readSavedLearningFiles(path.join(resolvedHome, 'knowledge', sourceId))].map(([rel]) => rel);
+      for (const rel of preserved) log(`${dryRun ? 'would preserve' : 'preserved'} ${rel}`);
       log(`${dryRun ? 'would preserve' : 'preserved'} saved knowledge and plans in storage ${sourceId}`);
       return { pass: true, exitCode: 0, migrated: !dryRun, preservedInPlace: true, repoId: currentId, fromId: sourceId,
-        ...adopted, from: sourceId, to: currentId, blockedReason: null };
+        ...adopted, preserved, from: sourceId, to: currentId, blockedReason: null };
     }
     if (fromId) throw new Error('source storage ID is already the canonical ID');
   } catch (error) {
     return { pass: false, exitCode: 1, migrated: false, blockedReason: error.message };
   }
-  if (currentId.startsWith('local-')) {
-    return {
-      pass: false,
-      exitCode: 2,
-      migrated: false,
-      blockedReason: 'this workspace has no origin remote configured — repoId is already path-keyed, nothing to migrate',
-    };
-  }
-  const legacyId = localRepoId(workspace);
-  const legacyDir = storeDirForId(legacyId, { home });
-  const targetDir = storeDirForId(currentId, { home });
-
-    if (storeFileState(path.join(legacyDir, 'consolidated.jsonl')) !== 'file') {
-    return {
-      pass: false,
-      exitCode: 2,
-      migrated: false,
-      blockedReason: `no legacy path-keyed store found at ${legacyDir} — nothing to migrate`,
-    };
-  }
-
-  if (isNonEmptyDir(targetDir)) {
-    return {
-      pass: false,
-      exitCode: 1,
-      migrated: false,
-      blockedReason: `migration target already exists and is non-empty: ${targetDir} — refusing to overwrite; resolve manually`,
-    };
-  }
-
-  if (dryRun) return { pass: true, exitCode: 0, migrated: false, dryRun: true, from: legacyDir, to: targetDir, blockedReason: null };
-
-    const lockPath = path.join(legacyDir, '.lock');
-  const lock = acquireStoreLock(lockPath);
-  if (!lock.acquired) {
-    const ageNote = lock.ageMs ? ` (${Math.round(lock.ageMs / 60000)}m old)` : '';
-    return {
-      pass: false,
-      exitCode: 1,
-      migrated: false,
-      blockedReason: `E_LOCKED: another operation holds the legacy store lock at ${lockPath}${ageNote} — if the owning process is confirmed dead, remove that directory manually and retry`,
-    };
-  }
-  const staleLockNote = lock.staleLockNote;
-
-  try {
-        if (isNonEmptyDir(targetDir)) {
-      return {
-        pass: false,
-        exitCode: 1,
-        migrated: false,
-        blockedReason: `migration target already exists and is non-empty: ${targetDir} — refusing to overwrite; resolve manually`,
-        ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
-      };
+  const legacyDir = storeDirForId(localRepoId(workspace), { home: resolvedHome });
+  const targetDir = storeDirForId(currentId, { home: resolvedHome });
+  const ids = [...new Set([currentId, localRepoId(workspace), ...legacyLocalRepoIds(workspace)])];
+  const dirs = [];
+  for (const root of [resolvedHome, migrationBackupHome(resolvedHome)].filter(Boolean)) {
+    for (const id of ids) {
+      const dir = path.join(root, 'knowledge', id);
+      if (fs.existsSync(dir) && !dirs.includes(dir)) dirs.push(dir);
     }
-    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
-        if (fs.existsSync(targetDir)) fs.rmdirSync(targetDir);
-    try {
-      fs.renameSync(legacyDir, targetDir);
-    } catch (err) {
-      if (err.code !== 'EXDEV') throw err;
-            try {
-        copyDirectorySync(legacyDir, targetDir);
-        if (storeFileState(path.join(targetDir, 'consolidated.jsonl')) !== 'file') {
-          throw new Error('cross-device copy did not verify — legacy store left untouched');
+  }
+  const queued = new Map();
+  for (const dir of dirs) {
+    if (path.resolve(dir) === path.resolve(targetDir)) continue;
+    for (const item of storeLearningItems(dir)) if (!queued.has(item.rel)) queued.set(item.rel, item);
+  }
+  for (const item of storeLearningItems(targetDir)) {
+    if (!queued.has(item.rel) && String(item.from).startsWith('git:')) queued.set(item.rel, item);
+  }
+  for (const item of mirrorItems(workspace)) if (!queued.has(item.rel)) queued.set(item.rel, item);
+  if (!queued.size) {
+    return {
+      pass: false,
+      exitCode: 2,
+      migrated: false,
+      blockedReason: currentId.startsWith('local-')
+        ? 'this workspace has no origin remote configured — repoId is already path-keyed, nothing to migrate'
+        : `no legacy path-keyed store found at ${legacyDir} — nothing to migrate`,
+    };
+  }
+  const held = [];
+  let staleLockNote = null;
+  if (!dryRun) {
+    for (const dir of dirs) {
+      const lockPath = path.join(dir, '.lock');
+      const lock = acquireStoreLock(lockPath);
+      if (!lock.acquired) {
+        for (const heldLock of held) {
+          try { releaseStoreLock(heldLock.lockPath, heldLock.token); } catch { /* a later attempt takes a stale lock */ }
         }
-      } catch (copyErr) {
-        fs.rmSync(targetDir, { recursive: true, force: true });
-        throw copyErr;
+        const ageNote = lock.ageMs ? ` (${Math.round(lock.ageMs / 60000)}m old)` : '';
+        return {
+          pass: false, exitCode: 1, migrated: false,
+          blockedReason: `E_LOCKED: another operation holds the store lock at ${lockPath}${ageNote} — if the owning process is confirmed dead, remove that directory manually and retry`,
+        };
       }
-      fs.rmSync(legacyDir, { recursive: true, force: true });
+      if (lock.staleLockNote) staleLockNote = lock.staleLockNote;
+      held.push({ lockPath, token: lock.token });
     }
-        releaseStoreLock(path.join(targetDir, '.lock'), lock.token);
-    log(`migrated stranded store: ${legacyDir} -> ${targetDir}`);
+  }
+  try {
+    if (!dryRun) ensureStore(workspace, { home: resolvedHome });
+    const copied = [];
+    const alreadyPresent = [];
+    const conflicts = [];
+    for (const item of queued.values()) {
+      const decision = classifyCarry(targetDir, item);
+      if (decision.action === 'present') {
+        alreadyPresent.push({ from: item.from, to: decision.full });
+        continue;
+      }
+      if (decision.action === 'conflict') {
+        conflicts.push({ from: item.from, to: decision.full, reason: decision.reason });
+        log(`conflict ${item.from} -> ${decision.full} (${decision.reason})`);
+        continue;
+      }
+      if (!dryRun) {
+        const wrote = item.rel.endsWith('.md') ? writeLearningFile(decision.full, item.text) : writeStoreFile(decision.full, item.text);
+        if (!wrote) throw new Error(`refused to copy ${item.rel}`);
+      }
+      copied.push({ from: item.from, to: decision.full });
+      log(`${dryRun ? 'would copy' : 'copied'} ${item.from} -> ${decision.full}`);
+    }
     return {
       pass: true,
       exitCode: 0,
-      migrated: true,
+      migrated: !dryRun && copied.length > 0,
+      dryRun,
+      unchanged: copied.length === 0 && conflicts.length === 0,
+      copied,
+      alreadyPresent,
+      conflicts,
       from: legacyDir,
       to: targetDir,
       blockedReason: null,
@@ -1201,10 +1305,8 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
       ...(staleLockNote ? { staleLockRemoved: staleLockNote } : {}),
     };
   } finally {
-        try {
-            releaseStoreLock(lockPath, lock.token);
-    } catch {
-      // ignored — a leftover lock is taken over as stale on the next attempt
+    for (const heldLock of held) {
+      try { releaseStoreLock(heldLock.lockPath, heldLock.token); } catch { /* a later attempt takes a stale lock */ }
     }
   }
 }

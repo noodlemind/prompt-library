@@ -1878,7 +1878,7 @@ registerCommand({
     ['purge <file>', 'cascade-delete an episode and dependent learnings'],
     ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
     ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
-    ['migrate-store [--from-id <id>]', 'recover saved storage after an ID change; --from-id preserves old knowledge and plans in place'],
+    ['migrate-store [--from-id <id>]', 'copy missing learnings into the current store and keep every source; --from-id preserves old knowledge and plans in place'],
   ],
     verbs: [
     { verb: 'on', summary: 'default mode: orient injects, and every writer (remember, compound --insight, consolidate --apply) is open' },
@@ -1903,7 +1903,7 @@ registerCommand({
     {
       verb: 'migrate-store',
       summary:
-        'recover saved storage after an ID change; --from-id preserves old knowledge and plans in place',
+        'copy missing learnings into the current store and keep every source; --from-id preserves old knowledge and plans in place',
     },
   ],
   args: {

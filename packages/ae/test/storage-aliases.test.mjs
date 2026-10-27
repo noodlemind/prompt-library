@@ -9,7 +9,8 @@ import { test } from 'node:test';
 import { binPath } from './helpers/cli.mjs';
 import { tempDir } from './helpers/temp.mjs';
 import { initGit, writeChecks, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
-import { repoId, storeDir, storeDirForId } from '../lib/knowledge/store.mjs';
+import { ensureStore, repoId, storeDir, storeDirForId } from '../lib/knowledge/store.mjs';
+import { storageIdForRepo } from '../lib/storage-aliases.mjs';
 import { externalPlansDir, normalizePlanRel } from '../lib/project-layout.mjs';
 import { externalPlansDir as hookPlansDir } from '../corpus/hooks/lib/external-plans.mjs';
 import { loadPlan, reloadPlan } from '../lib/plan-parse.mjs';
@@ -229,6 +230,17 @@ test('concurrent adoption publishes one immutable binding without changing eithe
   assert.equal(fs.readFileSync(path.join(c.knowledge, 'consolidated.jsonl'), 'utf8'), 'saved ledger\n');
   assert.equal(fs.readFileSync(path.join(otherDir, 'keep.txt'), 'utf8'), 'other bytes\n');
   assert.equal(fs.existsSync(c.plan), true);
+});
+
+test('an ensureStore shell does not hide a legacy store that still has a learning', () => {
+  const c = fixture();
+  ensureStore(c.ws, { home: c.home });
+  const legacy = 'local-abcdefabcdef';
+  const file = path.join(c.home, 'knowledge', legacy, 'learnings', 'sql', 'kept.md');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '---\nschema: 1\ntrigger: kept\nstatus: active\nsource: auto\n---\n\nkept\n');
+  assert.equal(storageIdForRepo(repoId(c.ws), { home: c.home, legacyIds: [legacy] }), legacy);
+  assert.equal(fs.readFileSync(file, 'utf8').includes('kept'), true);
 });
 
 test('migrate-store refuses canonical data conflicts and source IDs that escape the home', () => {

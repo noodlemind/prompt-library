@@ -62,6 +62,17 @@ The explicit binding keeps saved plans and knowledge at their original physical 
 
 The repository owner then updates package repository/homepage URLs, Pages settings, trusted publisher configuration and release links to the renamed repository. The local directory name can remain unchanged. The `.github/harness` policy directory, `.harness` workspace records, lock filenames, JSON fields, protocol keys and historical evidence retain their existing contracts.
 
+## Recover learnings that are still on disk
+
+An empty `learnings/` directory is the shell created the first time a checkout is opened. It is not evidence that a learning file was deleted. Consolidated learning files are written only by `ae consolidate --apply`. From the product checkout, point the command at the home you want to repair:
+
+```sh
+ae knowledge migrate-store --ae-home ~/.harness --dry-run --json
+ae knowledge migrate-store --ae-home ~/.harness --json
+```
+
+The dry run lists every file it would copy and writes nothing into either knowledge store. The real run copies a learning only when the destination does not already have that file. A destination file with different bytes is left alone and reported as a conflict. Source files, including the store's git history and a previous `ae migrate --from-home` backup, are never deleted or overwritten. A second run reports `unchanged`. The search covers this checkout's path-keyed store, older spellings of that path (including macOS `/var` and `/private/var`), learning files still stored in that store's git history, a `docs/knowledge/learnings/` mirror in the checkout, and the same store ids in the home named by a migration receipt. It does not import unrelated `local-*` directories from other checkouts.
+
 ## Qualification
 
 Source tests and isolated archive checks do not establish native editor acceptance. The release notes must state the exact archive digest and distinguish automated Windows checks from the later Windows VS Code/Copilot run owned by the user. Publication also requires an owner-controlled npm name and the repository's chosen license terms. No license change is part of this migration.

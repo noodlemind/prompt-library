@@ -20,7 +20,7 @@ import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { harnessGlobalHome, resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
-import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings } from './knowledge/store.mjs';
+import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings, readSavedLearningFiles } from './knowledge/store.mjs';
 import { storageIdForRepo } from './storage-aliases.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { loadRoutingPolicy } from './routing-policy.mjs';
@@ -441,19 +441,24 @@ function knowledgeChecks({ workspace, copilotHome }) {
       const selected = workspaceStorageId(workspace);
       if (selected !== storageIdForRepo(currentId)) {
         stranded = true;
-        hint = `saved knowledge or plans use the old Windows path ID ${selected}; preserve the binding with: ae knowledge migrate-store --from-id ${selected}`;
+        hint = `saved knowledge or plans use the old path ID ${selected}; preserve the binding with: ae knowledge migrate-store --from-id ${selected}`;
       }
     } else {
       const legacyDir = storeDirForId(localRepoId(workspace));
       const currentDir = storeDirForId(currentId);
-      const legacyExists = fs.existsSync(path.join(legacyDir, 'consolidated.jsonl'));
-      const currentExists = fs.existsSync(path.join(currentDir, 'consolidated.jsonl'));
-      if (legacyDir !== currentDir && legacyExists && !currentExists) {
+      const legacyFiles = readSavedLearningFiles(legacyDir);
+      const currentFiles = readSavedLearningFiles(currentDir);
+      let missing = 0;
+      let conflict = 0;
+      for (const [rel, text] of legacyFiles) {
+        if (!currentFiles.has(rel)) missing += 1;
+        else if (currentFiles.get(rel) !== text) conflict += 1;
+      }
+      if (legacyDir !== currentDir && (missing || conflict)) {
         stranded = true;
-        hint = `a path-keyed store exists at ${legacyDir} but this workspace now resolves to ${currentDir} — run: ae knowledge migrate-store`;
-      } else if (legacyDir !== currentDir && legacyExists && currentExists) {
-        stranded = true;
-        hint = `both a legacy path-keyed store and the remote-keyed store exist — reconcile manually (migrate-store will refuse a non-empty target); inspect ${legacyDir}`;
+        hint = conflict
+          ? `saved learnings at ${legacyDir} differ from ${currentDir}; the source stays in place. ae knowledge migrate-store copies missing files and does not overwrite either copy`
+          : `saved learnings at ${legacyDir} are missing from ${currentDir} — run: ae knowledge migrate-store`;
       }
     }
     checks.push({

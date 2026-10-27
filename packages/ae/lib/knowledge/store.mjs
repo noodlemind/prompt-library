@@ -68,26 +68,42 @@ function localIdForRoot(basis) {
   return `local-${crypto.createHash('sha256').update(real).digest('hex').slice(0, 12)}`;
 }
 
+export function localIdForAbsolutePath(file) {
+  return `local-${crypto.createHash('sha256').update(file).digest('hex').slice(0, 12)}`;
+}
+
+function spellingVariants(file) {
+  const variants = new Set();
+  const add = (value) => { if (typeof value === 'string' && value) variants.add(value); };
+  add(file);
+  try { add(fs.realpathSync(file)); } catch { /* a missing path still has a spelling */ }
+  try { add(fs.realpathSync.native(file)); } catch { /* a missing path still has a spelling */ }
+  for (const value of [...variants]) {
+    if (value.startsWith('/private/')) add(value.slice('/private'.length));
+    else if (value.startsWith('/var/')) add(`/private${value}`);
+  }
+  return [...variants];
+}
+
+export function legacyLocalIdsForPath(file) {
+  return [...new Set(spellingVariants(file).map(localIdForAbsolutePath))];
+}
+
 export function legacyLocalRepoIds(workspace) {
-  if (process.platform !== 'win32') return [];
   return legacyIdsForRoot(workspace, linkedPrimaryCheckout(workspace) || workspace);
 }
 
 function legacyIdsForRoot(workspace, primary) {
-  const candidates = [primary];
+  const candidates = [workspace, primary];
   try {
     candidates.push(path.resolve(workspace, path.relative(fs.realpathSync.native(workspace), fs.realpathSync.native(primary))));
   } catch { /* the existing path is the only candidate */ }
-  return [...new Set(candidates.flatMap((candidate) => {
-    try {
-      return [`local-${crypto.createHash('sha256').update(fs.realpathSync(candidate)).digest('hex').slice(0, 12)}`];
-    } catch { return []; }
-  }))];
+  return [...new Set(candidates.flatMap((candidate) => legacyLocalIdsForPath(candidate)))];
 }
 
 export function workspaceStorageId(workspace, { home } = {}) {
   const { id, primary } = observeRepoIdentity(workspace);
-  const legacyIds = process.platform === 'win32' && id.startsWith('local-')
+  const legacyIds = id.startsWith('local-')
     ? legacyIdsForRoot(workspace, primary || linkedPrimaryCheckout(workspace) || workspace) : [];
   return storageIdForRepo(id, { home, legacyIds });
 }
@@ -583,6 +599,33 @@ export function serializeLearning(fm, body) {
   lines.push(...provenanceLines(fm));
   lines.push('---', '', body.trim(), '');
   return lines.join('\n');
+}
+
+const SAVED_LEARNING_REL = /^(?:branches\/[^/]+\/)?learnings\/[^/]+\/[^/]+\.md$/;
+
+export function readSavedLearningFiles(dir) {
+  const out = new Map();
+  if (!dir) return out;
+  const walk = (rel) => {
+    const full = path.join(dir, rel);
+    let stat;
+    try { stat = fs.lstatSync(full); } catch { return; }
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      if (rel === '.git' || rel === '.lock' || rel === QUARANTINE_DIR) return;
+      for (const name of fs.readdirSync(full)) walk(rel ? path.join(rel, name) : name);
+      return;
+    }
+    if (!stat.isFile()) return;
+    const posix = rel.split(path.sep).join('/');
+    if (!SAVED_LEARNING_REL.test(posix)) return;
+    const text = readLearningFile(full);
+    if (text !== null) out.set(posix, text);
+  };
+  try {
+    if (fs.existsSync(dir)) walk('');
+  } catch { /* an unreadable store contributes nothing */ }
+  return out;
 }
 
 export function listLearnings(dir) {

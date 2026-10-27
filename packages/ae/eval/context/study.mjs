@@ -53,7 +53,7 @@ function trialEnvironment({ trial, copilotHome, harnessHome }) {
   const directory = path.join(trial, 'runtime-bin');
   fs.mkdirSync(directory);
   fs.writeFileSync(path.join(directory, 'package.json'), '{"private":true,"type":"commonjs"}\n');
-  const pinned = { COPILOT_HOME: copilotHome, AE_HOME: harnessHome, HARNESS_HOME: harnessHome, AE_BIN: bin, HARNESS_BIN: bin, AE_NO_EVENTS: '1', HARNESS_NO_EVENTS: '1' };
+  const pinned = { HOME: trial, USERPROFILE: trial, COPILOT_HOME: copilotHome, AE_HOME: harnessHome, HARNESS_HOME: harnessHome, AE_BIN: bin, HARNESS_BIN: bin, AE_NO_EVENTS: '1', HARNESS_NO_EVENTS: '1' };
   const source = `#!/usr/bin/env node\nconst { spawnSync } = require('node:child_process');\nconst child = spawnSync(process.execPath, [${JSON.stringify(bin)}, ...process.argv.slice(2)], { cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, ...${JSON.stringify(pinned)} } });\nif (child.error) throw child.error;\nprocess.exit(child.status ?? 1);\n`;
   fs.writeFileSync(path.join(directory, 'ae'), source, { mode: 0o755 });
   fs.writeFileSync(path.join(directory, 'ae.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0ae" %*\r\n`);

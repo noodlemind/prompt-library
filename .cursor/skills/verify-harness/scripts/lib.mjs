@@ -124,6 +124,8 @@ export async function runHarness(args, { ws, home, copilotHome, env = {} }) {
       ...GIT_ENV,
       CI: '',
       HARNESS_ALLOW_INPLACE: '',
+      HOME: home,
+      USERPROFILE: home,
       HARNESS_HOME: home,
       ...env,
     },
