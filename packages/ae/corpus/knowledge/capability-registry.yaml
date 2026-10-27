@@ -291,6 +291,11 @@ engineer_allowlist:
   - python-reviewer
   - sql-reviewer
   - aws-reviewer
+  - code-simplicity-reviewer
+  - pattern-recognition-specialist
+  - compounding-typescript-reviewer
+  - data-integrity-guardian
+  - spec-flow-analyzer
 
 growth:
   discovery: skill metadata → registry lookup when a gap is encountered

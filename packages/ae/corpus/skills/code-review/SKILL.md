@@ -66,7 +66,7 @@ The CLI preserves the five mandatory perspectives and selects bundled/product ch
 
 ### 4. Dispatch Personas and Checks
 
-**Orchestration:** If the `agent` tool is available, the Engineer may send the prepared packet, intent summary, and retrieved full sources to `code-review-coordinator` for isolated dispatch in batches of 3-4. Return all packet-required perspective/check results to the Engineer. A coordinator cannot run CLI commands through `terminalLastCommand`. Otherwise, the Engineer applies each required perspective sequentially within this session and preserves the actual provenance.
+**Orchestration:** If the `agent` tool is available, the Engineer invokes each packet-required specialist directly, or sends the prepared packet, intent summary, and retrieved full sources to `code-review-coordinator` for isolated dispatch in batches of 3-4. Return all packet-required perspective/check results to the Engineer. A coordinator cannot run CLI commands through `terminalLastCommand`. Record provenance kind `host-invocation`, with `agent` set to the specialist that returned the judgment and `via` set to `engineer` or `code-review-coordinator`. Otherwise, the Engineer applies each required perspective in this session and records kind `same-context` with `agent` set to `engineer`. That same-context result is not an independent review.
 
 Each persona receives:
 1. Their persona definition from `<copilot-home>/skills/code-review/references/review-personas.md`, read with the host read tool

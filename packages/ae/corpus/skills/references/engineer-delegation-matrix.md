@@ -22,6 +22,7 @@ Default to **3-5 active agents per workstream**, including the orchestrator/plan
 | Bug reproduction | `bug-reproduction-validator` | Report, steps, environment |
 | Code history | `git-history-analyzer` | Paths, history questions |
 | Full code review | `code-review-coordinator` | Changed files, PR context, project type |
+| One required reviewer | that specialist, including `code-simplicity-reviewer` and `pattern-recognition-specialist` | Packet, persona, findings schema |
 | Splunk / SPL validation (enterprise) | `splunk-reviewer` | Index, query, expected signal |
 | Terraform / IaC review (enterprise) | `terraform-reviewer` | Modules, plan output, conventions |
 
