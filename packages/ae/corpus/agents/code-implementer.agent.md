@@ -19,7 +19,7 @@ Write a behavioral failing test, observe failure, make the minimal fix, and clea
 Skip a new test only for explicit exemption or configuration without logic.
 Run focused and relevant affected checks. Inspect the complete diff against the assigned task.
 Keep imports at module top except documented strict circular dependencies. Union and enum switches need a never check in default.
-Do not refactor unrelated code, add unrelated features, or change files outside the supplied scope.
+Do not refactor unrelated code, add a helper, option, dependency, or comment the task did not name, or change files outside the supplied scope.
 ## Output
 Return changed paths and behavior, executed checks and outcomes, decisions, missing evidence, and remaining risks.
 The Engineer owns review, authoritative `ae verify`, learning, and completion. Focused tests do not establish delivery completion.

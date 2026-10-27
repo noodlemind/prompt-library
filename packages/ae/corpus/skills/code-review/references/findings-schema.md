@@ -66,8 +66,8 @@ Each persona returns a single JSON object:
 | Level | Meaning | Examples |
 |-------|---------|---------|
 | **P1 Critical** | Exploitable vulnerability, data loss/corruption, breaking change, security hole | SQL injection, auth bypass, N+1 on user-facing endpoint with unbounded data |
-| **P2 Important** | High-impact defect likely hit in normal usage, breaking contract, meaningful downside | Missing validation on public API, race condition under normal load, architectural violation |
-| **P3 Suggestion** | Low-impact improvement, narrow scope, minor quality enhancement | Naming inconsistency, minor simplification opportunity, documentation gap |
+| **P2 Important** | High-impact defect likely hit in normal usage, breaking contract, meaningful downside | Missing validation of untrusted input, race condition under normal load, architectural violation |
+| **P3 Suggestion** | Low-impact improvement, narrow scope, minor quality enhancement | Naming inconsistency, extra helper, comment on code this change did not need |
 
 ## Confidence Guidelines
 
@@ -104,3 +104,4 @@ Before submitting findings, each persona should verify:
 4. **Line numbers are accurate** — verified against the actual file content
 5. **Confidence is honest** — don't inflate confidence to get past the threshold
 6. **Evidence supports the claim** — each finding has at least one concrete code reference
+7. **Extra code is the defect** — a suggested fix that only adds a helper, option, comment, abstraction, or defensive check the spec did not name. Flag that extra code. Keep a missing check at a real boundary.

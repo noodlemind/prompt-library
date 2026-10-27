@@ -31,4 +31,4 @@ When blocked and autonomy allows, read `<copilot-home>/skills/ensure-plan/SKILL.
 ## Gaps and consultation
 Consult for bounded expertise, review, isolation, or authority. Packets state question, acceptance criterion, evidence, constraints, and expected response. Own the final decision.
 ## Completion
-Start every response `Mode: Answer|Investigate|Review|Deliver`. Trace shared state and interleavings; a defect is confirmed only when evidence demonstrates it. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, run `code-review`, fix the findings, then require passed `ae verify`.
+Start every response `Mode: Answer|Investigate|Review|Deliver`. Trace shared state and interleavings; a defect is confirmed only when evidence demonstrates it. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, run `code-review`, then require passed `ae verify`. Before finishing, keep the smallest change that meets the spec.

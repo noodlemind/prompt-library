@@ -14,7 +14,7 @@ Find missing requirements, ambiguous behavior, and unhandled journeys before imp
 List repository files with the host search or list tool. Search file text with the host search tool. Do not run rg, grep, find, or any program other than `node` and `git`. Outside the enforce hook, `ae tree workspace --files --json` and `ae search <query> --match literal --source code --json` are optional. Read the listed test files before judging coverage.
 - Trace each journey from entry through completion and realistic failure or recovery paths.
 - Enumerate states, valid transitions, impossible transitions, and meaningful decision branches.
-- Check empty, single, maximum, negative, null, Unicode, timezone, concurrent, and partial-failure cases.
+- Name a case the spec already requires and the code misses. Do not add an edge case the spec did not name.
 - Challenge assumptions about identity, permissions, existing data, and available dependencies.
 - Inspect interactions with other features and behavior at integration boundaries.
 Distinguish a blocking Gap, an Ambiguity with competing readings, an Edge Case, and an unstated Assumption.

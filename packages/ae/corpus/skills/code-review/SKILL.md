@@ -114,10 +114,11 @@ Before delivering the review, verify:
 3. **Severity is calibrated** — a style nit is never P1; a SQL injection is never P3
 4. **Line numbers are accurate** — verified against file content
 5. **Findings don't duplicate linter output** — focus on semantic issues the linter won't catch
+6. **Extra code is the defect** — a finding whose only fix adds a helper, option, comment, abstraction, or defensive check the spec did not name. Flag that extra code. Keep an exploitable bug and a missing check at a real boundary.
 
 ### 7. Continue from Evidence
 
-Assess fix authority and behavior before acting. `autofix_class` is advisory routing metadata; it never grants permissions. Apply authorized fixes, then prepare and collect a new review for the changed content before verification. Clearing a plan string cannot discharge a recorded critical finding.
+Assess fix authority and behavior before acting. `autofix_class` is advisory routing metadata; it never grants permissions. Apply a finding only when it names a defect in the spec. Reject a finding whose fix only adds a helper, option, comment, abstraction, or defensive check the plan did not name. Before finishing, the diff is the smallest change that meets the spec. Apply authorized fixes, then prepare and collect a new review for the changed content before verification. Clearing a plan string cannot discharge a recorded critical finding.
 
 When current coverage is complete and critical findings are resolved, run `ae verify`. Completion and Stop consume this same bound review record. After passed verification, record durable learning or explicit no-learning with `ae compound --learning-decision <file>`, then submit a complete plan-update decision. A standalone read-only review ends with its report and has no delivery completion ceremony.
 

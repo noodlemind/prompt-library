@@ -306,6 +306,62 @@ test('review delegation keeps CLI authority with the Engineer and returns packet
   assert.match(skill, /coordinator[\s\S]{0,140}raw results/i);
 });
 
+test('delivery keeps the smallest change and review flags extra code', () => {
+  const smallest = read('packages/ae/corpus/skills/references/delivery-principles.md')
+    .split('## smallest-change')[1]
+    .split('\n## ')[0];
+  assert.match(smallest, /smallest change that meets the spec/i);
+  assert.match(smallest, /helper, option, dependency, abstraction, or comment/i);
+  assert.match(smallest, /real boundary/i);
+  assert.match(smallest, /untrusted input, auth, persistence, or a process edge/i);
+  assert.match(read('packages/ae/corpus/skills/references/delivery-principles.md'), /same edit has already been repeated/);
+
+  const review = read('packages/ae/corpus/skills/code-review/SKILL.md');
+  assert.match(review, /Extra code is the defect/);
+  assert.match(review, /Before finishing, the diff is the smallest change that meets the spec/);
+
+  const personas = read('packages/ae/corpus/skills/code-review/references/review-personas.md');
+  assert.match(personas, /Flag extra code/);
+  assert.doesNotMatch(personas, /defense-in-depth improvements/);
+  assert.doesNotMatch(personas, /duplicated logic that should be extracted/);
+  assert.doesNotMatch(personas, /unhandled edge cases in specs/);
+
+  const schema = read('packages/ae/corpus/skills/code-review/references/findings-schema.md');
+  assert.match(schema, /Extra code is the defect/);
+  assert.doesNotMatch(schema, /Missing validation on public API/);
+
+  const engineer = read('packages/ae/corpus/agents/engineer.agent.md');
+  assert.match(engineer, /smallest change that meets the spec/);
+  assert.doesNotMatch(engineer, /fix the findings/);
+
+  const globalWorkflow = read('packages/ae/corpus/instructions/harness-global.instructions.md');
+  assert.match(globalWorkflow, /smallest change that meets the spec/);
+  assert.doesNotMatch(globalWorkflow, /fixes the findings/);
+
+  assert.match(
+    read('packages/ae/corpus/agents/code-implementer.agent.md'),
+    /helper, option, dependency, or comment the task did not name/,
+  );
+  assert.match(read('packages/ae/corpus/skills/references/playbooks/feature.md'), /smallest change that meets those criteria/);
+  assert.match(read('packages/ae/corpus/skills/references/playbooks/bug-fix.md'), /smallest fix that meets the spec/);
+  assert.doesNotMatch(read('packages/ae/corpus/agents/spec-flow-analyzer.agent.md'), /Unicode, timezone/);
+  assert.match(
+    read('packages/ae/corpus/agents/pattern-recognition-specialist.agent.md'),
+    /three similar lines until a fourth copy/,
+  );
+  assert.doesNotMatch(read('packages/ae/corpus/agents/security-sentinel.agent.md'), /defense gaps/);
+  const perspectives = read('packages/ae/corpus/skills/code-review/references/review-perspectives.md');
+  assert.doesNotMatch(perspectives, /Input validation at all entry points/);
+  assert.doesNotMatch(perspectives, /Duplication that should be extracted/);
+  const criteria = read('packages/ae/corpus/skills/document-review/references/review-criteria.md');
+  assert.match(criteria, /Flag extra scope/);
+  assert.doesNotMatch(criteria, /Additional scenario suggestions/);
+  assert.doesNotMatch(criteria, /Suggestions for more robust approaches/);
+  const java = read('packages/ae/corpus/instructions/java.instructions.md');
+  assert.doesNotMatch(java, /defensive null checks/);
+  assert.match(java, /untrusted input/);
+});
+
 test('document review preserves one packet and routes managed-plan fixes through decisions', () => {
   const skill = read('packages/ae/corpus/skills/document-review/SKILL.md');
   assert.equal((skill.match(/ae review prepare --domain document/g) || []).length, 1);

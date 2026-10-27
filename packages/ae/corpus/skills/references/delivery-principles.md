@@ -6,7 +6,7 @@ For code changes, read performance engineering (`ae get --reference skills/engin
 
 | Name | Rule |
 |---|---|
-| smallest-change | Make the smallest change that solves the problem. |
+| smallest-change | The diff is the smallest change that meets the spec. |
 | prove-with-evidence | A pass is the named check output, not a claim that it passed. |
 | behavior-not-implementation | Tests assert the observed behavior. |
 | bind-before-lock | The routing snapshot on the plan is the contract. |
@@ -29,7 +29,7 @@ For code changes, read performance engineering (`ae get --reference skills/engin
 
 ## smallest-change
 
-See `AGENTS.md` coding standards. Three similar lines are enough until a fourth appears.
+The diff is the smallest change that meets the spec. Reuse the code that is already there. Do not add a helper, option, dependency, abstraction, or comment unless the plan names it. Validate only at a real boundary. A real boundary is untrusted input, auth, persistence, or a process edge. Three similar lines are enough until a fourth appears.
 
 ## prove-with-evidence
 
@@ -69,7 +69,7 @@ Delete the unused branch, flag, or copy before introducing a replacement.
 
 ## build-the-lever
 
-When the same edit would be repeated, leave a check or script that a reviewer can run.
+When the same edit has already been repeated, leave a check or script that a reviewer can run.
 
 ## model-the-domain
 
