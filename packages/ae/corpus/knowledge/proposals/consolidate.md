@@ -47,7 +47,7 @@ Direct ask: a human requests "run the knowledge consolidation loop now."
 - **Outputs:** `.harness/consolidate-ops.json` (`{ "schema": 1, "ops": [...] }`); applied ledger line or reviewable diff depending on mode.
 - **State changes:** The skill writes only the ops file; the learnings store changes only through `ae consolidate --apply` (byte cap, delta contract, secret scan, imperative lint, governance reapplication enforced there).
 - **Verification evidence:** Trigger/outcome evals at `evals/skill-trigger-evals.yaml#consolidate`; apply-boundary behavior covered by `packages/ae/test/consolidate*.test.mjs`, `domain-cap-merge.test.mjs`, and the harness contract tests under `packages/ae/test/`.
-- **Failure handling:** Per-code fix-and-retry once (`E_SCHEMA`, `E_BYTE_CAP`, `E_DELTA_CONTRACT`, `E_LINT`), then quarantine; shared patterns per `ae get --reference skills/references/error-handling-patterns.md --json`; mode gate stops `--apply` outside `on`/approved `suggest`.
+- **Failure handling:** Per-code fix-and-retry once (`E_SCHEMA`, `E_BYTE_CAP`, `E_DELTA_CONTRACT`, `E_LINT`), then quarantine; shared patterns are in `<copilot-home>/skills/references/error-handling-patterns.md`, read with the host read tool. Outside the enforce hook, `ae get --reference skills/references/error-handling-patterns.md --json` prints the same file. Mode gate stops `--apply` outside `on`/approved `suggest`.
 
 ## Risks
 

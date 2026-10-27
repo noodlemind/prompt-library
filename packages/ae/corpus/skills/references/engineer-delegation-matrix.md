@@ -1,6 +1,6 @@
 # Engineer Delegation Matrix
 
-Load when delegating from `@engineer`. Every delegation uses `ae get --reference skills/references/subagent-context-packet.md --json`.
+Load when delegating from `@engineer`. Read `<copilot-home>/skills/references/subagent-context-packet.md` with the host read tool for every delegation. Outside the enforce hook, `ae get --reference skills/references/subagent-context-packet.md --json` prints the same file.
 
 ## Team Size
 

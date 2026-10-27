@@ -8,7 +8,7 @@ argument-hint: "[describe the engineering outcome]"
 
 Route the user's outcome and any explicit plan path to `@engineer`. The agent selects Answer, Investigate, Deliver, or Review mode; its nine-step lifecycle is canonical only for Deliver mode. It loads detailed skills only when their procedure is needed.
 
-Apply the performance code principles (`ae get --reference skills/engineer/references/performance-engineering.md --json`) during applicable code authoring and review. Read the full reference for journey goals, architecture/flow gaps, or implementation/dependency investigations.
+Read `<copilot-home>/skills/engineer/references/performance-engineering.md` with the host read tool during applicable code authoring and review. Outside the enforce hook, `ae get --reference skills/engineer/references/performance-engineering.md --json` prints the same file. Read the full reference for journey goals, architecture/flow gaps, or implementation/dependency investigations.
 
 ## Trigger Examples
 
@@ -39,4 +39,4 @@ Apply the performance code principles (`ae get --reference skills/engineer/refer
 - Substantial evidence-only diagnosis → `@engineer` Investigate mode
 - Setup diagnosis → `/harness-doctor`
 
-Do not duplicate runtime steps here. Contract: `@engineer` and `ae get --reference skills/references/harness-tool-contract.md --json`.
+Do not duplicate runtime steps here. Contract: `@engineer`. Read `<copilot-home>/skills/references/harness-tool-contract.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/harness-tool-contract.md --json` prints the same file.

@@ -61,7 +61,7 @@ Use `resources scaffold skill <name> --json` for metadata. Follow resource-opera
 ## Error Handling
 
 - **[Skill-specific failure]** -> [Recovery behavior]
-- For common tool/subagent/file failures, follow `ae get --reference skills/references/error-handling-patterns.md --json`
+- For common tool/subagent/file failures, read `<copilot-home>/skills/references/error-handling-patterns.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/error-handling-patterns.md --json` prints the same file.
 
 ## Guidelines
 [Key principles for this skill]

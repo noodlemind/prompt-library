@@ -34,7 +34,7 @@ For transaction races, lost updates, duplicate writes, or flush/commit misconcep
 
 ## Submit the plan decision
 
-Pipe the amend JSON to `ae plan-update --plan <path> --file - --json` for criteria/check bindings, scope, phases, and authored notes. Do not write the decision JSON to a file. See `ae get --reference skills/references/plan-operations.md --json`. Supply task descriptions and phase titles; Harness writes headings, task IDs, unchecked state, dates, references, and activity. Never put executable shell strings in a plan.
+Pipe the amend JSON to `ae plan-update --plan <path> --file - --json` for criteria/check bindings, scope, phases, and authored notes. Do not write the decision JSON to a file. Read `<copilot-home>/skills/references/plan-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/plan-operations.md --json` prints the same file. Supply task descriptions and phase titles; Harness writes headings, task IDs, unchecked state, dates, references, and activity. Never put executable shell strings in a plan.
 
 Use scoped source amendments when accepting changed selected specs. Harness records old/new hashes and affected evidence. Preserve the frozen selection; a relock cannot silently accept changed source bytes.
 
@@ -44,4 +44,4 @@ Report the returned path, phase/task counts, and missing prerequisites. Engineer
 
 Use the CLI diagnostics for missing plans, unsupported schemas, stale revisions, and unavailable proof. Reread a stale revision before making a new decision; replay an interrupted operation with the same payload and ID.
 
-If optional research fails, retain successful evidence and state the gap. Follow `ae get --reference skills/references/error-handling-patterns.md --json` for bounded recovery. Preserve existing authorization under `ae get --reference skills/references/human-approval-policy.md --json`. Obtain a missing gated decision before implementing it. Scope each phase so its outcome can be verified.
+If optional research fails, retain successful evidence and state the gap. Read `<copilot-home>/skills/references/error-handling-patterns.md` with the host read tool for bounded recovery. Outside the enforce hook, `ae get --reference skills/references/error-handling-patterns.md --json` prints the same file. Read `<copilot-home>/skills/references/human-approval-policy.md` with the host read tool to preserve existing authorization. Outside the enforce hook, `ae get --reference skills/references/human-approval-policy.md --json` prints the same file. Obtain a missing gated decision before implementing it. Scope each phase so its outcome can be verified.

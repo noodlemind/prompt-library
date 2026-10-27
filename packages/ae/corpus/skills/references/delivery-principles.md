@@ -2,7 +2,7 @@
 
 Read this file before the first edit of a Deliver task. Name a principle in the report only after reading its section. The harness does not treat the name as proof.
 
-For code changes, read performance engineering (`ae get --reference skills/engineer/references/performance-engineering.md --json`) and apply its code principles even when the request does not name performance. Use applicable journey goals and constraints returned by orientation; measure runtime claims through the existing named checks.
+For code changes, read `<copilot-home>/skills/engineer/references/performance-engineering.md` with the host read tool and apply its code principles even when the request does not name performance. Outside the enforce hook, `ae get --reference skills/engineer/references/performance-engineering.md --json` prints the same file. Use applicable journey goals and constraints returned by orientation; measure runtime claims through the existing named checks.
 
 | Name | Rule |
 |---|---|

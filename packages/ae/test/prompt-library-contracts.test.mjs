@@ -194,6 +194,57 @@ test('gated reads name a host file read the hook already records', () => {
   }
 });
 
+test('recovery steps and file listings do not require an ae read the enforce hook denies', () => {
+  const sentences = (text) => text.split(/(?<=[.!?])\s+|\n/);
+  const aeRead = (sentence) => /`ae (?:get|tree|search)\b/.test(sentence);
+  const optional = (sentence) => /outside the enforce hook/i.test(sentence);
+  const problems = [];
+  const walk = (dir, out = []) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full, out);
+      else if (entry.name.endsWith('.md')) out.push(full);
+    }
+    return out;
+  };
+  const corpus = path.join(repoRoot, 'packages/ae/corpus');
+  for (const full of walk(corpus)) {
+    const rel = path.relative(repoRoot, full);
+    for (const sentence of sentences(read(rel))) {
+      if (!aeRead(sentence) || optional(sentence)) continue;
+      if (/\b(recovery|recover)\b|error-handling-patterns|missing file|failed plan update|failure handling/i.test(sentence)) {
+        problems.push(`recovery ${rel}: ${sentence.trim().slice(0, 140)}`);
+      }
+      if (/`ae tree\b|`ae search\b/.test(sentence)) problems.push(`listing ${rel}: ${sentence.trim().slice(0, 140)}`);
+    }
+  }
+  const strict = [
+    'packages/ae/corpus/agents/engineer.agent.md',
+    'packages/ae/corpus/agents/code-implementer.agent.md',
+    'packages/ae/corpus/agents/code-review-coordinator.agent.md',
+    'packages/ae/corpus/agents/plan-coordinator.agent.md',
+    'packages/ae/corpus/instructions/harness-global.instructions.md',
+    'packages/ae/corpus/skills/engineer/SKILL.md',
+    'packages/ae/corpus/skills/ensure-plan/SKILL.md',
+    'packages/ae/corpus/skills/plan-issue/SKILL.md',
+    'packages/ae/corpus/skills/caffeinated/SKILL.md',
+    'packages/ae/corpus/skills/architect/SKILL.md',
+    'packages/ae/corpus/skills/references/delivery-principles.md',
+    'packages/ae/corpus/skills/references/engineer-delegation-matrix.md',
+    'packages/ae/corpus/skills/references/error-handling-patterns.md',
+    'packages/ae/corpus/skills/code-review/SKILL.md',
+    'packages/ae/corpus/skills/code-review/references/review-personas.md',
+    'packages/ae/corpus/skills/references/tool-native-loop.md',
+    'packages/ae/corpus/agents/spec-flow-analyzer.agent.md',
+  ];
+  for (const rel of strict) {
+    for (const sentence of sentences(read(rel))) {
+      if (aeRead(sentence) && !optional(sentence)) problems.push(`required ${rel}: ${sentence.trim().slice(0, 140)}`);
+    }
+  }
+  assert.deepEqual(problems, []);
+});
+
 test('every agent handoff declares a target agent that exists', () => {
   const agentsDir = path.join(repoRoot, 'packages/ae/corpus/agents');
   const agentFiles = fs.readdirSync(agentsDir).filter((file) => file.endsWith('.agent.md'));
