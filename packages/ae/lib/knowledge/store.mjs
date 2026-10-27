@@ -57,7 +57,15 @@ export function linkedPrimaryCheckout(workspace) {
 const WALK_SKIP = new Set(['.git', 'node_modules', '.harness', 'dist', 'build', 'coverage', '.next', 'vendor', 'target']);
 const WALK_CAP = 2000;
 
-function localLayout(workspace) {
+function gitFileKind(dir) {
+  try {
+    return fs.statSync(path.join(dir, '.git')).isFile() ? 'file' : 'dir';
+  } catch {
+    return 'absent';
+  }
+}
+
+function listWorktrees(workspace) {
   const listed = gitOut(workspace, ['worktree', 'list', '--porcelain', '-z']);
   const worktrees = [];
   if (listed) {
@@ -65,8 +73,25 @@ function localLayout(workspace) {
       if (record.startsWith('worktree ')) worktrees.push(resolvedGitPath(workspace, record.slice('worktree '.length)));
     }
   }
-  const toplevelRaw = gitOut(workspace, ['rev-parse', '--show-toplevel']);
+  return worktrees;
+}
+
+function nativePath(file) {
+  try { return fs.realpathSync.native(file); } catch { return path.resolve(file); }
+}
+
+function localLayout(workspace) {
+  const here = gitFileKind(workspace);
+  if (here === 'dir') {
+    const primary = nativePath(workspace);
+    return { primary, paths: [workspace, primary], worktrees: [primary] };
+  }
+  const toplevelRaw = here === 'absent' ? gitOut(workspace, ['rev-parse', '--show-toplevel']) : null;
   const toplevel = toplevelRaw ? resolvedGitPath(workspace, toplevelRaw) : null;
+  if (toplevel && gitFileKind(toplevel) === 'dir') {
+    return { primary: toplevel, paths: [workspace, toplevel], worktrees: [toplevel] };
+  }
+  const worktrees = listWorktrees(workspace);
   let primary = worktrees[0] || toplevel || null;
   if (!primary) {
     const common = gitOut(workspace, ['rev-parse', '--git-common-dir']);
@@ -75,9 +100,7 @@ function localLayout(workspace) {
       if (path.basename(resolved) === '.git') primary = path.resolve(resolved, '..');
     }
   }
-  if (!primary) {
-    try { primary = fs.realpathSync.native(workspace); } catch { primary = path.resolve(workspace); }
-  }
+  if (!primary) primary = nativePath(workspace);
   return {
     primary,
     paths: [workspace, primary, ...(toplevel ? [toplevel] : []), ...worktrees],
@@ -118,7 +141,12 @@ function storeNames(home, namespace) {
 export function matchingLocalStoreIds(workspace, { home, homes } = {}) {
   const layout = localLayout(workspace);
   const paths = [...layout.paths];
-  for (const root of layout.worktrees) paths.push(...walkCheckoutDirs(root));
+  const roots = new Set(layout.worktrees);
+  for (const root of listWorktrees(workspace)) roots.add(root);
+  for (const root of roots) {
+    paths.push(root);
+    paths.push(...walkCheckoutDirs(root));
+  }
   const indexes = (homes || [home || harnessGlobalHome()]).filter(Boolean).map((root) => ({
     knowledge: storeNames(root, 'knowledge'),
     projects: storeNames(root, 'projects'),
