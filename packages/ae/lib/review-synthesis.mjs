@@ -36,7 +36,28 @@ function aggregate(group) {
   const reviewers = unique(group.map(f => f.reviewer));
   const originalConfidences = group.map(f => f.confidence).sort((a, b) => a - b);
   const original = Math.max(...originalConfidences), boost = reviewers.length > 1 ? 0.10 : 0;
-  return { ...first, confidence: Math.min(1, Math.round((original + boost) * 1000000) / 1000000), originalConfidences, confidenceTransformation: { policy: 'perspective-agreement-v1', original, boost, independence: 'unverified' }, reviewers, evidence: unique(group.flatMap(f => f.evidence)), autofix_class: group.map(f => f.autofix_class).sort((a, b) => actionRank[a] - actionRank[b])[0], provenance: { kind: 'unknown', note: 'Reviewer identity and independence are host responsibilities' } };
+  const separate = group.every(f => f.invocation === 'separate-reviewer');
+  const rejected = group.some(f => f.invocation === 'rejected');
+  const independence = separate ? 'separate-reviewer' : rejected ? 'rejected' : 'unverified';
+  const base = { ...first };
+  delete base.invocation;
+  return { ...base, confidence: Math.min(1, Math.round((original + boost) * 1000000) / 1000000), originalConfidences, confidenceTransformation: { policy: 'perspective-agreement-v1', original, boost, independence }, reviewers, evidence: unique(group.flatMap(f => f.evidence)), autofix_class: group.map(f => f.autofix_class).sort((a, b) => actionRank[a] - actionRank[b])[0], provenance: independence === 'separate-reviewer' ? { kind: 'host-invocation', note: 'Recorded invocation names a separate reviewer' } : { kind: 'unknown', note: 'Reviewer identity and independence are host responsibilities' } };
+}
+
+const SEPARATE_CALLERS = new Set(['engineer', 'code-review-coordinator']);
+
+function invocationEvidence(result) {
+  const declared = result?.provenance;
+  const record = declared && typeof declared === 'object' && !Array.isArray(declared) ? declared : null;
+  const agent = typeof record?.agent === 'string' ? record.agent : '';
+  const via = typeof record?.via === 'string' ? record.via : '';
+  if (record?.kind === 'same-context' || agent === 'engineer' || result?.reviewer === 'engineer') {
+    return { kind: 'rejected-self-review', independence: 'rejected', declared: declared ?? null };
+  }
+  if (record?.kind === 'host-invocation' && agent && agent === result?.reviewer && SEPARATE_CALLERS.has(via)) {
+    return { kind: 'host-invocation', independence: 'separate-reviewer', agent, via, declared };
+  }
+  return { kind: 'unverified-declaration', independence: 'unverified', declared: declared ?? null };
 }
 
 function mergedPartitions(ids, decisions) {
@@ -63,11 +84,13 @@ export function synthesizeReview(workspace, required, input, preparationFailures
       if (parsed.value) normalized.push({ ...parsed.value, reviewer: result.reviewer });
     }
     const raw = result && typeof result === 'object' ? { ...result, ...(Array.isArray(result.findings) ? { findings: result.findings.toSorted((a, b) => compareText(stableJson(a), stableJson(b))) } : {}) } : result;
-    results.push({ reviewer: result?.reviewer || null, status: errors.length ? 'invalid' : 'completed', provenance: { kind: 'unverified-declaration', declared: result?.provenance || null }, raw, errors: unique(errors) });
+    const provenance = invocationEvidence(result);
+    results.push({ reviewer: result?.reviewer || null, status: errors.length ? 'invalid' : 'completed', provenance, raw, errors: unique(errors) });
     if (errors.length) failures.push({ reviewer: result?.reviewer || null, errors: unique(errors) });
     else for (const finding of normalized) {
-      if (finding.confidence >= (finding.severity === 'P1' ? 0.50 : 0.60)) accepted.push(finding);
-      else suppressed.push({ ...finding, reason: 'Below confidence floor before aggregation' });
+      const recorded = { ...finding, invocation: provenance.independence };
+      if (finding.confidence >= (finding.severity === 'P1' ? 0.50 : 0.60)) accepted.push(recorded);
+      else suppressed.push({ ...recorded, reason: 'Below confidence floor before aggregation' });
     }
   }
   const groups = new Map();
@@ -134,7 +157,13 @@ export function synthesizeReview(workspace, required, input, preparationFailures
 
 export function renderReview(record, maxBytes = 16384) {
   const escape = text => String(text).replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|').replace(/`/g, "'");
-  const lines = [`# ${record.kind === 'document' ? 'Document' : 'Code'} Review`, '', `Coverage: ${record.coverage.complete ? 'Complete' : 'Incomplete'} (${record.coverage.collected}/${record.coverage.expected} valid results).`, `Findings: ${record.counts.P1} P1, ${record.counts.P2} P2, ${record.counts.P3} P3. Suppressed: ${record.counts.suppressed}. Failures: ${record.counts.failures}.`, '', 'Reviewer identities and independence are unverified. Action classes do not grant permissions.', '', '| File | Issue | Severity | Perspectives | Confidence | Route |', '|---|---|---|---|---|---|'];
+  const recorded = Array.isArray(record.results) ? record.results : [];
+  const identity = recorded.length && recorded.every(result => result.provenance?.independence === 'separate-reviewer')
+    ? 'Recorded invocations name a separate reviewer.'
+    : recorded.some(result => result.provenance?.independence === 'rejected')
+      ? 'An engineer self-review is not an independent review.'
+      : 'Reviewer identities and independence are unverified.';
+  const lines = [`# ${record.kind === 'document' ? 'Document' : 'Code'} Review`, '', `Coverage: ${record.coverage.complete ? 'Complete' : 'Incomplete'} (${record.coverage.collected}/${record.coverage.expected} valid results).`, `Findings: ${record.counts.P1} P1, ${record.counts.P2} P2, ${record.counts.P3} P3. Suppressed: ${record.counts.suppressed}. Failures: ${record.counts.failures}.`, '', `${identity} Action classes do not grant permissions.`, '', '| File | Issue | Severity | Perspectives | Confidence | Route |', '|---|---|---|---|---|---|'];
   let omitted = 0;
   for (const f of record.findings) {
     const line = `| ${escape(f.file)}:${f.line} | ${escape(f.title)} | ${f.severity} | ${f.reviewers.map(escape).join(', ')} | ${f.confidence.toFixed(2)} | ${f.autofix_class} |`;

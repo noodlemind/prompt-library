@@ -6,6 +6,12 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
+import YAML from 'yaml';
+import { getCorpusRoot } from '../lib/assets.mjs';
+import { loadPlan } from '../lib/plan-parse.mjs';
+import { reviewCoverageFacts } from '../lib/report-facts.mjs';
+import { syncAssetsToTarget } from '../lib/sync.mjs';
+import { mergeVSCodeSettings } from '../lib/vscode-settings.mjs';
 import { initGit, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -477,6 +483,92 @@ test('a surviving overlap accepts a follow-up judgment referencing a prior merge
   assert.equal(a.value.id, b.value.id);
   assert.equal(a.value.findings.length, 2);
   assert.equal(a.value.overlaps.length, 0);
+});
+
+const REVIEW_SPECIALISTS = ['code-simplicity-reviewer', 'pattern-recognition-specialist', 'compounding-typescript-reviewer', 'data-integrity-guardian', 'spec-flow-analyzer'];
+
+function frontmatter(text) {
+  return YAML.parse(text.match(/^---\n([\s\S]*?)\n---/)[1]);
+}
+
+test('installed host profiles let the engineer invoke the review specialists', () => {
+  const corpus = getCorpusRoot();
+  const engineer = frontmatter(fs.readFileSync(path.join(corpus, 'agents/engineer.agent.md'), 'utf8'));
+  const coordinator = frontmatter(fs.readFileSync(path.join(corpus, 'agents/code-review-coordinator.agent.md'), 'utf8'));
+  const registry = YAML.parse(fs.readFileSync(path.join(corpus, 'knowledge/capability-registry.yaml'), 'utf8'));
+  assert.ok(engineer.tools.includes('agent'));
+  assert.ok(coordinator.tools.includes('agent'));
+  for (const id of REVIEW_SPECIALISTS) {
+    assert.ok(engineer.agents.includes(id), `engineer cannot invoke ${id}`);
+    assert.ok(coordinator.agents.includes(id), `coordinator cannot invoke ${id}`);
+  }
+  assert.deepEqual([...engineer.agents].sort(), [...registry.engineer_allowlist].sort());
+  assert.equal(mergeVSCodeSettings({})['chat.subagents.allowInvocationsFromSubagents'], true);
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-hosts-'));
+  try {
+    for (const host of ['vscode', 'cli', 'intellij']) {
+      const home = path.join(rootDir, host);
+      fs.mkdirSync(home);
+      syncAssetsToTarget(corpus, home, { dryRun: false, verbose: false }, () => {});
+      const installed = frontmatter(fs.readFileSync(path.join(home, 'agents/engineer.agent.md'), 'utf8'));
+      for (const id of REVIEW_SPECIALISTS) assert.ok(installed.agents.includes(id), `${host} engineer cannot invoke ${id}`);
+    }
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+function separate(reviewer, via) {
+  return { ...clean(reviewer), provenance: { kind: 'host-invocation', agent: reviewer, via } };
+}
+
+function coverageIdentity(f) {
+  const plan = loadPlan(f.ws, f.plan);
+  return reviewCoverageFacts({ workspace: f.ws, plan, copilotHome: path.join(f.dir, 'copilot') });
+}
+
+test('a direct specialist invocation counts as a separate review', t => {
+  const f = fixture(t);
+  const packet = f.prepare();
+  const assembled = f.assemble(packet, packet.required.map(reviewer => separate(reviewer, 'engineer')));
+  assert.equal(assembled.status, 0, assembled.stderr + assembled.stdout);
+  assert.equal(assembled.value.coverage.complete, true);
+  assert.ok(assembled.value.results.every(result => result.provenance.independence === 'separate-reviewer' && result.provenance.via === 'engineer' && result.provenance.agent === result.reviewer));
+  const facts = coverageIdentity(f);
+  assert.equal(facts.pass, true, facts.message);
+  assert.equal(facts.invocationIdentity, 'separate-reviewer');
+});
+
+test('a coordinator specialist invocation counts as a separate review', t => {
+  const f = fixture(t);
+  const packet = f.prepare();
+  const assembled = f.assemble(packet, packet.required.map(reviewer => separate(reviewer, 'code-review-coordinator')));
+  assert.equal(assembled.status, 0, assembled.stderr + assembled.stdout);
+  assert.equal(assembled.value.coverage.complete, true);
+  assert.ok(assembled.value.results.every(result => result.provenance.independence === 'separate-reviewer' && result.provenance.via === 'code-review-coordinator' && result.provenance.agent === result.reviewer));
+  assert.match(assembled.value.report, /Recorded invocations name a separate reviewer/);
+  const facts = coverageIdentity(f);
+  assert.equal(facts.pass, true, facts.message);
+  assert.equal(facts.invocationIdentity, 'separate-reviewer');
+});
+
+test('an engineer self-review is not an independent review', t => {
+  const f = fixture(t);
+  const packet = f.prepare();
+  const results = packet.required.map(clean);
+  results[0].provenance = { kind: 'same-context', agent: 'engineer' };
+  results[1].provenance = { kind: 'host-invocation', agent: 'engineer', via: 'engineer' };
+  const assembled = f.assemble(packet, results);
+  assert.equal(assembled.status, 0, assembled.stderr + assembled.stdout);
+  assert.equal(assembled.value.coverage.complete, true);
+  const recorded = new Map(assembled.value.results.map(result => [result.reviewer, result.provenance]));
+  assert.equal(recorded.get(results[0].reviewer).independence, 'rejected');
+  assert.equal(recorded.get(results[1].reviewer).independence, 'rejected');
+  assert.equal(recorded.get(results[2].reviewer).independence, 'unverified');
+  assert.match(assembled.value.report, /self-review is not an independent review/);
+  const facts = coverageIdentity(f);
+  assert.equal(facts.pass, true, facts.message);
+  assert.equal(facts.invocationIdentity, 'rejected');
 });
 
 test('contradictory adjudications block coverage without silently deleting findings', t => {

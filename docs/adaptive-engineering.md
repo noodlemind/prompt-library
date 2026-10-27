@@ -105,7 +105,7 @@ reviews:
   critical_open: []
 ```
 
-Product plans list `code-review` in `reviews.required`. A docs plan may leave that list empty. `ae review prepare --plan <path> --base <base> --json` captures the work to review. The host invokes reviewers, then `ae review assemble --plan <path> --packet <id> --file <results.json> --json` validates and stores their results. Reviewer names are declared provenance; they do not authenticate an invocation. `ae verify` fails while collected review coverage is incomplete or critical findings remain. A bare completed string is not review evidence.
+Product plans list `code-review` in `reviews.required`. A docs plan may leave that list empty. `ae review prepare --plan <path> --base <base> --json` captures the work to review. The host invokes reviewers, then `ae review assemble --plan <path> --packet <id> --file <results.json> --json` validates and stores their results. Reviewer names are declared provenance; they do not authenticate an invocation. A recorded host invocation counts when its agent is the specialist and its caller is the engineer or the code-review coordinator. An engineer same-context review does not. `ae verify` fails while collected review coverage is incomplete or critical findings remain. A bare completed string is not review evidence.
 
 The Engineer runs review preparation and assembly. The coordinator receives the prepared packet, dispatches its required judgments, and returns raw results with their actual status. It has no terminal execution authority. Focused TDD checks run during implementation. Required review and authoritative `ae verify` follow the completed change. README edits use a proportional full docs plan and the same gate, proof, learning, and completion authority.
 

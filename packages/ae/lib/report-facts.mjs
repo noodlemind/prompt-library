@@ -41,12 +41,19 @@ export function planStateFacts(workspace) {
   return { total: rows.length, counts, rows, diagnostics };
 }
 
+function invocationIdentityOf(record) {
+  const results = Array.isArray(record?.results) ? record.results : [];
+  if (results.length && results.every(result => result.provenance?.independence === 'separate-reviewer')) return 'separate-reviewer';
+  if (results.some(result => result.provenance?.independence === 'rejected')) return 'rejected';
+  return 'unverified';
+}
+
 export function reviewCoverageFacts({ workspace, plan, copilotHome }) {
   if (!plan) return { pass: false, state: 'no-plan', requiredCount: 0, missingCount: 0, record: null };
   const required = plan.fm.reviews?.required || [];
   try {
     const result = validateReview({ workspace, plan, copilotHome });
-    return { pass: result.pass, state: result.pass ? 'current' : 'incomplete-or-stale', requiredCount: required.length, missingCount: result.missing?.length || 0, record: result.record?.id || null, message: brief(result.message), invocationIdentity: 'unverified' };
+    return { pass: result.pass, state: result.pass ? 'current' : 'incomplete-or-stale', requiredCount: required.length, missingCount: result.missing?.length || 0, record: result.record?.id || null, message: brief(result.message), invocationIdentity: invocationIdentityOf(result.record) };
   } catch (error) { return { pass: false, state: 'unavailable', requiredCount: required.length, missingCount: required.length, record: null, message: brief(error.message) }; }
 }
 
