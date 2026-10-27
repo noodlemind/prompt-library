@@ -1,6 +1,6 @@
 # Capability Gap Proposal: `/consolidate` skill
 
-Filled from `ae get --reference skills/references/capability-gap-proposal.md --json`. Approval artifact for the `consolidate` capability activated in the knowledge-layer delivery (PR #37); referenced from `ae get --reference knowledge/capability-registry.yaml --json` (`capabilities.consolidate.proposal`).
+Read `<copilot-home>/skills/references/capability-gap-proposal.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/capability-gap-proposal.md --json` prints the same file. This is the approval artifact for the `consolidate` capability activated in the knowledge-layer delivery (PR #37). The registry entry is `<copilot-home>/knowledge/capability-registry.yaml`, read with the host read tool. Outside the enforce hook, `ae get --reference knowledge/capability-registry.yaml --json` prints the same file (`capabilities.consolidate.proposal`).
 
 ## Summary
 

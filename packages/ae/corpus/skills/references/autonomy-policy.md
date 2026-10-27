@@ -2,7 +2,7 @@
 
 Default: **run the pipeline autonomously**. Human consent is for **Tier 3** only.
 
-Profiles install as knowledge/profile.md from this template. Print it with `ae get --reference knowledge/profile.md.template --json`. Do not search the product workspace for it:
+Profiles install as knowledge/profile.md from this template. Read `<copilot-home>/knowledge/profile.md.template` with the host read tool. Outside the enforce hook, `ae get --reference knowledge/profile.md.template --json` prints the same file. Do not search the product workspace for it:
 
 ```yaml
 autonomy: full   # full | balanced | strict

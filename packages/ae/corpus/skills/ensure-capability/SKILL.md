@@ -60,7 +60,7 @@ Do not scan or load the full registry before ordinary work. Missing optional cap
 
 ## Plan record
 
-Use plan-operations.md (`ae get --reference skills/references/plan-operations.md --json`). An `amend` decision's `changes.gaps` supplies new gap IDs, class, scope, affected criterion/operation and authored evidence observations. Harness writes the plan representation, pending state and activity; existing gaps cannot be overwritten by this input. Criterion scope names an existing criterion. Observations are claims; they do not assert verified file bytes.
+Read `<copilot-home>/skills/references/plan-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/plan-operations.md --json` prints the same file. An `amend` decision's `changes.gaps` supplies new gap IDs, class, scope, affected criterion/operation and authored evidence observations. Harness writes the plan representation, pending state and activity; existing gaps cannot be overwritten by this input. Criterion scope names an existing criterion. Observations are claims; they do not assert verified file bytes.
 
 Use the `gap` operation to close an existing gap with the accepted evidence path. Harness binds its current bytes. Bridge and waiver authority remains in trusted policy with the human decision's reason and scope. A declaration cannot grant that authority or claim fulfillment. Read the resulting state and allowed next actions instead of editing frontmatter.
 

@@ -31,7 +31,7 @@ user-invocable: false
 
 ## Research and decisions
 
-Use the supplied plan path, or `ae orient --read --query <goal> --json` to discover the active plan. Retrieve its actual reasoning and scope. Do not select the newest filename or reconstruct plan metadata. See plan-operations.md (`ae get --reference skills/references/plan-operations.md --json`).
+Use the supplied plan path, or `ae orient --read --query <goal> --json` to discover the active plan. Retrieve its actual reasoning and scope. Do not select the newest filename or reconstruct plan metadata. Read `<copilot-home>/skills/references/plan-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/plan-operations.md --json` prints the same file.
 
 Choose sections where research could change a decision: unfamiliar technology, security boundaries, integrations, performance or nuanced tradeoffs. Skip established patterns already supported by evidence. Use `ae resources list --json` for available perspectives and load only relevant research capabilities. Delegate through the host when useful; otherwise research in this session.
 

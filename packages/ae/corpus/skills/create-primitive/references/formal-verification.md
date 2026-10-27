@@ -16,7 +16,7 @@ Write frontmatter naming the guarded area, activation conditions and exclusions.
 
 Keep normative properties separate from descriptive model transitions. Model an atomic action only when its implementation correspondence is justified. Specify useful progress or reachable successful paths as well as safety, so a model that refuses all useful work cannot obtain an unqualified pass. Never assert unconditional eventual completion when cancellation, unavailable tools or user abandonment are legal.
 
-For a TLC-based check, copy the standalone runner (`ae get --reference skills/create-primitive/assets/formal-verification/check.mjs --json`) into that property's `scripts/check.mjs`. The copied file uses Node built-ins and an explicitly supplied JAR; it does not require installed AE or any other plugin. In this library's own pilot, a thin wrapper imports the same shipped asset because the library owns it. Other products copy it.
+For a TLC-based check, read the standalone runner at `<copilot-home>/skills/create-primitive/assets/formal-verification/check.mjs` with the host read tool and copy it into that property's `scripts/check.mjs`. Outside the enforce hook, `ae get --reference skills/create-primitive/assets/formal-verification/check.mjs --json` prints the same file. The copied file uses Node built-ins and an explicitly supplied JAR; it does not require installed AE or any other plugin. In this library's own pilot, a thin wrapper imports the same shipped asset because the library owns it. Other products copy it.
 
 Write a concrete `manifest.json` with these fields:
 

@@ -34,7 +34,7 @@ user-invocable: false
 
 ## References
 
-- **Evaluation criteria:** Read `ae get --reference skills/document-review/references/review-criteria.md --json` for what each persona evaluates per document type
+- **Evaluation criteria:** Read `<copilot-home>/skills/document-review/references/review-criteria.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/document-review/references/review-criteria.md --json` prints the same file. It states what each persona evaluates per document type.
 
 ## Workflow
 
@@ -49,7 +49,7 @@ Classify the document type:
 
 ### 2. Select and Dispatch Personas
 
-Read `ae get --reference skills/document-review/references/review-criteria.md --json` for the evaluation criteria per persona and document type.
+Read `<copilot-home>/skills/document-review/references/review-criteria.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/document-review/references/review-criteria.md --json` prints the same file. It states the evaluation criteria per persona and document type.
 
 The Engineer runs `ae review prepare --domain document --file <document> --json` once before dispatch. Bind `--plan <path>` only when its review obligations are compatible with document review. Use a standalone document packet for a plan that requires code review; document judgments cannot satisfy that obligation. Use the exact source path returned in the packet, including an absolute path for a current-project plan outside the checkout. The packet supplies the source references and four required perspectives. Four personas evaluate every document:
 1. **Design** — information architecture, flows, interaction states, behavior completeness
@@ -60,8 +60,8 @@ The Engineer runs `ae review prepare --domain document --file <document> --json`
 **Orchestration:** If the `agent` tool is available for subagent delegation, delegate to 4 personas as isolated subagents in parallel. Each receives:
 - The full document content
 - The document type classification
-- Their persona's evaluation criteria from `ae get --reference skills/document-review/references/review-criteria.md --json`
-- The shared `ae get --reference skills/code-review/references/findings-schema.md --json` JSON contract, packet source paths, and instruction to return its actual completion status and exact document locations
+- Their persona's evaluation criteria from `<copilot-home>/skills/document-review/references/review-criteria.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/document-review/references/review-criteria.md --json` prints the same file
+- The shared findings schema. Read `<copilot-home>/skills/code-review/references/findings-schema.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/code-review/references/findings-schema.md --json` prints the same file. Pass its JSON contract, the packet source paths, and an instruction to return the actual completion status and exact document locations
 
 Otherwise, apply each persona's perspective sequentially within this session.
 

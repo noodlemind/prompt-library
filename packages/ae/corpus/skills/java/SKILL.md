@@ -25,7 +25,7 @@ Apply Java engineering guidance as an on-demand skill. Use this inside the norma
 
 ## Workflow
 
-1. **Load scoped conventions**: Apply the globally hydrated always-on `java.instructions.md`. If Spring Boot is present, also read this skill's `ae get --reference skills/java/references/spring-boot.md --json` (on-demand, so it does not stack on every Java file).
+1. **Load scoped conventions**: Apply the globally hydrated always-on `java.instructions.md`. If Spring Boot is present, also read this skill's `<copilot-home>/skills/java/references/spring-boot.md` with the host read tool (on-demand, so it does not stack on every Java file). Outside the enforce hook, `ae get --reference skills/java/references/spring-boot.md --json` prints the same file.
 2. **Classify scope**:
    - Small focused change -> proceed directly with TDD.
    - Multi-step feature, migration, or risky refactor -> create or update a plan through `/capture-issue` and `/plan-issue`.

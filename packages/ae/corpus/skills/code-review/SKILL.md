@@ -37,8 +37,8 @@ Activate when the user wants to:
 
 Read these installed files with the host read tool. Do not search the product workspace for them, and do not open a checkout-relative path. They live under `<copilot-home>/skills/`.
 
-- **Persona definitions:** `<copilot-home>/skills/code-review/references/review-personas.md`. Outside the enforce hook, `ae get --reference skills/code-review/references/review-personas.md --json` prints the same file.
-- **Findings schema:** `<copilot-home>/skills/code-review/references/findings-schema.md`. Outside the enforce hook, `ae get --reference skills/code-review/references/findings-schema.md --json` prints the same file.
+- **Persona definitions:** Read `<copilot-home>/skills/code-review/references/review-personas.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/code-review/references/review-personas.md --json` prints the same file.
+- **Findings schema:** Read `<copilot-home>/skills/code-review/references/findings-schema.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/code-review/references/findings-schema.md --json` prints the same file.
 
 ## Workflow
 

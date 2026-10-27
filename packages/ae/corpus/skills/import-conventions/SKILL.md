@@ -68,7 +68,7 @@ Classify with `/create-primitive`: deterministic reusable operation → Harness;
 
 ### Step 4: Author and validate
 
-Follow resource-operations.md (`ae get --reference skills/references/resource-operations.md --json`). Use `resources scaffold` for the canonical metadata and host declaration shape, then author the source-backed rationale, concrete good/bad examples, relevant triggers and meaningful outcome evaluations. Decide narrow activation patterns and minimum permissions from the actual use cases.
+Read `<copilot-home>/skills/references/resource-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/resource-operations.md --json` prints the same file. Use `resources scaffold` for the canonical metadata and host declaration shape, then author the source-backed rationale, concrete good/bad examples, relevant triggers and meaningful outcome evaluations. Decide narrow activation patterns and minimum permissions from the actual use cases.
 
 Use schema1 `resources create <type> <name> --file <decision.json>` for a personal primitive; the existing writer validates and registers it. Use `resources validate --corpus --json` for an authorized ship-set change. Harness owns structural checks, references, limits, registry consistency, replacement conflicts and inventory counts. Interpret its diagnostics and repair authored content; do not maintain counts manually.
 
@@ -78,7 +78,7 @@ Report inspected sources, overlap decisions, selected primitive, operation outco
 
 ## Non-interactive use
 
-A calling skill supplies scope and prior authorization. Apply the canonical human-approval-policy.md (`ae get --reference skills/references/human-approval-policy.md --json`); invocation alone does not authorize capability activation. Do not discard existing direct authorization or ask again for the same action.
+A calling skill supplies scope and prior authorization. Read `<copilot-home>/skills/references/human-approval-policy.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/human-approval-policy.md --json` prints the same file. Invocation alone does not authorize capability activation. Do not discard existing direct authorization or ask again for the same action.
 
 ## Error Handling
 
