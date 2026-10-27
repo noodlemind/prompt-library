@@ -21,6 +21,7 @@ import { runVerify } from '../lib/verify.mjs';
 import { runCompound } from '../lib/compound.mjs';
 import { validateCompletion } from '../lib/completion.mjs';
 import { domainExecutionBinding, domainPrerequisites, runDomainJointChecks, domainStatus, snapshotDomainCoordinator, domainCoordinatorCheck } from '../lib/domain-delivery.mjs';
+import { withGitObservationCache } from '../lib/git-observation-cache.mjs';
 
 function git(root, args) {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 4000 });
@@ -85,6 +86,29 @@ test('participating content keeps literal evidence bytes and selected-home trust
   assert.equal(producer.policyDigest, proofPolicyDigest(f.roots.producer, f.copilotHome, f.home));
   assert.equal(producer.trust, 'trusted');
   assert.deepEqual(redundant, [], 'Member HEAD is already part of the live repository identity observation');
+});
+
+test('one completion reuses the git observation of each checkout', t => {
+  const f = fixture(t);
+  const spawn = childProcess.spawnSync;
+  let gitCalls = 0;
+  t.mock.method(childProcess, 'spawnSync', function (command, args, options) {
+    if (path.basename(String(command)).toLowerCase().replace(/\.exe$/, '') === 'git') gitCalls += 1;
+    return spawn.apply(this, arguments);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const measure = (run) => { gitCalls = 0; run(); return gitCalls; };
+  const single = measure(() => domainExecutionBinding(f.options));
+  const repeated = measure(() => { domainExecutionBinding(f.options); domainExecutionBinding(f.options); });
+  assert.ok(repeated > single, 'a second binding re-reads git when no completion cache is active');
+  const cached = measure(() => withGitObservationCache(() => { domainExecutionBinding(f.options); domainExecutionBinding(f.options); }));
+  assert.ok(cached <= single, `cached bindings issued ${cached} git calls and one binding issued ${single}`);
+  const validated = measure(() => validateCompletion({ workspace: f.coordinator, plan: f.plan, copilotHome: f.copilotHome }));
+  assert.ok(validated <= single + 8, `validateCompletion issued ${validated} git calls and one binding issued ${single}`);
+  fs.writeFileSync(path.join(f.roots.producer, 'schema.json'), '{"version":9}\n');
+  const changed = domainExecutionBinding(f.options);
+  assert.deepEqual(changed.repos.find(repo => repo.id === 'producer').changedFiles, ['schema.json']);
 });
 
 test('removing discarded content authority preserves refusal of an invalid selected-home trusted policy', t => {

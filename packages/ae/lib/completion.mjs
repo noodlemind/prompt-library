@@ -5,6 +5,7 @@ import { loadPolicy } from './policy.mjs';
 import { validateReview, recordHash, readReviewRecord, publishReviewRecord } from './review.mjs';
 import { validateLearningDecision } from './learning-record.mjs';
 import { experimentProof } from './experiment-authority.mjs';
+import { withGitObservationCache } from './git-observation-cache.mjs';
 
 export function openHardGaps(plan, policy) {
   return (plan.fm.capability_gaps || []).filter(gap => {
@@ -64,7 +65,11 @@ export function completeWork({ workspace, plan, copilotHome, dryRun = false }) {
   return record;
 }
 
-export function validateCompletion({ workspace, plan, copilotHome }) {
+export function validateCompletion(options) {
+  return withGitObservationCache(() => validateCompletionRecord(options));
+}
+
+function validateCompletionRecord({ workspace, plan, copilotHome }) {
   const recordRoot = planRecordRoot(workspace, plan);
   const checked = completionPrerequisites({ workspace, plan, copilotHome });
   if (!checked.pass) return checked;

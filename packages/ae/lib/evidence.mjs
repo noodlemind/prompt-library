@@ -17,6 +17,7 @@ import { loadPolicy } from './policy.mjs';
 import { intentSourceBindings, intentSourcesCheck } from './intent-sources.mjs';
 import { gapEvidenceCheck } from './plan-readiness.mjs';
 import { loadNamedChecks } from './checks.mjs';
+import { cachedGitObservation } from './git-observation-cache.mjs';
 import { validatePlaybookBinding } from './playbook-binding.mjs';
 import { validateCheckArtifacts } from './check-artifacts.mjs';
 import { experimentProof } from './experiment-authority.mjs';
@@ -98,6 +99,10 @@ function validBinding(binding) {
 }
 
 function gitHead(workspace) {
+  return cachedGitObservation(['head', path.resolve(workspace)], () => readGitHead(workspace));
+}
+
+function readGitHead(workspace) {
   const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000, env: gitMetadataEnvironment() });
   if (head.error || head.status !== 0) return null;
   return String(head.stdout || '').trim();

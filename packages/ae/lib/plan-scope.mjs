@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { readGitArgs, gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 import { parseImpactedText } from '../corpus/hooks/lib/impacted-files.mjs';
 import { readPlanRecord } from './plan-record.mjs';
+import { cachedGitObservation } from './git-observation-cache.mjs';
 
 export { parseImpactedText };
 
@@ -37,6 +38,10 @@ export function matchesScope(file, allowed) {
 }
 
 export function collectChangedFiles(workspace, base = null) {
+  return cachedGitObservation(['changed', path.resolve(workspace), base], () => readChangedFiles(workspace, base));
+}
+
+function readChangedFiles(workspace, base) {
   const prefix = readGitArgs(workspace, { timeout: 30_000, env: gitMetadataEnvironment() });
   if (!prefix) return { files: [], error: 'Git helper configuration could not be read safely; scope cannot be verified' };
   const inside = runGit(workspace, ['rev-parse', '--is-inside-work-tree'], prefix);
