@@ -1,54 +1,39 @@
 # Model preferences
 
-The `ae` CLI does not call a model and does not route models. Preferences live in the existing user config, `<copilot-home>/harness/config.yaml`. Empty and `inherit` leave the host field unset, which is the previous behavior.
+The `ae` CLI does not call a model. It does not choose a model for a subagent, and this repository does not install a model router. Each host already has a native field. When that field is absent, the subagent inherits the parent session.
 
-`/setup-models` asks once. The host agent stores each answer with `ae config set`, then `ae install` stamps the generated files.
+Krish can set a preferred model per role on the host that is actually running the agent. One AE config cannot do that for every host, because the fields are not the same and AE only hydrates GitHub Copilot agents.
 
-## Questions
+## GitHub Copilot
 
-The default for every role is `inherit`.
+Custom agents in VS Code and in the Copilot cloud agent use `model` in the agent frontmatter. An omitted `model` inherits the model selected in the session. VS Code also accepts a prioritized list and a `handoffs.model` value. JetBrains IDEs are in public preview for the same custom-agent file. A model name that contains parentheses can fail to resolve and fall back to the session model.
 
-1. Engineer or orchestrator: `models.engineer`
-2. Specialists: `models.specialist`
-3. Researchers: `models.researcher`
-4. Reviewers: `models.reviewer`
-5. High thinking, used when the engineer or a reviewer has no model of its own: `models.high`
-6. Low thinking, used when a specialist or researcher has no model of its own: `models.low`
+- [Custom agents in VS Code](https://code.visualstudio.com/docs/copilot/customization/custom-chat-modes)
+- [Custom agents configuration](https://docs.github.com/en/copilot/reference/custom-agents-configuration)
+- [Requests in GitHub Copilot](https://docs.github.com/en/copilot/concepts/billing/copilot-requests)
 
-```sh
-ae config set models.reviewer claude-haiku-4-5 --scope user
-ae install
-```
+Copilot Chat bills one premium request per user prompt, multiplied by the model rate. The published request table says autonomous tool calls inside a prompt are not extra premium requests. A specialist dispatch is still a separate model session, and its tokens follow that model's rate.
 
-A later `ae config set models.reviewer inherit --scope user` and `ae install` removes the field.
+## Claude Code
 
-## What install writes
+A subagent file sets `model` to `inherit`, a family alias (`sonnet`, `opus`, `haiku`, `fable`), or a full model id. `inherit` uses the parent conversation. Anthropic's cost guidance says a switch to Opus also applies to subagents that inherit the session model, and a simple subagent should set `model: haiku`. Subagent requests still draw on the same usage.
 
-Copilot `agents/*.agent.md` gets a `model` line. A name that contains parentheses is stored, and the Copilot field is left unset, because those names fail to resolve in the agent frontmatter. Claude, Cursor, and Codex files are written under `<copilot-home>/hosts/` with that host's field:
+- [Create custom subagents](https://code.claude.com/docs/en/sub-agents)
+- [Manage costs effectively](https://code.claude.com/docs/en/costs)
 
-- Claude: `model`
-- Cursor: `model` plus `[effort=high]` for the engineer and reviewers, or `[effort=low]` for specialists and researchers
-- Codex: `model` and `model_reasoning_effort` in `<role>.config.toml`
+## Cursor
 
-```yaml
-model: "claude-opus-5"
-```
+A custom subagent under `.cursor/agents/` or `~/.cursor/agents/` sets `model` to `inherit` or a model id. Bracket parameters set effort, for example `claude-opus-5[effort=high]`. The default is `inherit`. The built-in Explore subagent has its own setting. Other built-in subagents do not. Cursor has reported cases where a frontmatter model is ignored and the subagent inherits the parent.
 
-```yaml
-model: "claude-opus-5[effort=high]"
-```
+- [Subagents](https://cursor.com/docs/subagents)
 
-```toml
-model = "claude-opus-5"
-model_reasoning_effort = "high"
-```
+## Codex
 
-## Hosts
+A profile file such as `~/.codex/deep-review.config.toml` sets `model` and `model_reasoning_effort`. Select it with `codex --profile deep-review`. `[agents]` can set `default_subagent_model` and `default_subagent_reasoning_effort`. A role's `config_file` can pin `model` and `model_reasoning_effort` for that role. Omitted values inherit the parent. `codex exec` has a reported bug where a pinned role still inherits the parent model and effort.
 
-This follows the same shape as pstack's `/setup-pstack`, which asks for a budget and per-role models and writes one user rule. AE uses the config file it already has.
+- [Advanced configuration](https://developers.openai.com/codex/config-advanced)
+- [Sample configuration](https://learn.chatgpt.com/docs/config-file/config-sample.md)
 
-- Copilot: [Custom agents in VS Code](https://code.visualstudio.com/docs/copilot/customization/custom-chat-modes), [custom agents configuration](https://docs.github.com/en/copilot/reference/custom-agents-configuration), [premium requests](https://docs.github.com/en/copilot/concepts/billing/copilot-requests)
-- Claude Code: [subagents](https://code.claude.com/docs/en/sub-agents), [costs](https://code.claude.com/docs/en/costs)
-- Cursor: [subagents](https://cursor.com/docs/subagents)
-- Codex: [advanced configuration](https://developers.openai.com/codex/config-advanced)
-- pstack: [setup-pstack](https://github.com/cursor/plugins/blob/main/pstack/skills/setup-pstack/SKILL.md)
+## What AE will not do
+
+Shipped Copilot agents omit `model`, so they inherit the session model. Writing a model into those files would pin one choice for every user. A per-role overlay at install time would be a new preference store. That store is not part of this change.

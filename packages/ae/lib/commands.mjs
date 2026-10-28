@@ -32,8 +32,6 @@ import { installHarnessBin } from './install-harness-bin.mjs';
 import { resolveHarnessBin, agentHarnessCommand, writeHarnessRunner, RUNNER_VERSION } from './resolve-harness-bin.mjs';
 import { installGlobalHarnessShim, configureShellPath, globalHarnessShimPath } from './global-bin.mjs';
 import { installVSCodeBridge, uninstallVSCodeBridge } from './install-vscode-bridge.mjs';
-import { configPathFor, loadConfigFile } from './config.mjs';
-import { applyModelPreferences } from './model-preferences.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { loadPolicy, publishPolicySnapshot } from './policy.mjs';
 import { loadPlan } from './plan-parse.mjs';
@@ -192,25 +190,6 @@ export async function cmdInstallOrUpgrade(command, argv) {
     allStats.intellij = syncAssetsToTarget(assets, ij, flags, logger);
     seedProfile(assets, ij, flags, logger);
     mergeIntelliJInstructions(assets, ij, flags, logger);
-  }
-
-  const modelFile = configPathFor('user', { copilotHome, workspace: path.resolve(flags.workspace) });
-  const modelConfig = loadConfigFile(modelFile);
-  if (modelConfig.errors.length) {
-    logger(`model preferences skipped: ${modelConfig.errors[0]}`);
-  } else {
-    const corpusAgents = path.join(assets, 'agents');
-    const stamped = [];
-    const omitted = [];
-    for (const targetRoot of [allStats.vscode ? copilotHome : null, allStats.intellij ? resolveIntelliJHome() : null]) {
-      if (!targetRoot) continue;
-      const result = applyModelPreferences({
-        corpusAgents, targetRoot, values: modelConfig.values, dryRun: flags.dryRun,
-      });
-      stamped.push(...result.files.map((file) => path.join(targetRoot, file)));
-      omitted.push(...result.omitted);
-    }
-    allStats.models = { files: stamped, omitted };
   }
 
     const runnerWorkspace = path.resolve(flags.workspace);

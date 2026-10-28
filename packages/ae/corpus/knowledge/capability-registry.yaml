@@ -148,7 +148,6 @@ capabilities:
     replacement: code-review
     reason: Plan-compliance audit is a code-review concern.
   sql: {type: skill, status: active, owner: data-platform, version: 1, origin: starter}
-  setup-models: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   start:
     type: skill
     status: retired
