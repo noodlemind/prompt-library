@@ -69,6 +69,34 @@ test('inherited trust stops when the primary approval becomes stale', t => {
   assert.equal(inherited.inherited, false);
 });
 
+test('canonical trust reads a legacy spelling and a new revocation takes precedence', () => {
+  const s = scopes();
+  approveProject(s);
+  const file = trustStorePath(s);
+  const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
+  const root = projectIdentity(s.workspace).root;
+  saved.projects[`${root}${path.sep}.`] = saved.projects[root];
+  delete saved.projects[root];
+  fs.writeFileSync(file, YAML.stringify(saved));
+  assert.equal(trustStatus(s).trusted, true);
+  assert.equal(revokeProject(s).state, 'revoked');
+  assert.equal(trustStatus(s).trusted, false);
+});
+
+test('conflicting legacy trust spellings require a new canonical approval', () => {
+  const s = scopes();
+  approveProject(s);
+  const file = trustStorePath(s);
+  const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
+  const root = projectIdentity(s.workspace).root;
+  saved.projects[`${root}${path.sep}.`] = saved.projects[root];
+  saved.projects[`${root}${path.sep}..${path.sep}${path.basename(root)}`] = { status: 'revoked' };
+  delete saved.projects[root];
+  fs.writeFileSync(file, YAML.stringify(saved));
+  assert.equal(trustStatus(s).trusted, false);
+  assert.equal(approveProject(s).trusted, true);
+});
+
 test('a fresh project is untrusted, and says why', () => {
   const s = scopes();
   const status = trustStatus(s);
