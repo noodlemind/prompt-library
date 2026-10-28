@@ -53,7 +53,7 @@ test('inherited trust stops when the primary approval becomes stale', t => {
   t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
   const s = { workspace, copilotHome, home: copilotHome };
   writeProjectFile(s, '.github/harness/policy.yaml', 'enforcement: enforce\n');
-  for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'baseline']]) {
+  for (const args of [['init', '-q'], ['config', 'core.autocrlf', 'false'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'baseline']]) {
     const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
   }
