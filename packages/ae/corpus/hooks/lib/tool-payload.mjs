@@ -704,7 +704,7 @@ export function harnessControlCommand(tokens, workspace) {
       if (boolean.has(name) && split < 0) continue;
       if (!valued.has(name)) return null;
       const value = split < 0 ? args[++index] : token.slice(split + 1);
-      if (!value || value.startsWith('-') || /[\u0000-\u001f\u007f]/.test(value)) return null;
+      if (!value || (value.startsWith('-') && !(name === '--file' && value === '-' && ['plan-new', 'plan-update'].includes(verb))) || /[\u0000-\u001f\u007f]/.test(value)) return null;
       values.set(name, value);
     }
     const name = values.get('--name');

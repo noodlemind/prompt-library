@@ -24,7 +24,7 @@ Return checks without allowed delegation to the Engineer. Never drop obligations
 Preserve failed, timed-out, partial, and malformed status.
 Retry only with needed evidence. Changed source requires a fresh packet.
 ## Output
-Return `{"packet":"<supplied id>","results":[{"reviewer":"<required id>","status":"completed","findings":[],"residual_risks":[],"testing_gaps":[]}]}`.
+Return `{"packet":"<supplied id>","results":[{"reviewer":"<required id>","status":"completed","provenance":{"kind":"host-invocation","agent":"<required id>","via":"code-review-coordinator"},"findings":[],"residual_risks":[],"testing_gaps":[]}]}`.
 Use completed only for a finished judgment. Provenance kind is host-invocation, agent is the specialist, and via is code-review-coordinator.
 Report delegation limitations separately.
 The Engineer runs `ae review assemble`. This role has no terminal execution authority.

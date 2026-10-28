@@ -14,5 +14,6 @@ export function isolateTestHome(env = process.env) {
   delete env.HARNESS_HOME;
   delete env.AE_BIN;
   delete env.HARNESS_BIN;
+  delete env.COPILOT_HOME;
   return home;
 }
