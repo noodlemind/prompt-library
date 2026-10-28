@@ -21,6 +21,7 @@ import { parseVSCodeSettings } from './vscode-settings.mjs';
 import { harnessGlobalHome, resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
 import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings, readSavedLearningFiles, matchingLocalStoreIds, carriedBytesDiffer } from './knowledge/store.mjs';
+import { storageIdForRepo } from './storage-aliases.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { loadRoutingPolicy } from './routing-policy.mjs';
 import { listBuckets } from './knowledge/overlay.mjs';
@@ -439,12 +440,13 @@ function knowledgeChecks({ workspace, copilotHome }) {
     if (!hasRemote) {
       const selected = workspaceStorageId(workspace);
       const currentHome = harnessGlobalHome();
-      const pending = selected !== currentId
+      const bound = storageIdForRepo(currentId, { home: currentHome });
+      const pending = selected !== bound
         ? [selected]
-        : matchingLocalStoreIds(workspace, { home: currentHome }).ids.filter((id) => id !== currentId && carriedBytesDiffer(currentHome, id, currentId));
+        : matchingLocalStoreIds(workspace, { home: currentHome }).ids.filter((id) => id !== bound && carriedBytesDiffer(currentHome, id, bound));
       if (pending.length) {
         stranded = true;
-        hint = `saved knowledge or plans use the old path ID ${pending[0]}; ae knowledge migrate-store copies them into ${currentId} and leaves the source in place`;
+        hint = `saved knowledge or plans use the old path ID ${pending[0]}; ae knowledge migrate-store copies them into ${bound} and leaves the source in place`;
       }
     } else {
       const legacyDir = storeDirForId(localRepoId(workspace));

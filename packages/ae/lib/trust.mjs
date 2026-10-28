@@ -158,7 +158,7 @@ export function trustStatus({ workspace, copilotHome, home }) {
       const primaryIdentity = projectIdentity(primary);
       const primaryRecord = store.projects[primaryIdentity.root] || null;
       inheritedFrom = primaryIdentity.root;
-      if (primaryRecord?.status === 'trusted' && digestMatchesApproval(primaryRecord.digest, workspace)) {
+      if (approvalState(primaryRecord, primary, store).state === 'trusted' && digestMatchesApproval(primaryRecord.digest, workspace)) {
         state = 'trusted';
         inherited = true;
         reason = `inherited from trusted primary ${primaryIdentity.root}`;
@@ -168,7 +168,7 @@ export function trustStatus({ workspace, copilotHome, home }) {
         reason = `inherited trust removed because primary ${primaryIdentity.root} was revoked`;
       } else if (primaryRecord?.status === 'trusted') {
         state = 'stale';
-        reason = `ae worktree of ${primaryIdentity.root}, but its policy files differ from that approval`;
+        reason = `ae worktree of ${primaryIdentity.root}, but the primary or worktree policy files differ from that approval`;
       }
     }
   }
