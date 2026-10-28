@@ -127,6 +127,53 @@ test('relative trust spellings never establish authority', () => {
   } finally { process.chdir(previous); }
 });
 
+test('stored approvals do not follow redirected project paths', async t => {
+  for (const redirected of ['root', 'ancestor']) {
+    await t.test(redirected, () => {
+      const base = tempDir('trust-redirect-');
+      t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+      const original = path.join(base, 'original');
+      const target = path.join(base, 'target');
+      fs.mkdirSync(original);
+      fs.mkdirSync(target);
+      const workspace = redirected === 'root' ? original : path.join(original, 'repo');
+      const otherWorkspace = redirected === 'root' ? target : path.join(target, 'repo');
+      fs.mkdirSync(workspace, { recursive: true });
+      fs.mkdirSync(otherWorkspace, { recursive: true });
+      const s = { workspace, home: path.join(base, 'home'), copilotHome: path.join(base, 'home') };
+      approveProject(s);
+      fs.renameSync(original, path.join(base, 'archived'));
+      fs.symlinkSync(target, original, process.platform === 'win32' ? 'junction' : 'dir');
+      assert.equal(trustStatus({ ...s, workspace: otherWorkspace }).trusted, false);
+    });
+  }
+});
+
+test('conflicting worktree approvals cannot fall back to primary trust', t => {
+  const workspace = tempDir('trust-child-conflict-');
+  const home = tempDir('trust-child-conflict-home-');
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const s = { workspace, home, copilotHome: home };
+  for (const args of [['init', '-q'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '--allow-empty', '-qm', 'baseline']]) {
+    const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  approveProject(s);
+  const linked = addIsolatedWorktree({ workspace, slug: 'conflict', from: 'HEAD' });
+  const child = { ...s, workspace: linked.path };
+  assert.equal(trustStatus(child).trusted, true);
+  revokeProject(child);
+  const file = trustStorePath(s);
+  const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
+  const root = projectIdentity(linked.path).root;
+  saved.projects[`${root}${path.sep}.`] = { status: 'trusted', digest: policyDigest(linked.path) };
+  fs.writeFileSync(file, YAML.stringify(saved));
+  const status = trustStatus(child);
+  assert.equal(status.trusted, false);
+  assert.equal(status.inherited, false);
+});
+
 test('a fresh project is untrusted, and says why', () => {
   const s = scopes();
   const status = trustStatus(s);
