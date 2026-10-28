@@ -97,6 +97,20 @@ test('conflicting legacy trust spellings require a new canonical approval', () =
   assert.equal(approveProject(s).trusted, true);
 });
 
+test('a canonical approval cannot bypass a conflicting legacy revocation', () => {
+  const s = scopes();
+  approveProject(s);
+  const file = trustStorePath(s);
+  const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
+  const root = projectIdentity(s.workspace).root;
+  saved.projects[`${root}${path.sep}.`] = { status: 'revoked' };
+  const before = YAML.stringify(saved);
+  fs.writeFileSync(file, before);
+  assert.equal(trustStatus(s).trusted, false);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(approveProject(s).trusted, true);
+});
+
 test('a fresh project is untrusted, and says why', () => {
   const s = scopes();
   const status = trustStatus(s);
