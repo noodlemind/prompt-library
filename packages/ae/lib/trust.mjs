@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { EXIT } from './style.mjs';
-import { writeFileContained, readFileNoFollow, canonicalPath } from './fs-safe.mjs';
+import { writeFileContained, readFileNoFollow, canonicalPath, assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { runtimeSetting } from '../corpus/hooks/lib/runtime-identity.mjs';
 import { aeWorktreePrimary } from './worktree.mjs';
@@ -131,6 +131,7 @@ function writeStore({ copilotHome, home } = {}, store) {
 
 function approvalState(record, workspace, store) {
   if (store.unreadable) return { state: 'untrusted', reason: 'the trust store could not be read, so nothing is trusted' };
+  if (record?.status === 'conflict') return { state: 'untrusted', reason: 'conflicting approvals for this project require a new approval' };
   if (record?.status === 'revoked') return { state: 'revoked', reason: 'trust was explicitly revoked' };
   if (record?.status === 'trusted') {
     if (digestMatchesApproval(record.digest, workspace)) return { state: 'trusted', reason: `approved ${record.approvedAt}` };
@@ -139,14 +140,20 @@ function approvalState(record, workspace, store) {
   return { state: 'untrusted', reason: 'this project has never been approved' };
 }
 
+function approvalMatches(root, identity) {
+  const anchor = path.parse(root).root;
+  return path.isAbsolute(root) && assertNoSymlinkAncestors(anchor, path.relative(anchor, root)) && projectIdentity(root).root === identity.root;
+}
+
 function projectApproval(store, identity) {
-  const matches = Object.entries(store.projects).filter(([root]) => path.isAbsolute(root) && projectIdentity(root).root === identity.root);
-  return matches.length === 1 ? matches[0][1] : null;
+  const matches = Object.entries(store.projects).filter(([root]) => approvalMatches(root, identity));
+  if (matches.length > 1) return { status: 'conflict' };
+  return matches[0]?.[1] ?? null;
 }
 
 function setProjectApproval(store, identity, record) {
   for (const root of Object.keys(store.projects)) {
-    if (path.isAbsolute(root) && projectIdentity(root).root === identity.root) delete store.projects[root];
+    if (approvalMatches(root, identity)) delete store.projects[root];
   }
   store.projects[identity.root] = record;
 }
@@ -163,7 +170,7 @@ export function trustStatus({ workspace, copilotHome, home }) {
   let inheritedFrom = null;
   let approvedAt = record?.approvedAt ?? null;
   let approvedDigest = record?.digest ?? null;
-  const ownDecides = store.unreadable || record?.status === 'revoked' || record?.status === 'trusted';
+  const ownDecides = store.unreadable || record?.status === 'revoked' || record?.status === 'trusted' || record?.status === 'conflict';
   if (!ownDecides) {
     const primary = aeWorktreePrimary(workspace);
     if (primary) {
