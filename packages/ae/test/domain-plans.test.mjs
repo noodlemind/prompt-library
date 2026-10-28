@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { readDomain } from '../lib/domain-contract.mjs';
 import { snapshotDomain } from '../lib/domain-bindings.mjs';
@@ -100,7 +101,7 @@ test('domain coordinator HEAD refresh consumes a stdin decision once', t => {
   assert.equal(advanced.status, 0, advanced.stderr);
   const coordinator = snapshotDomainCoordinator(workspace);
   const input = { version: 1, id: 'refresh-head-stdin', action: 'amend', expect: hash(plan.text), rationale: 'Accept the current coordinator HEAD.', authority: { scope: 'domain-intent', basis: 'The original coordinator explicitly accepts its new HEAD.' }, changes: { domainParent: { ...plan.fm.domain_parent, coordinator } } };
-  const result = spawnSync(process.execPath, [path.resolve(import.meta.dirname, '../bin/ae.mjs'), 'domain', 'plan-update', '--name', 'catalogue', '--plan', plan.path, '--workspace', workspace, '--harness-home', f.home, '--copilot-home', path.join(f.home, 'copilot'), '--file', '-', '--json', '--no-events'], { cwd: workspace, encoding: 'utf8', input: JSON.stringify(input), timeout: 15_000 });
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/ae.mjs', import.meta.url)), 'domain', 'plan-update', '--name', 'catalogue', '--plan', plan.path, '--workspace', workspace, '--harness-home', f.home, '--copilot-home', path.join(f.home, 'copilot'), '--file', '-', '--json', '--no-events'], { cwd: workspace, encoding: 'utf8', input: JSON.stringify(input), timeout: 15_000 });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(loadPlan(workspace, plan.path, { domainContext: context }).fm.domain_parent.coordinator.initial_head, coordinator.initial_head);
 });
