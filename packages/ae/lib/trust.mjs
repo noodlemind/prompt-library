@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { EXIT } from './style.mjs';
-import { writeFileContained, readFileNoFollow } from './fs-safe.mjs';
+import { writeFileContained, readFileNoFollow, canonicalPath, assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { runtimeSetting } from '../corpus/hooks/lib/runtime-identity.mjs';
 import { aeWorktreePrimary } from './worktree.mjs';
@@ -47,7 +47,7 @@ export function legacyTrustStorePath(copilotHome) {
 export function projectIdentity(workspace) {
   let root;
   try {
-    root = fs.realpathSync(path.resolve(workspace));
+    root = canonicalPath(path.resolve(workspace));
   } catch {
     root = path.resolve(workspace);
   }
@@ -131,6 +131,7 @@ function writeStore({ copilotHome, home } = {}, store) {
 
 function approvalState(record, workspace, store) {
   if (store.unreadable) return { state: 'untrusted', reason: 'the trust store could not be read, so nothing is trusted' };
+  if (record?.status === 'conflict') return { state: 'untrusted', reason: 'conflicting approvals for this project require a new approval' };
   if (record?.status === 'revoked') return { state: 'revoked', reason: 'trust was explicitly revoked' };
   if (record?.status === 'trusted') {
     if (digestMatchesApproval(record.digest, workspace)) return { state: 'trusted', reason: `approved ${record.approvedAt}` };
@@ -139,10 +140,28 @@ function approvalState(record, workspace, store) {
   return { state: 'untrusted', reason: 'this project has never been approved' };
 }
 
+function approvalMatches(root, identity) {
+  const anchor = path.parse(root).root;
+  return path.isAbsolute(root) && assertNoSymlinkAncestors(anchor, path.relative(anchor, root)) && projectIdentity(root).root === identity.root;
+}
+
+function projectApproval(store, identity) {
+  const matches = Object.entries(store.projects).filter(([root]) => approvalMatches(root, identity));
+  if (matches.length > 1) return { status: 'conflict' };
+  return matches[0]?.[1] ?? null;
+}
+
+function setProjectApproval(store, identity, record) {
+  for (const root of Object.keys(store.projects)) {
+    if (approvalMatches(root, identity)) delete store.projects[root];
+  }
+  store.projects[identity.root] = record;
+}
+
 export function trustStatus({ workspace, copilotHome, home }) {
   const identity = projectIdentity(workspace);
   const store = readStore({ copilotHome, home });
-  const record = store.projects[identity.root] || null;
+  const record = projectApproval(store, identity);
   const digest = policyDigest(workspace);
   const own = approvalState(record, workspace, store);
   let state = own.state;
@@ -151,14 +170,14 @@ export function trustStatus({ workspace, copilotHome, home }) {
   let inheritedFrom = null;
   let approvedAt = record?.approvedAt ?? null;
   let approvedDigest = record?.digest ?? null;
-  const ownDecides = store.unreadable || record?.status === 'revoked' || record?.status === 'trusted';
+  const ownDecides = store.unreadable || record?.status === 'revoked' || record?.status === 'trusted' || record?.status === 'conflict';
   if (!ownDecides) {
     const primary = aeWorktreePrimary(workspace);
     if (primary) {
       const primaryIdentity = projectIdentity(primary);
-      const primaryRecord = store.projects[primaryIdentity.root] || null;
+      const primaryRecord = projectApproval(store, primaryIdentity);
       inheritedFrom = primaryIdentity.root;
-      if (primaryRecord?.status === 'trusted' && digestMatchesApproval(primaryRecord.digest, workspace)) {
+      if (approvalState(primaryRecord, primary, store).state === 'trusted' && digestMatchesApproval(primaryRecord.digest, workspace)) {
         state = 'trusted';
         inherited = true;
         reason = `inherited from trusted primary ${primaryIdentity.root}`;
@@ -168,7 +187,7 @@ export function trustStatus({ workspace, copilotHome, home }) {
         reason = `inherited trust removed because primary ${primaryIdentity.root} was revoked`;
       } else if (primaryRecord?.status === 'trusted') {
         state = 'stale';
-        reason = `ae worktree of ${primaryIdentity.root}, but its policy files differ from that approval`;
+        reason = `ae worktree of ${primaryIdentity.root}, but the primary or worktree policy files differ from that approval`;
       }
     }
   }
@@ -207,7 +226,7 @@ export function approveProject({ workspace, copilotHome, home, now = new Date().
   }
   const digest = policyDigest(workspace);
   store.version = TRUST_SCHEMA_VERSION;
-  store.projects[identity.root] = { status: 'trusted', approvedAt: now, digest };
+  setProjectApproval(store, identity, { status: 'trusted', approvedAt: now, digest });
   writeStore({ copilotHome, home }, store);
   return trustStatus({ workspace, copilotHome, home });
 }
@@ -223,7 +242,7 @@ export function revokeProject({ workspace, copilotHome, home, now = new Date().t
     });
   }
   store.version = TRUST_SCHEMA_VERSION;
-  store.projects[identity.root] = { status: 'revoked', revokedAt: now };
+  setProjectApproval(store, identity, { status: 'revoked', revokedAt: now });
   writeStore({ copilotHome, home }, store);
   return trustStatus({ workspace, copilotHome, home });
 }

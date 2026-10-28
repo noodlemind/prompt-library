@@ -198,7 +198,8 @@ export async function main() {
       const { args: laneArgs, output } = extractOutputLane(args);
       const runFlags = parseFlags(args);
       const executionWorkspace = path.resolve(runFlags.workspace);
-      const domainContext = command === 'domain' ? resolveDomainCommandContext(laneArgs) : null;
+      const domainInput = {};
+      const domainContext = command === 'domain' ? resolveDomainCommandContext(laneArgs, { domainInput }) : null;
       const runWorkspace = domainContext ? domainContext.root : executionWorkspace;
       const journaling = (getCommand(command)?.workspaceJournal !== false || domainContext !== null) && !shouldSkipRunJournal(runFlags);
       runId = newRunId();
@@ -236,6 +237,7 @@ export async function main() {
         events,
         signal,
         domainContext,
+        domainInput,
         onRunStart: openRun,
                 reportStatus: (status) => { reportedStatus = status; },
       });

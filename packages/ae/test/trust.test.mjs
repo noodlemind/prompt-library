@@ -20,6 +20,7 @@ import {
 } from '../lib/trust.mjs';
 import { loadPolicy } from '../lib/policy.mjs';
 import { resolveConfig } from '../lib/config.mjs';
+import { addIsolatedWorktree } from '../lib/worktree.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
@@ -44,6 +45,134 @@ function run(argv, { workspace, copilotHome }) {
     encoding: 'utf8',
   });
 }
+
+test('inherited trust stops when the primary approval becomes stale', t => {
+  const workspace = tempDir('trust-primary-stale-');
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const copilotHome = tempDir('trust-primary-home-');
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  const s = { workspace, copilotHome, home: copilotHome };
+  writeProjectFile(s, '.github/harness/policy.yaml', 'enforcement: enforce\n');
+  for (const args of [['init', '-q'], ['config', 'core.autocrlf', 'false'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'baseline']]) {
+    const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  approveProject(s);
+  const linked = addIsolatedWorktree({ workspace, slug: 'inherited', from: 'HEAD' });
+  const initial = trustStatus({ ...s, workspace: linked.path });
+  assert.equal(initial.trusted, true, JSON.stringify({ initial, primary: trustStatus(s), workspace, nativeWorkspace: fs.realpathSync.native(workspace), copiedPolicy: fs.readFileSync(path.join(linked.path, '.github/harness/policy.yaml'), 'utf8') }));
+  writeProjectFile(s, '.github/harness/policy.yaml', 'enforcement: observe\n');
+  assert.equal(trustStatus(s).state, 'stale');
+  const inherited = trustStatus({ ...s, workspace: linked.path });
+  assert.equal(inherited.state, 'stale');
+  assert.equal(inherited.trusted, false);
+  assert.equal(inherited.inherited, false);
+});
+
+test('canonical trust reads a legacy spelling and a new revocation takes precedence', () => {
+  const s = scopes();
+  approveProject(s);
+  const file = trustStorePath(s);
+  const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
+  const root = projectIdentity(s.workspace).root;
+  saved.projects[`${root}${path.sep}.`] = saved.projects[root];
+  delete saved.projects[root];
+  fs.writeFileSync(file, YAML.stringify(saved));
+  assert.equal(trustStatus(s).trusted, true);
+  assert.equal(revokeProject(s).state, 'revoked');
+  assert.equal(trustStatus(s).trusted, false);
+});
+
+test('conflicting legacy trust spellings require a new canonical approval', () => {
+  const s = scopes();
+  approveProject(s);
+  const file = trustStorePath(s);
+  const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
+  const root = projectIdentity(s.workspace).root;
+  saved.projects[`${root}${path.sep}.`] = saved.projects[root];
+  saved.projects[`${root}${path.sep}..${path.sep}${path.basename(root)}`] = { status: 'revoked' };
+  delete saved.projects[root];
+  fs.writeFileSync(file, YAML.stringify(saved));
+  assert.equal(trustStatus(s).trusted, false);
+  assert.equal(approveProject(s).trusted, true);
+});
+
+test('a canonical approval cannot bypass a conflicting legacy revocation', () => {
+  const s = scopes();
+  approveProject(s);
+  const file = trustStorePath(s);
+  const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
+  const root = projectIdentity(s.workspace).root;
+  saved.projects[`${root}${path.sep}.`] = { status: 'revoked' };
+  const before = YAML.stringify(saved);
+  fs.writeFileSync(file, before);
+  assert.equal(trustStatus(s).trusted, false);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(approveProject(s).trusted, true);
+});
+
+test('relative trust spellings never establish authority', () => {
+  const s = scopes();
+  approveProject(s);
+  const file = trustStorePath(s);
+  const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
+  const root = projectIdentity(s.workspace).root;
+  saved.projects['.'] = saved.projects[root];
+  delete saved.projects[root];
+  fs.writeFileSync(file, YAML.stringify(saved));
+  const previous = process.cwd();
+  try {
+    process.chdir(s.workspace);
+    assert.equal(trustStatus(s).trusted, false);
+  } finally { process.chdir(previous); }
+});
+
+test('stored approvals do not follow redirected project paths', async t => {
+  for (const redirected of ['root', 'ancestor']) {
+    await t.test(redirected, () => {
+      const base = tempDir('trust-redirect-');
+      t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+      const original = path.join(base, 'original');
+      const target = path.join(base, 'target');
+      fs.mkdirSync(original);
+      fs.mkdirSync(target);
+      const workspace = redirected === 'root' ? original : path.join(original, 'repo');
+      const otherWorkspace = redirected === 'root' ? target : path.join(target, 'repo');
+      fs.mkdirSync(workspace, { recursive: true });
+      fs.mkdirSync(otherWorkspace, { recursive: true });
+      const s = { workspace, home: path.join(base, 'home'), copilotHome: path.join(base, 'home') };
+      approveProject(s);
+      fs.renameSync(original, path.join(base, 'archived'));
+      fs.symlinkSync(target, original, process.platform === 'win32' ? 'junction' : 'dir');
+      assert.equal(trustStatus({ ...s, workspace: otherWorkspace }).trusted, false);
+    });
+  }
+});
+
+test('conflicting worktree approvals cannot fall back to primary trust', t => {
+  const workspace = tempDir('trust-child-conflict-');
+  const home = tempDir('trust-child-conflict-home-');
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const s = { workspace, home, copilotHome: home };
+  for (const args of [['init', '-q'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '--allow-empty', '-qm', 'baseline']]) {
+    const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  approveProject(s);
+  const linked = addIsolatedWorktree({ workspace, slug: 'conflict', from: 'HEAD' });
+  const child = { ...s, workspace: linked.path };
+  assert.equal(trustStatus(child).trusted, true);
+  revokeProject(child);
+  const file = trustStorePath(s);
+  const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
+  const root = projectIdentity(linked.path).root;
+  saved.projects[`${root}${path.sep}.`] = { status: 'trusted', digest: policyDigest(linked.path) };
+  fs.writeFileSync(file, YAML.stringify(saved));
+  const status = trustStatus(child);
+  assert.equal(status.trusted, false);
+  assert.equal(status.inherited, false);
+});
 
 test('a fresh project is untrusted, and says why', () => {
   const s = scopes();

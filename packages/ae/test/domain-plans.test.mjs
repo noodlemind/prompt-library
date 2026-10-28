@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { readDomain } from '../lib/domain-contract.mjs';
 import { snapshotDomain } from '../lib/domain-bindings.mjs';
@@ -90,6 +91,19 @@ test('coordinator refresh must be accepted by the original actor before the repl
   const moved = loadPlan(replacement, plan.path, { domainContext: b });
   assert.equal(moved.fm.plan_id, plan.fm.plan_id);
   assert.equal(moved.fm.domain_parent.coordinator.root, replacement);
+});
+
+test('domain coordinator HEAD refresh consumes a stdin decision once', t => {
+  const f = fixture(t), created = createDomainPlans(f.options), workspace = f.roots.coordinator;
+  const context = resolveDomainContext({ workspace, home: f.home, name: 'catalogue' });
+  const plan = loadPlan(workspace, created.parent.path, { domainContext: context });
+  const advanced = spawnSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'advance coordinator'], { cwd: workspace, encoding: 'utf8' });
+  assert.equal(advanced.status, 0, advanced.stderr);
+  const coordinator = snapshotDomainCoordinator(workspace);
+  const input = { version: 1, id: 'refresh-head-stdin', action: 'amend', expect: hash(plan.text), rationale: 'Accept the current coordinator HEAD.', authority: { scope: 'domain-intent', basis: 'The original coordinator explicitly accepts its new HEAD.' }, changes: { domainParent: { ...plan.fm.domain_parent, coordinator } } };
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/ae.mjs', import.meta.url)), 'domain', 'plan-update', '--name', 'catalogue', '--plan', plan.path, '--workspace', workspace, '--harness-home', f.home, '--copilot-home', path.join(f.home, 'copilot'), '--file', '-', '--json', '--no-events'], { cwd: workspace, encoding: 'utf8', input: JSON.stringify(input), timeout: 15_000 });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(loadPlan(workspace, plan.path, { domainContext: context }).fm.domain_parent.coordinator.initial_head, coordinator.initial_head);
 });
 
 function conversionFixture(t) {

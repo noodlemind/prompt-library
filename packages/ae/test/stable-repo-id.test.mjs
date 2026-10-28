@@ -18,6 +18,10 @@ import {
 } from '../lib/knowledge/store.mjs';
 import { migrateStrandedStore } from '../lib/knowledge/admin.mjs';
 import { adoptStorageAlias, storageIdForRepo } from '../lib/storage-aliases.mjs';
+import { writeFileContainedExclusive } from '../lib/fs-safe.mjs';
+import { withPlanUpdateLock } from '../lib/plan-update.mjs';
+import { branchKeyFor } from '../lib/git-context.mjs';
+import { loadLayeredLearnings } from '../lib/knowledge/overlay.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
@@ -41,6 +45,96 @@ function checkout(prefix) {
 function stableId(ws) {
   return localIdForAbsolutePath(fs.realpathSync.native(ws));
 }
+
+for (const sameBytes of [false, true]) test(`migration preserves a plan created during publication${sameBytes ? ' with matching bytes' : ' and reports its conflict'}`, t => {
+  const c = checkout('migration-plan-race-');
+  t.after(() => fs.rmSync(c.parent, { recursive: true, force: true }));
+  const home = path.join(c.parent, 'home');
+  const oldId = stableId(c.ws);
+  assert.equal(git(c.ws, ['remote', 'add', 'origin', 'https://example.test/plan-race.git']).status, 0);
+  const rel = 'plans/2026-10-28-fix-race-plan.md';
+  const source = path.join(home, 'projects', oldId, rel);
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, 'old migrated plan\n');
+  const targetRoot = path.join(home, 'projects', repoId(c.ws));
+  const target = path.join(targetRoot, rel);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const open = fs.openSync;
+  const competing = sameBytes ? 'old migrated plan\n' : 'new accepted plan\n';
+  let created = false;
+  let result;
+  try {
+    fs.openSync = function (file, ...args) {
+      if (!created && typeof file === 'string' && path.dirname(file) === path.dirname(target)
+        && path.basename(file).startsWith(`.tmp-${path.basename(target)}-`)) {
+        created = true;
+        assert.ok(writeFileContainedExclusive(targetRoot, rel, competing));
+      }
+      return open.call(this, file, ...args);
+    };
+    withPlanUpdateLock(target, () => { result = migrateStrandedStore({ workspace: c.ws, home }); });
+  } finally { fs.openSync = open; }
+  assert.equal(created, true);
+  assert.equal(result.pass, true, result.blockedReason);
+  assert.equal(fs.readFileSync(target, 'utf8'), competing);
+  assert.equal(fs.readFileSync(source, 'utf8'), 'old migrated plan\n');
+  assert.deepEqual(result.conflicts.map(row => row.to), sameBytes ? [] : [target]);
+  if (sameBytes) assert.deepEqual(result.alreadyPresent.map(row => row.to), [target]);
+});
+
+for (const archived of [false, true]) test(`migration preserves branch ancestry and consolidation history${archived ? ' recovered from git' : ''}`, t => {
+  const c = checkout('migration-branch-state-');
+  t.after(() => fs.rmSync(c.parent, { recursive: true, force: true }));
+  const home = path.join(c.parent, 'home');
+  const oldId = stableId(c.ws);
+  assert.equal(git(c.ws, ['remote', 'add', 'origin', 'https://example.test/branch-state.git']).status, 0);
+  assert.equal(git(c.ws, ['checkout', '-qb', 'feature/migration']).status, 0);
+  const unrelated = git(c.ws, ['commit-tree', 'HEAD^{tree}', '-m', 'unrelated history']);
+  assert.equal(unrelated.status, 0, unrelated.stderr);
+  const rel = `branches/${branchKeyFor('feature/migration')}`;
+  const source = path.join(home, 'knowledge', oldId, rel);
+  fs.mkdirSync(path.join(source, 'learnings/sql'), { recursive: true });
+  const metadata = JSON.stringify({ baseSha: unrelated.stdout.trim(), branch: 'feature/migration' }) + '\n';
+  const ledger = '{"episode":"already consolidated"}\n';
+  fs.writeFileSync(path.join(source, 'meta.json'), metadata);
+  fs.writeFileSync(path.join(source, 'consolidated.jsonl'), ledger);
+  fs.writeFileSync(path.join(source, 'learnings/sql/old.md'), '---\nschema: 1\nstatus: active\ntrigger: old branch\nepisodes: []\nanchors: []\n---\nOld advice\n');
+  if (archived) {
+    const store = path.join(home, 'knowledge', oldId);
+    for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'saved bucket']]) {
+      const saved = git(store, args);
+      assert.equal(saved.status, 0, saved.stderr);
+    }
+    fs.rmSync(path.join(store, 'branches'), { recursive: true });
+  }
+  const result = migrateStrandedStore({ workspace: c.ws, home });
+  assert.equal(result.pass, true, result.blockedReason);
+  const destination = path.join(home, 'knowledge', repoId(c.ws), rel);
+  assert.equal(fs.readFileSync(path.join(destination, 'meta.json'), 'utf8'), metadata);
+  assert.equal(fs.readFileSync(path.join(destination, 'consolidated.jsonl'), 'utf8'), ledger);
+  const layered = loadLayeredLearnings({ workspace: c.ws, home });
+  assert.equal(layered.excludedBucket?.reason, 'ancestry');
+  assert.deepEqual(layered.learnings, []);
+  assert.equal(migrateStrandedStore({ workspace: c.ws, home }).unchanged, true);
+});
+
+test('doctor accepts an intentional storage alias after migration', t => {
+  const c = checkout('doctor-bound-alias-');
+  t.after(() => fs.rmSync(c.parent, { recursive: true, force: true }));
+  const home = path.join(c.parent, 'home');
+  const oldId = localIdForAbsolutePath(fs.realpathSync.native(path.join(c.ws, 'src')));
+  const source = path.join(home, 'projects', oldId, 'agent-context.md');
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, 'bound context\n');
+  adoptStorageAlias(repoId(c.ws), oldId, { home });
+  const migration = migrateStrandedStore({ workspace: c.ws, home });
+  assert.equal(migration.pass, true, migration.blockedReason);
+  assert.equal(migration.unchanged, true);
+  const result = spawnSync(process.execPath, [binPath, 'doctor', '--workspace', c.ws, '--ae-home', home, '--copilot-home', path.join(c.parent, 'copilot'), '--json'], { encoding: 'utf8', timeout: 20000 });
+  const k4 = JSON.parse(result.stdout).checks.find(check => check.id === 'K4');
+  assert.equal(k4.pass, true, k4.hint);
+  assert.equal(fs.readFileSync(source, 'utf8'), 'bound context\n');
+});
 
 test('one local id covers a subdirectory, a linked worktree, and a symlinked path', () => {
   const c = checkout('stable-id-');

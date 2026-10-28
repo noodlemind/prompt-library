@@ -53,12 +53,13 @@ test('the test bootstrap creates local stores under a temp home', () => {
 
 test('npm test child environment keeps the caller home out of AE state', () => {
   const caller = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-caller-home-'));
-  const env = { ...process.env, HOME: caller, USERPROFILE: caller, AE_HOME: path.join(caller, '.harness') };
+  const env = { ...process.env, HOME: caller, USERPROFILE: caller, AE_HOME: path.join(caller, '.harness'), COPILOT_HOME: path.join(caller, '.copilot') };
   const home = isolateTestHome(env);
   assert.notEqual(path.resolve(env.HOME), path.resolve(caller));
   assert.equal(env.USERPROFILE, env.HOME);
   assert.equal(env.AE_HOME, undefined);
   assert.equal(env.HARNESS_HOME, undefined);
+  assert.equal(env.COPILOT_HOME, undefined);
   assert.equal(path.resolve(home), path.resolve(env.HOME));
   fs.rmSync(caller, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });

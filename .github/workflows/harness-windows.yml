@@ -43,6 +43,10 @@ jobs:
       - name: Install harness dependencies
         run: npm ci --prefix packages/ae
 
+      - name: Trust inheritance preflight
+        if: matrix.shard == 1
+        run: node --import ./packages/ae/test/helpers/isolate-runtime-env.mjs --test --test-name-pattern="inherited trust stops" ./packages/ae/test/trust.test.mjs
+
       - name: Harness test suite (Windows)
         env:
           HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-full
@@ -282,6 +286,7 @@ jobs:
           if (settledMs > 15000) failures.push(`EXPECTED termination to settle promptly after the abort, GOT ${settledMs}ms`);
           if (grandchildPid === null) failures.push('EXPECTED a grandchild pid on stdout; cancellation was never exercised');
           if (grandchildAlive) {
+            failures.push(`EXPECTED the grandchild (pid ${grandchildPid}) to die with the tree, but it is still alive`);
             try { process.kill(grandchildPid); } catch { /* already gone */ }
             console.log('grandchild outlived the owned process; reaped by the probe');
           }

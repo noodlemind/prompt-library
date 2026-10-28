@@ -178,6 +178,27 @@ test('publication is immutable, repeatable and available through one validated r
   assert.deepEqual(fs.readFileSync(first.reference), bytes);
 });
 
+test('publication terminates when a missing lock cannot be created', t => {
+  const f = fixture(t), input = candidate(f);
+  const module = new URL('../lib/flow-model.mjs', import.meta.url).href;
+  const script = `import fs from 'node:fs';
+import path from 'node:path';
+import { publishFlowModel } from ${JSON.stringify(module)};
+const open = fs.openSync;
+fs.openSync = function(file, ...args) {
+  if (typeof file === 'string' && path.basename(file).startsWith('.tmp-.publish.lock-')) throw Object.assign(new Error('read-only'), { code: 'EACCES' });
+  return open.call(this, file, ...args);
+};
+try { publishFlowModel(${JSON.stringify({ workspace: f.workspace, home: f.home, input })}); }
+catch (error) { console.log(error.message); process.exitCode = 2; }
+`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 8000 });
+  assert.ifError(result.error);
+  assert.equal(result.status, 2, result.stderr + result.stdout);
+  assert.match(result.stdout, /publication is busy/);
+  assert.equal(flowModelStatus(f).state, 'absent');
+});
+
 test('publication rejects obsolete or forged preparation and invalid statechart edges', t => {
   const f = fixture(t), input = candidate(f);
   const invalid = structuredClone(input); invalid.model.flows[0].transitions[0].to = 'missing';

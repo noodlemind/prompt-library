@@ -118,7 +118,7 @@ export function runHostAdapter() {
       cwd: workspace,
       input: readStdin(),
       encoding: 'utf8',
-      timeout: 8000,
+      timeout: 40000,
       env: process.env,
     });
     const decision = parseLastJson(gate.stdout) || {};

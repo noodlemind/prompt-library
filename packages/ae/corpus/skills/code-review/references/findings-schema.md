@@ -10,6 +10,11 @@ Each persona returns a single JSON object:
 {
   "reviewer": "architecture-strategist",
   "status": "completed",
+  "provenance": {
+    "kind": "host-invocation",
+    "agent": "architecture-strategist",
+    "via": "code-review-coordinator"
+  },
   "findings": [
     {
       "file": "path/to/file.rb",
@@ -57,6 +62,7 @@ Each persona returns a single JSON object:
 |-------|------|-------------|
 | `reviewer` | string | Required perspective/check ID declared in the packet |
 | `status` | enum | `completed` or actual failure status such as `timed-out`; only completed validates as coverage |
+| `provenance` | object | Recorded invocation: `kind: "host-invocation"`, `agent` matching `reviewer`, and `via: "engineer"` or `"code-review-coordinator"`. For same-context work use `kind: "same-context"` and `agent: "engineer"`; it does not count as independent review. These are declared records, not host-attested transcripts. |
 | `findings` | array | List of finding objects |
 | `residual_risks` | array[string] | Risks that remain even after all findings are addressed |
 | `testing_gaps` | array[string] | Areas where test coverage is insufficient |

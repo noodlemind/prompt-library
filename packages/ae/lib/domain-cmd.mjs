@@ -49,7 +49,7 @@ export function parseDomainArguments(argv) {
     if (boolean.has(name) && split < 0) continue;
     if (!allValued.has(name)) throw usage(`unsupported option ${name}`);
     const value = split < 0 ? argv[++index] : token.slice(split + 1);
-    if (!value || value.startsWith('-') || /[\x00-\x1f\x7f]/.test(value)) throw usage(`${name} requires a bounded value`);
+    if (!value || (value.startsWith('-') && !(name === '--file' && value === '-')) || /[\x00-\x1f\x7f]/.test(value)) throw usage(`${name} requires a bounded value`);
     const entries = values.get(name) || [];
     if (entries.length >= 32 || Buffer.byteLength(value) > 4096) throw usage(`${name} exceeds the input bound`);
     entries.push(value); values.set(name, entries);
@@ -63,6 +63,7 @@ export function parseDomainArguments(argv) {
     if (entries.length > 1 && !(verb === 'review' && reviewVerb === 'prepare' && ['--reviewer', '--file'].includes(key))) throw usage(`duplicate option ${key}`);
   }
   const value = key => values.get(key)?.[0];
+  if (value('--file') === '-' && !['plan-new', 'plan-update'].includes(verb)) throw usage('--file - is supported only for plan-new and plan-update');
   const name = value('--name');
   if (!name || name.length > 64 || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) throw usage('--name must identify an existing bounded domain');
   const required = [];
@@ -77,8 +78,12 @@ export function parseDomainArguments(argv) {
 }
 
 export function resolveDomainCommandContext(argv, ctx = {}) {
-  const parsed = parseDomainArguments(argv);
+  return resolveParsedDomainContext(parseDomainArguments(argv), ctx);
+}
+
+function resolveParsedDomainContext(parsed, ctx) {
   if (parsed.verb === 'show') return null;
+  parsed.decision = ctx.domainInput?.decision;
   const workspace = path.resolve(parsed.flags.workspace), home = parsed.flags.harnessHome || ctx.harnessHome || harnessGlobalHome();
   let context = ctx.domainContext;
   if (context) {
@@ -96,13 +101,14 @@ export function resolveDomainCommandContext(argv, ctx = {}) {
     const checked = domainCoordinatorCheck({ workspace, plan });
     if (!checked.pass && !acceptedCoordinatorRefresh(parsed, workspace, plan)) throw usage(checked.message);
   }
+  if (ctx.domainInput && parsed.decision) ctx.domainInput.decision = parsed.decision;
   return context;
 }
 
 function acceptedCoordinatorRefresh(parsed, workspace, plan) {
   if (parsed.verb !== 'plan-update') return false;
-  const input = readDecision(workspace, parsed.value('--file'));
-  return planUpdateActorCheck({ workspace, plan, input }).pass;
+  parsed.decision ??= readDecision(workspace, parsed.value('--file'));
+  return planUpdateActorCheck({ workspace, plan, input: parsed.decision }).pass;
 }
 
 function readDecision(workspace, argument) {
@@ -119,7 +125,7 @@ export function domainResultOf(argv, ctx = {}) {
   const parsed = parseDomainArguments(argv), { flags, verb, name } = parsed;
   const workspace = path.resolve(flags.workspace), home = flags.harnessHome || ctx.harnessHome || harnessGlobalHome();
   if (verb === 'show') return inspectDomain(readDomain(name, { home }));
-  return runDomainOperation(parsed, { ...ctx, workspace, home, domainContext: resolveDomainCommandContext(argv, ctx) });
+  return runDomainOperation(parsed, { ...ctx, workspace, home, domainContext: resolveParsedDomainContext(parsed, ctx) });
 }
 
 async function runDomainOperation(parsed, ctx) {
@@ -129,7 +135,7 @@ async function runDomainOperation(parsed, ctx) {
   const common = { workspace, home, domainContext, copilotHome, dryRun: flags.dryRun };
   let result;
   if (verb === 'plan-new') result = await createDomainPlans({ ...common, name, decision: readDecision(workspace, value('--file')) });
-  else if (verb === 'plan-update') result = updatePlanDecision({ ...common, planPath: flags.plan, input: readDecision(workspace, value('--file')), flags });
+  else if (verb === 'plan-update') result = updatePlanDecision({ ...common, planPath: flags.plan, input: parsed.decision ?? readDecision(workspace, value('--file')), flags });
   else {
     const plan = loadPlan(workspace, flags.plan, { home, domainContext });
     if (!plan) throw usage('parent plan is missing or outside the selected domain store');

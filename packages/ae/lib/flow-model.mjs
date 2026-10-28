@@ -261,16 +261,13 @@ function withPublication(owner, publish) {
     // A lock can disappear, or be briefly unreadable, between the exclusive
     // create and this read. Windows hits that window when two publishers race.
     // Retry until the deadline. An oversized or non-file lock still fails now.
-    let held = false;
     try {
-      held = read(owner, '.publish.lock', 1024) !== null;
+      read(owner, '.publish.lock', 1024);
     } catch (cause) {
       if (!String(cause.message).includes('unreadable or exceeds its byte limit')) throw cause;
       const stat = fs.lstatSync(lock, { throwIfNoEntry: false });
       if (stat?.isFile() && stat.size > 1024) throw cause;
-      held = Boolean(stat);
     }
-    if (!held) continue;
     if (Date.now() >= deadline) throw error(`publication is busy; retry after the active writer finishes. If it was interrupted, inspect ${lock} and remove that lock only after confirming its writer has stopped`);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
   }
