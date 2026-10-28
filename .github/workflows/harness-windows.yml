@@ -282,6 +282,7 @@ jobs:
           if (settledMs > 15000) failures.push(`EXPECTED termination to settle promptly after the abort, GOT ${settledMs}ms`);
           if (grandchildPid === null) failures.push('EXPECTED a grandchild pid on stdout; cancellation was never exercised');
           if (grandchildAlive) {
+            failures.push(`EXPECTED the grandchild (pid ${grandchildPid}) to die with the tree, but it is still alive`);
             try { process.kill(grandchildPid); } catch { /* already gone */ }
             console.log('grandchild outlived the owned process; reaped by the probe');
           }
