@@ -5,6 +5,7 @@ import { buildContextPack } from '../lib/context-pack.mjs';
 import { extractGoalFromPlan } from '../lib/plan-goal.mjs';
 import { shortPlanDocument } from '../lib/plan-record.mjs';
 import { makeScopes, runHarness, writeVersionedPlan, initGit } from './helpers/index.mjs';
+import { tokenizeShell } from '../corpus/hooks/lib/tool-payload.mjs';
 
 test('orient extracts constraints and acceptance from both full and short plans', () => {
   const goal = 'Every accepted product remains searchable';
@@ -57,7 +58,7 @@ test('an oversized mandatory contract produces an explicit read barrier', () => 
 });
 
 test('orient names the learning decision and completion steps for an implement-ready plan', t => {
-  const { workspace, copilotHome } = makeScopes();
+  const { workspace, copilotHome } = makeScopes({ workspacePrefix: 'harness orient ' });
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
   const plan = writeVersionedPlan(workspace);
@@ -69,4 +70,8 @@ test('orient names the learning decision and completion steps for an implement-r
   assert.ok(value.nextTools.some(tool => /ae compound.*--plan .*--learning-decision/.test(tool)), JSON.stringify(value.nextTools));
   assert.ok(value.nextTools.some(tool => /ae plan-update.*--plan .*--file -/.test(tool)), JSON.stringify(value.nextTools));
   assert.ok(!value.nextTools.includes('ae compound'));
+  const completion = value.nextTools.find(tool => tool.startsWith('ae plan-update'));
+  const tokens = tokenizeShell(completion.split('\n')[0]);
+  assert.equal(tokens[tokens.indexOf('--workspace') + 1], workspace);
+  assert.equal(tokens[tokens.indexOf('--plan') + 1], plan);
 });

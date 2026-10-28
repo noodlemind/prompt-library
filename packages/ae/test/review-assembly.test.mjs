@@ -573,6 +573,19 @@ test('a coordinator specialist invocation counts as a separate review', t => {
   assert.equal(facts.invocationIdentity, 'separate-reviewer');
 });
 
+test('the coordinator output example records the required invocation provenance', t => {
+  const f = fixture(t), packet = f.prepare();
+  const instructions = fs.readFileSync(path.join(root, 'corpus/agents/code-review-coordinator.agent.md'), 'utf8');
+  const example = instructions.match(/Return `([^`]+)`\./)?.[1];
+  assert.ok(example);
+  const results = packet.required.map(reviewer => JSON.parse(example.replaceAll('<supplied id>', packet.id).replaceAll('<required id>', reviewer)).results[0]);
+  const assembled = f.assemble(packet, results);
+  assert.equal(assembled.status, 0, assembled.stderr + assembled.stdout);
+  const facts = coverageIdentity(f);
+  assert.equal(facts.pass, true, facts.message);
+  assert.equal(facts.invocationIdentity, 'separate-reviewer');
+});
+
 test('an engineer self-review is not an independent review', t => {
   const f = fixture(t);
   const packet = f.prepare('--reviewer', 'security-sentinel', '--reviewer', 'architecture-strategist');
