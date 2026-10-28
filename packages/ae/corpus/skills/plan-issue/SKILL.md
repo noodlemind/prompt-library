@@ -26,7 +26,7 @@ Retrieve the selected plan and current revision. If it is already locked, judge 
 
 ## Research and choose
 
-Read selected intent sources and task-relevant repository context. Use /recall for applicable prior solutions. Delegate bounded research when separate expertise is useful; otherwise research within this session. Follow the shared subagent context packet contract.
+Read selected intent sources and task-relevant repository context. Use /recall for applicable prior solutions. Delegate bounded research when separate expertise is useful; otherwise research within this session. Follow the shared subagent context packet contract. Researcher spawns use the `researcher` role. Read the matching role line in `~/.cursor/rules/ae-models.mdc` or `~/.claude/rules/ae-models.md`. Pass that model when the host spawn tool takes one. A missing file, a missing line, or `inherit` means omit the model.
 
 Choose the smallest approach that meets the goal. Identify impacted paths and meaningful acceptance criteria. Inspect trusted named checks from `.github/harness/checks.yaml`; judge assertion adequacy rather than matching a check name. Record source-backed reasoning, constraints, unresolved questions, and risk-aware review needs.
 

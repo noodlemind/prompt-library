@@ -8,7 +8,7 @@ This is a skill-driven prompt library for software development teams. The primar
 
 ### Architecture: Skill-First Primitives
 
-- **Skills** (`packages/ae/corpus/skills/*/SKILL.md`, read from `~/.copilot/skills/`): 27 workflows total, including five internal workflows (`ensure-plan`, experimental `caffeinated`, `ensure-capability`, `auto-compound`, and experimental `auto-skill-draft`) and design-before-code `/architect`. The single entry is `@engineer`; the only user-invocable skills are `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal (`user-invocable: false`), loaded on demand by the Engineer. The connected pipeline `/capture-issue` → `/plan-issue` → Engineer Deliver mode → `/code-review` → `/compound-learnings` is the engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. Quick Q&A is `@engineer` Answer mode (ceremony-free). `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
+- **Skills** (`packages/ae/corpus/skills/*/SKILL.md`, read from `~/.copilot/skills/`): 28 workflows total, including internal workflows (`ensure-plan`, experimental `caffeinated`, `ensure-capability`, `auto-compound`, experimental `auto-skill-draft`, and per-role model setup `setup-models`) and design-before-code `/architect`. The single entry is `@engineer`; the only user-invocable skills are `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal (`user-invocable: false`), loaded on demand by the Engineer. The connected pipeline `/capture-issue` → `/plan-issue` → Engineer Deliver mode → `/code-review` → `/compound-learnings` is the engineering loop, while `/auto-compound` is the Engineer's automatic post-success delivery path. Quick Q&A is `@engineer` Answer mode (ceremony-free). `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`.
 - **Agents** (`packages/ae/corpus/agents/*.agent.md`, read from `~/.copilot/agents/`): 22 agents — 17 stateless domain experts using judgment-criteria design, 1 delivery classifier, 1 engineer, 1 code-implementer, plus 2 internal coordinator agents (`code-review-coordinator`, `plan-coordinator`) dispatched by `@engineer`. Agents exist for separate judgment, tool authority, runtime profile, isolation, or accountability. Active Java, Python, SQL, and AWS reviewers are included.
 - **Instructions** (`packages/ae/corpus/instructions/*.instructions.md`, 5 files: harness-global, TypeScript, Python, Java, PostgreSQL; read from `~/.copilot/instructions/`): Scoped context that activates based on file patterns. Spring Boot and AWS SDK guidance loads on demand via the `/java` and `/aws` skill references, so a single `.java` file no longer stacks three always-on instructions.
 - **Prompt wrappers**: Retired. `.github/prompts/` no longer exists — users select `@engineer` from the agent dropdown, and `ae upgrade` purges previously hydrated wrappers via `retired.json`.
@@ -45,7 +45,7 @@ docs/
   adaptive-engineering.md — how the Engineer and Harness work, and how capability is acquired
 packages/ae/      — CLI package
   corpus/
-    skills/            — 27 skill directories with SKILL.md
+    skills/            — 28 skill directories with SKILL.md
     agents/            — 22 agent definitions (17 specialists + 1 delivery classifier + 1 engineer + 1 implementer + 2 coordinators)
     instructions/      — 5 scoped instructions (harness-global, TypeScript, Python, Java, PostgreSQL)
     hooks/             — install-time Copilot hooks
@@ -94,7 +94,7 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 21. **code-review-coordinator**: Thin dispatcher of the `/code-review` skill (the skill owns all criteria, confidence scoring, and checks) — delegates to specialist reviewers in parallel batches with isolated context
 22. **plan-coordinator**: Delegates to research agents in parallel with isolated context
 
-## Available Skills (27 total)
+## Available Skills (28 total)
 
 ### User-Invocable
 1. **/engineer**: Substantial read-only investigation or full-cycle delivery with gated edits and verification
@@ -138,6 +138,7 @@ Only `@engineer` is user-invocable; all other agents are internal and dispatched
 
 ### Engineer-Internal (loaded on demand) — Accepted Delivery
 27. **/caffeinated**: Experimental continuation of an accepted Deliver plan and bound playbook through its scoped worklist, review, proof and completion.
+28. **/setup-models**: Ask once for a reasoning budget and a model per role, then write the host user rule. Engineer-internal. AE does not call a model.
 
 ## Key Design Decisions
 

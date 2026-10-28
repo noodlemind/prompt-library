@@ -2,6 +2,8 @@
 
 Use this template for every delegated task. Subagents run in isolated context; assume they do not remember prior conversation, hidden plan details, or unstated constraints.
 
+Read the matching role line in `~/.cursor/rules/ae-models.mdc` or `~/.claude/rules/ae-models.md`. The role is `engineer`, `specialist`, `researcher`, or `reviewer`. Pass that model when the host spawn tool takes one. A missing file, a missing line, or `inherit` means omit the model.
+
 ## Delegation Header
 
 - **Delegating agent/skill:**

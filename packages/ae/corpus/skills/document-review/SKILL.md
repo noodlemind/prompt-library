@@ -57,7 +57,7 @@ The Engineer runs `ae review prepare --domain document --file <document> --json`
 3. **Coherence** — internal consistency, contradictions, terminology drift, structural issues
 4. **Feasibility** — technical feasibility, architecture conflicts, dependency gaps, implementability
 
-**Orchestration:** If the `agent` tool is available for subagent delegation, delegate to 4 personas as isolated subagents in parallel. Each receives:
+**Orchestration:** If the `agent` tool is available for subagent delegation, delegate to 4 personas as isolated subagents in parallel. Those personas use the `reviewer` role. Read the matching role line in `~/.cursor/rules/ae-models.mdc` or `~/.claude/rules/ae-models.md`. Pass that model when the host spawn tool takes one. A missing file, a missing line, or `inherit` means omit the model. Each receives:
 - The full document content
 - The document type classification
 - Their persona's evaluation criteria from `<copilot-home>/skills/document-review/references/review-criteria.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/document-review/references/review-criteria.md --json` prints the same file

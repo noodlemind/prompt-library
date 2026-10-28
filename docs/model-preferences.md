@@ -1,6 +1,6 @@
 # Model preferences
 
-This note records how other systems set a model per role, and three ways AE could follow them. It does not choose one. AE does not call a model, and the shipped agents still omit `model`, so each host inherits the session model.
+Krish chose the user rule the skills read. The skill is `setup-models`. It asks once, writes one user file, and spawn sites pass that model when the host tool takes one. AE does not call a model. Shipped agents still omit `model`. Copilot and Codex stay hand-set, as recorded below.
 
 ## pstack
 
@@ -32,9 +32,35 @@ Claude Code is a generated copy under [harness/pstack/claude-code](https://githu
 
 [AutoGen AssistantAgent](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.agents.html) requires a `model_client`. The [quickstart](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/quickstart.html) constructs `OpenAIChatCompletionClient(model="gpt-4o")` and passes that client to one agent. A second agent can receive a different client. I did not find a setup command that interviews the user.
 
-## Options for AE
+## Decision
 
-AE already stores user settings in `<copilot-home>/harness/config.yaml` and project settings in `.github/harness/config.yaml`. Shipped agents omit `model`. These options are recorded so Krish can choose. None is selected here.
+Krish chose **A user rule the skills read**. `setup-models` is engineer-internal. It lists the slugs the session can pass to a subagent, asks the user to paste slugs when it cannot see any, and never writes a real slug that was not confirmed. `inherit` is always allowed. It asks for one budget (`unlimited — max reasoning`, `large — xhigh reasoning`, `medium — high reasoning`, `small — medium reasoning`), then shows `engineer`, `specialist`, `researcher`, and `reviewer`. A re-run reads the existing file and keeps a role the user changed.
+
+Cursor writes `~/.cursor/rules/ae-models.mdc` with `alwaysApply: true`. Claude Code writes `~/.claude/rules/ae-models.md` with no frontmatter. A Claude slug such as `claude-opus-5-5-xhigh` is stored as `opus xhigh` (`model` `opus`, `effort` `xhigh`). A non-Claude slug is stored as `inherit`, which omits `model`. The user home is `USERPROFILE` on Windows and `HOME` on macOS and Linux.
+
+A spawn reads the matching role line in that file and passes the model when the host spawn tool takes one. A missing file, a missing line, or `inherit` omits the model. There is no parser in the `ae` CLI.
+
+Copilot subagents inherit the session model. A user who wants a pin sets `model` by hand in that agent's frontmatter. A name that contains parentheses can fail to resolve in JetBrains ([copilot-intellij-feedback#1536](https://github.com/microsoft/copilot-intellij-feedback/issues/1536)). Codex profiles are also set by hand: `model` and `model_reasoning_effort` in `~/.codex/<profile>.config.toml`, or the same keys in a role `config_file`. [openai/codex#33881](https://github.com/openai/codex/issues/33881) reports that `codex exec` 0.144.5 ignored a role file's model and effort. This repo does not run that case.
+
+Sample Cursor rule after the user accepts the defaults:
+
+```
+---
+description: AE per-role model choices
+alwaysApply: true
+---
+# AE model configuration. One line per role. Delete a line to omit the model.
+# `inherit` omits the spawn model so the subagent uses the parent session.
+# budget: large (xhigh)
+engineer: inherit
+specialist: inherit
+researcher: inherit
+reviewer: inherit
+```
+
+## Options that were considered
+
+AE already stores user settings in `<copilot-home>/harness/config.yaml` and project settings in `.github/harness/config.yaml`. Shipped agents omit `model`. The chosen option is the user rule above. The other two stay recorded with their tradeoffs.
 
 ### Leave the agents unset
 
@@ -44,7 +70,7 @@ Tradeoff: nothing new to install, and an omitted field keeps today's inherit beh
 
 ### A user rule the skills read
 
-Follow pstack: a setup skill asks once, writes one user file, and the engineer skill tells the model to pass that model when the host tool has a model argument. A missing line keeps the current default, which for AE is omit the field.
+This is the option Krish chose. `setup-models` asks once, writes one user file, and the spawn sites pass that model when the host tool has a model argument. A missing line keeps the current default, which for AE is omit the field.
 
 Tradeoff: AE still never calls a model. Cursor and Claude Code can take a model on the spawn, as their docs and the pstack adapter describe. Copilot's published control is the `model` field on the agent file, and I did not find a spawn argument for it. A rule alone would not change Copilot subagents. The skill text would have to stay inside the engineer token cap.
 

@@ -164,7 +164,7 @@ try {
   const agents = filesBelow(path.join(copilotHome, 'agents')).filter(file => file.endsWith('.agent.md'));
   const instructions = filesBelow(path.join(copilotHome, 'instructions')).filter(file => file.endsWith('.instructions.md'));
   const publicSkills = skills.filter(file => !/^user-invocable: false\s*$/m.test(fs.readFileSync(file, 'utf8'))).map(file => path.basename(path.dirname(file))).sort();
-  assert.equal(skills.length, 27); assert.equal(agents.length, 22); assert.equal(instructions.length, 5);
+  assert.equal(skills.length, 28); assert.equal(agents.length, 22); assert.equal(instructions.length, 5);
   assert.deepEqual(publicSkills, ['engineer', 'harness-doctor', 'project-readme', 'triage-issues']);
   assert.equal(agents.filter(file => !/^user-invocable: false\s*$/m.test(fs.readFileSync(file, 'utf8'))).length, 1);
   const installedHooks = json(path.join(copilotHome, 'hooks/hooks.json'));

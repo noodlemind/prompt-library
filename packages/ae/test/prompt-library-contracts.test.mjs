@@ -1056,6 +1056,55 @@ test('repository startup context preserves Engineer review authority and exact-c
   assert.doesNotMatch(document, /P2\/P3 auto-applied/);
 });
 
+test('setup-models asks for confirmed slugs and spawn sites omit a missing model', () => {
+  const skill = read('packages/ae/corpus/skills/setup-models/SKILL.md');
+  const frontmatter = YAML.parse(skill.match(/^---\n([\s\S]*?)\n---/)[1]);
+  assert.equal(frontmatter.name, 'setup-models');
+  assert.equal(frontmatter['user-invocable'], false);
+  assert.ok(frontmatter.description.length <= 220);
+  for (const phrase of [
+    'paste',
+    'not confirmed',
+    'inherit',
+    'unlimited — max reasoning',
+    'large — xhigh reasoning',
+    'medium — high reasoning',
+    'small — medium reasoning',
+    'engineer',
+    'specialist',
+    'researcher',
+    'reviewer',
+    're-run',
+    '.cursor/rules/ae-models.mdc',
+    '.claude/rules/ae-models.md',
+    'alwaysApply: true',
+    'opus',
+    'effort',
+    'USERPROFILE',
+    'Copilot',
+    'by hand',
+    'Codex',
+    'model_reasoning_effort',
+    '33881',
+  ]) assert.match(skill, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), `setup skill missing ${phrase}`);
+  assert.match(skill, /does not call a model/i);
+  assert.doesNotMatch(skill, /\b(rg|grep|find|sed|awk|jq)\b/);
+  const sites = [
+    'packages/ae/corpus/skills/references/engineer-delegation-matrix.md',
+    'packages/ae/corpus/skills/references/subagent-context-packet.md',
+    'packages/ae/corpus/skills/code-review/SKILL.md',
+    'packages/ae/corpus/skills/document-review/SKILL.md',
+    'packages/ae/corpus/skills/plan-issue/SKILL.md',
+  ];
+  for (const rel of sites) {
+    const text = read(rel);
+    assert.match(text, /ae-models\.mdc/);
+    assert.match(text, /ae-models\.md/);
+    assert.match(text, /omit the model/i);
+    assert.match(text, /inherit/);
+  }
+});
+
 test('host hook reference requires proof after recorded potential terminal mutations', () => {
   const contract = read('packages/ae/corpus/skills/references/harness-tool-contract.md');
   const boundary = contract.split('## Host hook boundary')[1];

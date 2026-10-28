@@ -6,6 +6,8 @@ Load when delegating from `@engineer`. Read `<copilot-home>/skills/references/su
 
 Default to **3-5 active agents per workstream**, including the orchestrator/planner, executor, and reviewers or researchers. Use more specialists only by batching them and recording the reason in the plan `## Agent Journal` or `## Activity`.
 
+Read the matching role line in `~/.cursor/rules/ae-models.mdc` or `~/.claude/rules/ae-models.md`. Pass that model when the host spawn tool takes one. A missing file, a missing line, or `inherit` means omit the model. `engineer` is the orchestrator. `specialist` is `code-implementer` and `bug-reproduction-validator`. `researcher` is `repo-research-analyst`, `best-practices-researcher`, `framework-docs-researcher`, and `git-history-analyzer`. `reviewer` is a review specialist.
+
 | Situation | Delegate to | Include in task prompt |
 |-----------|-------------|------------------------|
 | Implementation tasks | `code-implementer` | Task, files + code excerpts, patterns, tests, constraints |
