@@ -117,10 +117,14 @@ test('relative trust spellings never establish authority', () => {
   const file = trustStorePath(s);
   const saved = YAML.parse(fs.readFileSync(file, 'utf8'));
   const root = projectIdentity(s.workspace).root;
-  saved.projects[path.relative(process.cwd(), root)] = saved.projects[root];
+  saved.projects['.'] = saved.projects[root];
   delete saved.projects[root];
   fs.writeFileSync(file, YAML.stringify(saved));
-  assert.equal(trustStatus(s).trusted, false);
+  const previous = process.cwd();
+  try {
+    process.chdir(s.workspace);
+    assert.equal(trustStatus(s).trusted, false);
+  } finally { process.chdir(previous); }
 });
 
 test('a fresh project is untrusted, and says why', () => {
