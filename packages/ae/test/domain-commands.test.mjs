@@ -108,6 +108,15 @@ test('inline decisions do not weaken native domain argument or input-file contro
   assert.equal(beforeDeliveryTool({ name: 'harness', input: { argv: ['domain', 'plan-new', '--name', 'catalogue'] } }, { workspace: '/tmp/workspace' }).pass, false);
 });
 
+test('domain stdin decisions pass bounded hook parsing only for supported plan verbs', () => {
+  for (const tail of ['plan-new --file -', 'plan-update --plan parent.hplan --file -']) {
+    assert.equal(harnessControlCommand(`ae domain ${tail} --name catalogue --json`.split(' '), '/tmp/workspace'), 'domain', tail);
+  }
+  for (const tail of ['plan-update --plan - --file decision.json', 'review assemble --plan parent.hplan --packet packet --file -']) {
+    assert.equal(harnessControlCommand(`ae domain ${tail} --name catalogue --json`.split(' '), '/tmp/workspace'), null, tail);
+  }
+});
+
 function cliFixture(t) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'domain-command-journey-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
