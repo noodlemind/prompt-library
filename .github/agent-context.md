@@ -6,7 +6,7 @@ This file contains accumulated knowledge about the codebase, discovered by agent
 
 This repository is a skill-driven prompt library containing AI agent systems:
 - `packages/ae/corpus/agents/` — 22 agents (17 specialists + 1 delivery classifier + 1 engineer + 1 implementer + 2 coordinators, judgment-criteria style), read from `~/.copilot/agents/`
-- `packages/ae/corpus/skills/` — 27 skills including internal planning (`ensure-plan`), experimental accepted delivery (`caffeinated`), on-demand gap resolution (`ensure-capability`), design-before-code (`architect`), verified learning (`auto-compound`), and knowledge consolidation (`consolidate`), read from `~/.copilot/skills/`
+- `packages/ae/corpus/skills/` — 28 skills including internal planning (`ensure-plan`), experimental accepted delivery (`caffeinated`), on-demand gap resolution (`ensure-capability`), design-before-code (`architect`), verified learning (`auto-compound`), and knowledge consolidation (`consolidate`), read from `~/.copilot/skills/`
 - `packages/ae/corpus/enterprise/` — optional corp overlay (skills, agents, capability-gaps) hydrated to `~/.copilot/enterprise/`
 - `ae index` — deterministic manifest rebuild (replaces manual index steps)
 - `docs/adaptive-engineering.md` — canonical Engineer and Harness explanation

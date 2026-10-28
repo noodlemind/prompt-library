@@ -267,6 +267,20 @@ export const CONFIG_SCHEMA = Object.freeze({
     merge: 'user',
     description: 'first-run Adaptive Engineer walkthrough has been dismissed',
   },
+  ...Object.fromEntries(['engineer', 'specialist', 'researcher', 'reviewer', 'high', 'low'].map((role) => [`models.${role}`, {
+    type: 'string',
+    default: '',
+    merge: 'user',
+    description: `model for the ${role} role; empty or inherit leaves the host model unset`,
+    validate: (value) => {
+      if (value.length > 120) throw usageError(`models.${role} must be at most 120 characters`);
+      if (/[\0\r\n]/.test(value)) throw usageError(`models.${role} must be one line`);
+      if (value && value !== 'inherit' && /[\\/]/.test(value)) {
+        throw usageError(`models.${role} is a model name, not a path`);
+      }
+      return value;
+    },
+  }])),
 });
 
 export const CONFIG_KEYS = Object.freeze(Object.keys(CONFIG_SCHEMA));

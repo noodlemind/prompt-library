@@ -85,6 +85,7 @@ The optional `ae agent --profile deliver` loop enforces explicit orientation wit
 | Command | Purpose |
 |---------|---------|
 | `install` / `upgrade` | Hydrate `~/.copilot/` and install the VS Code bridge; upgrade retires lock paths |
+| `config set models.<role>` | User-scoped model for engineer, specialist, researcher, reviewer, high, or low. `inherit` leaves the host field unset. `ae install` stamps it. See [model preferences](../../docs/model-preferences.md). |
 | `doctor` | Health; `--host vscode` runs hook probes |
 | `inventory show` / `inventory refresh --editor <family>` | Optional sourced local IDE snapshot in the selected Harness home |
 | `domain show --name <name>` | Read-only local membership and identity drift from an existing domain configuration |
