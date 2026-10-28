@@ -8,18 +8,6 @@ user-invocable: false
 
 Ask once, then write the user config. `ae` does not call a model. Empty and `inherit` leave the host field unset.
 
-## Should trigger
-
-- "Set the reviewer model to Haiku."
-- "Choose models for the engineer and the specialists."
-- "Run setup-models."
-
-## Should not trigger
-
-- "Review this diff." → use /code-review
-- "Install the harness." → use `ae install`
-- "Change the implement gate." → that is not a model preference
-
 ## Questions
 
 Offer `inherit` as the default for every answer. Accept a model name the user can already use. A name with parentheses is stored, and Copilot install leaves that agent's `model` field unset.
