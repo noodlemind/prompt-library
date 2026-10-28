@@ -47,6 +47,6 @@ export function projectTrustIsCurrent(workspace) {
   if (result.error || result.status !== 0) return false;
   try {
     const status = JSON.parse(result.stdout);
-    return status.trusted === true && status.state === 'trusted' && status.project === fs.realpathSync(workspace);
+    return status.trusted === true && status.state === 'trusted' && status.project === fs.realpathSync.native(workspace);
   } catch { return false; }
 }
