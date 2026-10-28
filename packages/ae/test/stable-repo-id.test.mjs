@@ -46,7 +46,7 @@ function stableId(ws) {
   return localIdForAbsolutePath(fs.realpathSync.native(ws));
 }
 
-test('migration preserves a plan created during publication and reports its conflict', t => {
+for (const sameBytes of [false, true]) test(`migration preserves a plan created during publication${sameBytes ? ' with matching bytes' : ' and reports its conflict'}`, t => {
   const c = checkout('migration-plan-race-');
   t.after(() => fs.rmSync(c.parent, { recursive: true, force: true }));
   const home = path.join(c.parent, 'home');
@@ -60,6 +60,7 @@ test('migration preserves a plan created during publication and reports its conf
   const target = path.join(targetRoot, rel);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const open = fs.openSync;
+  const competing = sameBytes ? 'old migrated plan\n' : 'new accepted plan\n';
   let created = false;
   let result;
   try {
@@ -67,7 +68,7 @@ test('migration preserves a plan created during publication and reports its conf
       if (!created && typeof file === 'string' && path.dirname(file) === path.dirname(target)
         && path.basename(file).startsWith(`.tmp-${path.basename(target)}-`)) {
         created = true;
-        assert.ok(writeFileContainedExclusive(targetRoot, rel, 'new accepted plan\n'));
+        assert.ok(writeFileContainedExclusive(targetRoot, rel, competing));
       }
       return open.call(this, file, ...args);
     };
@@ -75,12 +76,13 @@ test('migration preserves a plan created during publication and reports its conf
   } finally { fs.openSync = open; }
   assert.equal(created, true);
   assert.equal(result.pass, true, result.blockedReason);
-  assert.equal(fs.readFileSync(target, 'utf8'), 'new accepted plan\n');
+  assert.equal(fs.readFileSync(target, 'utf8'), competing);
   assert.equal(fs.readFileSync(source, 'utf8'), 'old migrated plan\n');
-  assert.deepEqual(result.conflicts.map(row => row.to), [target]);
+  assert.deepEqual(result.conflicts.map(row => row.to), sameBytes ? [] : [target]);
+  if (sameBytes) assert.deepEqual(result.alreadyPresent.map(row => row.to), [target]);
 });
 
-test('migration preserves branch ancestry and consolidation history', t => {
+for (const archived of [false, true]) test(`migration preserves branch ancestry and consolidation history${archived ? ' recovered from git' : ''}`, t => {
   const c = checkout('migration-branch-state-');
   t.after(() => fs.rmSync(c.parent, { recursive: true, force: true }));
   const home = path.join(c.parent, 'home');
@@ -97,6 +99,14 @@ test('migration preserves branch ancestry and consolidation history', t => {
   fs.writeFileSync(path.join(source, 'meta.json'), metadata);
   fs.writeFileSync(path.join(source, 'consolidated.jsonl'), ledger);
   fs.writeFileSync(path.join(source, 'learnings/sql/old.md'), '---\nschema: 1\nstatus: active\ntrigger: old branch\nepisodes: []\nanchors: []\n---\nOld advice\n');
+  if (archived) {
+    const store = path.join(home, 'knowledge', oldId);
+    for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'saved bucket']]) {
+      const saved = git(store, args);
+      assert.equal(saved.status, 0, saved.stderr);
+    }
+    fs.rmSync(path.join(store, 'branches'), { recursive: true });
+  }
   const result = migrateStrandedStore({ workspace: c.ws, home });
   assert.equal(result.pass, true, result.blockedReason);
   const destination = path.join(home, 'knowledge', repoId(c.ws), rel);

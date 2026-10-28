@@ -37,7 +37,7 @@ import { rebuildIndex, todayClamped } from './apply.mjs';
 import { consolidateStatus, LEARNING_BYTE_CAP, isActiveFm } from './consolidate.mjs';
 import { listBuckets, branchesRoot, bucketDirFor } from './overlay.mjs';
 import { scanSecrets } from '../secret-scan.mjs';
-import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained, readFileNoFollow } from '../fs-safe.mjs';
+import { assertNoSymlinkAncestors, assertRealpathContained, writeFileContained, writeFileContainedExclusive, readFileNoFollow } from '../fs-safe.mjs';
 import { projectStoreDir } from '../project-layout.mjs';
 import {
   readLearningFile,
@@ -1151,12 +1151,22 @@ function storeLearningItems(dir) {
       seen.add(rel);
     }
   }
-  for (const rel of ['consolidated.jsonl', 'governance.jsonl', 'config.json', 'stale.json']) {
+  const metadata = ['consolidated.jsonl', 'governance.jsonl', 'config.json', 'stale.json'];
+  const buckets = new Set(listBuckets(dir).map(({ key }) => key));
+  for (const item of items) {
+    const key = item.rel.match(/^branches\/([^/]+)\//)?.[1];
+    if (key) buckets.add(key);
+  }
+  for (const key of buckets) {
+    metadata.push(`branches/${key}/meta.json`, `branches/${key}/consolidated.jsonl`);
+  }
+  for (const rel of metadata) {
     const full = path.join(dir, rel);
-    if (storeFileState(full) !== 'file') continue;
-    const text = readStoreFile(full);
+    const state = storeFileState(full);
+    const saved = state === 'absent' && rel.startsWith('branches/') ? revisionWithFile(dir, rel) : null;
+    const text = state === 'file' ? readStoreFile(full) : saved?.text;
     if (!text || !text.trim()) continue;
-    items.push({ from: full, rel, text });
+    items.unshift({ from: saved ? `git:${dir}:${saved.rev}:${rel}` : full, rel, text });
   }
   return items;
 }
@@ -1371,9 +1381,12 @@ export function migrateStrandedStore({ workspace, home, fromId, dryRun = false, 
     }
     const sharedProjects = new Map();
     for (const item of projectQueue) {
-      const decision = noteSharedPath(sharedProjects, item, classifyProject(targetProject, item));
+      let decision = noteSharedPath(sharedProjects, item, classifyProject(targetProject, item));
       if (decision.action === 'copy' && !dryRun) {
-        if (!writeFileContained(targetProject, item.rel, item.text)) throw new Error(`refused to copy ${item.rel}`);
+        if (!writeFileContainedExclusive(targetProject, item.rel, item.text)) {
+          decision = classifyProject(targetProject, item);
+          if (decision.action === 'copy') throw new Error(`refused to copy ${item.rel}`);
+        }
       }
       record(item, decision, path.join(resolvedHome, 'projects', item.fromId));
     }
