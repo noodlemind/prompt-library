@@ -59,7 +59,8 @@ test('inherited trust stops when the primary approval becomes stale', t => {
   }
   approveProject(s);
   const linked = addIsolatedWorktree({ workspace, slug: 'inherited', from: 'HEAD' });
-  assert.equal(trustStatus({ ...s, workspace: linked.path }).trusted, true);
+  const initial = trustStatus({ ...s, workspace: linked.path });
+  assert.equal(initial.trusted, true, JSON.stringify({ initial, primary: trustStatus(s), workspace, nativeWorkspace: fs.realpathSync.native(workspace), copiedPolicy: fs.readFileSync(path.join(linked.path, '.github/harness/policy.yaml'), 'utf8') }));
   writeProjectFile(s, '.github/harness/policy.yaml', 'enforcement: observe\n');
   assert.equal(trustStatus(s).state, 'stale');
   const inherited = trustStatus({ ...s, workspace: linked.path });
