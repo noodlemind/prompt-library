@@ -40,9 +40,7 @@ Apply AWS engineering guidance as an on-demand skill. Use this for AWS SDK usage
    - Prefer LocalStack/Testcontainers or host-approved cloud test environments for integration behavior.
    - Review IAM/action/resource scope before completion.
 6. **Review route**:
-   - Use `@aws-reviewer` for AWS service, IAM, resilience, and observability review.
-   - Add `@security-sentinel` for auth/secrets/data exposure risk.
-   - Add `@java-reviewer`, `@python-reviewer`, or other language reviewers for implementation quality.
+   - Do not dispatch reviewers after a task. The finished-diff budget includes security when a path crosses a real boundary.
 
 ## Guardrails
 

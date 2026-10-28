@@ -4,7 +4,7 @@ This file defines WHAT each reviewer persona looks for. The skill body (SKILL.md
 
 ## Always-On Personas
 
-These personas are engaged on every review regardless of project type or diff content.
+The packet's required reviewers are the budget. These personas are the pool, not a fan-out. A small diff uses code-simplicity-reviewer. Security joins when a path crosses a real boundary or the diff exceeds eight files. Architecture joins only for that larger diff. One language reviewer joins when the diff is that language and the default cap of three has room.
 
 Flag extra code. A finding whose only fix adds a helper, option, comment, abstraction, or defensive check the spec did not name is itself the defect. Keep a finding for an exploitable bug or a missing check at a real boundary. A real boundary is untrusted input, auth, persistence, or a process edge.
 

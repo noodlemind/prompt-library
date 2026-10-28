@@ -11,7 +11,7 @@ import { readFileNoFollow, writeFileContained, readBoundedInput } from './fs-saf
 import { ensureHarnessDir } from './session.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { redactedJson } from './redact.mjs';
-import { reviewPreparation, preparationIsCurrent, selectedDocumentSources, refreshDocumentSources, reviewHash, stableJson, compareText, CODE_REVIEWERS, DOCUMENT_REVIEW_DEFINITIONS } from './review-preparation.mjs';
+import { reviewPreparation, preparationIsCurrent, selectedDocumentSources, refreshDocumentSources, reviewHash, stableJson, compareText, DOCUMENT_REVIEW_DEFINITIONS } from './review-preparation.mjs';
 import { synthesizeReview, renderReview } from './review-synthesis.mjs';
 
 export const REVIEW_VERBS = Object.freeze(['prepare', 'assemble']);
@@ -133,7 +133,7 @@ export function validateReview({ workspace, plan, copilotHome }) {
   if (id !== pointer.id || (record.version === 2 ? reviewHash(value) : recordHash(value)) !== id) return failure('Review record is invalid');
   if (record.scope?.mode === 'selected-document-v1') return failure('Standalone selected document review cannot satisfy delivery review obligations');
   if (record.plan !== plan.path || JSON.stringify(record.version === 2 ? record.declaredRequired : record.required) !== JSON.stringify([...new Set(required)].sort(compareText))) return failure('Review obligations changed');
-  if (record.version === 2 && required.includes('code-review') && (record.kind !== 'code' || CODE_REVIEWERS.some(id => !record.required.includes(id)))) return failure('Required code review perspectives are missing');
+  if (record.version === 2 && required.includes('code-review') && record.kind !== 'code') return failure('Required code review perspectives are missing');
   if (JSON.stringify(record.scope) !== JSON.stringify(currentReviewScope(workspace, plan, record.scope.base, copilotHome))) return failure('Reviewed content or policy changed; prepare and review the current scope');
   if (record.version === 2) {
     const packet = readReviewRecord(recordRoot, `.harness/reviews/packets/${record.packet}.json`);

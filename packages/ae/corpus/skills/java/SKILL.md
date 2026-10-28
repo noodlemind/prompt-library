@@ -40,8 +40,7 @@ Apply Java engineering guidance as an on-demand skill. Use this inside the norma
    - Run broader project checks when the touched surface is shared.
    - Confirm changed files match the plan or stated request.
 6. **Review route**:
-   - Use `@java-reviewer` for Java correctness, API, concurrency, and test review.
-   - Add `@aws-reviewer`, `@sql-reviewer`, or `@security-sentinel` when those boundaries are touched.
+   - Do not dispatch reviewers after a task. The finished-diff budget includes `@java-reviewer` when the diff is Java.
 
 ## Guardrails
 

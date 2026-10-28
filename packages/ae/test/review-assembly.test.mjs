@@ -88,12 +88,33 @@ test('prepare owns mandatory coverage and brace/comma/glob discovery', t => {
   fs.writeFileSync(path.join(f.ws, '.github/checks/sql.md'), '---\nname: sql-contract\nglobs: "**/*.sql"\n---\nRead SQL.\n');
   const packet = f.prepare();
   assert.equal(packet.version, 2);
-  for (const name of baseline) assert.ok(packet.required.includes(name), name);
+  assert.ok(packet.required.includes('code-simplicity-reviewer'));
+  for (const name of baseline.filter(id => id !== 'code-simplicity-reviewer')) assert.equal(packet.required.includes(name), false, name);
   assert.ok(packet.required.includes('api-contract'));
   assert.ok(!packet.required.includes('sql-contract'));
   assert.equal(packet.preparation.checks.find(c => c.name === 'api-contract').matched, true);
   assert.equal(packet.preparation.coverage.totalFiles, packet.scope.changedFiles.length);
   assert.equal(f.prepare().id, packet.id);
+});
+
+test('the review budget grows for a large diff, a real boundary, and one language', t => {
+  const large = fixture(t);
+  for (let i = 0; i < 8; i += 1) fs.writeFileSync(path.join(large.ws, `src/extra-${i}.js`), `export const extra${i} = ${i};\n`);
+  const largePacket = large.prepare();
+  for (const name of ['code-simplicity-reviewer', 'security-sentinel', 'architecture-strategist']) assert.ok(largePacket.required.includes(name), name);
+  assert.equal(largePacket.required.includes('performance-oracle'), false);
+  const boundary = fixture(t);
+  fs.mkdirSync(path.join(boundary.ws, 'src/auth'), { recursive: true });
+  fs.writeFileSync(path.join(boundary.ws, 'src/auth/session.js'), 'export const session = true;\n');
+  const boundaryPacket = boundary.prepare();
+  assert.ok(boundaryPacket.required.includes('security-sentinel'));
+  assert.equal(boundaryPacket.required.includes('architecture-strategist'), false);
+  const java = fixture(t);
+  fs.writeFileSync(path.join(java.ws, 'src/Order.java'), 'public record Order() {}\n');
+  const javaPacket = java.prepare();
+  assert.ok(javaPacket.required.includes('java-reviewer'));
+  assert.equal(javaPacket.required.includes('python-reviewer'), false);
+  assert.ok(javaPacket.required.filter(id => id.endsWith('reviewer') || id.endsWith('strategist') || id.endsWith('sentinel')).length <= 3);
 });
 
 test('a checks README without frontmatter is documentation; malformed declared checks still block', t => {
@@ -111,7 +132,7 @@ test('a checks README without frontmatter is documentation; malformed declared c
 });
 
 test('assembly is invariant to result order, gates before boosting and only merges exact identities', t => {
-  const f = fixture(t), packet = f.prepare();
+  const f = fixture(t), packet = f.prepare('--reviewer', 'security-sentinel');
   const results = packet.required.map(clean);
   results[0].findings = [finding(), finding({ line: 5 }), finding({ title: 'Weak', confidence: 0.55 }), finding({ title: 'Critical uncertainty', severity: 'P1', confidence: 0.5 })];
   results[1].findings = [finding({ file: 'src\\example.js', confidence: 0.8, evidence: ['Second observation'] }), finding({ title: 'Weak', confidence: 0.55 })];
@@ -133,7 +154,7 @@ test('assembly is invariant to result order, gates before boosting and only merg
 });
 
 test('missing, timed-out and malformed results remain failed coverage with retrievable raw evidence', t => {
-  const f = fixture(t), packet = f.prepare();
+  const f = fixture(t), packet = f.prepare('--reviewer', 'security-sentinel', '--reviewer', 'architecture-strategist');
   const results = packet.required.map(clean);
   results[0].status = 'timed-out';
   results[1].findings = [finding({ line: 1000 })];
@@ -435,7 +456,7 @@ test('ignored documents above the excerpt read limit still bind their actual byt
 });
 
 test('different claims at the same location remain distinct pending judgment', t => {
-  const f = fixture(t), packet = f.prepare(), results = packet.required.map(clean);
+  const f = fixture(t), packet = f.prepare('--reviewer', 'security-sentinel'), results = packet.required.map(clean);
   results[0].findings = [finding()];
   results[1].findings = [finding({ description: 'The caller can bypass account authorization.', suggested_fix: 'Check account ownership.' })];
   const record = f.assemble(packet, results).value;
@@ -554,7 +575,7 @@ test('a coordinator specialist invocation counts as a separate review', t => {
 
 test('an engineer self-review is not an independent review', t => {
   const f = fixture(t);
-  const packet = f.prepare();
+  const packet = f.prepare('--reviewer', 'security-sentinel', '--reviewer', 'architecture-strategist');
   const results = packet.required.map(clean);
   results[0].provenance = { kind: 'same-context', agent: 'engineer' };
   results[1].provenance = { kind: 'host-invocation', agent: 'engineer', via: 'engineer' };

@@ -31,6 +31,10 @@ For code changes, read `<copilot-home>/skills/engineer/references/performance-en
 
 The diff is the smallest change that meets the spec. Reuse the code that is already there. Do not add a helper, option, dependency, abstraction, or comment unless the plan names it. Validate only at a real boundary. A real boundary is untrusted input, auth, persistence, or a process edge. Three similar lines are enough until a fourth appears.
 
+## review-budget
+
+Review the finished diff once before `ae verify`, not after each task. Cap the default at three. A fix re-dispatches only the files the fix touched. Stop after two rounds. Count a finding only when it names a defect in the spec.
+
 ## prove-with-evidence
 
 See `docs/adaptive-engineering.md`. Run the checks named on the plan. Paste the result that shows the pass.

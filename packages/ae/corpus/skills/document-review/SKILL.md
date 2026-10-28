@@ -85,13 +85,13 @@ Decide semantic overlap and severity from the document's goals and evidence. Nea
 - Skip P3 improvements
 - Return the document path and proposed changes; include the updated path when the Engineer has applied them
 
-The Engineer applies accepted fixes. For a Harness-managed plan, return authored amendments for `ae plan-update --file` against its observed revision; never edit the project-store plan in the editor. Product document edits enter Deliver and require a successful implement gate before mutation. Existing authorization covers necessary corrections; a review request alone supplies no new mutation authority. Prepare a fresh packet after changing the reviewed content.
+The Engineer applies accepted fixes. For a Harness-managed plan, return authored amendments for `ae plan-update --file` against its observed revision; never edit the project-store plan in the editor. Product document edits enter Deliver and require a successful implement gate before mutation. Existing authorization covers necessary corrections; a review request alone supplies no new mutation authority. A fix re-prepares only the changed document. Stop after two rounds and report what remains.
 
 ### 5. Offer Next Action
 
 After improvements:
 - **Proceed to next step** — `/plan-issue` (for brainstorms) or `@engineer` Deliver mode (for plans)
-- **Review again** — another pass for further refinement
+- **Stop** — after two rounds, report the findings that remain
 - **Done** — return to user
 
 ## Error Handling

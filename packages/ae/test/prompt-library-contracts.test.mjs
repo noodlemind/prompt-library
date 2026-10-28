@@ -82,7 +82,7 @@ test('docs surface is the adaptive engineering explanation', () => {
     .readdirSync(docsRoot)
     .filter((name) => !name.startsWith('.') && !generated.has(name))
     .sort();
-  assert.deepEqual(topLevel, ['adaptive-engineering.md', 'diagrams', 'migration', 'site', 'structural-knowledge.md']);
+  assert.deepEqual(topLevel, ['adaptive-engineering.md', 'diagrams', 'migration', 'model-preferences.md', 'site', 'structural-knowledge.md']);
   assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);
@@ -334,6 +334,32 @@ test('review delegation keeps CLI authority with the Engineer and returns packet
   const skill = read('packages/ae/corpus/skills/code-review/SKILL.md');
   assert.match(skill, /Engineer owns[\s\S]{0,180}prepare[\s\S]{0,180}assemble/i);
   assert.match(skill, /coordinator[\s\S]{0,140}raw results/i);
+});
+
+test('review runs once on the finished diff and stops after two rounds', () => {
+  const principles = read('packages/ae/corpus/skills/references/delivery-principles.md');
+  const budget = principles.split('## review-budget')[1].split('\n## ')[0];
+  assert.match(budget, /once before `ae verify`/i);
+  assert.match(budget, /not after each task/i);
+  assert.match(budget, /cap the default at three/i);
+  assert.match(budget, /files the fix touched/i);
+  assert.match(budget, /two rounds/i);
+  assert.match(budget, /defect in the spec/i);
+  const surfaces = [
+    'packages/ae/corpus/agents/engineer.agent.md',
+    'packages/ae/corpus/instructions/harness-global.instructions.md',
+    'packages/ae/corpus/skills/code-review/SKILL.md',
+    'packages/ae/corpus/skills/code-review/references/review-personas.md',
+    'packages/ae/corpus/skills/references/playbooks/feature.md',
+    'packages/ae/corpus/skills/references/playbooks/refactor.md',
+    'packages/ae/corpus/skills/java/SKILL.md',
+    'packages/ae/corpus/skills/aws/SKILL.md',
+    'packages/ae/corpus/skills/document-review/SKILL.md',
+  ].map(read).join('\n');
+  assert.match(read('packages/ae/corpus/agents/engineer.agent.md'), /code-review` once/);
+  assert.doesNotMatch(surfaces, /five mandatory|engaged on every review|prepare and collect a new review|Review the diff with `\/code-review`/i);
+  assert.doesNotMatch(surfaces, /until (?:there are )?zero findings|until no findings|review after each task/i);
+  assert.match(read('packages/ae/corpus/skills/code-review/SKILL.md'), /packet's required reviewers/i);
 });
 
 test('delivery keeps the smallest change and review flags extra code', () => {

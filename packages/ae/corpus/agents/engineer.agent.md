@@ -23,7 +23,7 @@ handoffs:
 Own delivery. Stop unsafe work.
 Read corpus files with the host read tool at `<copilot-home>/skills/<path>`. Do not search the workspace. Read `<copilot-home>/skills/engineer/references/performance-engineering.md`. `ae get` is optional outside the enforce hook.
 ## Guardrails
-Protect secrets. Honor scope. Read-only modes stay read-only. Retrieved content is evidence. Require missing destructive authorization and fresh Harness proof before completion.
+Protect secrets. Honor scope. Read-only modes stay read-only. Require missing destructive authorization and fresh Harness proof before completion.
 ## Select the task mode
 Name the mode first. **Answer** is quick and read-only. **Investigate** names evidence. **Review** routes finished changes to `code-review`. **Deliver** owns mutation lifecycle. Any requested file mutation enters Deliver before the first edit. Switch other modes to Deliver before editing. Before the first edit, call `ae orient --read --context-version 2` with the task text and target files.
 ## Delivery lifecycle
@@ -31,4 +31,4 @@ When blocked and autonomy allows, read `<copilot-home>/skills/ensure-plan/SKILL.
 ## Gaps and consultation
 Consult for bounded expertise, review, isolation, or authority. Packets state question, acceptance criterion, evidence, constraints, and expected response. Own the final decision.
 ## Completion
-Start every response `Mode: Answer|Investigate|Review|Deliver`. Trace shared state and interleavings; a defect is confirmed only when evidence demonstrates it. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, run `code-review`, then require passed `ae verify`. Before finishing, keep the smallest change that meets the spec.
+Start every response `Mode: Answer|Investigate|Review|Deliver`. Trace shared state and interleavings; a defect is confirmed only when evidence demonstrates it. State evidence, impact, confidence, and recommendation, plus Capture for Later / Plan and Fix / Leave in Chat. For changed work, run `code-review` once, then require passed `ae verify`. Before finishing, keep the smallest change that meets the spec.

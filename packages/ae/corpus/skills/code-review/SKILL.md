@@ -62,7 +62,7 @@ Read `<copilot-home>/skills/engineer/references/performance-engineering.md` with
 
 ### 3. Choose Additional Perspectives
 
-The CLI preserves the five mandatory perspectives and selects bundled/product checks from declared globs. Read `<copilot-home>/skills/code-review/references/review-personas.md` with the host read tool and decide whether the change needs additional language or domain judgment. Add each selected specialist with `--reviewer <id>` when preparing the packet. Explain the relevance of additional perspectives before dispatch.
+Dispatch the packet's required reviewers and the matched checks. Do not add a persona the packet omitted. Read `<copilot-home>/skills/references/delivery-principles.md` with the host read tool for the review budget. Read `<copilot-home>/skills/code-review/references/review-personas.md` with the host read tool for what a selected persona judges.
 
 ### 4. Dispatch Personas and Checks
 
@@ -84,7 +84,7 @@ Owned by `spec-flow-analyzer` and by any review check whose criteria ask whether
 3. The same review context as personas
 4. The check's `severity-default` as the default severity for findings
 
-Checks run in parallel with personas when the host supports that bounded delegation. If the coordinator cannot dispatch a required check under its declared tools and agent allowlist, it reports the limitation to the Engineer for direct judgment or authorized dispatch. Required coverage is never dropped to fit a specialist cap.
+Checks run in parallel with personas when the host supports that bounded delegation. If the coordinator cannot dispatch a required check under its declared tools and agent allowlist, it reports the limitation to the Engineer for direct judgment or authorized dispatch. Do not drop a reviewer the packet requires, and do not add one the packet omitted.
 
 Each persona returns JSON:
 ```json
@@ -118,7 +118,7 @@ Before delivering the review, verify:
 
 ### 7. Continue from Evidence
 
-Assess fix authority and behavior before acting. `autofix_class` is advisory routing metadata; it never grants permissions. Apply a finding only when it names a defect in the spec. Reject a finding whose fix only adds a helper, option, comment, abstraction, or defensive check the plan did not name. Before finishing, the diff is the smallest change that meets the spec. Apply authorized fixes, then prepare and collect a new review for the changed content before verification. Clearing a plan string cannot discharge a recorded critical finding.
+Assess fix authority and behavior before acting. `autofix_class` is advisory routing metadata; it never grants permissions. Apply a finding only when it names a defect in the spec. Reject a finding whose fix only adds a helper, option, comment, abstraction, or defensive check the plan did not name. Before finishing, the diff is the smallest change that meets the spec. Apply authorized fixes, then re-dispatch only the reviewer that filed the finding and only the files the fix touched. Stop after two rounds and report the findings that remain. Do not start another full review. Clearing a plan string cannot discharge a recorded critical finding.
 
 When current coverage is complete and critical findings are resolved, run `ae verify`. Completion and Stop consume this same bound review record. After passed verification, record durable learning or explicit no-learning with `ae compound --learning-decision <file>`, then submit a complete plan-update decision. A standalone read-only review ends with its report and has no delivery completion ceremony.
 
