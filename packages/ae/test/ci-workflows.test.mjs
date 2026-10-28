@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import vm from 'node:vm';
 import { test } from 'node:test';
 import YAML from 'yaml';
 
@@ -10,6 +11,26 @@ const root = new URL('../../../', import.meta.url);
 const workflow = name => YAML.parse(fs.readFileSync(new URL(`.github/workflows/${name}.yml`, root), 'utf8'));
 const suite = job => job.steps.find(step => step.name === 'Harness test suite' || step.name === 'Harness test suite (Windows)');
 const upload = job => job.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+
+test('Windows cancellation probe fails when a descendant outlives the runner', () => {
+  const command = workflow('harness-windows').jobs.windows.steps.find(step => step.id === 'cancellation').run;
+  const start = command.indexOf('const failures = [];');
+  const end = command.indexOf("'@", start);
+  assert.ok(start > 0 && end > start);
+  for (const grandchildAlive of [false, true]) {
+    let exitCode = 0;
+    const logs = [];
+    const context = {
+      res: { status: 'cancelled' }, settledMs: 2500, ABORT_AT_MS: 1500, grandchildPid: 42, grandchildAlive,
+      console: { log: message => logs.push(message), error: message => logs.push(message) },
+      process: { kill() {}, exit(code) { exitCode = code; throw new Error('probe-exit'); } },
+    };
+    try { vm.runInNewContext(command.slice(start, end), context); }
+    catch (error) { assert.equal(error.message, 'probe-exit'); }
+    assert.equal(exitCode, grandchildAlive ? 1 : 0, logs.join('\n'));
+    if (grandchildAlive) assert.match(logs.join('\n'), /EXPECTED.*grandchild/);
+  }
+});
 
 test('Windows runs once automatically per PR revision and remains manually runnable', () => {
   const windows = workflow('harness-windows');

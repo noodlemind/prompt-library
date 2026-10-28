@@ -20,6 +20,7 @@ import {
 } from '../lib/trust.mjs';
 import { loadPolicy } from '../lib/policy.mjs';
 import { resolveConfig } from '../lib/config.mjs';
+import { addIsolatedWorktree } from '../lib/worktree.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const binPath = path.join(packageRoot, 'bin', 'ae.mjs');
@@ -44,6 +45,28 @@ function run(argv, { workspace, copilotHome }) {
     encoding: 'utf8',
   });
 }
+
+test('inherited trust stops when the primary approval becomes stale', t => {
+  const workspace = tempDir('trust-primary-stale-');
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const copilotHome = tempDir('trust-primary-home-');
+  t.after(() => fs.rmSync(copilotHome, { recursive: true, force: true }));
+  const s = { workspace, copilotHome, home: copilotHome };
+  writeProjectFile(s, '.github/harness/policy.yaml', 'enforcement: enforce\n');
+  for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'baseline']]) {
+    const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  approveProject(s);
+  const linked = addIsolatedWorktree({ workspace, slug: 'inherited', from: 'HEAD' });
+  assert.equal(trustStatus({ ...s, workspace: linked.path }).trusted, true);
+  writeProjectFile(s, '.github/harness/policy.yaml', 'enforcement: observe\n');
+  assert.equal(trustStatus(s).state, 'stale');
+  const inherited = trustStatus({ ...s, workspace: linked.path });
+  assert.equal(inherited.state, 'stale');
+  assert.equal(inherited.trusted, false);
+  assert.equal(inherited.inherited, false);
+});
 
 test('a fresh project is untrusted, and says why', () => {
   const s = scopes();

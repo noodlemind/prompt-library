@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import YAML from 'yaml';
 import { planContractText } from '../lib/evidence.mjs';
@@ -23,6 +23,47 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const hooksRoot = path.join(repoRoot, 'packages', 'ae', 'corpus', 'hooks');
 const binPath = path.join(repoRoot, 'packages', 'ae', 'bin', 'ae.mjs');
+
+test('protection hooks leave time to return a denial after authority timeouts', t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hook-deadline-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, 'product');
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(workspace, 'app.js'), 'old\n');
+  const authority = path.join(root, 'authority.mjs');
+  const marker = path.join(root, 'authority.pid');
+  fs.writeFileSync(authority, `import fs from 'node:fs';
+if (process.argv[2] === 'orient') console.log('{}');
+else { fs.writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => {}, 1000); }
+`);
+  const input = JSON.stringify({ cwd: workspace, session_id: 'deadline-fixture', tool_name: 'replace_string_in_file', tool_input: { filePath: path.join(workspace, 'app.js'), oldString: 'old', newString: 'new' } });
+  const env = { ...process.env, AE_BIN: authority, HARNESS_BIN: authority, AE_HOME: path.join(root, 'home'), HARNESS_HOME: path.join(root, 'home'), COPILOT_HOME: path.join(root, 'copilot') };
+  const hooks = JSON.parse(fs.readFileSync(path.join(hooksRoot, 'hooks.json'), 'utf8')).hooks.PreToolUse[0].hooks;
+  for (const hook of hooks) {
+    const calls = hook.command.includes('require-plan-gate') ? 3 : 1;
+    assert.ok(hook.timeout * 1000 > PROOF_AUTHORITY_TIMEOUT_MS * calls + (calls === 3 ? 4000 : 0), hook.command);
+  }
+  const configured = hooks.find(hook => hook.command.includes('require-plan-gate'));
+  const adapter = path.join(root, 'adapter.mjs');
+  fs.writeFileSync(adapter, `import { runHostAdapter } from ${JSON.stringify(pathToFileURL(path.join(hooksRoot, 'lib/host-adapter.mjs')).href)}; runHostAdapter();\n`);
+  for (const [entry, args, timeout] of [
+    [path.join(hooksRoot, 'require-plan-gate.mjs'), [], configured.timeout * 1000],
+    [adapter, ['edit'], 45000],
+  ]) {
+    let result;
+    try {
+      result = spawnSync(process.execPath, [entry, ...args], { cwd: workspace, input, env, encoding: 'utf8', timeout });
+    } finally {
+      if (fs.existsSync(marker)) {
+        try { process.kill(Number(fs.readFileSync(marker, 'utf8'))); } catch { /* authority already timed out */ }
+      }
+    }
+    assert.ifError(result.error);
+    const output = JSON.parse(result.stdout.trim().split('\n').at(-1));
+    assert.equal(output.hookSpecificOutput?.permissionDecision, 'deny', result.stdout + result.stderr);
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /missing-implement-gate/);
+  }
+});
 
 test('proof authority retains bounded failure cause without command output or credentials', () => {
   const timedOut = callProofAuthority(repoRoot, [], { spawnFn: () => ({ status: null, signal: 'SIGTERM', error: { code: 'ETIMEDOUT' }, stderr: 'token=private-value' }), timeout: 2500 });
