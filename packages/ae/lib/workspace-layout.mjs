@@ -277,12 +277,14 @@ function readCodeWorkspace(boundRoot) {
   let selected = null;
   for (const file of codeWorkspaceFiles(boundRoot)) {
     const parsed = parseJsonc(readText(file) || '');
-    const folders = Array.isArray(parsed?.folders) ? parsed.folders.slice(0, MAX_FOLDERS) : null;
-    if (!folders) continue;
+    const listed = Array.isArray(parsed?.folders) ? parsed.folders : null;
+    if (!listed) continue;
+    const folders = listed.slice(0, MAX_FOLDERS);
     const resolved = folders.map(folder => resolveWorkspacePath(file, folder?.path));
     const found = distinctOthers(resolved, boundRoot);
     if (!found.includesBound) continue;
-    if (!selected || found.others.length > selected.others.length) selected = { file, ...found };
+    const truncated = found.truncated || listed.length > MAX_FOLDERS;
+    if (!selected || found.others.length > selected.others.length) selected = { file, ...found, truncated };
   }
   return selected;
 }
@@ -297,21 +299,24 @@ function vcsFiles(boundRoot) {
 
 function mappingDirectories(xml) {
   const dirs = [];
+  let truncated = false;
   for (const match of String(xml).matchAll(/<mapping\b[^>]*\bdirectory\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) {
+    if (dirs.length >= MAX_FOLDERS) { truncated = true; break; }
     dirs.push(match[1] ?? match[2]);
-    if (dirs.length >= MAX_FOLDERS) break;
   }
-  return dirs;
+  return { dirs, truncated };
 }
 
 function readVcs(boundRoot) {
   let selected = null;
   for (const file of vcsFiles(boundRoot)) {
     const projectDir = path.dirname(path.dirname(file));
-    const resolved = mappingDirectories(readText(file) || '').map(directory => expandProjectDir(projectDir, directory));
+    const mappings = mappingDirectories(readText(file) || '');
+    const resolved = mappings.dirs.map(directory => expandProjectDir(projectDir, directory));
     const found = distinctOthers(resolved, boundRoot);
     if (!found.includesBound) continue;
-    if (!selected || found.others.length > selected.others.length) selected = { file, ...found };
+    const truncated = found.truncated || mappings.truncated;
+    if (!selected || found.others.length > selected.others.length) selected = { file, ...found, truncated };
   }
   return selected;
 }
@@ -404,6 +409,7 @@ export function detectWorkspace(workspace, options = {}) {
     const selected = vscode || idea;
     const others = selected?.others || [];
     const members = [bound, ...others];
+    const truncated = Boolean(selected?.truncated);
     return {
       boundRoot: bound.root,
       kind: bound.kind,
@@ -411,7 +417,8 @@ export function detectWorkspace(workspace, options = {}) {
       workspaceType: vscode ? 'vscode' : idea ? 'intellij' : 'none',
       workspaceFile: selected?.file || null,
       roots: others.map(({ root, kind, markers }) => ({ root, kind, markers })),
-      domainSuggestion: selected?.truncated ? null : suggestDomain(home, members),
+      ...(truncated ? { truncated: true } : {}),
+      domainSuggestion: truncated ? null : suggestDomain(home, members),
     };
   } catch {
     return emptyLayout();

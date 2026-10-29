@@ -207,6 +207,33 @@ test('a one-folder saved workspace is vscode and does not suggest a domain', (t)
   assert.equal(layout.domainSuggestion, null);
 });
 
+test('a folder or mapping past the cap does not suggest a partial domain', (t) => {
+  const parent = tempRoot(t);
+  const home = path.join(parent, 'home');
+  const alpha = initRepo(path.join(parent, 'repo-a'), 'https://example.invalid/team/alpha.git');
+  const beta = initRepo(path.join(parent, 'repo-b'));
+  initRepo(path.join(parent, 'repo-c'));
+  const folders = [{ path: './repo-a' }, { path: './repo-b' }];
+  while (folders.length < 64) folders.push({ path: './repo-a' });
+  folders.push({ path: './repo-c' });
+  const mappings = folders.map(folder => `    <mapping directory="$PROJECT_DIR$/${folder.path.slice(2)}" vcs="Git" />`).join('\n');
+  fs.mkdirSync(path.join(parent, '.idea'));
+  fs.writeFileSync(path.join(parent, '.idea', 'vcs.xml'), `<project><component name="VcsDirectoryMappings">\n${mappings}\n</component></project>`);
+  const idea = detectWorkspace(alpha, { home });
+  assert.equal(idea.workspaceType, 'intellij');
+  assert.equal(idea.truncated, true);
+  assert.equal(idea.domainSuggestion, null);
+  assert.equal(idea.roots.length, 1);
+  assert.equal(idea.roots[0].root, beta);
+  fs.writeFileSync(path.join(parent, 'big.code-workspace'), JSON.stringify({ folders }));
+  const vscode = detectWorkspace(alpha, { home });
+  assert.equal(vscode.workspaceType, 'vscode');
+  assert.equal(vscode.truncated, true);
+  assert.equal(vscode.domainSuggestion, null);
+  assert.equal(vscode.roots[0].root, beta);
+  assert.equal(fs.existsSync(path.join(home, 'domains')), false);
+});
+
 test('no saved workspace reports none and does not suggest a domain', (t) => {
   const parent = tempRoot(t);
   const home = path.join(parent, 'home');
