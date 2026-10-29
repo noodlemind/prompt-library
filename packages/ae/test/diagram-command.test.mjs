@@ -106,7 +106,7 @@ test('diagram output paths use the active platform separator, including Windows'
   assert.equal(paths.html, 'C:\\work\\repo\\.harness\\diagrams\\abc\\report.html');
   assert.equal(paths.png, 'C:\\work\\repo\\.harness\\diagrams\\abc\\diagram.png');
   assert.equal(paths.receipt, 'C:\\work\\repo\\.harness\\diagrams\\abc\\receipt.json');
-  assert.equal(diagramArtifactPaths('/work/repo', artifacts).svg, '/work/repo/.harness/diagrams/abc/diagram.svg');
+  assert.equal(diagramArtifactPaths('/work/repo', artifacts, path.posix).svg, '/work/repo/.harness/diagrams/abc/diagram.svg');
 });
 
 test('optional png is written beside the svg, hashed in the receipt, printed as an absolute path, and checked by status', async t => {

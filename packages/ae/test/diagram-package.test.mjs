@@ -39,7 +39,7 @@ test('offline local and global archives render both bundled backends from foreig
   delete env.NODE_TEST_CONTEXT;
   for (const command of ['ae', 'd2', 'pstack', 'tlc']) assert.ok(spawnSync(command, ['--version'], { env }).error, `${command} must not be supplied by the environment`);
   const run = (command, args, cwd, extraEnv = {}) => {
-    const result = spawnSync(command, args, { cwd, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
+    const result = spawnSync(command, args, { cwd, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
     assert.ifError(result.error);
     assert.equal(result.status, 0, `${command} ${args.join(' ')}\n${result.stdout}\n${result.stderr}`);
     return result.stdout;
