@@ -92,6 +92,9 @@ export function validateRelease() {
     'node_modules/@d2lang/d2/dist/node-esm/wasm_exec.js',
     'node_modules/@d2lang/d2/dist/node-esm/d2.wasm',
     'node_modules/@d2lang/d2/LICENSE.txt', 'node_modules/@d2lang/d2/THIRD_PARTY_NOTICES.txt',
+    'node_modules/@resvg/resvg-wasm/index.mjs', 'node_modules/@resvg/resvg-wasm/index_bg.wasm',
+    'lib/diagrams/fonts/SourceSans3-Regular.ttf', 'lib/diagrams/fonts/SourceSans3-Bold.ttf',
+    'lib/diagrams/fonts/SourceSans3-It.ttf', 'lib/diagrams/fonts/LICENSE.md',
   ]) assert.ok(fs.existsSync(path.join(packageRoot, rel)), `missing bundled renderer asset: ${rel}`);
 
   const cli = (...args) => execFileSync(process.execPath, [path.join(packageRoot, 'bin/ae.mjs'), ...args], { cwd: packageRoot, encoding: 'utf8' });

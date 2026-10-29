@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { diagramsResultOf, parseDiagramArguments } from '../lib/diagram-cmd.mjs';
+import { diagramArtifactPaths } from '../lib/diagram.mjs';
 import { prepareFlowModel, publishFlowModel } from '../lib/flow-model.mjs';
 import { queryGraph } from '../lib/graph.mjs';
 
@@ -84,7 +85,64 @@ test('authored diagram publishes portable SVG, offline HTML and a source-bound r
   assert.match(html, /Content-Security-Policy/);
   assert.match(html, /not-verified/);
   assert.doesNotMatch(html, /<script\b|<iframe\b|<img\b/i);
+  assert.equal(first.artifacts.png, undefined);
+  assert.equal(receipt.hashes.png, undefined);
   assert.equal((await render(workspace)).id, first.id, 'identical source/configuration replays its immutable artifacts');
+});
+
+function pngSize(bytes) {
+  assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.equal(bytes.toString('ascii', 12, 16), 'IHDR');
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+test('diagram output paths use the active platform separator, including Windows', () => {
+  const artifacts = {
+    svg: '.harness/diagrams/abc/diagram.svg', html: '.harness/diagrams/abc/report.html',
+    png: '.harness/diagrams/abc/diagram.png', receipt: '.harness/diagrams/abc/receipt.json',
+  };
+  const paths = diagramArtifactPaths('C:\\work\\repo', artifacts, path.win32);
+  assert.equal(paths.svg, 'C:\\work\\repo\\.harness\\diagrams\\abc\\diagram.svg');
+  assert.equal(paths.html, 'C:\\work\\repo\\.harness\\diagrams\\abc\\report.html');
+  assert.equal(paths.png, 'C:\\work\\repo\\.harness\\diagrams\\abc\\diagram.png');
+  assert.equal(paths.receipt, 'C:\\work\\repo\\.harness\\diagrams\\abc\\receipt.json');
+  assert.equal(diagramArtifactPaths('/work/repo', artifacts).svg, '/work/repo/.harness/diagrams/abc/diagram.svg');
+});
+
+test('optional png is written beside the svg, hashed in the receipt, printed as an absolute path, and checked by status', async t => {
+  const workspace = fixture(t);
+  const printed = spawnSync(process.execPath, [cli, 'diagrams', 'render', '--file', 'view.mmd', '--sources', 'src', '--png', '--workspace', workspace, '--no-events'], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(printed.status, 0, printed.stderr || printed.stdout);
+  assert.match(printed.stdout, /Open the HTML page in a browser\. Use the PNG for Slack, Confluence, Jira, email, or slides\./);
+  const jsonRun = spawnSync(process.execPath, [cli, 'diagrams', 'render', '--file', 'view.mmd', '--sources', 'src', '--png', '--scale', '2', '--workspace', workspace, '--no-events', '--json'], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(jsonRun.status, 0, jsonRun.stderr || jsonRun.stdout);
+  const result = JSON.parse(jsonRun.stdout);
+  assert.equal(result.paths.svg, path.resolve(workspace, result.artifacts.svg));
+  assert.equal(result.paths.html, path.resolve(workspace, result.artifacts.html));
+  assert.equal(result.paths.png, path.resolve(workspace, result.artifacts.png));
+  assert.match(printed.stdout, new RegExp(result.paths.svg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(printed.stdout, new RegExp(result.paths.png.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(result.artifacts.png, /^\.harness\/diagrams\/[a-f0-9]{64}\/diagram\.png$/);
+  const receipt = JSON.parse(fs.readFileSync(path.join(workspace, result.artifacts.receipt), 'utf8'));
+  const png = fs.readFileSync(path.join(workspace, result.artifacts.png));
+  const svg = fs.readFileSync(path.join(workspace, result.artifacts.svg), 'utf8');
+  const size = pngSize(png);
+  assert.equal(size.width, Number(svg.match(/\bwidth="(\d+(?:\.\d+)?)"/)[1]) * 2);
+  assert.equal(size.height, Number(svg.match(/\bheight="(\d+(?:\.\d+)?)"/)[1]) * 2);
+  assert.equal(receipt.hashes.png, hash(png));
+  assert.equal(receipt.artifacts.png, result.artifacts.png);
+  assert.equal(receipt.renderer.settings.raster.scale, 2);
+  assert.equal((await status(workspace, result.artifacts.receipt)).state, 'current');
+  fs.writeFileSync(path.join(workspace, result.artifacts.png), Buffer.concat([png.subarray(0, 8), Buffer.from('nope')]));
+  assert.equal((await status(workspace, result.artifacts.receipt)).state, 'unknown');
+  const scaled = await diagramsResultOf(['render', '--file', 'view.mmd', '--sources', 'src', '--png', '--scale', '1', '--workspace', workspace, '--no-events']);
+  const once = pngSize(fs.readFileSync(path.join(workspace, scaled.artifacts.png)));
+  const scaledSvg = fs.readFileSync(path.join(workspace, scaled.artifacts.svg), 'utf8');
+  assert.equal(once.width, Number(scaledSvg.match(/\bwidth="(\d+(?:\.\d+)?)"/)[1]));
+  assert.notEqual(scaled.id, result.id);
+  for (const argv of [['render', '--file', 'view.mmd', '--scale', '2'], ['render', '--file', 'view.mmd', '--png', '--scale', '5'], ['status', '--receipt', 'receipt.json', '--png']]) {
+    assert.throws(() => parseDiagramArguments(argv), /diagrams:/);
+  }
 });
 
 test('status detects covered edits, added files, diagram edits and corrupted output', async t => {

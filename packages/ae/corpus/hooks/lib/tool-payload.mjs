@@ -579,12 +579,12 @@ export function harnessControlCommand(tokens, workspace) {
     // Hydrated hooks cannot import package lib/. Keep this bounded grammar in
     // step with diagram-cmd.mjs; diagram-native tests cover the shared forms.
     const verb = args[1], options = {
-      render: ['--file', '--sources', '--renderer', '--layout', '--timeout'],
-      graph: ['--root', '--operation', '--depth', '--limit', '--max-nodes', '--timeout'],
-      flow: ['--flow', '--limit', '--max-nodes', '--timeout'], status: ['--receipt'],
+      render: ['--file', '--sources', '--renderer', '--layout', '--timeout', '--scale'],
+      graph: ['--root', '--operation', '--depth', '--limit', '--max-nodes', '--timeout', '--scale'],
+      flow: ['--flow', '--limit', '--max-nodes', '--timeout', '--scale'], status: ['--receipt'],
     };
     if (!Object.hasOwn(options, verb)) return null;
-    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v']);
+    const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v', ...(verb === 'status' ? [] : ['--png'])]);
     const valued = new Set(['--workspace', '--ae-home', '--harness-home', '--copilot-home', '--output', ...options[verb]]);
     const seen = new Set(), values = new Map();
     for (let index = 2; index < args.length; index++) {
@@ -616,6 +616,10 @@ export function harnessControlCommand(tokens, workspace) {
       if (!values.has(key)) continue;
       const value = values.get(key), number = Number(value);
       if (!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number < 1 || number > max) return null;
+    }
+    if (values.has('--scale')) {
+      const scale = values.get('--scale'), number = Number(scale);
+      if (!seen.has('--png') || !/^\d+$/.test(scale) || !Number.isSafeInteger(number) || number < 1 || number > 4) return null;
     }
     if (values.has('--output') && !['json-envelope', 'agent'].includes(values.get('--output'))) return null;
     if (values.has('--workspace') && path.resolve(values.get('--workspace')) !== path.resolve(workspace)) return null;
