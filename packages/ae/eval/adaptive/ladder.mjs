@@ -41,6 +41,7 @@ const SLICE_KEYS = [
   'index',
   'gateStatus',
   'activePlan',
+  'layout',
 ];
 
 const CLAIM = 'save skips the audit stamp';

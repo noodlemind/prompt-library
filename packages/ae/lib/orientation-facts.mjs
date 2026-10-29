@@ -19,6 +19,7 @@ import { resolveObligation, intentPage } from './intent-sources.mjs';
 import { performanceContext } from './performance.mjs';
 import { buildChangeImpactContext } from './change-impact.mjs';
 import { flowModelContext } from './flow-model.mjs';
+import { detectWorkspace, emptyLayout } from './workspace-layout.mjs';
 
 function indexPlane(plane) {
   if (!plane?.indexed) return 'missing';
@@ -86,6 +87,7 @@ export function collectOrientationFacts({ workspace, copilotHome, flags = {}, qu
     index: { knowledge: indexPlane(status?.knowledge), structural: indexPlane(status?.structural) },
     gateStatus: gate.pass ? 'pass' : 'blocked',
     activePlan: active ? { path: active.path, status: active.status, plan_lock: active.plan_lock } : null,
+    layout: advisory('layout', emptyLayout(), () => detectWorkspace(workspace, { home })),
   };
   if (flags.questionKind) slice.impactContext = buildChangeImpactContext({ workspace, copilotHome, home, query: q, files: flags.files || [], questionKind: flags.questionKind, graphPreparation });
   return { slice, active, session, namedFiles, matches, gate, status, routingLines, failures, sourceSnapshot, query: q, procedure, obligation };

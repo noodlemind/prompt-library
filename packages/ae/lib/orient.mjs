@@ -245,6 +245,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     gateStatus: newSession.gateStatus,
     blockedReason: newSession.blockedReason,
     nextTools,
+    layout: facts.slice.layout,
     neighborhood,
     skills,
     instructions,

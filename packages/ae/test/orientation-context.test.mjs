@@ -27,7 +27,8 @@ test('version two is opt-in and a cold read writes no context artifacts', (t) =>
   const f = fixture(t);
   const result = f.invoke('--read', '--context-version', '2', '--file', 'a.mjs');
   assert.equal(result.schema, 'harness.context.v2');
-  assert.equal(Object.keys(result.slice).length, 17);
+  assert.equal(Object.keys(result.slice).length, 18);
+  assert.equal(result.slice.layout.workspaceType, 'none');
   assert.equal(result.evidence[0].location, 'a.mjs');
   assert.match(result.evidence[0].sha256, /^[a-f0-9]{64}$/);
   assert.equal(result.coverage.semanticCompleteness, 'unverified');

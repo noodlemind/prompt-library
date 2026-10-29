@@ -26,6 +26,15 @@ function emptyOrientSlice() {
     index: { knowledge: 'missing', structural: 'missing' },
     gateStatus: 'blocked',
     activePlan: null,
+    layout: {
+      boundRoot: null,
+      kind: 'unknown',
+      markers: [],
+      workspaceType: 'none',
+      workspaceFile: null,
+      roots: [],
+      domainSuggestion: null,
+    },
   };
 }
 

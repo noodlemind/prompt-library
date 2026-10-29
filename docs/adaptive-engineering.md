@@ -199,6 +199,8 @@ The catalog-search eval is run after implementation on the completed checkout wi
 
 Inventory records source paths and local scope. CLI-selected launcher paths do not identify a running instance. VS Code and Cursor extension enablement remains unknown; JetBrains disabled IDs can establish an explicit disabled observation. Approved settings are overrides with `effective_known: false`. Remote sessions and live capability remain uncollected. The collector avoids editor state databases and histories. A refreshed installation snapshot still requires a separate actual task-operation proof. Inventory is optional and is never scanned during ordinary Deliver orientation.
 
+`ae orient` reports `layout` for the bound Git root: `monorepo` or `product-repo`, plus `workspaceType` of `vscode`, `intellij`, or `none`. A saved `.code-workspace` or `.idea/vcs.xml` beside that root or its parent can name other Git roots. Orient does not open their stores. When more than one root is listed and no domain file covers them, `domainSuggestion` prints a `domain_version: 2` body and the `<harness-home>/domains/<name>.yaml` path where a person can save it. Orient does not write that file. See [Workspace layout detection](workspace-layout-detection.md).
+
 `ae domain show --name <name> --json` reads `<harness-home>/domains/<name>.yaml` without creating records or repairing drift. It reports expected identity separately from observed Git identity, checkout roots, worktree roots, HEAD, and checks-file presence. Missing or changed identities remain explicit. The original `domain_version: 1` shape remains readable. Its shared references are advisory, and its configuration cannot authorize delivery.
 
 ### Shared intent and domain delivery

@@ -1,8 +1,39 @@
 # Workspace layout detection
 
-Research note. Nothing here is selected for a build. Krish decides.
+Krish chose option 3 on 2026-10-29. `ae orient` labels the bound Git root, reads a saved VS Code or IntelliJ workspace file, and prints a domain draft. It does not write that file.
 
-AE today binds one directory. `flags.workspace` defaults to `process.cwd()` (`packages/ae/lib/flags.mjs`). Git identity is `git rev-parse --show-toplevel` from that directory (`packages/ae/lib/git-context.mjs`). The plan and knowledge store is `<harness-home>/projects/<repo-id>/`, and the id is a slug of `origin` or `local-` plus a hash of that one checkout (`packages/ae/lib/project-layout.mjs`, `packages/ae/lib/knowledge/store.mjs`). Hooks walk up from a touched file until they see `.git` or `.harness` (`packages/ae/corpus/hooks/lib/tool-payload.mjs`). There is no reader for `.code-workspace`. `ae inventory` records editor installs and does not scan the live window during orient (`docs/adaptive-engineering.md`, "Optional environment observations").
+`layout` is on the full `ae orient` JSON and on `ae orient --read` (including context version 2's `slice`):
+
+```json
+{
+  "boundRoot": "/work/repo-a",
+  "kind": "monorepo",
+  "markers": ["pnpm-workspace.yaml"],
+  "workspaceType": "vscode",
+  "workspaceFile": "/work/dev.code-workspace",
+  "roots": [
+    { "root": "/work/repo-b", "kind": "product-repo", "markers": [] }
+  ],
+  "domainSuggestion": {
+    "path": "<harness-home>/domains/repo-a-repo-b.yaml",
+    "yaml": "domain_version: 2\nname: repo-a-repo-b\nrepos:\n  - id: repo-a\n    origin: https://example.invalid/team/repo-a\n"
+  }
+}
+```
+
+`kind` is `monorepo` or `product-repo`. `unknown` means the directory is not a Git work tree. A monorepo marker is `pnpm-workspace.yaml`, a non-empty `package.json` `workspaces` array or `workspaces.packages`, `lerna.json`, `nx.json`, `turbo.json`, `settings.gradle` or `settings.gradle.kts` with more than one `include`, a Maven `<modules>` list that contains a `<module>`, `MODULE.bazel`, `WORKSPACE`, or `WORKSPACE.bazel`. One Gradle `include` stays a product repo. `includeBuild` alone is not counted.
+
+`workspaceType` is `vscode`, `intellij`, or `none`. The reader looks for `*.code-workspace` in the bound root and its parent, and for `.idea/vcs.xml` in those same two places. Relative folder paths resolve from the workspace file. `%USERPROFILE%`, `~`, backslashes, and drive letters are accepted. `$PROJECT_DIR$` in a mapping expands to the directory that contains `.idea`. A saved VS Code file that includes the bound root wins over `vcs.xml`. `none` is also an unsaved Add Folder window: there is no file to read.
+
+`roots` lists the other Git roots from that file, each with its own kind and markers. Orient does not open their plan or knowledge stores. Plans stay on the bound repo's store. When `roots` is non-empty, those checkouts are in scope for read-only investigation, one researcher per repo.
+
+`domainSuggestion` is present only when the saved workspace has more than one Git root and no `<harness-home>/domains/*.yaml` already covers every one of them. The yaml is `domain_version: 2` with `origin` or `local_identity: {id, approved: true}`, and `bindings` hold the absolute roots. A person saves it at `path`. AE does not create the file. An invalid domain file is ignored. A credential-bearing origin is not copied into the draft; that repo is named with `local_identity` instead.
+
+The engineer states the bound repo and its kind at the start of the reply.
+
+The rest of this note is the research behind that choice.
+
+AE today binds one directory. `flags.workspace` defaults to `process.cwd()` (`packages/ae/lib/flags.mjs`). Git identity is `git rev-parse --show-toplevel` from that directory (`packages/ae/lib/git-context.mjs`). The plan and knowledge store is `<harness-home>/projects/<repo-id>/`, and the id is a slug of `origin` or `local-` plus a hash of that one checkout (`packages/ae/lib/project-layout.mjs`, `packages/ae/lib/knowledge/store.mjs`). Hooks walk up from a touched file until they see `.git` or `.harness` (`packages/ae/corpus/hooks/lib/tool-payload.mjs`). Before this change there was no reader for `.code-workspace`. `ae inventory` records editor installs and does not scan the live window during orient (`docs/adaptive-engineering.md`, "Optional environment observations").
 
 A multi-repo question already has a hand-written home: `<harness-home>/domains/<name>.yaml`. Version 2 names repos by origin, keeps absolute paths in `bindings`, and caps membership at 32 (`packages/ae/lib/domain-contract.mjs`). `ae domain show` reads that file and does not invent one. The paths `docs/multi-repo-domains.md` and `docs/user-feature-maps-and-ide-discovery.md` are not in this checkout. The domain contract that is in the checkout is the section "Shared intent and domain delivery" in `docs/adaptive-engineering.md`.
 
@@ -109,7 +140,7 @@ Auto-writing a domain yaml from `.code-workspace` or `vcs.xml` would turn an edi
 
 ## Options
 
-Smallest change first. None is chosen.
+Smallest change first. Krish chose the third, which includes the label and the workspace read. The behavior at the top of this note is what shipped.
 
 ### Report the bound root
 
@@ -129,10 +160,10 @@ A command prints a version 2 domain body from those roots and stops. A person co
 
 Tradeoff: the multi-repo plan and knowledge story stays the one AE already has. The cost is a new command and a review of the draft, because a wrong folder list would become a domain if someone saves it. Still no gate or hook change.
 
-## Open questions
+## Decisions
 
-- Should a monorepo's packages be named in the orient object, or is the marker file enough?
-- Who passes unsaved VS Code folders: a Copilot hook payload, or is "unknown" acceptable?
-- Is `.idea/vcs.xml` in the product repos Krish uses, or is it local and uncommitted?
-- Should the bound root be the session primary directory VS Code already picked, rather than a second guess?
-- Does a layout object belong in the orient JSON only, or also in the session-start hook text the model already sees?
+- Marker file names are enough. Package directories inside one Git root are not listed.
+- An unsaved Add Folder window stays `workspaceType: none`. No hook payload was added.
+- `.idea/vcs.xml` is read when it is on disk next to the bound root or its parent. A missing file stays `none`.
+- The bound root is `git rev-parse --show-toplevel` for the directory AE was given.
+- `layout` is part of the orient slice. Session start already injects that slice, so the field is visible there without a hook change.

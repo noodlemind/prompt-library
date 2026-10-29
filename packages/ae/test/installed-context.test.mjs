@@ -47,7 +47,7 @@ test('clean installed package expands current context and rejects stale source r
   };
   ok('install');
   assert.ok(fs.existsSync(path.join(copilotHome, 'skills/references/context-budget.md')));
-  assert.equal(Object.keys(ok('orient', '--read')).length, 17);
+  assert.equal(Object.keys(ok('orient', '--read')).length, 18);
   ok('index', '--structural');
   const context = ok('orient', '--read', '--context-version', '2', '--query', 'repair item', '--file', 'a.mjs');
   assert.equal(context.schema, 'harness.context.v2');
