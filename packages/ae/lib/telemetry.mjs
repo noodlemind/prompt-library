@@ -4,7 +4,7 @@ import YAML from 'yaml';
 
 const OUTCOMES = new Set(['passed', 'failed', 'inconclusive']);
 const SKILL_NAME = /^[a-z0-9][a-z0-9-]*$/;
-const LOCK_ATTEMPTS = 50;
+const LOCK_ATTEMPTS = 200;
 const LOCK_WAIT_MS = 20;
 
 function loadUsage(file) {
