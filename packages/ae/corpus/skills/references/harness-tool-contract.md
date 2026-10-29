@@ -389,11 +389,13 @@ After orient, start with at most three memory matches and expand the required se
 | Skill | Harness command(s) |
 |-------|-------------------|
 | `@engineer` Deliver mode | proportional `orient` → read pack → start/gate → focused TDD → required review prepare/assemble → `verify [--learnings <ids>]` → `compound --learning-decision` → complete plan-update decision |
-| `@engineer` Answer/Investigate modes | minimal reads → evidence-backed report; no delivery gate, verification, or compound |
+| `@engineer` Answer/Investigate modes | minimal reads → evidence-backed report; no `plan-new`, delivery gate, verification, or compound |
 | `/recall` | `orient` or `recall` (`-c`, `--min-score`) |
 | `/index-memory` | `index` (manifest + BM25 postings) |
 | `/auto-compound` | classify durable learning or no-learning, then publish through `compound --learning-decision`; Engineer records completion |
 | `/code-review` plan-compliance audit | `validate-plan`, `gate` |
+
+Investigate starts with a short list of questions and records findings with file:line refs in chat, or one notes file if long. A large scope splits by repo or area across parallel researchers, one narrow question each. Read the `researcher` line in `~/.cursor/rules/ae-models.mdc` or `~/.claude/rules/ae-models.md`. Pass that model when the host spawn tool takes one. A missing file, a missing line, or `inherit` means omit the model. A plan starts only when the user asks for a change and the mode switches to Deliver.
 
 ## CI examples
 

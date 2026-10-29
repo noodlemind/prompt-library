@@ -82,7 +82,7 @@ test('docs surface is the adaptive engineering explanation', () => {
     .readdirSync(docsRoot)
     .filter((name) => !name.startsWith('.') && !generated.has(name))
     .sort();
-  assert.deepEqual(topLevel, ['adaptive-engineering.md', 'diagrams', 'migration', 'model-preferences.md', 'site', 'structural-knowledge.md']);
+  assert.deepEqual(topLevel, ['adaptive-engineering.md', 'diagrams', 'migration', 'model-preferences.md', 'site', 'structural-knowledge.md', 'workspace-layout-detection.md']);
   assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);
@@ -388,6 +388,7 @@ test('delivery keeps the smallest change and review flags extra code', () => {
 
   const engineer = read('packages/ae/corpus/agents/engineer.agent.md');
   assert.match(engineer, /smallest change that meets the spec/);
+  assert.match(engineer, /Investigate\*\* names evidence and never calls `plan-new` or `ensure-plan`/);
   assert.doesNotMatch(engineer, /fix the findings/);
 
   const globalWorkflow = read('packages/ae/corpus/instructions/harness-global.instructions.md');

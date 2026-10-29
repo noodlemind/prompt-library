@@ -10,7 +10,7 @@ Capture the observed problem and intended outcome as an unlocked plan. /plan-iss
 
 ## When to use
 
-Use when the user wants to log a bug, feature request, task, or investigation finding.
+Use when the user wants to log a bug, feature request, or task. A read-only investigation does not create a plan. Log a finding only when the user asks to save it.
 
 ## Trigger Examples
 
@@ -23,6 +23,7 @@ Use when the user wants to log a bug, feature request, task, or investigation fi
 - "Plan how to fix this." Use /plan-issue.
 - "Fix this bug now." Use Engineer Deliver mode.
 - "Brainstorm solutions." Use /brainstorming.
+- "How are these attributes preserved?" Engineer Investigate mode. Do not create a plan.
 
 ## Gather the evidence
 

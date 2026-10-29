@@ -18,6 +18,7 @@ Bridge capture and planning for Engineer Deliver mode. Decide intent, scope, cri
 - "Log this issue for later." Use /capture-issue.
 - "Research this captured issue." Use /plan-issue.
 - "Execute this locked plan." Use Engineer Deliver mode.
+- "How does this flow work across repos?" Engineer Investigate mode. Do not create a plan.
 
 ## Confusable Boundaries
 
@@ -27,7 +28,7 @@ Capture records the problem. Planning chooses the approach. Engineer executes th
 
 Use concise content for one or two intended product files, expected completion in one session, a user-supplied target or reference, no architectural choice, and focused trusted verification. Use one phase and no broad repository scan. Consult a specialist only when its judgment is needed.
 
-Escalate when investigation reveals a data migration, security or concurrency implications, compatibility risk, more affected files, or unclear verification. Choose full or short representation through the same CLI contract; both require current proof.
+A read-only investigation does not use this skill, even when it spans many files or repos. During Deliver, escalate when the change reveals a data migration, security or concurrency implications, compatibility risk, more affected files, or unclear verification. Choose full or short representation through the same CLI contract; both require current proof.
 
 ## Establish the decision
 
