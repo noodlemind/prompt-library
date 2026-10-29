@@ -14,15 +14,15 @@ The Engineer authors the view after inspecting sources. Harness renders the sele
 From the repository root with AE installed:
 
 ```bash
-ae diagrams render --file docs/diagrams/ae-rendering.d2 --sources docs/adaptive-engineering.md,packages/ae/lib/diagram.mjs,packages/ae/lib/diagram-cmd.mjs,packages/ae/lib/diagrams --renderer d2 --layout tala --json
-ae diagrams render --file docs/diagrams/recovery.mmd --sources packages/ae/lib/plan-update.mjs --renderer pele --json
-ae diagrams graph --root packages/ae/lib/diagram-cmd.mjs --operation deps --depth 2 --limit 24 --max-nodes 7 --json
+ae diagrams render --file docs/diagrams/ae-rendering.d2 --sources docs/adaptive-engineering.md,packages/ae/lib/diagram.mjs,packages/ae/lib/diagram-cmd.mjs,packages/ae/lib/diagrams --renderer d2 --layout tala --png --json
+ae diagrams render --file docs/diagrams/recovery.mmd --sources packages/ae/lib/plan-update.mjs --renderer pele --png --json
+ae diagrams graph --root packages/ae/lib/diagram-cmd.mjs --operation deps --depth 2 --limit 24 --max-nodes 7 --png --json
 ```
 
-The JSON result supplies immutable `.harness/diagrams/<id>/` paths for the SVG, self-contained HTML, and receipt. Open the returned HTML locally. Check freshness with `ae diagrams status --receipt <returned-receipt-path> --json`. Raw rendering without `--sources` remains `diagram-only`.
+The JSON result supplies immutable `.harness/diagrams/<id>/` paths for the SVG, self-contained HTML, receipt, and PNG when `--png` is set. The text report prints the absolute paths and one line on how to open them. Open the returned HTML locally, or attach the PNG where SVG is not shown. Check freshness with `ae diagrams status --receipt <returned-receipt-path> --json`. Raw rendering without `--sources` remains `diagram-only`.
 
 `ae diagrams flow --flow <existing-flow-id> --json` visualizes an already published descriptive statechart; it does not generate or update that model. Flow baselines describe the locally observed committed default branch. Dependency diagrams describe current worktree imports and retain coverage limitations. Neither is a complete runtime architecture map.
 
 The bundled renderers load on demand; these operations require no MCP server, network request, runtime package installation, or global rendering executable. Only a bounded subset of Mermaid/D2 is accepted. Keep examples plain: no imports, remote assets, links, directives, configuration, or injected markup. The Harness chooses renderer options and TALA seeds.
 
-In regular work, ask the Engineer to inspect the sources and explain one boundary or recovery question. Use the import view to check dependency assumptions, author the explanation in D2 or Mermaid, render it, and inspect the returned HTML. Before reusing it during review, run receipt status. The editable diagram source stays with the design; SVG/HTML are derived outputs. PNGs in this folder are documentation previews, produced from the SVGs outside the runtime CLI.
+In regular work, ask the Engineer to inspect the sources and explain one boundary or recovery question. Use the import view to check dependency assumptions, author the explanation in D2 or Mermaid, render it, and inspect the returned HTML. Before reusing it during review, run receipt status. The editable diagram source stays with the design; SVG, HTML, and PNG are derived outputs. PNGs in this folder are documentation previews of the same views. Pass `--png` on the commands above to write `diagram.png` beside the SVG.

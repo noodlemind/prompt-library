@@ -19,13 +19,15 @@ Use a small view around one question. Keep context, components, deployment, and 
 ## Render an authored view
 
 ```bash
-ae diagrams render --file docs/diagrams/architecture.d2 --sources src/orders,config/orders.json --renderer d2 --layout tala --json
-ae diagrams render --file docs/diagrams/recovery.mmd --sources src/orders --renderer pele --json
+ae diagrams render --file docs/diagrams/architecture.d2 --sources src/orders,config/orders.json --renderer d2 --layout tala --png --json
+ae diagrams render --file docs/diagrams/recovery.mmd --sources src/orders --renderer pele --png --scale 2 --json
 ```
 
 All paths are repository-relative. `--sources` is a comma-separated selection of explicit files or directories. Include likely locations of additional writers: directory watches capture their inventory so a new file can invalidate freshness. A diagram source alone cannot establish source coverage. Without `--sources`, the result is explicitly `diagram-only`; do not present it as source-bound architecture evidence.
 
-Pele renders Mermaid to SVG without a browser. D2 uses its bundled JavaScript/WASM engine; TALA is the architecture layout, while ELK and Dagre are available for directional views. The dependencies load on demand in bounded workers. Rendering invokes no model, fetches no remote, and installs no executable, package, or browser at runtime. Users do not need global D2, TALA, Graphviz, Java, or Chromium installations for these commands.
+Pele renders Mermaid to SVG without a browser. D2 uses its bundled JavaScript/WASM engine; TALA is the architecture layout, while ELK and Dagre are available for directional views. TALA ships inside that WASM build under the same MPL-2.0 terms as D2. It does not need a license key or a separate TALA binary. The default layout stays TALA. The dependencies load on demand in bounded workers. Rendering invokes no model, fetches no remote, and installs no executable, package, or browser at runtime. Users do not need global D2, TALA, Graphviz, Java, or Chromium installations for these commands.
+
+`--png` also writes `diagram.png` next to the SVG. `--scale` is an integer from 1 to 4 and defaults to 2. The PNG is produced by the bundled resvg WebAssembly rasterizer, with Source Sans 3 for Mermaid text and the faces embedded in a D2 SVG. It does not open a browser or read system fonts, so the same SVG produces the same PNG on Windows, macOS, and Linux. Omit `--png` when only the SVG and HTML are needed.
 
 The Harness accepts a deliberately restricted subset of each source language, rather than every feature in upstream Mermaid or D2. Use plain Mermaid flow or state syntax without author-controlled directives, clicks, styles, or HTML. Use plain D2 nodes, labels, containers, and connections without imports, configuration, variables, links, icons, or markup. Harness owns renderer options and TALA seeds. A rejected feature is an explicit unsupported-input result; simplify the view rather than bypassing validation or installing another renderer during the task.
 
@@ -43,7 +45,7 @@ Flow views reuse the published model from [flow-models.md](flow-models.md); they
 
 ## Review artifacts and freshness
 
-A successful creation returns an `id` and `artifacts` paths for `svg`, `html`, and `receipt`. The default output is an immutable directory under `.harness/diagrams/<id>/`. Open the self-contained HTML or SVG and inspect labels, boundaries, crossings, and clipping. Keep the source as the editable input; rendered output is a derived artifact.
+A successful creation returns an `id` and `artifacts` paths for `svg`, `html`, `receipt`, and `png` when `--png` was set. The text report prints the absolute SVG, HTML, receipt, and PNG paths, plus one line on how to open them. The default output is an immutable directory under `.harness/diagrams/<id>/`. Open the self-contained HTML or SVG and inspect labels, boundaries, crossings, and clipping. Use the PNG where a page cannot show SVG. Keep the source as the editable input; rendered output is a derived artifact.
 
 ```bash
 ae diagrams status --receipt .harness/diagrams/<id>/receipt.json --json

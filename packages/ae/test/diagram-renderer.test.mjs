@@ -8,6 +8,16 @@ import { renderDiagram } from '../lib/diagrams/render.mjs';
 
 const source = 'flowchart TB\n A[Engineer authors] --> B[Harness validates]\n B --> C[Local SVG]';
 
+test('optional png uses the svg dimensions and a bounded scale', async () => {
+  const result = await renderDiagram({ source, engine: 'pele', pngScale: 2 });
+  assert.equal(result.settings.raster.scale, 2);
+  assert.equal(result.png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.equal(result.png.toString('ascii', 12, 16), 'IHDR');
+  assert.equal(result.png.readUInt32BE(16), Number(result.svg.match(/\bwidth="(\d+(?:\.\d+)?)"/)[1]) * 2);
+  assert.equal(result.png.readUInt32BE(20), Number(result.svg.match(/\bheight="(\d+(?:\.\d+)?)"/)[1]) * 2);
+  await assert.rejects(renderDiagram({ source, engine: 'pele', pngScale: 5 }), /scale/i);
+});
+
 test('Pele renders portable, deterministic SVG without a browser', async () => {
   const first = await renderDiagram({ source, engine: 'pele' });
   const second = await renderDiagram({ source, engine: 'pele' });

@@ -11,7 +11,7 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 
 test('diagram renderers are pinned and bundled in the AE distribution', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
-  for (const [name, version] of Object.entries({ pele: '1.8.0', '@d2lang/d2': '0.1.34' })) {
+  for (const [name, version] of Object.entries({ pele: '1.8.0', '@d2lang/d2': '0.1.34', '@resvg/resvg-wasm': '2.6.2' })) {
     assert.equal(manifest.dependencies[name], version, `${name} must have a pinned version`);
     assert.ok(manifest.bundledDependencies.includes(name), `${name} must ship inside the archive`);
   }
@@ -39,7 +39,7 @@ test('offline local and global archives render both bundled backends from foreig
   delete env.NODE_TEST_CONTEXT;
   for (const command of ['ae', 'd2', 'pstack', 'tlc']) assert.ok(spawnSync(command, ['--version'], { env }).error, `${command} must not be supplied by the environment`);
   const run = (command, args, cwd, extraEnv = {}) => {
-    const result = spawnSync(command, args, { cwd, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
+    const result = spawnSync(command, args, { cwd, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
     assert.ifError(result.error);
     assert.equal(result.status, 0, `${command} ${args.join(' ')}\n${result.stdout}\n${result.stderr}`);
     return result.stdout;
@@ -61,7 +61,7 @@ test('offline local and global archives render both bundled backends from foreig
     assert.ok(fs.existsSync(command), `${mode} installation must expose ae`);
     assert.equal(fs.existsSync(path.join(installed, 'test')), false);
     assert.equal(fs.existsSync(path.join(installed, 'node_modules/tree-sitter-java')), false, 'optional grammars are omitted');
-    for (const asset of ['THIRD-PARTY-NOTICES.md', 'node_modules/pele/LICENSE', 'node_modules/@d2lang/d2/LICENSE.txt', 'node_modules/@d2lang/d2/THIRD_PARTY_NOTICES.txt', 'node_modules/@d2lang/d2/dist/node-esm/d2.wasm', 'node_modules/@d2lang/d2/dist/node-esm/worker.js']) assert.ok(fs.existsSync(path.join(installed, asset)), `${mode} archive is missing ${asset}`);
+    for (const asset of ['THIRD-PARTY-NOTICES.md', 'node_modules/pele/LICENSE', 'node_modules/@d2lang/d2/LICENSE.txt', 'node_modules/@d2lang/d2/THIRD_PARTY_NOTICES.txt', 'node_modules/@d2lang/d2/dist/node-esm/d2.wasm', 'node_modules/@d2lang/d2/dist/node-esm/worker.js', 'node_modules/@resvg/resvg-wasm/index_bg.wasm', 'lib/diagrams/fonts/SourceSans3-Regular.ttf', 'lib/diagrams/fonts/LICENSE.md']) assert.ok(fs.existsSync(path.join(installed, asset)), `${mode} archive is missing ${asset}`);
     assert.equal(run(process.execPath, [cli, '--version'], root).trim(), packed.version);
     const workspace = path.join(root, `${mode} fixture workspace`), foreign = path.join(root, `${mode} foreign working directory`);
     fs.mkdirSync(path.join(workspace, 'src'), { recursive: true });
@@ -70,10 +70,10 @@ test('offline local and global archives render both bundled backends from foreig
     fs.writeFileSync(path.join(workspace, 'diagram.mmd'), 'flowchart LR\n  received[Received] --> processed[Processed]\n');
     fs.writeFileSync(path.join(workspace, 'diagram.d2'), 'direction: right\nreceived: Received\nprocessed: Processed\nreceived -> processed\n');
     for (const renderer of ['pele', 'd2']) {
-      const result = JSON.parse(run(process.execPath, [cli, 'diagrams', 'render', '--file', renderer === 'pele' ? 'diagram.mmd' : 'diagram.d2', '--sources', 'src/input.mjs', '--renderer', renderer, ...(renderer === 'd2' ? ['--layout', 'tala'] : []), '--workspace', workspace, '--ae-home', path.join(root, `${mode} ae home`), '--json'], foreign));
+      const result = JSON.parse(run(process.execPath, [cli, 'diagrams', 'render', '--file', renderer === 'pele' ? 'diagram.mmd' : 'diagram.d2', '--sources', 'src/input.mjs', '--renderer', renderer, ...(renderer === 'd2' ? ['--layout', 'tala'] : []), '--png', '--scale', '1', '--workspace', workspace, '--ae-home', path.join(root, `${mode} ae home`), '--json'], foreign));
       assert.equal(result.status, 'ok');
       assert.match(result.id, /^[a-f0-9]{64}$/);
-      for (const [kind, filename] of Object.entries({ svg: 'diagram.svg', html: 'report.html', receipt: 'receipt.json' })) {
+      for (const [kind, filename] of Object.entries({ svg: 'diagram.svg', html: 'report.html', png: 'diagram.png', receipt: 'receipt.json' })) {
         assert.equal(result.artifacts[kind], `.harness/diagrams/${result.id}/${filename}`);
         assert.ok(fs.statSync(path.join(workspace, result.artifacts[kind])).size > 0);
       }

@@ -118,7 +118,7 @@ initialize this repo (`init-repo`) from the palette
 | `recall` / `get` / `search` / `lookup` / `tree` | Retrieval |
 | `graph deps` / `dependents` / `path` / `explain` / `impact` | Bounded structural evidence and change-impact candidates |
 | `flows prepare` / `flows publish` / `flows status` / `flows show` | Optional source-bound descriptive application model |
-| `diagrams render` / `graph` / `flow` / `status` | Local SVG/HTML views with source freshness receipts |
+| `diagrams render` / `graph` / `flow` / `status` | Local SVG/HTML views, optional PNG, and source freshness receipts |
 | `edit` / `write` / `apply` / `undo` | Mutations (`undo` operator-only) |
 | `exec` / `bash` | Governed process / shell |
 | `todo` | Durable worklist (`.harness/todo.json`) |

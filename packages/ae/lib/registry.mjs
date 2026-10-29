@@ -1302,7 +1302,7 @@ registerCommand({
   capabilities: [],
   outputModes: ['ledger', 'json'],
   surfaces: ['cli', 'tui', 'agent'],
-  usage: '<render|graph|flow|status> [--file <path>] [--sources <paths>] [--renderer <pele|d2>] [--layout <tala|elk|dagre>] [--root <path>] [--operation <deps|dependents>] [--flow <id>] [--receipt <path>] [--depth <n>] [--limit <n>] [--max-nodes <n>] [--timeout <ms>] [--dry-run]',
+  usage: '<render|graph|flow|status> [--file <path>] [--sources <paths>] [--renderer <pele|d2>] [--layout <tala|elk|dagre>] [--png] [--scale <1-4>] [--root <path>] [--operation <deps|dependents>] [--flow <id>] [--receipt <path>] [--depth <n>] [--limit <n>] [--max-nodes <n>] [--timeout <ms>] [--dry-run]',
   verbs: [
     { verb: 'render', summary: 'render an authored Mermaid or D2 source with explicit evidence' },
     { verb: 'graph', summary: 'render a bounded current-worktree module-import view' },
@@ -1324,6 +1324,8 @@ registerCommand({
       { name: '--limit', type: 'number', valueName: 'n', description: 'graph/flow edge limit 1 to 200; default 50', tui: 'prompt', verbs: ['graph', 'flow'] },
       { name: '--max-nodes', type: 'number', valueName: 'n', description: 'view nodes 1 to 200; default 50', tui: 'prompt', verbs: ['graph', 'flow'] },
       { name: '--timeout', type: 'number', valueName: 'ms', description: 'worker deadline 1 to 30000 ms; default 10000', tui: 'prompt', verbs: ['render', 'graph', 'flow'] },
+      { name: '--png', type: 'boolean', description: 'also write diagram.png beside the SVG', tui: 'cli-only', verbs: ['render', 'graph', 'flow'] },
+      { name: '--scale', type: 'number', valueName: '1-4', description: 'PNG pixel scale; default 2; requires --png', tui: 'prompt', verbs: ['render', 'graph', 'flow'] },
     ],
   },
   handler: cmdDiagrams,

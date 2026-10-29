@@ -42,19 +42,11 @@ function validateSource(source, engine) {
   }
 }
 
-/** Render authored static diagram source using only the libraries shipped with AE. */
-export async function renderDiagram({ source, engine = 'pele', layout, timeoutMs = 10_000 } = {}) {
-  if (!['pele', 'd2'].includes(engine)) throw failure('engine must be pele or d2');
-  if (engine === 'pele' && layout !== undefined) throw failure('layout controls are supported only for D2');
-  if (layout !== undefined && !LAYOUTS.includes(layout)) throw failure('layout must be tala, elk or dagre');
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
-    throw failure(`timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}`);
-  }
-  validateSource(source, engine);
-  const worker = new Worker(new URL('./render-worker.mjs', import.meta.url), {
-    workerData: { source, engine, layout: engine === 'd2' ? layout || 'tala' : null, maxOutputBytes: MAX_OUTPUT_BYTES },
-    execArgv: [], stdout: true, stderr: true,
-    resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 },
+const WORKER_LIMITS = { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 };
+
+function runIsolatedWorker(filename, workerData, timeoutMs, accept) {
+  const worker = new Worker(filename, {
+    workerData, execArgv: [], stdout: true, stderr: true, resourceLimits: WORKER_LIMITS,
   });
   // Renderer diagnostics are reported through the bounded result, never as raw output.
   worker.stdout.resume(); worker.stderr.resume();
@@ -72,10 +64,39 @@ export async function renderDiagram({ source, engine = 'pele', layout, timeoutMs
     worker.once('exit', code => finish(failure(`worker exited before returning a result (code ${code})`)));
     worker.once('message', message => {
       if (message?.error) return finish(failure(String(message.error).slice(0, 2000)));
-      if (!message?.result || typeof message.result.svg !== 'string' || Buffer.byteLength(message.result.svg) > MAX_OUTPUT_BYTES) {
-        return finish(failure('renderer returned an invalid or oversized result'));
-      }
-      return finish(null, message.result);
+      const result = accept(message);
+      if (!result) return finish(failure('renderer returned an invalid or oversized result'));
+      return finish(null, result);
     });
   });
+}
+
+/** Render authored static diagram source using only the libraries shipped with AE. */
+export async function renderDiagram({ source, engine = 'pele', layout, timeoutMs = 10_000, pngScale } = {}) {
+  if (!['pele', 'd2'].includes(engine)) throw failure('engine must be pele or d2');
+  if (engine === 'pele' && layout !== undefined) throw failure('layout controls are supported only for D2');
+  if (layout !== undefined && !LAYOUTS.includes(layout)) throw failure('layout must be tala, elk or dagre');
+  if (pngScale !== undefined && (!Number.isInteger(pngScale) || pngScale < 1 || pngScale > 4)) throw failure('png scale must be an integer from 1 to 4');
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
+    throw failure(`timeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}`);
+  }
+  validateSource(source, engine);
+  const started = Date.now();
+  const rendered = await runIsolatedWorker(new URL('./render-worker.mjs', import.meta.url), {
+    source, engine, layout: engine === 'd2' ? layout || 'tala' : null, maxOutputBytes: MAX_OUTPUT_BYTES,
+  }, timeoutMs, message => {
+    if (!message?.result || typeof message.result.svg !== 'string' || Buffer.byteLength(message.result.svg) > MAX_OUTPUT_BYTES) return null;
+    return message.result;
+  });
+  if (pngScale === undefined) return rendered;
+  const remaining = timeoutMs - (Date.now() - started);
+  if (remaining < 1) throw failure(`timed out after ${timeoutMs}ms`);
+  const png = await runIsolatedWorker(new URL('./raster-worker.mjs', import.meta.url), {
+    svg: rendered.svg, scale: pngScale,
+  }, remaining, message => {
+    const bytes = Buffer.isBuffer(message?.png) ? message.png : Buffer.from(message?.png || []);
+    if (bytes.length < 24 || bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') return null;
+    return bytes;
+  });
+  return { ...rendered, png, settings: { ...rendered.settings, raster: { format: 'png', scale: pngScale } } };
 }

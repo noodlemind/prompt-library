@@ -22,7 +22,7 @@
     "THIRD-PARTY-NOTICES.md",
     "scripts/check-release.mjs"
   ],
-  "//bundledDependencies": "All hard runtime dependencies ship inside the tarball for offline installation and diagram rendering. Pinned Pele and D2/WASM need no separate executable, service or download. Pinned Tree-sitter loader/runtime and selected grammar WASM assets ship under lib/repo-map/vendor with upstream licenses and integrity manifests; no native bindings or optional package installation is required. Bundled dependency updates require an AE release and license/advisory review.",
+  "//bundledDependencies": "All hard runtime dependencies ship inside the tarball for offline installation and diagram rendering. Pinned Pele, D2/WASM, and resvg-wasm need no separate executable, service, browser, or download. Diagram PNG text uses the OFL Source Sans 3 files under lib/diagrams/fonts plus any WOFF faces embedded in a D2 SVG. Pinned Tree-sitter loader/runtime and selected grammar WASM assets ship under lib/repo-map/vendor with upstream licenses and integrity manifests; no native bindings or optional package installation is required. Bundled dependency updates require an AE release and license/advisory review.",
   "scripts": {
     "check:release": "node ./scripts/check-release.mjs",
     "check:repo": "node --test ./test/release-version.test.mjs ./test/prompt-library-contracts.test.mjs",
@@ -45,11 +45,13 @@
   },
   "dependencies": {
     "@d2lang/d2": "0.1.34",
+    "@resvg/resvg-wasm": "2.6.2",
     "pele": "1.8.0",
     "yaml": "^2.9.0"
   },
   "bundledDependencies": [
     "@d2lang/d2",
+    "@resvg/resvg-wasm",
     "pele",
     "yaml"
   ],
@@ -58,5 +60,11 @@
     "agent-skills",
     "adaptive-engineer",
     "harness"
+  ],
+  "bundleDependencies": [
+    "@d2lang/d2",
+    "@resvg/resvg-wasm",
+    "pele",
+    "yaml"
   ]
 }
