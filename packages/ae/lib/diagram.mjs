@@ -166,21 +166,40 @@ function htmlReport({ id, record, svg, source }) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:"><title>AE diagram ${id.slice(0, 12)}</title><style>body{margin:0;background:#fafbf8;color:#183237;font:16px/1.6 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:30px;line-height:1.2}.meta{color:#52666b}figure{background:white;padding:24px;border:1px solid #dce4de;overflow:auto;margin:24px 0}figure svg{display:block;max-width:100%;height:auto;margin:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;background:#edf2ed;padding:20px}summary{cursor:pointer;font-weight:600}code{overflow-wrap:anywhere}</style></head><body><main><h1>${escape(record.kind)} diagram</h1><p class="meta">${escape(record.snapshot.scope)} · ${escape(record.renderer.engine)} ${escape(record.renderer.version)} · ${escape(record.renderer.layout || 'native')} · snapshot ${id.slice(0, 12)}</p><p><strong>Descriptive context.</strong> Verification: <code>not-verified</code>. A successful render does not establish architecture accuracy, runtime behavior or complete coverage.</p><figure>${svg}</figure><details><summary>Sources, coverage and rendering receipt</summary><pre>${escape(JSON.stringify(record, null, 2))}</pre></details><details><summary>Diagram source</summary><pre>${escape(source)}</pre></details><p>This is a saved snapshot. Run <code>ae diagrams status --receipt .harness/diagrams/${id}/receipt.json --json</code> to check current source and artifact bytes.</p></main></body></html>\n`;
 }
 
+function sameBytes(existing, content) {
+  if (existing === content) return true;
+  if (existing == null || content == null) return false;
+  const left = Buffer.isBuffer(existing) ? existing : Buffer.from(existing);
+  const right = Buffer.isBuffer(content) ? content : Buffer.from(content);
+  return left.equals(right);
+}
+
 function publish(workspace, rel, content) {
   const full = assertNoSymlinkAncestors(workspace, rel);
   if (!full) throw fail('report destination is unsafe or symlinked');
-  const existing = readFileNoFollow(full, { root: workspace, maxBytes: MAX_ARTIFACT });
-  if (existing === content) return;
+  const binary = Buffer.isBuffer(content);
+  const existing = readFileNoFollow(full, { root: workspace, maxBytes: MAX_ARTIFACT, encoding: binary ? null : 'utf8' });
+  if (sameBytes(existing, content)) return;
   if (existing !== null || !writeFileContained(workspace, rel, content, { exclusive: true })) throw fail('report destination is unsafe or contains conflicting bytes');
-  if (readFileNoFollow(path.join(workspace, rel), { root: workspace, maxBytes: MAX_ARTIFACT }) !== content) throw fail('report publication could not be verified');
+  const verified = readFileNoFollow(path.join(workspace, rel), { root: workspace, maxBytes: MAX_ARTIFACT, encoding: binary ? null : 'utf8' });
+  if (!sameBytes(verified, content)) throw fail('report publication could not be verified');
+}
+
+export function diagramArtifactPaths(workspace, artifacts, pathImpl = path) {
+  const paths = {};
+  if (!artifacts) return paths;
+  for (const key of ['svg', 'html', 'png', 'receipt']) {
+    if (typeof artifacts[key] === 'string') paths[key] = pathImpl.resolve(workspace, artifacts[key]);
+  }
+  return paths;
 }
 
 export async function renderDiagramView(options) {
-  const { workspace, home, renderer, layout, timeoutMs, dryRun = false } = options;
+  const { workspace, home, renderer, layout, timeoutMs, dryRun = false, png = false, scale = 2 } = options;
   const view = selectView(options);
   const engine = renderer || (view.format === 'd2' ? 'd2' : 'pele');
   if (view.format === 'd2' && engine !== 'd2' || view.format === 'mermaid' && engine !== 'pele') throw fail('diagram syntax must match renderer; Mermaid uses pele and D2 uses d2');
-  const rendered = await renderDiagram({ source: view.source, engine, layout, timeoutMs });
+  const rendered = await renderDiagram({ source: view.source, engine, layout, timeoutMs, pngScale: png ? scale : undefined });
   let now;
   if (view.snapshot.kind === 'flow') {
     const after = showFlowModel({ workspace, home });
@@ -194,17 +213,22 @@ export async function renderDiagramView(options) {
   const id = digest(record), base = `.harness/diagrams/${id}`;
   const artifacts = { svg: `${base}/diagram.svg`, html: `${base}/report.html`, source: `${base}/diagram.${view.format === 'd2' ? 'd2' : 'mmd'}`, receipt: `${base}/receipt.json` };
   const contents = { svg: rendered.svg, html: htmlReport({ id, record, svg: rendered.svg, source: view.source }), source: view.source };
+  if (rendered.png) {
+    artifacts.png = `${base}/diagram.png`;
+    contents.png = rendered.png;
+  }
   const hashes = Object.fromEntries(Object.entries(contents).map(([key, content]) => [key, sha(content)]));
   const receipt = { ...record, id, artifacts, hashes };
   const json = `${JSON.stringify(receipt, null, 2)}\n`;
-  if ([...Object.values(contents), json].some(content => Buffer.byteLength(content) > MAX_ARTIFACT)) throw fail('generated artifact exceeds 8 MiB; select a smaller view');
+  if ([...Object.values(contents), json].some(content => Buffer.byteLength(content) > MAX_ARTIFACT)) throw fail('generated artifact exceeds 8 MiB; select a smaller view or a lower --scale');
   if (!dryRun) {
     // The receipt is the completion marker. Interrupted publication can replay
     // identical bytes; conflicting/user-edited content is never overwritten.
     for (const [key, content] of Object.entries(contents)) publish(workspace, artifacts[key], content);
     publish(workspace, artifacts.receipt, json);
   }
-  return { mode: 'diagrams', verb: options.verb, status: 'ok', exitCode: 0, id, kind: view.kind, renderer: record.renderer, freshness: { ...now, scope: view.snapshot.scope }, artifacts: dryRun ? null : artifacts, dryRun, verification: 'not-verified' };
+  const published = dryRun ? null : artifacts;
+  return { mode: 'diagrams', verb: options.verb, status: 'ok', exitCode: 0, id, kind: view.kind, renderer: record.renderer, freshness: { ...now, scope: view.snapshot.scope }, artifacts: published, paths: published ? diagramArtifactPaths(workspace, published) : null, dryRun, verification: 'not-verified' };
 }
 
 export function diagramStatus({ workspace, home, receiptPath }) {
@@ -213,13 +237,16 @@ export function diagramStatus({ workspace, home, receiptPath }) {
     const receipt = JSON.parse(read(workspace, receiptPath, MAX_ARTIFACT));
     const { id, artifacts, hashes, ...record } = receipt;
     const base = `.harness/diagrams/${id}`;
-    const expected = { svg: `${base}/diagram.svg`, html: `${base}/report.html`, source: `${base}/diagram.${record.diagram?.format === 'd2' ? 'd2' : 'mmd'}`, receipt: `${base}/receipt.json` };
+    const hashNames = hashes && typeof hashes === 'object' ? Object.keys(hashes).sort() : [];
+    const png = hashNames.includes('png');
+    const expectedNames = png ? ['html', 'png', 'source', 'svg'] : ['html', 'source', 'svg'];
+    const expected = { svg: `${base}/diagram.svg`, html: `${base}/report.html`, source: `${base}/diagram.${record.diagram?.format === 'd2' ? 'd2' : 'mmd'}`, ...(png ? { png: `${base}/diagram.png` } : {}), receipt: `${base}/receipt.json` };
     if (!HASH.test(id) || record.schema !== 'ae.diagram.v1' || record.authority !== 'descriptive-context' || record.verification !== 'not-verified'
       || digest(record) !== id || receiptPath !== expected.receipt || serialize(artifacts) !== serialize(expected)
-      || !hashes || Object.keys(hashes).sort().join(',') !== 'html,source,svg'
+      || hashNames.join(',') !== expectedNames.join(',')
       || !['d2', 'mermaid'].includes(record.diagram?.format) || record.diagram.sha256 !== hashes.source) return unknown('invalid or changed render receipt');
     validateSnapshot(record.snapshot);
-    for (const key of ['svg', 'html', 'source']) if (!HASH.test(hashes[key]) || sha(read(workspace, expected[key], MAX_ARTIFACT, true)) !== hashes[key]) return unknown('rendered artifact bytes changed or are unavailable');
-    return { mode: 'diagrams', verb: 'status', status: 'ok', exitCode: 0, id, ...currentness({ workspace, home }, record.snapshot), scope: record.snapshot.scope, artifacts, verification: 'not-verified' };
+    for (const key of expectedNames) if (!HASH.test(hashes[key]) || sha(read(workspace, expected[key], MAX_ARTIFACT, true)) !== hashes[key]) return unknown('rendered artifact bytes changed or are unavailable');
+    return { mode: 'diagrams', verb: 'status', status: 'ok', exitCode: 0, id, ...currentness({ workspace, home }, record.snapshot), scope: record.snapshot.scope, artifacts, paths: diagramArtifactPaths(workspace, artifacts), verification: 'not-verified' };
   } catch (error) { return unknown(String(error.message).slice(0, 500)); }
 }

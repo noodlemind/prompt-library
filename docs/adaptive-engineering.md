@@ -357,7 +357,7 @@ A successful compound may return an advisory `flowMaintenance` pointer when an e
 
 ### Local diagram rendering
 
-The existing Codebase Context skill owns diagram interpretation through its on-demand [diagram reference](../packages/ae/corpus/skills/codebase-context/references/diagrams.md). The host Engineer authors source-backed explanations and labels inferred or proposed relationships; Harness renders bounded local inputs, captures provenance, and reports freshness. This adds no agent, MCP server, model call, network request, or runtime installer. Bundled Pele and D2 dependencies load on demand in workers and produce SVG plus self-contained HTML.
+The existing Codebase Context skill owns diagram interpretation through its on-demand [diagram reference](../packages/ae/corpus/skills/codebase-context/references/diagrams.md). The host Engineer authors source-backed explanations and labels inferred or proposed relationships; Harness renders bounded local inputs, captures provenance, and reports freshness. This adds no agent, MCP server, model call, network request, or runtime installer. Bundled Pele and D2 dependencies load on demand in workers and produce SVG plus self-contained HTML. Optional `--png` adds a PNG beside the SVG through bundled resvg WebAssembly.
 
 ```bash
 ae diagrams render --file docs/diagrams/architecture.d2 --sources src/orders,config/orders.json --renderer d2 --layout tala --json
@@ -367,7 +367,7 @@ ae diagrams flow --flow order-recovery --json
 ae diagrams status --receipt .harness/diagrams/<id>/receipt.json --json
 ```
 
-Render accepts a restricted Mermaid/D2 subset with Harness-owned options; imports, remote assets, author-controlled renderer configuration, links, and markup are unsupported. TALA handles architecture layout, with ELK or Dagre available for directional views. The returned `id` and `artifacts` identify immutable output under `.harness/diagrams/<id>/`, including `svg`, `html`, and `receipt`. Open those returned artifact paths. Without `--sources`, authored text remains `diagram-only`; selected files or directories bind the view to worktree bytes and watched inventory, including new files.
+Render accepts a restricted Mermaid/D2 subset with Harness-owned options; imports, remote assets, author-controlled renderer configuration, links, and markup are unsupported. TALA handles architecture layout, with ELK or Dagre available for directional views. TALA is part of the bundled D2 WebAssembly build, so the command does not install a separate layout binary. The returned `id` and `artifacts` identify immutable output under `.harness/diagrams/<id>/`, including `svg`, `html`, `receipt`, and `png` when requested. The text report prints those absolute paths. `--scale` accepts 1 to 4 and defaults to 2. Without `--sources`, authored text remains `diagram-only`; selected files or directories bind the view to worktree bytes and watched inventory, including new files.
 
 Dependency diagrams reuse bounded current-worktree import facts and retain unresolved edges and coverage limits. Flow diagrams render existing committed-default-branch descriptive models without regenerating them; keep their recorded generation and freshness distinct from the worktree. Artifact integrity and source currentness do not prove architecture correctness, complete behavior, accepted intent, or a TLA+ property. [Hand-authored examples](diagrams/README.md) illustrate these limits.
 
