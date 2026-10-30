@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { publishPolicySnapshot } from '../lib/policy.mjs';
 import { resolveConfig } from '../lib/config.mjs';
+import { withGitObservationCache } from '../lib/git-observation-cache.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-project-authority-'));
@@ -29,6 +30,21 @@ function fixture(t) {
   return { workspace, home, copilotHome };
 }
 function write(directory, name, content) { fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, name), content); }
+
+test('operation-scoped identity reuse never caches policy bytes, competing sources or another home', t => {
+  const f = fixture(t);
+  withGitObservationCache(() => {
+    const local = resolveProjectAuthority(f.workspace).directory;
+    write(local, 'checks.yaml', 'version: 1\nchecks: {}\n');
+    const before = policyDigest(f.workspace);
+    write(local, 'checks.yaml', 'version: 1\nchecks: {}\n# changed during validation\n');
+    assert.notEqual(policyDigest(f.workspace), before);
+    const other = path.join(path.dirname(f.home), 'another-home');
+    assert.notEqual(resolveProjectAuthority(f.workspace, { home: other }).directory, local);
+    write(path.join(f.workspace, '.github/harness'), 'policy.yaml', 'version: 1\nenforcement: enforce\n');
+    assert.throws(() => resolveProjectAuthority(f.workspace), /both local and shared/i);
+  });
+});
 
 test('personal authority has one external source for checks, readiness, policy, routing and configuration', t => {
   const f = fixture(t), authority = resolveProjectAuthority(f.workspace, { home: f.home });
