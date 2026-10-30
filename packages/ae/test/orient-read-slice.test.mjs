@@ -132,6 +132,7 @@ function assertColdSlice(slice, { contextVersion = 1 } = {}) {
   assert.deepEqual(slice.layout.roots, []);
   assert.equal(slice.layout.domainSuggestion, null);
   assert.equal(typeof slice.layout.boundRoot, 'string');
+  assert.equal(typeof slice.layout.projectStore, 'string');
   if (contextVersion === 2) {
     const evidence = slice.contextEvidence;
     assert.equal(evidence.schema, 'harness.context.v2');

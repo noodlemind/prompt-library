@@ -23,3 +23,19 @@ The reserved font name Source stays with Adobe.
 
 Optional tree-sitter packages retain their own upstream licenses. They are not
 required for the bundled diagram renderers.
+
+## pstack architecture reference and test fixtures
+
+Lauren Tan's pstack `/statechart` v0.15.36 informed AE's separation of checker
+execution, retained evidence, pure compilation, and honest diagram projection.
+AE implements its own bounded protocol reader and evidence graph, preserving TLC
+values as opaque text. It does not bundle pstack implementation source, its
+Java/TLC runner, tool installer, POSIX launcher, or executable views.
+
+Upstream reference:
+<https://github.com/cursor/plugins/tree/4dd1d05818d19792e7cd6e818f1667f95f7e1dbe/pstack/skills/statechart>
+
+The repository's saved TLC protocol fixtures retain the MIT notice, Copyright
+(c) 2026 Lauren Tan, in `test/fixtures/formal-diagrams/LICENSE.pstack`, with source
+paths documented beside them. Those test fixtures are not part of the runtime
+npm archive. They are replay data, not fresh checker results.

@@ -11,6 +11,8 @@ import { domainContextOf, planRecordRoot } from './domain-context.mjs';
 import { installedCorpusHomes, resolveInstalledReference } from './corpus-reference.mjs';
 
 const PACKAGED_REL = /^(skills|agents|instructions)\//;
+// Internal read provenance for the headless adapter; omitted from CLI JSON.
+export const READ_SOURCE = Symbol('ae.readSource');
 
 function resolvePackagedRel(relPath, copilotHome) {
   const normalized = path.posix.normalize(String(relPath).replace(/\\/g, '/'));
@@ -80,7 +82,7 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
     relPath = found.rel;
     entry = { docid: null, path: found.rel, title: path.basename(found.fullPath) };
   } else if (docid) {
-    entry = findEntryByDocid(copilotHome, workspace, docid);
+    entry = findEntryByDocid(copilotHome, workspace, docid, { home: home || flags.home || flags.harnessHome });
     if (!entry) throw new Error(`docid not found in manifest: ${docid}`);
     const resolved = resolveDocPath(copilotHome, workspace, entry, {
       home: home || flags.home,
@@ -101,7 +103,7 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
       if (!fullPath) throw new Error(`path escapes workspace: ${relPath}`);
       readRoot = workspaceResolved;
     }
-    entry = findEntryByDocid(copilotHome, workspace, path.basename(relPath, '.md')) || {
+    entry = findEntryByDocid(copilotHome, workspace, path.basename(relPath, '.md'), { home: home || flags.home || flags.harnessHome }) || {
       docid: null,
       path: relPath,
       title: path.basename(relPath),
@@ -132,7 +134,7 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
   const sourceExcerpt = wasRedacted ? selectedText : clipped ? excerpt.split('\n…(truncated)')[0] : excerpt;
   const truncated = clipped || start > 0 || start + lines.length < allLines.length;
 
-  return {
+  const result = {
     docid: entry.docid || entry.id || docid || null,
     path: entry.path || relPath,
     title: entry.title || path.basename(fullPath),
@@ -155,4 +157,6 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
       },
     } : {}),
   };
+  Object.defineProperty(result, READ_SOURCE, { value: fullPath });
+  return result;
 }

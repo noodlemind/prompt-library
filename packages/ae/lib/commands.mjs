@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { parseFlags, hasFlag } from './flags.mjs';
 import { resolveCopilotHome, resolveIntelliJHome } from './paths.mjs';
 import { pkgRoot, readPkgVersion, getCorpusRoot } from './assets.mjs';
-import { readLock, writeLock, LOCK_NAME } from './lock.mjs';
+import { readLock, writeLock, installationRoot, LOCK_NAME } from './lock.mjs';
 import {
   loadRetired,
   applyRetired,
@@ -146,15 +146,46 @@ export async function cmdInstallOrUpgrade(command, argv) {
   const version = readPkgVersion();
   const assets = getCorpusRoot();
   const copilotHome = resolveCopilotHome(flags.copilotHome);
-  const previousLock = readLock(copilotHome);
   const retired = loadRetired(pkgRoot);
   const logger = (m) => log(flags, m);
-
   const allStats = { vscode: null, intellij: null, vscodeBridge: null };
+  const ownershipWarnings = [];
+  const selectedHomes = new Map();
+  const homeKey = home => process.platform === 'win32' ? installationRoot(home).toLowerCase() : installationRoot(home);
+  const copilotSelected = flags.targets.has('vscode') || flags.targets.has('cli');
+  const intellijHome = flags.targets.has('intellij') ? resolveIntelliJHome() : null;
+  // Validate every selected path before deduplicating physical home ownership.
+  for (const target of flags.targets) {
+    const home = target === 'intellij' ? intellijHome : copilotHome;
+    const previous = readLock(home, { strict: true });
+    const key = homeKey(home);
+    if (!selectedHomes.has(key)) selectedHomes.set(key, { home, previous, targets: new Set() });
+    selectedHomes.get(key).targets.add(target);
+  }
+  for (const entry of selectedHomes.values()) {
+    const oldTargets = entry.previous?.targets || [];
+    const atCopilotHome = homeKey(entry.home) === homeKey(copilotHome);
+    const bound = entry.previous?.lockVersion === 2;
+    const legacyCopilot = atCopilotHome && oldTargets.length > 0 && oldTargets.every(target => ['cli', 'vscode'].includes(target));
+    const files = bound || legacyCopilot ? entry.previous.files : atCopilotHome
+      ? (entry.previous?.files || []).filter(file => file.startsWith('.ae-bin/') || file.startsWith('.harness-bin/') || ['bin/ae', 'bin/harness'].includes(file))
+      : [];
+    entry.owned = { ...entry.previous, files };
+    const previousTargets = bound ? oldTargets : atCopilotHome ? oldTargets.filter(target => ['cli', 'vscode'].includes(target)) : [];
+    entry.installedTargets = [...new Set([...previousTargets, ...entry.targets])].sort();
+    if (entry.previous && !bound && !legacyCopilot && entry.previous.files.length > files.length) {
+      const warning = `preserved legacy files with unproven target-home ownership: ${entry.home}`;
+      ownershipWarnings.push(warning);
+      logger(warning);
+    }
+  }
+  const copilotEntry = copilotSelected ? selectedHomes.get(homeKey(copilotHome)) : null;
+  const previousLock = copilotEntry?.previous || null;
 
-  if (flags.targets.has('vscode') || flags.targets.has('cli')) {
-    installGlobalHarnessShim(copilotHome, { ...flags, dryRun: true }, () => {});
-    applyRetired(copilotHome, retired, previousLock, flags, logger);
+  if (copilotSelected) installGlobalHarnessShim(copilotHome, { ...flags, dryRun: true }, () => {});
+  for (const entry of selectedHomes.values()) applyRetired(entry.home, retired, entry.owned, flags, logger);
+
+  if (copilotSelected) {
     allStats.vscode = syncAssetsToTarget(assets, copilotHome, flags, logger);
     seedProfile(assets, copilotHome, flags, logger);
         allStats.bundles = syncBundles({
@@ -184,9 +215,8 @@ export async function cmdInstallOrUpgrade(command, argv) {
   }
 
   if (flags.targets.has('intellij')) {
-    const ij = resolveIntelliJHome();
+    const ij = intellijHome;
     if (!flags.dryRun) fs.mkdirSync(ij, { recursive: true });
-    applyRetired(ij, retired, previousLock, flags, logger);
     allStats.intellij = syncAssetsToTarget(assets, ij, flags, logger);
     seedProfile(assets, ij, flags, logger);
     mergeIntelliJInstructions(assets, ij, flags, logger);
@@ -197,11 +227,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
     allStats.runner = writeHarnessRunner(runnerWorkspace, flags.dryRun);
   }
 
-  const files = new Set([
-    ...(allStats.vscode?.files || []),
-    ...(allStats.intellij?.files || []),
-    ...(allStats.harnessBin?.files || []),
-  ]);
+  const files = new Set([...(allStats.vscode?.files || []), ...(allStats.harnessBin?.files || [])]);
   if (allStats.globalShim?.path) {
     files.add('bin/ae');
   }
@@ -213,19 +239,26 @@ export async function cmdInstallOrUpgrade(command, argv) {
   }
   const vscodeBridge = allStats.vscodeBridge || previousLock?.vscodeBridge || null;
 
-  const lock = {
-    package: 'ae-harness',
-    version,
-    installedAt: new Date().toISOString(),
-    command,
-    targets: [...flags.targets],
-    files: [...files].sort(),
-    retiredApplied: retired,
-    ...(vscodeBridge ? { vscodeBridge } : {}),
-  };
-
-  if (!flags.dryRun) {
-    writeLock(copilotHome, lock, false);
+  for (const entry of selectedHomes.values()) {
+    const ownedFiles = new Set();
+    for (const rel of entry.owned.files) {
+      const full = resolveContainedPath(entry.home, rel);
+      if (full && fs.lstatSync(full, { throwIfNoEntry: false })?.isFile()) ownedFiles.add(rel);
+    }
+    const atCopilot = homeKey(entry.home) === homeKey(copilotHome);
+    if (atCopilot && copilotSelected) for (const rel of files) ownedFiles.add(rel);
+    if (intellijHome && homeKey(entry.home) === homeKey(intellijHome)) {
+      for (const rel of allStats.intellij?.files || []) ownedFiles.add(rel);
+      if (allStats.intellij?.files.some(rel => rel.startsWith('instructions/') && rel.endsWith('.instructions.md'))) ownedFiles.add('global-copilot-instructions.md');
+    }
+    const bridge = atCopilot ? vscodeBridge || entry.previous?.vscodeBridge : null;
+    writeLock(entry.home, {
+      lockVersion: 2,
+      installationRoot: installationRoot(entry.home),
+      package: 'ae-harness', version, installedAt: new Date().toISOString(), command,
+      targets: entry.installedTargets, files: [...ownedFiles].sort(), retiredApplied: retired,
+      ...(bridge ? { vscodeBridge: bridge } : {}),
+    }, flags.dryRun);
   }
 
   if (flags.json) {
@@ -240,6 +273,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
           vscodeBridge: allStats.vscodeBridge,
           intellij: allStats.intellij,
           runner: allStats.runner ?? null,
+          ...(ownershipWarnings.length ? { ownershipWarnings } : {}),
         },
         { pretty: true }
       )

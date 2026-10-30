@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { readLock } from './lock.mjs';
+import { resolveContainedPath } from './sync.mjs';
 
 const PATH_MARKER = '# harness global bin';
 const PATH_EXPORT = 'export PATH="$HOME/.copilot/bin:$PATH"';
@@ -17,8 +18,7 @@ export function globalHarnessShimPath(copilotHome) {
   return path.join(globalBinDir(copilotHome), 'ae');
 }
 
-function harnessShimSource(copilotHome) {
-  const home = copilotHome.replace(/\\/g, '/');
+function harnessShimSource() {
   return `#!/usr/bin/env node
 /**
  * Global harness shim — installed by ae install.
@@ -27,11 +27,10 @@ function harnessShimSource(copilotHome) {
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const COPILOT_HOME = process.env.COPILOT_HOME || path.join(os.homedir(), '.copilot');
+const COPILOT_HOME = process.env.COPILOT_HOME || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bin = path.join(COPILOT_HOME, '.ae-bin', 'bin', 'ae.mjs');
 
 if (!fs.existsSync(bin)) {
@@ -53,7 +52,8 @@ process.exit(result.status ?? 1);
 }
 
 export function installGlobalHarnessShim(copilotHome, flags, log) {
-  const shimPath = globalHarnessShimPath(copilotHome);
+  const shimPath = resolveContainedPath(copilotHome, 'bin/ae');
+  if (!shimPath) throw Object.assign(new Error('refusing an unsafe global shim target'), { code: 'E_TARGET', exit: 1 });
   const stats = { path: shimPath, created: false, updated: false };
   let existed = false;
   try {
@@ -74,21 +74,21 @@ export function installGlobalHarnessShim(copilotHome, flags, log) {
   }
 
   fs.mkdirSync(path.dirname(shimPath), { recursive: true });
-  fs.writeFileSync(shimPath, harnessShimSource(copilotHome), 'utf8');
+  fs.writeFileSync(shimPath, harnessShimSource(), 'utf8');
   try {
     fs.chmodSync(shimPath, 0o755);
   } catch {
     /* windows */
   }
   stats[existed ? 'updated' : 'created'] = true;
-  const legacy = path.join(globalBinDir(copilotHome), 'harness');
+  const legacy = resolveContainedPath(copilotHome, 'bin/harness');
   const lock = readLock(copilotHome);
-  if (['harness', 'ae-harness'].includes(lock?.package) && lock.files?.includes('bin/harness')) {
+  if (legacy && ['harness', 'ae-harness'].includes(lock?.package) && Array.isArray(lock.files) && lock.files.includes('bin/harness')) {
     try {
       const stat = fs.lstatSync(legacy);
       if (stat.isFile() && !stat.isSymbolicLink()
           && /Global harness shim[\s\S]*installed by (?:harness|ae) install/.test(fs.readFileSync(legacy, 'utf8'))) {
-        fs.writeFileSync(legacy, harnessShimSource(copilotHome), 'utf8');
+        fs.writeFileSync(legacy, harnessShimSource(), 'utf8');
         stats.legacyPath = legacy;
       }
     } catch (error) {
@@ -107,7 +107,9 @@ export function findHarnessOnPath() {
     for (const name of names) {
       const candidate = path.join(dir, name);
       try {
-        if (fs.statSync(candidate).isFile()) return candidate;
+        if (!fs.statSync(candidate).isFile()) continue;
+        if (process.platform !== 'win32') fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
       } catch {
         // This PATH entry does not contain the shim.
       }
@@ -117,8 +119,11 @@ export function findHarnessOnPath() {
 }
 
 export function configureShellPath(copilotHome, flags, log) {
-  const binDir = globalBinDir(copilotHome);
+  const binDir = path.resolve(globalBinDir(copilotHome));
   const home = os.homedir();
+  const defaultBin = path.join(home, '.copilot', 'bin');
+  const useDefault = binDir === defaultBin;
+  const pathExport = useDefault ? PATH_EXPORT : `export PATH='${binDir.replaceAll("'", "'\\''")}':"$PATH"`;
   const candidates = ['.zshrc', '.bashrc', '.bash_profile', '.profile'];
   let updated = 0;
 
@@ -126,18 +131,18 @@ export function configureShellPath(copilotHome, flags, log) {
     const rcPath = path.join(home, rc);
     if (!fs.existsSync(rcPath)) continue;
     const content = fs.readFileSync(rcPath, 'utf8');
-    if (content.includes('.copilot/bin') || content.includes(PATH_MARKER)) {
+    if (content.includes(pathExport) || useDefault && content.includes('.copilot/bin')) {
       if (flags.verbose) log(`skip PATH (already configured): ${rcPath}`);
       continue;
     }
-    const block = `\n${PATH_MARKER}\n${PATH_EXPORT}\n`;
+    const block = `\n${PATH_MARKER}\n${pathExport}\n`;
     if (flags.dryRun) {
       log(`would append PATH to ${rcPath}`);
       updated++;
       continue;
     }
     fs.appendFileSync(rcPath, block, 'utf8');
-    log(`appended ~/.copilot/bin to PATH via ${rc}`);
+    log(`appended ${binDir} to PATH via ${rc}`);
     updated++;
   }
 

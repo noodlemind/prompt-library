@@ -102,6 +102,11 @@ test('doctor --adapter checks the installed file and grok-build start preserves 
   assert.equal(slice.trust.trusted, false);
   assert.equal(slice.planGoal, null);
   assert.equal(slice.neighborhood, null);
+  assert.equal(slice.layout.boundRoot, fs.realpathSync.native(ws));
+  assert.equal(path.relative(harnessHome, slice.layout.projectStore).split(path.sep)[0], 'projects');
+  assert.deepEqual(slice.layout.roots, []);
+  assert.equal(slice.layout.workspaceFile, null);
+  assert.equal(slice.layout.domainSuggestion, null);
   assert.equal(fs.existsSync(path.join(ws, '.harness', 'repo-map.md')), false);
   assert.equal(fs.existsSync(path.join(ws, '.harness', 'context-pack.md')), false);
   assert.equal(fs.existsSync(path.join(ws, '.harness', 'session.json')), false);

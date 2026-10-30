@@ -109,6 +109,72 @@ test('doctor on an installed home reads the installed files', () => {
   assert.equal(fs.existsSync(path.join(packageRoot, 'corpus', 'agents', 'engineer.agent.md')), true);
 });
 
+test('doctor selects CLI hook contracts without requiring VS Code discovery', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-doctor-cli-'));
+  const home = path.join(root, 'home'), copilot = path.join(root, 'copilot');
+  const workspace = freshWorkspace();
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(workspace, { recursive: true, force: true }); });
+  assert.equal(run(['install', '--target', 'cli'], { home, copilot, workspace }).status, 0);
+  const body = checks(run(['doctor', '--target', 'cli'], { home, copilot, workspace }));
+  const target = body.checks.find(check => check.id === 'T0');
+  assert.equal(target.target, 'cli');
+  assert.equal(target.home, copilot);
+  assert.equal(target.capabilities.nativeHooks, 'supported');
+  assert.equal(target.capabilities.liveHost, 'unverified');
+  const hostChecks = body.checks.filter(check => /^C\d+$/.test(check.id));
+  assert.ok(hostChecks.length >= 7);
+  assert.ok(hostChecks.every(check => check.pass), JSON.stringify(hostChecks));
+  assert.equal(body.checks.some(check => /^V\d+$/.test(check.id)), false);
+});
+
+test('doctor selects IntelliJ customization files without claiming native hook enforcement', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-doctor-intellij-'));
+  const home = path.join(root, 'home'), copilot = path.join(root, 'copilot'), intellij = path.join(root, 'intellij');
+  const workspace = freshWorkspace(), env = { AE_INTELLIJ_HOME: intellij };
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(workspace, { recursive: true, force: true }); });
+  assert.equal(run(['install', '--target', 'intellij'], { home, copilot, workspace, env }).status, 0);
+  const selected = () => checks(run(['doctor', '--target', 'intellij'], { home, copilot, workspace, env }));
+  const body = selected(), target = body.checks.find(check => check.id === 'T0');
+  assert.equal(target.home, intellij);
+  assert.equal(target.capabilities.nativeHooks, 'unsupported');
+  assert.equal(target.capabilities.liveHost, 'unverified');
+  for (const id of ['H1', 'H2', 'H3', 'H4', 'H7']) {
+    const selected = body.checks.filter(check => check.id === id);
+    assert.ok(selected.length > 0 && selected.every(check => check.pass), id);
+  }
+  const native = body.checks.find(check => check.id === 'T1');
+  assert.equal(native.status, 'unavailable');
+  assert.equal(native.optional, true);
+  assert.equal(native.pass, false);
+  const runtime = body.checks.find(check => check.id === 'H12');
+  assert.equal(runtime.status, 'n/a');
+  assert.equal(runtime.optional, true);
+  for (const id of ['H14', 'H15', 'H16']) {
+    assert.equal(body.checks.find(check => check.id === id).status, 'n/a');
+    assert.equal(body.checks.find(check => check.id === id).pass, true);
+  }
+  assert.equal(body.checks.some(check => /^V\d+$/.test(check.id)), false);
+  assert.equal(body.checks.find(check => check.id === 'T2').pass, true);
+  fs.mkdirSync(path.join(copilot, 'agents'), { recursive: true });
+  fs.copyFileSync(path.join(intellij, 'agents/engineer.agent.md'), path.join(copilot, 'agents/engineer.agent.md'));
+  fs.rmSync(path.join(intellij, 'agents/engineer.agent.md'));
+  assert.equal(selected().checks.find(check => check.id === 'H3').pass, false, 'another host must not hide a missing selected-host agent');
+});
+
+test('doctor rejects ambiguous targets and conflicting legacy host selection', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-doctor-target-'));
+  const home = path.join(root, 'home'), copilot = path.join(root, 'copilot');
+  const workspace = freshWorkspace();
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(workspace, { recursive: true, force: true }); });
+  for (const args of [['--target', 'cli,intellij'], ['--target', 'vscode,cli,intellij'], ['--target', 'cli', '--host', 'vscode']]) {
+    const result = run(['doctor', ...args], { home, copilot, workspace });
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.match(result.stdout + result.stderr, /one target|conflicts/);
+  }
+  const same = checks(run(['doctor', '--target', 'intellij', '--host', 'intellij'], { home, copilot, workspace, env: { AE_INTELLIJ_HOME: path.join(root, 'intellij') } }));
+  assert.equal(same.checks.find(check => check.id === 'T0').target, 'intellij');
+});
+
 test('ae index is the remedy for H10 and H11, and zero learnings are n/a', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-doctor-index-'));
   const home = path.join(root, 'home');

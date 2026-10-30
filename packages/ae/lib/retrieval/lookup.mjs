@@ -141,7 +141,7 @@ function symbolEntity({ workspace, identifier, home }) {
 }
 
 function documentEntity({ workspace, copilotHome, identifier, home }) {
-  const entry = findEntryByDocid(copilotHome, workspace, identifier);
+  const entry = findEntryByDocid(copilotHome, workspace, identifier, { home });
   if (!entry) throw notFound({ kind: 'document', identifier, hint: 'a docid from the knowledge manifest' });
   const resolved = resolveDocPath(copilotHome, workspace, entry, { home });
   const raw = resolved?.full ? readFileNoFollow(resolved.full, { root: resolved.root }) : null;

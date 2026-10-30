@@ -24,7 +24,7 @@ test('content binding normalizes files and preserves the literal binary and miss
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   const result = evidence.createWorkspaceContentBinding({ workspace, changedFiles: ['zeta.txt', 'src\\bytes.bin', 'alpha.txt', 'src/bytes.bin'] });
-  assert.deepEqual(result, { changedFiles: ['alpha.txt', 'src/bytes.bin', 'zeta.txt'], workspaceDigest: '5aacb35eac3e7cf9531b973869d13c6b2ca6ac6e78c289ee40bd923a4a5945fa' });
+  assert.deepEqual(result, { changedFiles: ['alpha.txt', 'src/bytes.bin', 'zeta.txt'], workspaceDigest: 'eeff24793565bd90a32d2d66257af50f15d943938bda4170dc393b0ee8e4893a' });
   assert.deepEqual(fs.readdirSync(workspace), before);
 });
 
@@ -33,11 +33,24 @@ test('same-file byte changes alter the content binding even when the path and le
   const product = path.join(workspace, 'product.txt');
   fs.writeFileSync(product, 'first');
   const first = evidence.createWorkspaceContentBinding({ workspace, changedFiles: ['product.txt'] });
-  assert.equal(first.workspaceDigest, 'dc1356f281f5a452ff7838e966046b4cb2bc21d9cef2fcd020065232d932a8ff');
+  assert.equal(first.workspaceDigest, '61f73c58a074d765c7e7abfc5fb68a7b8e8f1ee71269c8bcc7a752be38cd590c');
   fs.writeFileSync(product, 'other');
   const other = evidence.createWorkspaceContentBinding({ workspace, changedFiles: ['product.txt'] });
-  assert.equal(other.workspaceDigest, '5c38ec46d354de16d0d5a6d2edf5d70d9995189e6bce036b5b6b9c41a1e4bc3f');
+  assert.equal(other.workspaceDigest, 'e61d95749e0f5e71cc1508ff37088615213f02ef58ca6c7e339e5033acc72b5e');
   assert.deepEqual(first.changedFiles, other.changedFiles);
+});
+
+test('regular-file executable changes invalidate the content binding without changing bytes or scope', { skip: process.platform === 'win32' }, t => {
+  const workspace = fixture(t), file = path.join(workspace, 'run.sh');
+  fs.writeFileSync(file, '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(file, 0o644);
+  const plain = evidence.createWorkspaceContentBinding({ workspace, changedFiles: ['run.sh'] });
+  fs.chmodSync(file, 0o755);
+  const executable = evidence.createWorkspaceContentBinding({ workspace, changedFiles: ['run.sh'] });
+  assert.deepEqual(executable.changedFiles, plain.changedFiles);
+  assert.notEqual(executable.workspaceDigest, plain.workspaceDigest);
+  fs.chmodSync(file, 0o644);
+  assert.deepEqual(evidence.createWorkspaceContentBinding({ workspace, changedFiles: ['run.sh'] }), plain);
 });
 
 test('the independently bound plan is excluded and evidence retains the serialized product binding and field order', t => {
@@ -51,7 +64,7 @@ test('the independently bound plan is excluded and evidence retains the serializ
   const product = evidence.createWorkspaceContentBinding({ workspace, changedFiles, planPath });
   const plan = { path: planPath, text, fm: {}, phase: 1 };
   const binding = evidence.createEvidenceBinding({ workspace, plan, changedFiles, copilotHome: path.join(workspace, 'copilot') });
-  const literal = '{"changedFiles":["product.txt"],"workspaceDigest":"dc1356f281f5a452ff7838e966046b4cb2bc21d9cef2fcd020065232d932a8ff"}';
+  const literal = '{"changedFiles":["product.txt"],"workspaceDigest":"61f73c58a074d765c7e7abfc5fb68a7b8e8f1ee71269c8bcc7a752be38cd590c"}';
   assert.equal(JSON.stringify(product), literal);
   assert.equal(JSON.stringify({ changedFiles: binding.changedFiles, workspaceDigest: binding.workspaceDigest }), literal);
   assert.deepEqual(Object.keys(binding), ['contractVersion', 'executionPhase', 'policyDigest', 'base', 'planDigest', 'changedFiles', 'workspaceDigest', 'head']);
@@ -83,7 +96,7 @@ test('content extraction remains after evidence policy observations', t => {
   });
   const binding = evidence.createEvidenceBinding({ workspace, plan: { path: 'plan.md', text: '# Change\n', fm: {} }, changedFiles: ['product.txt'], copilotHome: path.join(workspace, 'copilot') });
   assert.equal(observed, true);
-  assert.equal(binding.workspaceDigest, '5c38ec46d354de16d0d5a6d2edf5d70d9995189e6bce036b5b6b9c41a1e4bc3f');
+  assert.equal(binding.workspaceDigest, 'e61d95749e0f5e71cc1508ff37088615213f02ef58ca6c7e339e5033acc72b5e');
 });
 
 test('content binding rejects escaping paths and symlinked ancestors before reading external bytes', t => {

@@ -10,6 +10,7 @@ import { resolveDomainContext } from './domain-context.mjs';
 import { resolvePlanUpdateFile } from './plan-update.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 import { readEvidence } from './evidence.mjs';
+import { READ_SOURCE } from './get-cmd.mjs';
 import { harnessControlCommand, normalizeToolPayload, unwrapShellSegments } from '../corpus/hooks/lib/tool-payload.mjs';
 import { validateContextSnapshot } from './task-handoff.mjs';
 
@@ -123,8 +124,9 @@ export function afterDeliveryTool(call, result, options) {
   if (call.name === 'todo') return { pass: true };
   return hook('record-successful-edit.mjs', {
     ...toolPayload(call, options.workspace, options.sessionId),
+    ...(call.name === 'read' && result[READ_SOURCE] ? { tool_input: { ...call.input, path: result[READ_SOURCE] } } : {}),
     success: result.status === 'ok' && result.exitCode === 0,
-    ...(call.name === 'read' ? { tool_response: { truncated: result.truncated } } : {}),
+    ...(call.name === 'read' ? { tool_response: { truncated: result.truncated, sha256: result.sha256 } } : {}),
   }, options);
 }
 

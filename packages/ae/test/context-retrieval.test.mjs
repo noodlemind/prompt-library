@@ -10,6 +10,7 @@ import { runSearch } from '../lib/retrieval/search.mjs';
 import { createRetrievalResult, federate } from '../lib/retrieval/kernel.mjs';
 import { dispatchToolCall, renderToolResult } from '../lib/agent-loop.mjs';
 import { projectStoreDir } from '../lib/project-layout.mjs';
+import { repoId } from '../lib/knowledge/store.mjs';
 
 function fixture(t) {
   const f = makeScopes();
@@ -128,7 +129,8 @@ for (const scope of ['product', 'global', 'product-user']) {
     fs.mkdirSync(path.dirname(document), { recursive: true });
     fs.writeFileSync(document, '# Reference lesson\n\nA scope-specific body.\n');
     fs.mkdirSync(path.join(f.copilotHome, 'knowledge'), { recursive: true });
-    fs.writeFileSync(path.join(f.copilotHome, 'knowledge/manifest.yaml'), `entries:\n  - id: lesson-id\n    path: docs/solutions/lesson.md\n    title: reference lesson\n    scope: ${scope}\n`);
+    // Private rows in a shared home must identify the repository that owns them.
+    fs.writeFileSync(path.join(f.copilotHome, 'knowledge/manifest.yaml'), `repository: ${JSON.stringify(repoId(f.workspace))}\nentries:\n  - id: lesson-id\n    path: docs/solutions/lesson.md\n    title: reference lesson\n    scope: ${scope}\n`);
     const result = runSearch({ workspace: f.workspace, copilotHome: f.copilotHome, home, query: 'reference lesson', sources: ['knowledge'], contextVersion: 2 });
     assert.equal(result.results.length, 1);
     const reference = result.results[0].evidence.reference;

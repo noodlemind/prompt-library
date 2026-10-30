@@ -10,6 +10,7 @@ import { readFileNoFollow } from './fs-safe.mjs';
 import { bindPlaybook, validatePlaybookBinding } from './playbook-binding.mjs';
 import { locateVerification } from './verification-location.mjs';
 import { validateExperimentContract } from './experiment-contract.mjs';
+import { skillActivationSourceCurrent } from '../corpus/hooks/lib/skill-activation.mjs';
 
 export const PLAN_ACTIONS = Object.freeze(['start', 'amend', 'progress', 'finding', 'gap', 'complete']);
 export const planRevision = text => createHash('sha256').update(text).digest('hex');
@@ -190,7 +191,8 @@ export function applyPlanDecision(workspace, plan, input, { applyUpdate, recorde
       for (const name of changes.skillsUsed) {
         const activation = session.activatedSkills?.[name], at = Date.parse(activation?.activatedAt || '');
         const start = session.sessionStartedAt === undefined ? null : Date.parse(session.sessionStartedAt);
-        if (activation?.complete !== true || activation?.sessionId !== session.sessionId || !Number.isFinite(at) || at > Date.now() + 1000 || start !== null && (!Number.isFinite(start) || at < start)) fail(`skill ${name} needs an actual complete read in the current session`);
+        if (activation?.complete !== true || activation?.sessionId !== session.sessionId || !Number.isFinite(at) || at > Date.now() + 1000 || start !== null && (!Number.isFinite(start) || at < start)
+          || !skillActivationSourceCurrent(activation, name, { copilotHome })) fail(`skill ${name} needs an actual complete read of its current installed or bundled source in the current session`);
       }
       fm.skills_used = [...new Set([...(fm.skills_used || []), ...changes.skillsUsed])];
     }

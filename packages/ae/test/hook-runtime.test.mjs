@@ -265,6 +265,7 @@ function runHook(name, workspace, payload, { authorityBin = binPath } = {}) {
     encoding: 'utf8',
     env: {
       ...process.env,
+      COPILOT_HOME: path.join(workspace, 'copilot-home'),
       HARNESS_ENFORCEMENT: 'enforce',
       HARNESS_BIN: authorityBin,
       ...(authorityBin === binPath ? {} : { AE_BIN: authorityBin }),
@@ -731,7 +732,7 @@ test('passed gate allows scoped mutation and primitive target requires current-s
     hook_event_name: 'PostToolUse',
     tool_name: 'read_file',
     tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
-    tool_response: { content: 'Skill loaded', truncated: false },
+    tool_response: { content: fs.readFileSync(skillFixturePath(workspace, 'create-primitive'), 'utf8'), truncated: false },
   });
   assert.equal(activation.status, 0, activation.stderr);
   const recorded = JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8'));
@@ -744,6 +745,12 @@ test('passed gate allows scoped mutation and primitive target requires current-s
     tool_input: { filePath: 'packages/ae/corpus/skills/example/SKILL.md' },
   });
   assert.notEqual(outputJson(primitiveAllowed).hookSpecificOutput?.permissionDecision, 'deny');
+  fs.appendFileSync(skillFixturePath(workspace, 'create-primitive'), 'Changed workflow.\n');
+  const changedSource = runHook('require-plan-gate.mjs', workspace, {
+    tool_name: 'replace_string_in_file',
+    tool_input: { filePath: 'packages/ae/corpus/skills/example/SKILL.md' },
+  });
+  assert.match(outputJson(changedSource).hookSpecificOutput?.permissionDecisionReason || '', /create-primitive-activation/);
 });
 
 test('scoped shell creation permits only ancestor directories of planned files', () => {
@@ -754,7 +761,7 @@ test('scoped shell creation permits only ancestor directories of planned files',
     hook_event_name: 'PostToolUse',
     tool_name: 'read_file',
     tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
-    tool_response: { content: 'Skill loaded', truncated: false },
+    tool_response: { content: fs.readFileSync(skillFixturePath(workspace, 'create-primitive'), 'utf8'), truncated: false },
   });
 
   const allowed = runHook('require-plan-gate.mjs', workspace, {
@@ -1565,11 +1572,13 @@ test('primitive activation without a host session id is accepted only while fres
   const workspace = tempWorkspace();
   const plan = writePlan(workspace, { createPrimitive: true });
   writePassedGate(workspace, plan);
+  runHook('record-successful-edit.mjs', workspace, {
+    session_id: null,
+    tool_name: 'read_file',
+    tool_input: { filePath: skillFixturePath(workspace, 'create-primitive') },
+    tool_response: { truncated: false },
+  });
   const session = JSON.parse(fs.readFileSync(path.join(workspace, '.harness', 'session.json'), 'utf8'));
-  session.activatedSkills = {
-    'create-primitive': { sessionId: null, activatedAt: new Date().toISOString() },
-  };
-  fs.writeFileSync(path.join(workspace, '.harness', 'session.json'), JSON.stringify(session));
 
   const noSession = spawnSync(process.execPath, [path.join(hooksRoot, 'require-plan-gate.mjs')], {
     cwd: workspace,
@@ -1580,7 +1589,7 @@ test('primitive activation without a host session id is accepted only while fres
       tool_input: { filePath: '.github/checks/example.md' },
     }),
     encoding: 'utf8',
-    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+    env: { ...process.env, COPILOT_HOME: path.join(workspace, 'copilot-home'), HARNESS_ENFORCEMENT: 'enforce' },
   });
   assert.notEqual(outputJson(noSession).hookSpecificOutput?.permissionDecision, 'deny', noSession.stdout);
 
@@ -1595,7 +1604,7 @@ test('primitive activation without a host session id is accepted only while fres
       tool_input: { filePath: '.github/checks/example.md' },
     }),
     encoding: 'utf8',
-    env: { ...process.env, HARNESS_ENFORCEMENT: 'enforce' },
+    env: { ...process.env, COPILOT_HOME: path.join(workspace, 'copilot-home'), HARNESS_ENFORCEMENT: 'enforce' },
   });
   assert.equal(outputJson(stale).hookSpecificOutput?.permissionDecision, 'deny');
 

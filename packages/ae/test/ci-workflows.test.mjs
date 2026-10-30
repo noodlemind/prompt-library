@@ -150,6 +150,9 @@ test('package qualification filters its inputs, cancels stale runs and keeps bot
   assert.match(candidate.concurrency.group, /github\.ref/);
   const job = candidate.jobs.package;
   assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest']);
+  assert.deepEqual(job.strategy.matrix.node, ['20', '24']);
+  const runtime = job.steps.find(step => step.uses?.startsWith('actions/setup-node@'));
+  assert.equal(runtime.with['node-version'], '${{ matrix.node }}');
   const release = job.steps.find(step => step.name === 'Validate release contracts');
   assert.match(release.run, /npm run --prefix packages\/ae check:release/);
   assert.match(release.run, /npm run --prefix packages\/ae check:repo/);
@@ -159,4 +162,10 @@ test('package qualification filters its inputs, cancels stale runs and keeps bot
   assert.match(install.run, /--offline/);
   assert.match(install.run, /artifacts\/\$AE_ARCHIVE/);
   assert.match(install.run, /\.ae-bin\/bin\/ae\.mjs/);
+  const delivery = job.steps.find(step => step.name === 'Prove installed delivery lifecycle');
+  assert.match(delivery.run, /--test-name-pattern=.*installed package proves behavior/);
+  assert.equal(delivery.env.AE_TEST_ARCHIVE, '${{ github.workspace }}/artifacts/${{ env.AE_ARCHIVE }}');
+  assert.match(delivery.env.HARNESS_PROOF_LOG, /artifacts\/delivery-transcripts\.jsonl$/);
+  assert.equal(upload(job).if, 'always()');
+  assert.match(upload(job).with.name, /matrix\.node/);
 });

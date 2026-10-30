@@ -136,6 +136,24 @@ export function classifyTlc(execution, expected, property = null) {
   return { pass: Boolean(pass), expected, property, complete, states, trace, messageIds: ids, errors: errors.map(({ id, text }) => ({ id, text })) };
 }
 
+export function tlcModelArguments(jar, model, sandbox, captureGraph = false) {
+  const module = path.basename(model.module, '.tla');
+  const args = ['-Xmx512m', '-XX:+UseParallelGC', '-cp', jar, 'tlc2.TLC', '-tool', '-workers', '1', '-fp', '0', '-seed', '0', '-config', model.config, '-metadir', path.join(sandbox, `${module}-states`)];
+  if (captureGraph) args.push('-dump', 'dot,actionlabels', path.join(sandbox, `${module}.graph`));
+  return [...args, model.module];
+}
+
+export function publishModelGraph({ artifactDir, sandbox, model, execution }) {
+  const outcome = classifyTlc(execution, model.expect, model.property || null);
+  if (!outcome.complete || !outcome.pass) fail('graph capture requires the completed expected TLC result');
+  const file = `${path.basename(model.module, '.tla')}.graph.dot`;
+  const bytes = readRegular(sandbox, file);
+  if (!bytes.length || bytes.includes(0) || !Buffer.from(bytes.toString('utf8')).equals(bytes)) fail('captured graph must be nonempty UTF-8 text without NUL bytes');
+  const dir = prepareArtifactDirectory(artifactDir);
+  fs.writeFileSync(path.join(dir, file), bytes, { flag: 'wx', mode: 0o600 });
+  return { format: 'tlc-dot', file, sha256: hash(bytes), exploration: model.expect === 'pass' ? 'complete' : 'partial' };
+}
+
 export function validateConfiguration(text) {
   // The starter intentionally accepts one small grammar, not general TLC cfg.
   // Whitelisting prevents whitespace/plural spellings from hiding reductions.
@@ -195,7 +213,7 @@ function replaceOwnedReceipt(dir, receipt, previousHash) {
   return hash(bytes);
 }
 
-export async function runFormalVerification({ workspace = process.cwd(), manifestPath, maintain = false, rationale = '', env = process.env } = {}) {
+export async function runFormalVerification({ workspace = process.cwd(), manifestPath, maintain = false, rationale = '', captureGraph = false, env = process.env } = {}) {
   const receipt = { schema: 1, feature: 'formal-verification', passed: false, status: 'blocked', semanticCompleteness: 'unverified', assurance: 'finite-model-and-observed-implementation-correspondence', models: [], conformance: [] };
   let ownedLock = null, root, artifactDir, receiptHash = null;
   try {
@@ -203,6 +221,7 @@ export async function runFormalVerification({ workspace = process.cwd(), manifes
     artifactDir = env.HARNESS_CHECK_ARTIFACT_DIR ? prepareArtifactDirectory(env.HARNESS_CHECK_ARTIFACT_DIR) : privateArtifactDirectory();
     receipt.evidencePath = path.join(artifactDir, 'formal-verification.json');
     if (fs.existsSync(receipt.evidencePath)) fail('formal-verification.json already exists; use a fresh invocation artifact directory');
+    if (typeof captureGraph !== 'boolean') fail('captureGraph must be an explicit boolean');
     const manifestRel = path.relative(root, path.resolve(root, manifestPath || '')).replaceAll('\\', '/');
     const original = readRegular(root, relative(manifestRel));
     const manifest = JSON.parse(original.toString('utf8'));
@@ -246,11 +265,13 @@ export async function runFormalVerification({ workspace = process.cwd(), manifes
     for (const model of manifest.models) {
       const configured = validateConfiguration(fs.readFileSync(path.join(sandbox, model.config), 'utf8'));
       if (model.expect === 'safety-violation' && !configured.invariants.includes(model.property) || model.expect === 'liveness-violation' && (configured.properties.length !== 1 || configured.properties[0] !== model.property)) fail('negative control must name its configured intended property');
-      const args = ['-Xmx512m', '-XX:+UseParallelGC', '-cp', jar, 'tlc2.TLC', '-tool', '-workers', '1', '-fp', '0', '-seed', '0', '-config', model.config, '-metadir', path.join(sandbox, `${path.basename(model.module, '.tla')}-states`), model.module];
+      const args = tlcModelArguments(jar, model, sandbox, captureGraph);
       const execution = execute(java, args, { cwd: sandbox, env });
       const outcome = classifyTlc(execution, model.expect, model.property || null);
-      receipt.models.push({ module: model.module, ...outcome, execution });
+      const recorded = { module: model.module, ...outcome, execution };
+      receipt.models.push(recorded);
       if (!outcome.pass) { receipt.status = execution.error || execution.signal ? 'blocked' : 'failed'; fail(`TLC ${model.module} did not produce its required ${model.expect} result`); }
+      if (captureGraph) recorded.graph = publishModelGraph({ artifactDir, sandbox, model, execution });
     }
     for (const [kind, command] of [['positive', manifest.conformance.command], ['negative', manifest.conformance.negativeControl]]) {
       readRegular(root, command[1]);
@@ -316,6 +337,7 @@ export async function main(argv = process.argv.slice(2), defaults = {}) {
     for (let i = 0; i < argv.length; i++) {
       const token = argv[i];
       if (token === '--maintain') options.maintain = true;
+      else if (token === '--capture-graph') options.captureGraph = true;
       else if (['--manifest', '--rationale', '--workspace'].includes(token) && argv[i + 1] && !argv[i + 1].startsWith('--')) options[{ '--manifest': 'manifestPath', '--rationale': 'rationale', '--workspace': 'workspace' }[token]] = argv[++i];
       else fail(`unsupported or missing formal-check argument: ${token}`);
     }

@@ -301,7 +301,8 @@ export function appendFileContained(root, rel, content, { newlineGuard = false }
   }
 }
 
-export function writeFileContained(root, rel, content, { exclusive = false } = {}) {
+export function writeFileContained(root, rel, content, { exclusive = false, mode } = {}) {
+  if (mode !== undefined && (!Number.isInteger(mode) || mode < 0 || mode > 0o777)) return null;
   const rootFull = path.resolve(root);
   const full = assertNoSymlinkAncestors(rootFull, rel);
   if (!full) return null;
@@ -310,7 +311,7 @@ export function writeFileContained(root, rel, content, { exclusive = false } = {
   const tmp = path.join(parent, `.tmp-${path.basename(full)}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   let fd;
   try {
-        fd = fs.openSync(tmp, 'wx');
+        fd = mode === undefined ? fs.openSync(tmp, 'wx') : fs.openSync(tmp, 'wx', mode);
   } catch {
     return null;
   }
@@ -333,6 +334,7 @@ export function writeFileContained(root, rel, content, { exclusive = false } = {
   // Verify passed: write content THROUGH the verified descriptor, then close.
   try {
     fs.writeFileSync(fd, content, { encoding: 'utf8' });
+    if (mode !== undefined) fs.fchmodSync(fd, mode);
     fs.closeSync(fd);
   } catch {
     try {

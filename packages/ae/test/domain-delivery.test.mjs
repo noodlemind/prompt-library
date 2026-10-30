@@ -65,11 +65,11 @@ function fixture(t) {
   return { dir, home, copilotHome, roots, coordinator, plan, recordRoot, options: { workspace: coordinator, plan, copilotHome, home, recordRoot } };
 }
 
-test('participating content keeps literal evidence bytes and selected-home trust without discarded per-repo HEAD probes', t => {
+test('participating content keeps literal mode-bound evidence and selected-home trust without discarded per-repo HEAD probes', t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.roots.producer, 'schema.json'), '{"version":5}');
   const previous = createEvidenceBinding({ workspace: f.roots.producer, plan: { path: '', text: '', fm: {}, phase: 0 }, base: f.plan.fm.domain_parent.repos[0].initial_head, changedFiles: ['schema.json'], copilotHome: f.copilotHome });
-  assert.equal(previous.workspaceDigest, '82fc568781d48c38f1528f2ccf707f14d129481cb105101f570e5c3198eb26c6');
+  assert.equal(previous.workspaceDigest, 'ea203c82ae2e8707728efbe2a968c1c501ff984104776e5adcdc343189cabff8');
   assert.equal(trustStatus({ workspace: f.roots.producer, copilotHome: f.copilotHome }).state, 'untrusted');
   assert.equal(trustStatus({ workspace: f.roots.producer, copilotHome: f.copilotHome, home: f.home }).state, 'trusted');
   const spawn = childProcess.spawnSync;

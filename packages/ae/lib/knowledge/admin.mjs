@@ -598,7 +598,7 @@ function refreshRecallAfterPurge({ workspace, copilotHome, target, log = () => {
 
     let served;
   try {
-    served = loadManifest(copilotHome || '', workspace);
+    served = loadManifest(copilotHome || '', workspace, { home });
   } catch {
         return { ok: true, refreshed: !rebuildError, reason: null };
   }

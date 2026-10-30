@@ -3,9 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import { runBuildPostingsIndex } from './postings-index.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
-import { readFileNoFollow, assertNoSymlinkAncestors } from './fs-safe.mjs';
+import { readFileNoFollow, assertNoSymlinkAncestors, writeFileContained } from './fs-safe.mjs';
 import { solutionsScanRoots } from './project-layout.mjs';
 import { withPlanUpdateLock } from './plan-update.mjs';
+import YAML from 'yaml';
+import { repoId } from './knowledge/store.mjs';
+import { manifestCorpusContent, projectManifestContent, PROJECT_MANIFEST_FILE } from './knowledge-manifest.mjs';
 
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -168,6 +171,7 @@ function rebuildKnowledgeIndex({ knowledgeRoot, workspace, copilotHome, flags, l
     '# Team knowledge index — rebuilt by ae index',
     'version: 1',
     `updated: ${today}`,
+    `repository: ${yamlQuote(repoId(workspace))}`,
     'entries:',
   ];
   for (const e of entries) {
@@ -189,29 +193,49 @@ function rebuildKnowledgeIndex({ knowledgeRoot, workspace, copilotHome, flags, l
   }
 
   const body = lines.join('\n') + '\n';
+  const manifestEntries = YAML.parse(body).entries || [];
+  const corpus = manifestCorpusContent(manifestEntries);
+  const projectManifest = projectManifestContent(repoId(workspace), today, manifestEntries);
   if (flags.dryRun) {
     log(`would write ${manifestPath} (${entries.length} entries)`);
     const indexDir = selectedIndexDir || resolveIndexDir(copilotHome || '', workspace, home);
-    runBuildPostingsIndex({ entries, indexDir, manifestUpdated: today, flags });
+    runBuildPostingsIndex({ entries, indexDir, manifestUpdated: today, manifestContent: corpus, projectManifest, flags });
     log(`would write ${indexDir} (${entries.length} postings)`);
     return { entries: entries.length, manifestPath, indexDir };
   }
-  const previous = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath) : null;
-  writeManifestAtomic(manifestPath, body);
-  log(`wrote ${manifestPath} (${entries.length} entries)`);
-
   const indexDir = selectedIndexDir || resolveIndexDir(copilotHome || '', workspace, home);
+  const previous = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath) : null;
+  const before = [PROJECT_MANIFEST_FILE, 'postings.json', 'meta.json'].map(name => {
+    const full = path.join(indexDir, name);
+    const stat = fs.lstatSync(full, { throwIfNoEntry: false });
+    if (!stat) return [name, null];
+    const bytes = readFileNoFollow(full, { root: indexDir, encoding: null });
+    if (bytes === null) throw new Error(`knowledge index ${name} is unsafe or unreadable`);
+    return [name, { bytes, mode: stat.mode & 0o777 }];
+  });
   let indexResult;
   try {
+    writeManifestAtomic(manifestPath, body);
+    log(`wrote ${manifestPath} (${entries.length} entries)`);
     indexResult = runBuildPostingsIndex({
       entries,
       indexDir,
       manifestUpdated: today,
+      manifestContent: corpus,
+      projectManifest,
       flags,
     });
   } catch (error) {
     if (previous === null) fs.rmSync(manifestPath, { force: true });
     else writeManifestAtomic(manifestPath, previous);
+    const failed = [];
+    for (const [name, snapshot] of before) {
+      try {
+        if (snapshot === null) fs.rmSync(path.join(indexDir, name), { force: true });
+        else if (!writeFileContained(indexDir, name, snapshot.bytes, { mode: snapshot.mode })) failed.push(name);
+      } catch { failed.push(name); }
+    }
+    if (failed.length) throw new Error(`knowledge index rebuild failed and rollback is incomplete (${failed.join(', ')}): ${error.message}`);
     throw error;
   }
   log(`wrote ${indexDir} (${indexResult.entryCount} postings)`);
@@ -221,12 +245,7 @@ function rebuildKnowledgeIndex({ knowledgeRoot, workspace, copilotHome, flags, l
 
 function writeManifestAtomic(file, body) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(tmp, body);
-    fs.renameSync(tmp, file);
-  } catch (error) {
-    fs.rmSync(tmp, { force: true });
-    throw error;
-  }
+  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  const mode = stat ? stat.mode & 0o777 : 0o600;
+  if (!writeFileContained(path.dirname(file), path.basename(file), body, { mode })) throw new Error('knowledge manifest publication failed');
 }

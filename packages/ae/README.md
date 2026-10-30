@@ -8,6 +8,17 @@ CLI for the **Adaptive Engineer Harness**: install/hydrate Copilot assets, run t
 
 Developers use Copilot **`@engineer`**. The kernel never starts an LLM on the host path.
 
+AE's native formal-evidence compiler is informed by [Lauren Tan's pstack `/statechart`
+v0.15.36](https://github.com/cursor/plugins/tree/4dd1d05818d19792e7cd6e818f1667f95f7e1dbe/pstack/skills/statechart).
+Lauren's checking/evidence/projection boundaries and counterexample presentation inform
+`ae diagrams formal --file <formal-verification.json> --model <Module.tla>`.
+This draws retained counterexamples or positive explored graphs through bundled
+rendering, with no Java, JAR, checker invocation, or runtime download. The optional
+formal-check starter's `--capture-graph` retains same-run graph evidence using
+only a checker deliberately configured by its caller. Keep the receipt beside
+its referenced `Module.graph.dot` when copying a retained artifact bundle.
+AE ships no pstack implementation. See [third-party notices](THIRD-PARTY-NOTICES.md).
+
 ## Install
 
 `ae-harness` is not published to the npm registry. From the repository root:
@@ -30,6 +41,11 @@ installation or upgrade. `ae install --configure-vscode` and
 `ae upgrade` remain available for explicit/non-TUI setup.
 
 The npm package includes `corpus/`. `ae install` copies that tree onto the Copilot home.
+
+Knowledge indexes bind their actual corpus and retain project-private metadata
+beside each project's postings. Global notes remain shared. Older unbound private
+rows are omitted with rebuild guidance until `ae index` runs in that repository;
+another project's private rows are never a fallback corpus.
 
 ### Validate and pack
 
@@ -122,7 +138,7 @@ initialize this repo (`init-repo`) from the palette
 | `recall` / `get` / `search` / `lookup` / `tree` | Retrieval |
 | `graph deps` / `dependents` / `path` / `explain` / `impact` | Bounded structural evidence and change-impact candidates |
 | `flows prepare` / `flows publish` / `flows status` / `flows show` | Optional source-bound descriptive application model |
-| `diagrams render` / `graph` / `flow` / `status` | Local SVG/HTML views, optional PNG, and source freshness receipts |
+| `diagrams render` / `graph` / `flow` / `formal` / `status` | Local SVG/HTML views, recorded formal counterexamples, optional PNG, and source freshness receipts |
 | `edit` / `write` / `apply` / `undo` | Mutations (`undo` operator-only) |
 | `exec` / `bash` | Governed process / shell |
 | `todo` | Durable worklist (`.harness/todo.json`) |

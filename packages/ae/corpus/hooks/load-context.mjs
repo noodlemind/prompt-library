@@ -28,6 +28,7 @@ function emptyOrientSlice() {
     activePlan: null,
     layout: {
       boundRoot: null,
+      projectStore: null,
       kind: 'unknown',
       markers: [],
       workspaceType: 'none',

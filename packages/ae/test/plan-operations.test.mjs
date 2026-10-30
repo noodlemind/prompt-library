@@ -9,6 +9,7 @@ import YAML from 'yaml';
 import { initGit, writeVersionedPlan, writeChecks } from './helpers/cli-fixtures.mjs';
 import { approveProject } from '../lib/trust.mjs';
 import { planDigest } from '../lib/evidence.mjs';
+import { reviewHash } from '../lib/review-preparation.mjs';
 import { resolvePlanUpdateFile, convertFullPlan } from '../lib/plan-update.mjs';
 import { readPlanConversionGuard, planConversionPublished, planConversionPending, conversionPointerRel, projectStoreDir } from '../lib/project-layout.mjs';
 import { loadPlan, reloadPlan } from '../lib/plan-parse.mjs';
@@ -445,6 +446,19 @@ test('stale decisions and reused operation identity cannot overwrite accepted wo
   assert.equal(f.op(stale).status, 2);
   assert.equal(f.op({ ...first, finding: { id: 'observed-1', text: 'Changed payload.' } }).status, 2);
   assert.equal(f.text(), accepted);
+});
+
+for (const content of ['{"version":1,', 'null', 'false', '0']) test(`a corrupt structured operation journal cannot be overwritten (${content})`, t => {
+  const f = fixture(t), before = f.text();
+  const input = f.decision('finding', { finding: { id: 'observed-1', text: 'Inspect the boundary.' } });
+  const journal = path.join(f.ws, '.harness/operations/plans', `${reviewHash({ plan: f.plan, operation: input.id })}.json`);
+  fs.mkdirSync(path.dirname(journal), { recursive: true });
+  fs.writeFileSync(journal, content);
+  const result = f.op(input);
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stderr, /operation identity.*corrupt journal/i);
+  assert.equal(f.text(), before);
+  assert.equal(fs.readFileSync(journal, 'utf8'), content);
 });
 
 test('blocked start returns prerequisites without publishing a transition or passing gate', t => {

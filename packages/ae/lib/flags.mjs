@@ -76,6 +76,7 @@ function assignTargets(flags, value) {
     invalidFlag('--target', value, parts.join('; '));
   }
   flags.targets = new Set(names);
+  flags.targetsExplicit = true;
 }
 
 export function hasFlag(argv, name) {
@@ -103,6 +104,7 @@ export function parseFlags(argv) {
     harnessHome: null,
     fromId: null,
     targets: new Set(['vscode', 'cli', 'intellij']),
+    targetsExplicit: false,
     workspace: process.cwd(),
     query: null,
     files: null,

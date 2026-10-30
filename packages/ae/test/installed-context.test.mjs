@@ -35,6 +35,11 @@ test('clean installed package expands current context and rejects stale source r
     assert.equal(result.status, 0, result.stderr);
   };
   git(['init', '-q']); git(['add', '.']); git(['commit', '-qm', 'fixture']);
+  const unrelated = path.join(root, 'unrelated-repository');
+  fs.mkdirSync(unrelated);
+  const unrelatedGit = spawnSync('git', ['init', '-q'], { cwd: unrelated, env, encoding: 'utf8' });
+  assert.equal(unrelatedGit.status, 0, unrelatedGit.stderr);
+  fs.writeFileSync(path.join(root, 'inactive.code-workspace'), JSON.stringify({ folders: [{ path: workspace }, { path: unrelated }] }));
   const cli = (...args) => {
     const result = spawnSync(process.execPath, [path.join(runtime, 'bin/ae.mjs'), ...args, '--workspace', workspace, '--copilot-home', copilotHome, '--ae-home', harnessHome, '--json', '--no-events'], { cwd: workspace, env, encoding: 'utf8', timeout: 30000 });
     if (process.env.HARNESS_PROOF_LOG) fs.appendFileSync(process.env.HARNESS_PROOF_LOG, JSON.stringify({ kind: 'installed-context', runtime, archiveIntegrity: metadata.integrity, args, status: result.status, stdout: result.stdout, stderr: result.stderr }) + '\n');
@@ -47,7 +52,18 @@ test('clean installed package expands current context and rejects stale source r
   };
   ok('install');
   assert.ok(fs.existsSync(path.join(copilotHome, 'skills/references/context-budget.md')));
-  assert.equal(Object.keys(ok('orient', '--read')).length, 18);
+  const binding = ok('orient', '--read');
+  assert.equal(Object.keys(binding).length, 18);
+  assert.equal(binding.layout.boundRoot, fs.realpathSync.native(workspace));
+  assert.equal(path.relative(harnessHome, binding.layout.projectStore).split(path.sep)[0], 'projects');
+  assert.deepEqual(binding.layout.roots, []);
+  assert.equal(binding.layout.workspaceFile, null);
+  assert.equal(binding.layout.domainSuggestion, null);
+  const started = spawnSync(process.execPath, [path.join(copilotHome, 'hooks/grok-build.mjs'), 'start'], {
+    cwd: workspace, env, encoding: 'utf8', timeout: 20000,
+  });
+  assert.equal(started.status, 0, started.stderr + started.stdout);
+  assert.deepEqual(JSON.parse(started.stdout).layout, binding.layout);
   ok('index', '--structural');
   const context = ok('orient', '--read', '--context-version', '2', '--query', 'repair item', '--file', 'a.mjs');
   assert.equal(context.schema, 'harness.context.v2');

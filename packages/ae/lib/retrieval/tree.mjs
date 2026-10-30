@@ -240,7 +240,8 @@ function knowledgeTree({ workspace, copilotHome, home, target, depth, maxNodes }
     );
   }
 
-  const manifest = loadManifest(copilotHome, workspace);
+  const manifest = loadManifest(copilotHome, workspace, { home });
+  if (manifest.error) throw new Error(manifest.error);
   const rows = [];
   for (const entry of manifest.entries || []) {
     if (!entry || typeof entry !== 'object') continue;

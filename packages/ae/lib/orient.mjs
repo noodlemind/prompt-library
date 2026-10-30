@@ -1,5 +1,5 @@
 import fs from 'fs';
-import path from 'path';
+import path from 'node:path';
 import { planStateFacts } from './report-facts.mjs';
 import { rankRecall } from './recall-rank.mjs';
 import { buildContextPack, learningsSectionBytes } from './context-pack.mjs';
@@ -18,8 +18,14 @@ import { inspectIsolation, planSlugFromPath } from './worktree.mjs';
 import { collectOrientationFacts } from './orientation-facts.mjs';
 import { buildContextRecord } from './context-record.mjs';
 import { accountContext } from './token-meter.mjs';
+import { writeFileContained } from './fs-safe.mjs';
 
 const ORIENT_BRANCH_CAP = 80;
+function writeContextFile(workspace, rel, content) {
+  const stat = fs.lstatSync(path.join(workspace, rel), { throwIfNoEntry: false });
+  return writeFileContained(workspace, rel, content, stat ? { mode: stat.mode & 0o777 } : {});
+}
+
 function jsonGitContext(gitContext) {
   if (!gitContext) return null;
   return {
@@ -33,8 +39,8 @@ function jsonGitContext(gitContext) {
 
 export function runOrient({ workspace, copilotHome, flags, query, files }) {
   const q = query || flags.query || '';
-  // A symlinked .harness redirects the context pack out of the workspace.
-  if (ensureHarnessDir(workspace, flags.dryRun) === null) return null;
+  // Refuse unsafe state paths before producing orientation artifacts.
+  if (ensureHarnessDir(workspace, flags.dryRun) === null) throw Object.assign(new Error('orientation state directory or ignore file is unsafe or unavailable'), { code: 'E_ORIENT_WRITE', exit: 1 });
 
     let gitContext = null;
   try {
@@ -95,7 +101,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     const repoMapRel = '.harness/repo-map.md';
     const repoMap = buildRepoMap({ workspace, query: q, home });
     if (!repoMap.empty) {
-      if (!flags.dryRun) fs.writeFileSync(path.join(workspace, repoMapRel), repoMap.body, 'utf8');
+      if (!flags.dryRun && !writeContextFile(workspace, repoMapRel, repoMap.body)) throw new Error('repo map target is unsafe or unavailable');
       repoMapRef = { path: repoMapRel, files: repoMap.files.length, totalFiles: repoMap.totalFiles };
     }
   } catch {
@@ -183,8 +189,7 @@ export function runOrient({ workspace, copilotHome, flags, query, files }) {
     const deliveredLearnings = learnings.filter((l) => packBody.includes(`- [${l.id}]`)).map((l) => l.id);
 
   const packRel = '.harness/context-pack.md';
-  const packFull = path.join(workspace, packRel);
-  if (!flags.dryRun) fs.writeFileSync(packFull, packBody, 'utf8');
+  if (!flags.dryRun && !writeContextFile(workspace, packRel, packBody)) throw Object.assign(new Error('context pack target is unsafe or unavailable; no context pack was written'), { code: 'E_ORIENT_WRITE', exit: 1 });
 
   const newSession = {
     ...session,

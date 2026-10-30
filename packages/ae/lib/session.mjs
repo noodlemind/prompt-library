@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
+import { appendFileContained, readFileNoFollow, writeFileContained } from './fs-safe.mjs';
 
 export const SESSION_DIR = '.harness';
 export const SESSION_FILE = 'session.json';
@@ -59,10 +60,11 @@ export function ensureHarnessDir(workspace, dryRun) {
   if (!fs.existsSync(gitignore)) {
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(gitignore, content, 'utf8');
+      if (!writeFileContained(workspace, path.join(SESSION_DIR, '.gitignore'), content, { exclusive: true })) return null;
     }
   } else if (!dryRun) {
-    const current = fs.readFileSync(gitignore, 'utf8');
+    const current = readFileNoFollow(gitignore, { root: workspace });
+    if (current === null) return null;
     const lines = current.split(/\r?\n/);
     const missing = [
       'session.json',
@@ -83,7 +85,7 @@ export function ensureHarnessDir(workspace, dryRun) {
     ].filter((entry) => !lines.includes(entry));
     if (missing.length) {
       const separator = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
-      fs.appendFileSync(gitignore, `${separator}${missing.join('\n')}\n`, 'utf8');
+      if (!appendFileContained(workspace, path.join(SESSION_DIR, '.gitignore'), `${separator}${missing.join('\n')}\n`)) return null;
     }
   }
   return dir;

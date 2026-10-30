@@ -142,7 +142,9 @@ function workspaceDigest(workspace, files, planPath) {
       hash.update(`symlink\0${fs.readlinkSync(full)}\0`);
     } else if (stat.isFile()) {
       const content = fs.readFileSync(full);
-      hash.update('file\0');
+      // Bind Git's executable identity as well as bytes. The new tag also makes
+      // older byte-only proof stale instead of silently retaining its authority.
+      hash.update(`file\0${stat.mode & 0o111 ? '100755' : '100644'}\0`);
       hash.update(rel === planPath ? planContractText(content.toString('utf8')) : content);
       hash.update('\0');
     } else {

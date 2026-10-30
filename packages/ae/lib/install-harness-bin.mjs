@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'node:module';
 import { readLock } from './lock.mjs';
+import { resolveContainedPath } from './sync.mjs';
 
 const require = createRequire(import.meta.url);
 const COPY_DIRS = ['bin', 'lib', 'config', 'corpus', 'vscode-extension'];
@@ -11,42 +12,37 @@ const COPY_FILES = ['package.json', 'retired.json'];
  * Copy harness CLI into ~/.copilot/.ae-bin so agents can run without npx.
  */
 export function installHarnessBin(pkgRoot, copilotHome, flags, log) {
-  const destRoot = path.join(copilotHome, '.ae-bin');
-  const stats = { created: 0, updated: 0, files: [] };
+  const stats = { created: 0, updated: 0, removed: 0, files: [] };
+  const previous = readLock(copilotHome);
+  const previousFiles = Array.isArray(previous?.files) ? previous.files : [];
+  const sources = [];
 
   for (const dir of COPY_DIRS) {
     const srcDir = path.join(pkgRoot, dir);
     if (!fs.existsSync(srcDir)) continue;
-    for (const ent of fs.readdirSync(srcDir, { withFileTypes: true })) {
-      const src = path.join(srcDir, ent.name);
-      const rel = path.join(dir, ent.name).replace(/\\/g, '/');
-      const dest = path.join(destRoot, rel);
-      if (ent.isDirectory()) {
-        copyDirRecursive(src, dest, destRoot, flags, log, stats);
-      } else {
-        copyFile(src, dest, rel, flags, log, stats);
-      }
-    }
+    collectFiles(srcDir, dir, sources);
   }
 
   for (const file of COPY_FILES) {
     const src = path.join(pkgRoot, file);
     if (!fs.existsSync(src)) continue;
-    const rel = file;
-    const dest = path.join(destRoot, rel);
-    copyFile(src, dest, rel, flags, log, stats);
+    sources.push({ src, rel: file });
   }
 
   const manifest = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
   for (const dependency of Object.keys(manifest.dependencies || {})) {
     const src = resolveDependencyRoot(dependency);
-    const dest = path.join(destRoot, 'node_modules', dependency);
-    copyDirRecursive(src, dest, destRoot, flags, log, stats);
+    collectFiles(src, `node_modules/${dependency}`, sources);
+  }
+
+  // Refuse unsafe targets before replacing any part of the current runtime.
+  for (const { rel } of sources) runtimeTarget(copilotHome, rel);
+  for (const { src, rel } of sources) {
+    copyFile(src, runtimeTarget(copilotHome, rel), rel, flags, log, stats);
   }
 
   const legacyRel = '.harness-bin/bin/harness.mjs';
-  const previous = readLock(copilotHome);
-  if (['harness', 'ae-harness'].includes(previous?.package) && previous.files?.includes(legacyRel)) {
+  if (['harness', 'ae-harness'].includes(previous?.package) && previousFiles.includes(legacyRel)) {
     const segments = ['.harness-bin', '.harness-bin/bin', legacyRel];
     const managed = segments.every((relative, index) => {
       const stat = fs.lstatSync(path.join(copilotHome, relative), { throwIfNoEntry: false });
@@ -57,6 +53,18 @@ export function installHarnessBin(pkgRoot, copilotHome, flags, log) {
       stats.updated++;
       stats.files.push(legacyRel);
       log(`${flags.dryRun ? 'would update' : 'updated'} owned legacy runtime: ${legacyRel}`);
+    }
+  }
+
+  if (['harness', 'ae-harness'].includes(previous?.package)) {
+    const current = new Set(stats.files);
+    for (const rel of new Set(previousFiles)) {
+      if (typeof rel !== 'string' || !rel.startsWith('.ae-bin/') || current.has(rel)) continue;
+      const stale = resolveContainedPath(copilotHome, rel);
+      if (!stale || !fs.lstatSync(stale, { throwIfNoEntry: false })?.isFile()) continue;
+      log(`${flags.dryRun ? 'would remove' : 'removed'} obsolete harness-bin: ${rel}`);
+      if (!flags.dryRun) fs.unlinkSync(stale);
+      stats.removed++;
     }
   }
 
@@ -77,18 +85,22 @@ function resolveDependencyRoot(name) {
   }
 }
 
-function copyDirRecursive(srcDir, destDir, destRoot, flags, log, stats) {
-  if (!flags.dryRun) fs.mkdirSync(destDir, { recursive: true });
+function collectFiles(srcDir, relative, files) {
   for (const ent of fs.readdirSync(srcDir, { withFileTypes: true })) {
     const src = path.join(srcDir, ent.name);
-    const rel = path.relative(destRoot, path.join(destDir, ent.name)).replace(/\\/g, '/');
-    const dest = path.join(destRoot, rel);
+    const rel = `${relative}/${ent.name}`;
     if (ent.isDirectory()) {
-      copyDirRecursive(src, dest, destRoot, flags, log, stats);
+      collectFiles(src, rel, files);
     } else {
-      copyFile(src, dest, rel, flags, log, stats);
+      files.push({ src, rel });
     }
   }
+}
+
+function runtimeTarget(copilotHome, rel) {
+  const target = resolveContainedPath(copilotHome, `.ae-bin/${rel}`);
+  if (!target) throw Object.assign(new Error(`refusing an unsafe runtime target: ${rel}`), { code: 'E_TARGET', exit: 1 });
+  return target;
 }
 
 function copyFile(src, dest, rel, flags, log, stats) {

@@ -30,6 +30,7 @@ function emptySlice() {
     activePlan: null,
     layout: {
       boundRoot: null,
+      projectStore: null,
       kind: 'unknown',
       markers: [],
       workspaceType: 'none',

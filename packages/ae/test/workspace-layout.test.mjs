@@ -2,21 +2,20 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import childProcess, { spawnSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import YAML from 'yaml';
-import { readDomain } from '../lib/domain-contract.mjs';
 import { readOrientSlice } from '../lib/orient-read.mjs';
 import { runOrient } from '../lib/orient.mjs';
 import { estimateTokens } from '../lib/token-meter.mjs';
+import { projectStoreDir } from '../lib/project-layout.mjs';
+import { repoId } from '../lib/knowledge/store.mjs';
 import {
   classifyRepo,
   detectWorkspace,
   gradleIncludeCount,
   mavenModuleCount,
-  parseJsonc,
-  resolveWorkspacePath,
 } from '../lib/workspace-layout.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -90,203 +89,123 @@ test('monorepo markers are file presence, package workspaces, repeated gradle in
   assert.equal(classifyRepo(linked).kind, 'product-repo');
 });
 
-test('parseJsonc keeps strings and drops comments and trailing commas', () => {
-  const parsed = parseJsonc(`{
-    // saved window
-    "folders": [
-      { "path": "keep // inside", },
-      { "path": "../other" /* second */ },
-    ],
-  }`);
-  assert.equal(parsed.folders[0].path, 'keep // inside');
-  assert.equal(parsed.folders[1].path, '../other');
-  assert.equal(parseJsonc('{ "folders": [ }'), null);
+test('binding reports unknown for a non-repository without creating a store', (t) => {
+  const parent = tempRoot(t), home = path.join(parent, 'home');
+  const layout = detectWorkspace(parent, { home });
+  assert.equal(layout.boundRoot, null);
+  assert.equal(layout.projectStore, null);
+  assert.equal(layout.kind, 'unknown');
+  assert.equal(fs.existsSync(home), false);
 });
 
-test('resolveWorkspacePath expands USERPROFILE, backslashes, and drive letters', () => {
-  const previous = process.env.USERPROFILE;
-  const profile = path.join(os.tmpdir(), 'Profile Name');
-  process.env.USERPROFILE = profile;
-  try {
-    assert.equal(resolveWorkspacePath('/work/app.code-workspace', '%USERPROFILE%/child'), path.resolve(profile, 'child'));
-    assert.equal(resolveWorkspacePath('C:\\work\\app.code-workspace', '..\\lib'), 'C:\\lib');
-    assert.equal(resolveWorkspacePath('C:\\work\\app.code-workspace', 'D:\\repos\\lib'), 'D:\\repos\\lib');
-    process.env.USERPROFILE = 'C:\\Users\\krish';
-    assert.equal(resolveWorkspacePath('C:\\work\\app.code-workspace', '%USERPROFILE%\\src'), 'C:\\Users\\krish\\src');
-  } finally {
-    if (previous === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = previous;
+test('unavailable storage bindings do not hide the observed repository', (t) => {
+  const parent = tempRoot(t), home = path.join(parent, 'home');
+  const alpha = initRepo(path.join(parent, 'repo-a'), 'https://example.invalid/team/alpha.git');
+  fs.mkdirSync(path.join(home, 'storage-aliases'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'storage-aliases', `${repoId(alpha)}.json`), '{');
+  const layout = detectWorkspace(alpha, { home });
+  assert.equal(layout.boundRoot, alpha);
+  assert.equal(layout.kind, 'product-repo');
+  assert.equal(layout.projectStore, null);
+});
+
+test('full and read orientation report the same selected binding without a domain draft', (t) => {
+  const parent = tempRoot(t), home = path.join(parent, 'home'), copilotHome = path.join(parent, 'copilot');
+  const alpha = initRepo(path.join(parent, 'repo-a'));
+  const beta = initRepo(path.join(parent, 'repo-b'));
+  fs.mkdirSync(home); fs.mkdirSync(copilotHome);
+  fs.writeFileSync(path.join(parent, 'dev.code-workspace'), JSON.stringify({ folders: [{ path: alpha }, { path: beta }] }));
+  const flags = { workspace: alpha, home, copilotHome, dryRun: true };
+  const full = runOrient({ workspace: alpha, copilotHome, flags, query: 'layout' });
+  const read = readOrientSlice({ workspace: alpha, copilotHome, flags, query: 'layout' });
+  const record = readOrientSlice({ workspace: alpha, copilotHome, flags: { ...flags, contextVersion: 2 }, query: 'layout' });
+  for (const layout of [full.layout, read.layout, record.slice.layout]) {
+    assert.equal(layout.boundRoot, alpha);
+    assert.equal(layout.projectStore, projectStoreDir(alpha, { home }));
+    assert.equal(layout.kind, 'product-repo');
+    assert.equal(layout.workspaceType, 'none');
+    assert.equal(layout.workspaceFile, null);
+    assert.deepEqual(layout.roots, []);
+    assert.equal(layout.domainSuggestion, null);
   }
-});
-
-test('a code-workspace with JSONC lists the other git root and prefers vscode', (t) => {
-  const parent = tempRoot(t);
-  const home = path.join(parent, 'harness-home');
-  const alpha = initRepo(path.join(parent, 'repo-a'), 'https://example.invalid/team/alpha.git');
-  const beta = initRepo(path.join(parent, 'repo-b'));
-  fs.writeFileSync(path.join(alpha, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
-  fs.writeFileSync(path.join(beta, '.harness-secret'), 'SECRET_PLAN_TOKEN\n');
-  fs.mkdirSync(path.join(parent, '.idea'), { recursive: true });
-  fs.writeFileSync(path.join(parent, '.idea', 'vcs.xml'), `<project><component name="VcsDirectoryMappings">
-    <mapping directory="$PROJECT_DIR$/repo-a" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/repo-b" vcs="Git" />
-  </component></project>`);
-  fs.writeFileSync(path.join(parent, 'dev.code-workspace'), `{
-    // multi-root
-    "folders": [
-      { "path": "./repo-a", },
-      { "path": "./repo-b", },
-      { "path": "D:\\\\absent\\\\lib" },
-    ],
-    "settings": { "note": "keep // inside", },
-  }\n`);
-  fs.mkdirSync(path.join(home, 'domains'), { recursive: true });
-  fs.writeFileSync(path.join(home, 'domains', 'broken.yaml'), ':\n');
-
-  const layout = detectWorkspace(alpha, { home });
-  assert.equal(layout.boundRoot, alpha);
-  assert.equal(layout.kind, 'monorepo');
-  assert.deepEqual(layout.markers, ['pnpm-workspace.yaml']);
-  assert.equal(layout.workspaceType, 'vscode');
-  assert.equal(layout.workspaceFile, path.join(parent, 'dev.code-workspace'));
-  assert.equal(layout.roots.length, 1);
-  assert.equal(layout.roots[0].root, beta);
-  assert.equal(layout.roots[0].kind, 'product-repo');
-  assert.equal(fs.existsSync(layout.domainSuggestion.path), false);
-  assert.equal(path.dirname(layout.domainSuggestion.path), path.join(home, 'domains'));
-  assert.doesNotMatch(layout.domainSuggestion.yaml, /SECRET_PLAN_TOKEN/);
-  assert.match(layout.domainSuggestion.yaml, /https:\/\/example\.invalid\/team\/alpha$/m);
-  assert.match(layout.domainSuggestion.yaml, /local_identity:/);
-  assert.match(layout.domainSuggestion.yaml, /approved: true/);
-
-  fs.mkdirSync(path.dirname(layout.domainSuggestion.path), { recursive: true });
-  fs.writeFileSync(layout.domainSuggestion.path, layout.domainSuggestion.yaml);
-  const saved = readDomain(path.basename(layout.domainSuggestion.path, '.yaml'), { home });
-  assert.equal(saved.config.domain_version, 2);
-  assert.equal(saved.config.repos.length, 2);
-  assert.equal(detectWorkspace(alpha, { home }).domainSuggestion, null);
-});
-
-test('vcs.xml expands PROJECT_DIR and reports intellij when no code-workspace matches', (t) => {
-  const parent = tempRoot(t);
-  const home = path.join(parent, 'home');
-  fs.mkdirSync(home);
-  const alpha = initRepo(path.join(parent, 'repo-a'), 'https://user:pass@example.invalid/team/alpha.git');
-  const beta = initRepo(path.join(parent, 'repo-b'), 'https://example.invalid/team/beta.git');
-  fs.writeFileSync(path.join(beta, 'nx.json'), '{}\n');
-  fs.mkdirSync(path.join(parent, '.idea'));
-  fs.writeFileSync(path.join(parent, '.idea', 'vcs.xml'), `<?xml version="1.0"?>
-    <project version="4">
-      <component name="VcsDirectoryMappings">
-        <mapping directory="$PROJECT_DIR$\\repo-a" vcs="Git" />
-        <mapping directory="$PROJECT_DIR$/repo-b" vcs="Git" />
-        <mapping directory="D:\\repos\\missing" vcs="Git" />
-      </component>
-    </project>`);
-  const layout = detectWorkspace(alpha, { home });
-  assert.equal(layout.workspaceType, 'intellij');
-  assert.equal(layout.workspaceFile, path.join(parent, '.idea', 'vcs.xml'));
-  assert.equal(layout.roots.length, 1);
-  assert.equal(layout.roots[0].root, beta);
-  assert.deepEqual(layout.roots[0].markers, ['nx.json']);
-  assert.equal(layout.roots[0].kind, 'monorepo');
-  assert.doesNotMatch(layout.domainSuggestion.yaml, /user:pass/);
-  assert.match(layout.domainSuggestion.yaml, /local_identity:/);
   assert.equal(fs.existsSync(path.join(home, 'domains')), false);
 });
 
-test('a one-folder saved workspace is vscode and does not suggest a domain', (t) => {
-  const parent = tempRoot(t);
-  const home = path.join(parent, 'home');
-  const alpha = initRepo(path.join(parent, 'repo-a'));
-  fs.writeFileSync(path.join(parent, 'solo.code-workspace'), JSON.stringify({ folders: [{ path: './repo-a' }] }));
-  const layout = detectWorkspace(alpha, { home });
-  assert.equal(layout.workspaceType, 'vscode');
-  assert.equal(layout.boundRoot, alpha);
-  assert.deepEqual(layout.roots, []);
-  assert.equal(layout.domainSuggestion, null);
+test('shipped investigation guidance selects repositories by task relevance', () => {
+  const engineer = fs.readFileSync(path.join(packageRoot, 'corpus/agents/engineer.agent.md'), 'utf8');
+  assert.ok(estimateTokens(engineer) <= 900, `engineer is ${estimateTokens(engineer)} tokens`);
+  assert.ok(Math.ceil(Buffer.byteLength(engineer) / 4) <= 900);
+  for (const file of ['corpus/skills/references/playbooks/investigation.md', 'corpus/instructions/harness-global.instructions.md']) {
+    const text = fs.readFileSync(path.join(packageRoot, file), 'utf8');
+    assert.doesNotMatch(text, /one researcher per repo|When `ae orient` lists other Git roots|When `domainSuggestion` is present/);
+    assert.match(text, /task|dependency/);
+    assert.match(text, /Plans stay on the bound repo/);
+  }
+  const doc = fs.readFileSync(path.join(repoRoot, 'docs/workspace-layout-detection.md'), 'utf8');
+  assert.match(doc, /does not\s+discover saved workspaces/i);
+  assert.match(doc, /projectStore/);
 });
 
-test('a folder or mapping past the cap does not suggest a partial domain', (t) => {
-  const parent = tempRoot(t);
-  const home = path.join(parent, 'home');
-  const alpha = initRepo(path.join(parent, 'repo-a'), 'https://example.invalid/team/alpha.git');
+test('orientation keeps the bound repository when inactive saved workspaces list more roots', (t) => {
+  const parent = tempRoot(t), home = path.join(parent, 'home');
+  const alpha = initRepo(path.join(parent, 'repo-a'));
   const beta = initRepo(path.join(parent, 'repo-b'));
-  initRepo(path.join(parent, 'repo-c'));
-  const folders = [{ path: './repo-a' }, { path: './repo-b' }];
-  while (folders.length < 64) folders.push({ path: './repo-a' });
-  folders.push({ path: './repo-c' });
-  const mappings = folders.map(folder => `    <mapping directory="$PROJECT_DIR$/${folder.path.slice(2)}" vcs="Git" />`).join('\n');
+  const gamma = initRepo(path.join(parent, 'repo-c'));
+  fs.writeFileSync(path.join(parent, 'active.code-workspace'), JSON.stringify({ folders: [{ path: './repo-a' }] }));
+  fs.writeFileSync(path.join(parent, 'inactive.code-workspace'), JSON.stringify({ folders: [alpha, beta, gamma].map(root => ({ path: root })) }));
   fs.mkdirSync(path.join(parent, '.idea'));
-  fs.writeFileSync(path.join(parent, '.idea', 'vcs.xml'), `<project><component name="VcsDirectoryMappings">\n${mappings}\n</component></project>`);
-  const idea = detectWorkspace(alpha, { home });
-  assert.equal(idea.workspaceType, 'intellij');
-  assert.equal(idea.truncated, true);
-  assert.equal(idea.domainSuggestion, null);
-  assert.equal(idea.roots.length, 1);
-  assert.equal(idea.roots[0].root, beta);
-  fs.writeFileSync(path.join(parent, 'big.code-workspace'), JSON.stringify({ folders }));
-  const vscode = detectWorkspace(alpha, { home });
-  assert.equal(vscode.workspaceType, 'vscode');
-  assert.equal(vscode.truncated, true);
-  assert.equal(vscode.domainSuggestion, null);
-  assert.equal(vscode.roots[0].root, beta);
-  assert.equal(fs.existsSync(path.join(home, 'domains')), false);
-});
-
-test('no saved workspace reports none and does not suggest a domain', (t) => {
-  const parent = tempRoot(t);
-  const home = path.join(parent, 'home');
-  const alpha = initRepo(path.join(parent, 'repo-a'));
-  const layout = detectWorkspace(alpha, { home });
+  fs.writeFileSync(path.join(parent, '.idea', 'vcs.xml'), `<project><mapping directory="${beta}" vcs="Git" /></project>`);
+  const originalRead = fs.readFileSync, originalOpen = fs.opendirSync, originalSpawn = childProcess.spawnSync;
+  const reads = [], directories = [], probes = [];
+  fs.readFileSync = (file, ...args) => { reads.push(String(file)); return originalRead(file, ...args); };
+  fs.opendirSync = (directory, ...args) => { directories.push(String(directory)); return originalOpen(directory, ...args); };
+  childProcess.spawnSync = (command, args, options) => {
+    if (command === 'git') probes.push(options?.cwd);
+    return originalSpawn(command, args, options);
+  };
+  syncBuiltinESMExports();
+  let layout;
+  try { layout = detectWorkspace(alpha, { home }); }
+  finally {
+    fs.readFileSync = originalRead; fs.opendirSync = originalOpen; childProcess.spawnSync = originalSpawn;
+    syncBuiltinESMExports();
+  }
+  assert.equal(layout.boundRoot, alpha);
+  assert.equal(layout.projectStore, projectStoreDir(alpha, { home }));
   assert.equal(layout.workspaceType, 'none');
   assert.equal(layout.workspaceFile, null);
   assert.deepEqual(layout.roots, []);
   assert.equal(layout.domainSuggestion, null);
-  assert.equal(layout.kind, 'product-repo');
-  assert.equal(detectWorkspace(path.join(parent, 'missing'), { home }).kind, 'unknown');
-});
-
-test('orient json reports layout and does not write the domain file', (t) => {
-  const parent = tempRoot(t);
-  const home = path.join(parent, 'home');
-  const copilot = path.join(parent, 'copilot');
-  fs.mkdirSync(home);
-  fs.mkdirSync(copilot);
-  const alpha = initRepo(path.join(parent, 'repo-a'), 'https://example.invalid/team/alpha.git');
-  const beta = initRepo(path.join(parent, 'repo-b'));
-  fs.writeFileSync(path.join(parent, 'dev.code-workspace'), JSON.stringify({
-    folders: [{ path: './repo-a' }, { path: './repo-b' }],
-  }));
-  const flags = { workspace: alpha, harnessHome: home, copilotHome: copilot, dryRun: true };
-  const full = runOrient({ workspace: alpha, copilotHome: copilot, flags, query: 'layout' });
-  const read = readOrientSlice({ workspace: alpha, copilotHome: copilot, flags, query: 'layout' });
-  const record = readOrientSlice({ workspace: alpha, copilotHome: copilot, flags: { ...flags, contextVersion: 2 }, query: 'layout' });
-  for (const layout of [full.layout, read.layout, record.slice.layout]) {
-    assert.equal(layout.boundRoot, alpha);
-    assert.equal(layout.kind, 'product-repo');
-    assert.equal(layout.workspaceType, 'vscode');
-    assert.equal(layout.roots[0].root, beta);
-    assert.equal(layout.roots[0].kind, 'product-repo');
-    assert.equal(fs.existsSync(layout.domainSuggestion.path), false);
-  }
-  const doc = YAML.parse(full.layout.domainSuggestion.yaml);
-  assert.equal(doc.domain_version, 2);
-  assert.equal(doc.name, path.basename(full.layout.domainSuggestion.path, '.yaml'));
+  assert.deepEqual(directories, [], 'binding does not enumerate workspace candidates');
+  assert.ok(reads.every(file => !file.endsWith('.code-workspace') && !file.endsWith('vcs.xml')), 'saved editor configuration is not task scope');
+  assert.ok(probes.every(cwd => cwd !== beta && cwd !== gamma), 'no other repository is probed');
   assert.equal(fs.existsSync(path.join(home, 'domains')), false);
 });
 
-test('engineer and the investigation playbook name the bound repo and other roots', () => {
-  const engineer = fs.readFileSync(path.join(packageRoot, 'corpus/agents/engineer.agent.md'), 'utf8');
-  const playbook = fs.readFileSync(path.join(packageRoot, 'corpus/skills/references/playbooks/investigation.md'), 'utf8');
-  assert.match(engineer, /State the bound repo and layout kind from `ae orient` first/);
-  assert.ok(estimateTokens(engineer) <= 900, `engineer is ${estimateTokens(engineer)} tokens`);
-  assert.ok(Math.ceil(Buffer.byteLength(engineer) / 4) <= 900);
-  assert.match(playbook, /other Git roots[\s\S]*one researcher per repo/);
-  assert.match(playbook, /Plans stay on the bound repo/);
-  const global = fs.readFileSync(path.join(packageRoot, 'corpus/instructions/harness-global.instructions.md'), 'utf8');
-  assert.match(global, /do not write the domain file/i);
-  const doc = fs.readFileSync(path.join(repoRoot, 'docs/workspace-layout-detection.md'), 'utf8');
-  assert.match(doc, /Krish chose option 3/);
-  assert.doesNotMatch(doc, /Nothing here is selected/);
+test('binding reports the aliased project store in the selected home', (t) => {
+  const parent = tempRoot(t), home = path.join(parent, 'selected-home');
+  const alpha = initRepo(path.join(parent, 'repo-a'), 'https://example.invalid/team/alpha.git');
+  const id = repoId(alpha), storageId = 'local-123456789abc';
+  const projectStore = path.join(home, 'projects', storageId);
+  fs.mkdirSync(path.join(home, 'storage-aliases'), { recursive: true });
+  fs.mkdirSync(projectStore, { recursive: true });
+  fs.writeFileSync(path.join(projectStore, 'saved.md'), 'existing private record\n');
+  fs.writeFileSync(path.join(home, 'storage-aliases', `${id}.json`), JSON.stringify({ schema: 1, repoId: id, storageId }));
+  const layout = detectWorkspace(alpha, { home });
+  assert.equal(layout.projectStore, projectStore);
+  assert.equal(projectStoreDir(alpha, { home }), projectStore);
+  assert.equal(fs.existsSync(path.join(home, 'projects', id)), false);
+});
+
+test('unrelated saved workspaces do not change task context identity', (t) => {
+  const parent = tempRoot(t), home = path.join(parent, 'home'), copilotHome = path.join(parent, 'copilot');
+  const alpha = initRepo(path.join(parent, 'repo-a'));
+  const beta = initRepo(path.join(parent, 'repo-b'));
+  fs.mkdirSync(copilotHome);
+  const flags = { home, contextVersion: 2, dryRun: true };
+  const before = readOrientSlice({ workspace: alpha, copilotHome, flags, query: 'explain this repository' });
+  fs.writeFileSync(path.join(parent, 'unrelated.code-workspace'), JSON.stringify({ folders: [{ path: alpha }, { path: beta }] }));
+  const after = readOrientSlice({ workspace: alpha, copilotHome, flags, query: 'explain this repository' });
+  assert.equal(after.contextId, before.contextId);
+  assert.deepEqual(after.slice.layout, before.slice.layout);
 });

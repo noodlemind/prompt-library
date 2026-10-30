@@ -2,13 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { createRequire } from 'module';
 import { fileURLToPath } from 'node:url';
 import { completeWork } from './completion.mjs';
 import { runCompound } from './compound.mjs';
 import { loadPolicy } from './policy.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
+import { loadManifest } from './recall-rank.mjs';
 import { resolveHarnessBin, RUNNER_VERSION } from './resolve-harness-bin.mjs';
 import { globalHarnessShimPath, findHarnessOnPath } from './global-bin.mjs';
 import { readLock } from './lock.mjs';
@@ -18,7 +18,7 @@ import { runVerify } from './verify.mjs';
 import { approveProject } from './trust.mjs';
 import { readSession, writeSession } from './session.mjs';
 import { parseVSCodeSettings } from './vscode-settings.mjs';
-import { harnessGlobalHome, resolveVSCodeSettingsPaths } from './paths.mjs';
+import { harnessGlobalHome, resolveIntelliJHome, resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
 import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings, readSavedLearningFiles, matchingLocalStoreIds, carriedBytesDiffer } from './knowledge/store.mjs';
 import { storageIdForRepo } from './storage-aliases.mjs';
@@ -35,8 +35,6 @@ import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { leftoverWorkspaceArtifacts } from './migrate-layout.mjs';
 import { planReadDirs } from './project-layout.mjs';
 
-const require = createRequire(import.meta.url);
-
 const MIN_ENRICHED_RATIO = 0.5;
 
 function fieldText(value) {
@@ -51,21 +49,6 @@ function manifestStamp(value) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
   if (typeof value === 'string' && value.trim()) return value.trim();
   return null;
-}
-
-function loadManifestEntries(manifestPath) {
-  if (!fs.existsSync(manifestPath)) return { entries: [], updated: null, error: null };
-  try {
-    const yaml = require('yaml');
-    const doc = yaml.parse(fs.readFileSync(manifestPath, 'utf8'));
-    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { entries: [], updated: null, error: 'unreadable' };
-    // A bare `entries:` key parses as null. That is the packaged empty index, not a damaged file.
-    if (doc.entries === null || doc.entries === undefined) return { entries: [], updated: doc.updated || null, error: null };
-    if (!Array.isArray(doc.entries)) return { entries: [], updated: null, error: 'unreadable' };
-    return { entries: doc.entries, updated: doc.updated || null, error: null };
-  } catch {
-    return { entries: [], updated: null, error: 'unreadable' };
-  }
 }
 
 function hookCommands(config, event) {
@@ -358,23 +341,32 @@ export async function runVSCodeHookProbe(hookRoot) {
   }
 }
 
-async function vscodeChecks({ copilotHome, settingsPaths }) {
+async function installedHookChecks({ copilotHome, settingsPaths = [], target }) {
+  const vscode = target === 'vscode', prefix = vscode ? 'V' : 'C', host = vscode ? 'VS Code' : 'Copilot CLI';
   const hookRoot = path.join(copilotHome, 'hooks');
   const installed = fs.existsSync(path.join(hookRoot, 'hooks.json'));
   const loaded = installed ? loadInstalledHookConfig(hookRoot) : { config: null, error: 'Installed hook bundle is missing' };
-  const discovery = vscodeDiscoveryConfigured(settingsPaths);
   const probe = loaded.config ? await runVSCodeHookProbe(hookRoot) : {};
   return [
-    { id: 'V1', name: 'VS Code hook bundle installed', pass: installed, hint: 'Run: ae upgrade --configure-vscode' },
-    { id: 'V2', name: 'VS Code hook configuration and commands resolvable', pass: Boolean(loaded.config), hint: loaded.error || 'Reinstall hooks' },
-    { id: 'V3', name: 'VS Code user hook discovery configured', pass: discovery, hint: 'Run: ae install --configure-vscode — sets chat.hookFilesLocations and chat.subagents.allowInvocationsFromSubagents' },
-    { id: 'V4', name: 'Known VS Code mutation payload recognized', pass: Boolean(probe.recognized), hint: 'Inspect payload normalization and hook events' },
-    { id: 'V5', name: 'Missing-gate mutation denied', pass: Boolean(probe.missingGateDenied), hint: 'Inspect PreToolUse policy output' },
-    { id: 'V6', name: 'Gated scoped mutation allowed', pass: Boolean(probe.gatedAllowed), hint: 'Inspect plan gate and scope handling' },
-    { id: 'V7', name: 'Successful PostToolUse event recorded', pass: Boolean(probe.postRecorded), hint: 'Inspect record-successful-edit.mjs' },
-    { id: 'V8', name: 'Completion without verification denied', pass: Boolean(probe.unverifiedDenied), hint: 'Inspect Stop hook registration and evidence checks' },
-    { id: 'V9', name: 'Completion after passed verification allowed', pass: Boolean(probe.verifiedAllowed), hint: 'Inspect evidence binding and freshness' },
+    { id: `${prefix}1`, name: `${host} hook bundle installed`, pass: installed, hint: `Run: ae install --target ${target}` },
+    { id: `${prefix}2`, name: `${host} hook configuration and commands resolvable`, pass: Boolean(loaded.config), hint: loaded.error || 'Mechanical compatibility probe; actual native host discovery is unverified' },
+    ...(vscode ? [{ id: 'V3', name: 'VS Code user hook discovery configured', pass: vscodeDiscoveryConfigured(settingsPaths), hint: 'Run: ae install --configure-vscode — sets chat.hookFilesLocations and chat.subagents.allowInvocationsFromSubagents' }] : []),
+    { id: `${prefix}4`, name: `${host} compatible mutation payload recognized`, pass: Boolean(probe.recognized), hint: 'Inspect payload normalization and hook events' },
+    { id: `${prefix}5`, name: 'Missing-gate mutation denied', pass: Boolean(probe.missingGateDenied), hint: 'Inspect PreToolUse policy output' },
+    { id: `${prefix}6`, name: 'Gated scoped mutation allowed', pass: Boolean(probe.gatedAllowed), hint: 'Inspect plan gate and scope handling' },
+    { id: `${prefix}7`, name: 'Successful PostToolUse event recorded', pass: Boolean(probe.postRecorded), hint: 'Inspect record-successful-edit.mjs' },
+    { id: `${prefix}8`, name: 'Completion without verification denied', pass: Boolean(probe.unverifiedDenied), hint: 'Inspect Stop hook registration and evidence checks' },
+    { id: `${prefix}9`, name: 'Completion after passed verification allowed', pass: Boolean(probe.verifiedAllowed), hint: 'Inspect evidence binding and freshness' },
   ];
+}
+
+function selectedDoctorTarget(flags) {
+  const targets = flags.targetsExplicit ? [...flags.targets] : [];
+  const fail = message => { throw Object.assign(new Error(message), { code: 'E_USAGE', exit: 2 }); };
+  if (flags.targetsExplicit && targets.length !== 1) fail('doctor requires one target: vscode, cli, or intellij');
+  if (targets.length && flags.host && targets[0] !== flags.host) fail('doctor --target conflicts with --host');
+  const target = targets[0] || flags.host || null;
+  return target;
 }
 
 // Knowledge-layer health (design §2, §3, §12). All three are optional/advisory
@@ -657,7 +649,15 @@ function prerequisiteChecks() {
 }
 
 export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
+  const target = selectedDoctorTarget(flags);
+  const customizationOnly = target === 'intellij';
+  if (customizationOnly) copilotHome = resolveIntelliJHome();
   const checks = [...prerequisiteChecks()];
+  if (['vscode', 'cli', 'intellij'].includes(target)) checks.push({
+    id: 'T0', name: `Selected ${target} customization home`, pass: true, target, home: copilotHome,
+    capabilities: { customizations: 'declared', nativeHooks: customizationOnly ? 'unsupported' : 'supported', liveHost: 'unverified' },
+    hint: customizationOnly ? 'Customization files can be inspected; JetBrains native lifecycle hooks are unavailable' : 'Installed hook probes are mechanical checks; native host activation is unverified',
+  });
 
   const manifest = path.join(copilotHome, 'knowledge', 'manifest.yaml');
   checks.push({
@@ -753,13 +753,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     optional: true,
   });
 
-  const workspaceManifest = path.join(flags.workspace, 'knowledge', 'manifest.yaml');
-  const manifestPath = fs.existsSync(manifest)
-    ? manifest
-    : fs.existsSync(workspaceManifest)
-      ? workspaceManifest
-      : manifest;
-  const { entries: manifestEntries, updated: manifestUpdatedRaw, error: manifestError } = loadManifestEntries(manifestPath);
+  const { entries: manifestEntries, updated: manifestUpdatedRaw, sha256: manifestSha256, error: manifestError } = loadManifest(copilotHome, flags.workspace, { home: flags.harnessHome || flags.home });
   const manifestUpdated = manifestStamp(manifestUpdatedRaw);
   const indexDir = resolveIndexDir(copilotHome, flags.workspace, flags.harnessHome || flags.home);
   if (manifestError) {
@@ -800,7 +794,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
       pass: enrichedCount / manifestEntries.length >= MIN_ENRICHED_RATIO,
       hint: 'Run: ae index — rebuilds symptom, module, trigger, summary, and excerpt from solution files',
     });
-    const indexFresh = fs.existsSync(path.join(indexDir, 'meta.json')) && !isIndexStale(indexDir, manifestUpdated);
+    const indexFresh = fs.existsSync(path.join(indexDir, 'meta.json')) && !isIndexStale(indexDir, manifestUpdated, manifestSha256);
     checks.push({
       id: 'H11',
       name: 'BM25 postings index fresh',
@@ -814,8 +808,9 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   checks.push({
     id: 'H12',
     name: 'Harness CLI resolvable',
-    pass: Boolean(resolved.bin),
-    hint: resolved.bin
+    pass: customizationOnly || Boolean(resolved.bin),
+    ...(customizationOnly ? { status: 'n/a', optional: true } : {}),
+    hint: customizationOnly ? 'n/a — IntelliJ installation provides customizations; use a separately installed CLI for Harness commands' : resolved.bin
       ? `Resolved via ${resolved.source}: ${resolved.bin}`
       : 'Run: ae install, then init-repo (creates .harness/run.mjs)',
   });
@@ -844,8 +839,9 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   checks.push({
     id: 'H14',
     name: 'Lifecycle hooks bundle',
-    pass: fs.existsSync(hooksJson),
-    hint: 'Re-run ae install to sync hooks/',
+    pass: customizationOnly || fs.existsSync(hooksJson),
+    ...(customizationOnly ? { status: 'n/a' } : {}),
+    hint: customizationOnly ? 'n/a — copied scripts do not establish native IntelliJ hook support' : 'Re-run ae install to sync hooks/',
     optional: true,
   });
 
@@ -854,17 +850,19 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   checks.push({
     id: 'H15',
     name: 'Global ae shim (~/.copilot/bin/ae)',
-    pass: fs.existsSync(shim),
-    hint: 'Run: ae install (creates ~/.copilot/bin/ae)',
-    optional: cliResolvable && !fs.existsSync(shim),
+    pass: customizationOnly || fs.existsSync(shim),
+    ...(customizationOnly ? { status: 'n/a' } : {}),
+    hint: customizationOnly ? 'n/a — IntelliJ customization installation does not install a CLI shim' : 'Run: ae install (creates ~/.copilot/bin/ae)',
+    optional: customizationOnly || cliResolvable && !fs.existsSync(shim),
   });
 
   const onPath = Boolean(findHarnessOnPath());
   checks.push({
     id: 'H16',
     name: 'ae on PATH',
-    pass: onPath,
-    hint: 'Run: ae install --configure-path  (or add ~/.copilot/bin to PATH)',
+    pass: customizationOnly || onPath,
+    ...(customizationOnly ? { status: 'n/a' } : {}),
+    hint: customizationOnly ? 'n/a — the native IntelliJ customization path does not require the CLI on PATH' : 'Run: ae install --configure-path  (or add ~/.copilot/bin to PATH)',
     optional: true,
   });
 
@@ -910,7 +908,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   const enforced = effectivePolicy?.enforcement === 'enforce';
   checks.push({
     id: 'P0',
-    name: effectivePolicy ? `Installed effective policy: ${effectivePolicy.enforcement}` : 'Installed effective policy',
+    name: effectivePolicy ? `${customizationOnly ? 'Configured CLI' : 'Installed effective'} policy: ${effectivePolicy.enforcement}` : 'Installed effective policy',
     pass: !policyError && enforced,
     hint: policyError
       ? policyError
@@ -918,24 +916,26 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
         ? `${effectivePolicy.enforcementSource}; critical=${effectivePolicy.rules.critical}; destructive=${effectivePolicy.rules.destructive}`
         : `Effective enforcement is ${effectivePolicy.enforcement} (${effectivePolicy.enforcementSource}). Doctor fails until enforcement is enforce.`,
     ...(effectivePolicy ? { policy: effectivePolicy } : {}),
+    ...(customizationOnly ? { optional: true } : {}),
   });
   checks.push(...knowledgeChecks({ workspace, copilotHome }));
   checks.push(...structuralChecks({ workspace }));
 
-  if (flags.host === 'vscode') {
+  if (target === 'vscode' || target === 'cli') {
     checks.push(
-      ...(await vscodeChecks({
+      ...(await installedHookChecks({
         copilotHome,
-        settingsPaths: vscodeSettingsPaths || resolveVSCodeSettingsPaths(),
+        target,
+        settingsPaths: target === 'vscode' ? vscodeSettingsPaths || resolveVSCodeSettingsPaths() : [],
       }))
     );
-  } else if (flags.host) {
-    checks.push({
-      id: 'V0',
-      name: `Unsupported doctor host: ${flags.host}`,
-      pass: false,
-      hint: 'Supported host: vscode',
-    });
+  } else if (customizationOnly) {
+    checks.push({ id: 'T1', name: 'IntelliJ native lifecycle enforcement', pass: false, status: 'unavailable', optional: true,
+      hint: 'JetBrains custom agents and skills do not supply native lifecycle hooks. Use the supported CLI or VS Code surface when hook enforcement is required.' });
+    checks.push({ id: 'T2', name: 'IntelliJ global instructions installed', pass: fs.existsSync(path.join(copilotHome, 'global-copilot-instructions.md')),
+      hint: 'Run: ae install --target intellij; enable global customizations in the selected IDE' });
+  } else if (target) {
+    checks.push({ id: 'V0', name: `Unsupported doctor host: ${target}`, pass: false, hint: 'Supported hosts: vscode, cli, intellij' });
   }
 
   if (typeof flags.adapter === 'string' && flags.adapter) {

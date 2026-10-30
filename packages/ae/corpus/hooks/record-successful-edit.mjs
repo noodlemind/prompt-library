@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { writeHookEvent } from './lib/events.mjs';
 import { readSessionState, writeSessionState } from './lib/session-state.mjs';
-import { activatedSkillFromPayload, normalizeToolPayload, toolMutationSucceeded } from './lib/tool-payload.mjs';
+import { normalizeToolPayload, toolMutationSucceeded } from './lib/tool-payload.mjs';
+import { readSkillActivation } from './lib/skill-activation.mjs';
 
 const startedAt = Date.now();
 
@@ -21,7 +22,8 @@ try {
 
 const normalized = normalizeToolPayload(payload);
 const success = toolMutationSucceeded(payload);
-const activatedSkill = activatedSkillFromPayload(payload);
+const activation = readSkillActivation(payload);
+const activatedSkill = activation?.skill;
 if (success && activatedSkill) {
   const session = readSessionState(normalized.workspace) || {};
   const activatedAt = new Date().toISOString();
@@ -37,7 +39,8 @@ if (success && activatedSkill) {
       [activatedSkill]: {
         sessionId: normalized.sessionId || null,
         activatedAt,
-        complete: payload.tool_response?.truncated === false || ['read_skill', 'readSkill'].includes(normalized.toolName),
+        complete: true,
+        source: activation.source,
       },
     },
   });
