@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,6 +38,36 @@ function isTracked(rel) {
   const out = execFileSync('git', ['-C', repoRoot, 'ls-files', '--', rel], { encoding: 'utf8' }).trim();
   return out.length > 0;
 }
+
+test('doctor procedure preserves the selected target and distinguishes unselected native support', () => {
+  const skill = read('packages/ae/corpus/skills/harness-doctor/SKILL.md');
+  assert.match(skill, /--target <selected-target>/);
+  assert.match(skill, /vscode.*cli.*intellij/);
+  assert.match(skill, /selected.*homes/i);
+  assert.match(skill, /target is unknown[\s\S]*without `--target`/i);
+  assert.doesNotMatch(skill, /`ae doctor[^`]*--host vscode[^`]*`/);
+  assert.match(skill, /IntelliJ[\s\S]*native lifecycle hooks.*unavailable/i);
+});
+
+test('agent exit guidance preserves actual usage refusals and command-specific advisories', () => {
+  const contract = read('packages/ae/corpus/skills/references/harness-tool-contract.md');
+  assert.doesNotMatch(contract, /\| `2` \| Warn.*may proceed/i);
+  assert.match(contract, /`2`[^\n]*[Uu]sage.*E_USAGE/);
+  assert.match(contract, /nonzero[^.]*never[^.]*authority/i);
+  assert.match(contract, /command-specific[^.]*advisory/i);
+  assert.match(contract, /stderr/);
+  for (const args of [['status', '--bogus'], ['install', '--target', 'codex']]) {
+    const result = spawnSync(process.execPath, [path.join(repoRoot, 'packages/ae/bin/ae.mjs'), ...args, '--json', '--no-events'], {
+      cwd: repoRoot, encoding: 'utf8', timeout: 10_000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 2);
+    const error = JSON.parse(result.stderr);
+    assert.equal(error.ok, false);
+    assert.equal(error.error.code, 'E_USAGE');
+    assert.equal(result.stdout, '', 'refused commands do not emit successful output');
+  }
+});
 
 test('canonical concept doc defines task modes, ownership, gap handling, and runtime modes', () => {
   const model = read(architecturePath);
