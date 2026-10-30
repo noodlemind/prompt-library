@@ -11,7 +11,7 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const bridge = path.join(packageRoot, 'lib/hosts/native-hook.mjs');
 
 function fixture(t, configName = 'config home') {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ae-native-hook-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ae-native-hook-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const workspace = path.join(root, 'product'), configHome = path.join(root, configName), skillsHome = path.join(root, 'skills'), home = path.join(root, 'state');
   fs.mkdirSync(workspace); fs.mkdirSync(configHome);
@@ -24,13 +24,19 @@ function fixture(t, configName = 'config home') {
   return { root, workspace, configHome, skillsHome, home, run };
 }
 
-test('native hook configuration uses each host dialect and preserves selected roots', () => {
-  const roots = { configHome: '/tmp/native config', skillsHome: '/tmp/native skills', home: '/tmp/ae state', packageRoot };
+test('native hook configuration uses each host dialect and preserves selected roots', t => {
+  const { configHome, skillsHome, home } = fixture(t);
+  const roots = { configHome, skillsHome, home, packageRoot };
+  const commandSource = command => process.platform === 'win32'
+    ? Buffer.from(command.match(/-EncodedCommand ([A-Za-z0-9+/=]+)$/)[1], 'base64').toString('utf16le')
+    : command;
   for (const host of ['claude-code', 'codex']) {
     const result = nativeHookConfig({ host, ...roots });
     assert.equal(result.path, host === 'codex' ? 'hooks.json' : 'settings.json');
-    assert.ok(result.value.hooks.PreToolUse[0].hooks[0].command.includes('--skills-home'));
-    assert.ok(result.value.hooks.PreToolUse[0].hooks[0].command.includes('--ae-home'));
+    const source = commandSource(result.value.hooks.PreToolUse[0].hooks[0].command);
+    assert.ok(source.includes('--skills-home'));
+    assert.ok(source.includes('--ae-home'));
+    for (const root of [configHome, skillsHome, home]) assert.ok(source.includes(root));
     assert.ok(result.value.hooks.Stop);
     assert.equal(result.value.trust, undefined);
   }
@@ -38,7 +44,7 @@ test('native hook configuration uses each host dialect and preserves selected ro
   assert.equal(cursor.value.version, 1);
   assert.equal(cursor.value.hooks.preToolUse[0].failClosed, true);
   assert.equal(cursor.value.hooks.preToolUse[0].hooks, undefined);
-  assert.ok(cursor.value.hooks.stop[0].command.includes('--event'));
+  assert.ok(commandSource(cursor.value.hooks.stop[0].command).includes('--event'));
   assert.throws(() => nativeHookConfig({ host: 'unknown', ...roots }), /Unsupported native host/);
 });
 

@@ -13,7 +13,7 @@ function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-plugin-package-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   execFileSync('git', ['init', '--quiet', root]);
-  return root;
+  return fs.realpathSync.native(root);
 }
 const file = (result, rel) => result.files.find(item => item.path === rel)?.content;
 
@@ -29,7 +29,7 @@ test('portable package uses published matching schemas and binds MCP to the requ
   const server = mcp.mcpServers.ae;
   assert.equal(server.type, 'stdio');
   assert.equal(server.command, 'ae');
-  assert.deepEqual(server.args, ['mcp', 'serve', '--workspace', fs.realpathSync(workspace), '--copilot-home', '${PLUGIN_ROOT}', '--skills-home', '${PLUGIN_ROOT}/skills']);
+  assert.deepEqual(server.args, ['mcp', 'serve', '--workspace', fs.realpathSync.native(workspace), '--copilot-home', '${PLUGIN_ROOT}', '--skills-home', '${PLUGIN_ROOT}/skills']);
   assert.equal(server.cwd, undefined);
   assert.equal(server.env, undefined);
   assert.equal(manifest.extensions, undefined);
@@ -78,7 +78,7 @@ test('package generation rejects ambiguous or nonexistent workspaces instead of 
   const workspace = fixture(t);
   fs.mkdirSync(path.join(workspace, 'src'));
   const result = buildPluginPackage({ packageRoot, workspace: path.join(workspace, 'src') });
-  assert.equal(JSON.parse(file(result, 'mcp.json')).mcpServers.ae.args[3], fs.realpathSync(workspace));
+  assert.equal(JSON.parse(file(result, 'mcp.json')).mcpServers.ae.args[3], fs.realpathSync.native(workspace));
   assert.throws(() => buildPluginPackage({ packageRoot, workspace: '.' }), /absolute.*Git workspace/i);
   assert.throws(() => buildPluginPackage({ packageRoot, workspace: path.join(workspace, 'missing') }), /Git workspace/i);
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-plugin-outside-'));
