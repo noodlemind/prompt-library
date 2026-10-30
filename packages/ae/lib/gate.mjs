@@ -298,7 +298,7 @@ export function publishGateSession({ workspace, plan = null, result, policy, dry
   }
   const previous = readSession(recordRoot) || {};
   const passed = result.pass && result.exitCode === 0;
-  const snapshot = passed ? configuredCheckSnapshot(workspace) : null;
+  const snapshot = passed ? configuredCheckSnapshot(workspace, { home: planTrustHome(workspace, plan) }) : null;
   if (passed && snapshot.error) throw new Error(snapshot.error);
   const written = writeSession(recordRoot, {
     ...previous,

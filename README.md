@@ -27,6 +27,13 @@ Select `@engineer` in Copilot Chat.
 
 New installations use `~/.ae/projects/<repo-id>/` for plans and private solutions. Existing populated `~/.harness` homes remain discoverable. `--ae-home <path>` selects a root for one command; `AE_HOME` selects it for all processes. To copy an existing root with a backup, use `ae migrate --from-home ~/.harness --ae-home ~/.ae`, starting with `--dry-run`.
 
+`ae init-repo` defaults to private project configuration.
+`ae init-repo --shared` explicitly publishes team policy and checks under
+`.github/harness/` for review and commit. Existing shared configuration stays
+selected. Runtime files use Git-local excludes; each teammate retains their
+own installation and approval.
+
+
 ## Recorded formal diagrams
 
 `ae diagrams formal --file <formal-verification.json> --model <Module.tla> --json`

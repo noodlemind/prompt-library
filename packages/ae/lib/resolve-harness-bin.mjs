@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { findHarnessOnPath, globalHarnessShimPath, INSTALL_FIX_HINT } from './global-bin.mjs';
 import { runtimeSetting } from '../corpus/hooks/lib/runtime-identity.mjs';
+import { assertNoSymlinkAncestors, readFileNoFollow, writeFileContained } from './fs-safe.mjs';
 
 const HARNESS_REL = path.join('packages', 'ae', 'bin', 'ae.mjs');
 const NM_REL = path.join('node_modules', 'ae-harness', 'bin', 'ae.mjs');
@@ -15,9 +16,10 @@ export function resolveHarnessBin({ workspace = process.cwd(), copilotHome } = {
   if (override) {
     const envBin = path.resolve(override);
     tried.push({ source: 'HARNESS_BIN', path: envBin });
-    if (fs.existsSync(envBin)) {
-      return { bin: envBin, source: 'HARNESS_BIN', tried, globalShim: null, onPath: false };
-    }
+    try {
+      if (fs.statSync(envBin).isFile()) return { bin: envBin, source: 'HARNESS_BIN', tried, globalShim: null, onPath: false };
+    } catch {}
+    return { bin: null, source: 'HARNESS_BIN', tried, globalShim: null, onPath: false, error: 'The explicitly selected AE_BIN/HARNESS_BIN runtime is unavailable' };
   }
 
   const shim = globalHarnessShimPath(home);
@@ -78,10 +80,9 @@ export function agentHarnessCommand(resolved) {
   return `node "${resolved.bin}"`;
 }
 
-export const RUNNER_VERSION = 7;
+export const RUNNER_VERSION = 8;
 
 export function harnessRunnerSource() {
-  const home = os.homedir().replace(/\\/g, '/');
   return `#!/usr/bin/env node
 /**
  * Workspace harness runner — delegates to globally installed harness.
@@ -105,7 +106,17 @@ function whichHarness() {
     for (const name of names) {
       const candidate = path.join(dir, name);
       try {
-        if (fs.statSync(candidate).isFile()) return candidate;
+        if (!fs.statSync(candidate).isFile()) continue;
+        if (process.platform === 'win32' && name.endsWith('.cmd')) {
+          // npm's command shim is a batch file, not a spawnable executable.
+          // Run its standard package entry directly; never enable a shell.
+          const entry = path.join(dir, 'node_modules', 'ae-harness', 'bin', 'ae.mjs');
+          if (fs.statSync(entry).isFile()) return { cmd: process.execPath, args: [entry], mode: 'npm-path' };
+          continue;
+        }
+        if (name.endsWith('.mjs')) return { cmd: process.execPath, args: [candidate], mode: 'path' };
+        if (process.platform !== 'win32') fs.accessSync(candidate, fs.constants.X_OK);
+        return { cmd: candidate, args: [], mode: 'path' };
       } catch {
         // This PATH entry does not contain the shim.
       }
@@ -122,15 +133,20 @@ function resolveTarget() {
     process.exit(2);
   }
   const override = canonical || legacy;
-  if (override && fs.existsSync(override)) {
-    return { cmd: process.execPath, args: [override], mode: 'HARNESS_BIN' };
+  if (override) {
+    const selected = path.resolve(override);
+    try {
+      if (fs.statSync(selected).isFile()) return { cmd: process.execPath, args: [selected], mode: 'AE_BIN' };
+    } catch {}
+    console.error('[x] E_NO_HARNESS_BIN: selected AE_BIN/HARNESS_BIN is not a readable runtime file');
+    process.exit(1);
   }
   const shim = path.join(COPILOT_HOME, 'bin', 'ae');
   if (fs.existsSync(shim)) return { cmd: process.execPath, args: [shim], mode: 'global-shim' };
   const runtime = path.join(COPILOT_HOME, '.ae-bin', 'bin', 'ae.mjs');
   if (fs.existsSync(runtime)) return { cmd: process.execPath, args: [runtime], mode: 'global-runtime' };
   const onPath = whichHarness();
-  if (onPath) return { cmd: onPath, args: [], mode: 'path' };
+  if (onPath) return onPath;
   return null;
 }
 
@@ -174,30 +190,47 @@ const result = spawnSync(target.cmd, spawnArgs, {
   cwd: workspace,
   env: process.env,
 });
+if (result.error || result.signal) {
+  console.error('[x] E_RUNTIME_START: ' + (result.error?.code || result.signal));
+  console.error('  -> fix   ' + ${JSON.stringify(INSTALL_FIX_HINT)});
+}
 process.exit(result.status ?? 1);
 `;
 }
 
+export function workspaceRunnerStatus(workspace) {
+  const rel = path.join('.harness', 'run.mjs');
+  const runnerPath = path.join(workspace, rel);
+  if (!assertNoSymlinkAncestors(workspace, rel)) return { path: runnerPath, state: 'unsafe' };
+  let stat;
+  try { stat = fs.lstatSync(runnerPath); }
+  catch (error) { return { path: runnerPath, state: error.code === 'ENOENT' ? 'missing' : 'unsafe' }; }
+  if (!stat.isFile() || stat.isSymbolicLink()) return { path: runnerPath, state: 'unsafe' };
+  const source = readFileNoFollow(runnerPath, { root: workspace, maxBytes: 64 * 1024 });
+  if (source === null) return { path: runnerPath, state: 'unsafe' };
+  const markers = [...source.matchAll(/^\s*\*\s+@harness-runner-version ([1-9][0-9]*)\s*$/gm)];
+  if (markers.length !== 1) return { path: runnerPath, state: 'custom' };
+  const version = Number(markers[0][1]);
+  return { path: runnerPath, version, state: version > RUNNER_VERSION ? 'newer' : source === harnessRunnerSource() ? 'current' : 'stale' };
+}
+
 export function writeHarnessRunner(workspace, dryRun) {
-  const dir = path.join(workspace, '.harness');
-  const runnerPath = path.join(dir, 'run.mjs');
-  let stale = true;
-  const existedBefore = fs.existsSync(runnerPath);
-  if (existedBefore) {
-    const existing = fs.readFileSync(runnerPath, 'utf8');
-    stale = !existing.includes(`@harness-runner-version ${RUNNER_VERSION}`);
+  const { path: runnerPath, state } = workspaceRunnerStatus(workspace);
+  if (state === 'unsafe' || state === 'custom') {
+    throw Object.assign(new Error(`refusing to replace an unsafe or unrelated runner at ${runnerPath}`), {
+      code: 'E_TARGET', exit: 1, hint: 'inspect and preserve the existing path; use the installed ae command directly or move the conflicting custom runner before initialization',
+    });
   }
-  if (existedBefore && !stale && !process.env.HARNESS_FORCE_RUNNER) {
+  if (state === 'newer') {
+    throw Object.assign(new Error(`workspace runner requires a newer AE installation: ${runnerPath}`), {
+      code: 'E_RUNNER_NEWER', exit: 1, hint: 'upgrade the selected AE installation before regenerating this runner',
+    });
+  }
+  if (state === 'current') {
     return { path: runnerPath, created: false, updated: false };
   }
-  if (!dryRun) {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(runnerPath, harnessRunnerSource(), 'utf8');
-    try {
-      fs.chmodSync(runnerPath, 0o755);
-    } catch {
-      /* windows */
-    }
+  if (!dryRun && !writeFileContained(workspace, path.join('.harness', 'run.mjs'), harnessRunnerSource(), { mode: 0o755, exclusive: state === 'missing' })) {
+    throw Object.assign(new Error(`runner target is unsafe or unavailable: ${runnerPath}`), { code: 'E_TARGET', exit: 1 });
   }
-  return { path: runnerPath, created: !existedBefore, updated: existedBefore && stale };
+  return { path: runnerPath, created: state === 'missing', updated: state === 'stale' };
 }

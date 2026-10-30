@@ -90,7 +90,7 @@ test('VS Code doctor proves discovery, gate, post-tool, and completion behavior'
   fs.cpSync(sourceHooks, path.join(assetsRoot, 'hooks'), { recursive: true });
   syncAssetsToTarget(assetsRoot, copilotHome, { dryRun: false, preserveKnowledge: true, verbose: false }, () => {});
   const settingsPath = path.join(tempDir('harness-vscode-'), 'settings.json');
-  fs.writeFileSync(settingsPath, JSON.stringify(mergeVSCodeSettings({})));
+  fs.writeFileSync(settingsPath, JSON.stringify(mergeVSCodeSettings({}, { copilotHome })));
 
   const result = await runDoctor({
     copilotHome,

@@ -302,7 +302,7 @@ test('existing skills own structured findings, proportional plans, and primitive
     'security or concurrency',
     'unclear verification',
   ]) assert.match(ensure, new RegExp(phrase, 'i'), `fast plan missing ${phrase}`);
-  assert.match(ensure, /read `.github\/harness\/checks\.yaml`[\s\S]{0,180}never invent/i);
+  assert.match(ensure, /read the selected check source[\s\S]{0,180}ae checks list --json[\s\S]{0,180}never invent/i);
   assert.match(ensure, /schema-validation[\s\S]{0,100}no schema output/i);
   assert.match(ensure, /ae plan-update/);
 
@@ -599,15 +599,13 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
 
   const workflow = read('.github/workflow-templates/harness-plan-verification.yml');
   assert.match(workflow, /validate-plan --plan/);
-  assert.match(workflow, /gate --phase implement --plan/);
-  assert.match(workflow, /verify --plan/);
+  assert.doesNotMatch(workflow, /ae (?:gate|verify|trust approve)\b/);
   assert.match(workflow, /upload-artifact@v4/);
-  assert.match(workflow, /HARNESS_ENFORCEMENT/);
-  assert.match(workflow, /exactly one/i);
-  assert.match(workflow, /plan_candidates/);
-  assert.match(workflow, /\[\[ -f "\$candidate" \]\]/);
-  assert.match(workflow, /steps\.plan\.outcome == 'success'/);
-  assert.ok(workflow.includes("^docs/plans/[0-9]{4}-[0-9]{2}-[0-9]{2}[^/]*\\.md$"));
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /plan_path:/);
+  assert.match(workflow, /No delivery proof/i);
+  assert.match(workflow, /private plans/i);
+  assert.match(workflow, /persist-credentials: false/);
 
   const policy = YAML.parse(read('.github/harness/policy.yaml'));
   assert.equal(policy.version, 1);
@@ -947,9 +945,9 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   }
 
   const workflow = read('.github/workflow-templates/harness-plan-verification.yml');
-  assert.match(workflow, /HARNESS_VERSION:\?Harness version must be configured/i);
-  assert.match(workflow, /base_sha:/i);
-  assert.doesNotMatch(workflow, /grep -Ev ['"]\^\(docs\/plans\/\|docs\/\|\\\.github\/\)/);
+  assert.match(workflow, /archive_sha256:/i);
+  assert.match(workflow, /sha256sum --check/i);
+  assert.doesNotMatch(workflow, /pull_request:|pull_request_target:/);
 
   const checks = YAML.parse(read('.github/harness/checks.yaml'));
   assert.match(checks.checks['prompt-contracts'].command.join(' '), /prompt-library-contracts\.test\.mjs/);
@@ -966,8 +964,8 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(concept, /reviews:\s*\n\s+required:[\s\S]*completed:[\s\S]*critical_open:/);
 
   const packageReadme = read('packages/ae/README.md');
-  assert.match(packageReadme, /\$PLAN[^\n]*single plan resolved from the PR/i);
-  assert.match(packageReadme, /\$BASE_SHA[^\n]*PR base SHA/i);
+  assert.match(packageReadme, /manual[^\n]*diagnostic/i);
+  assert.match(packageReadme, /private plans/i);
 
   assert.match(read('packages/ae/corpus/skills/references/harness-tool-contract.md'), /ae help <command>/);
   assert.match(read(architecturePath), /bounded delegation/i);

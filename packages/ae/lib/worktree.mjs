@@ -5,7 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { readGitArgs } from '../corpus/hooks/lib/product-diff.mjs';
 import { EXIT } from './style.mjs';
 import { deriveGitContext, resolveDefaultBranch } from './git-context.mjs';
-import { appendFileContained, readFileNoFollow, writeFileContained } from './fs-safe.mjs';
+import { readFileNoFollow, writeFileContained } from './fs-safe.mjs';
+import { ensureLocalGitExclude } from './git-local-exclude.mjs';
 import { externalPlansDir, SESSION_PLANS_REL, WORKSPACE_PLANS_REL } from './project-layout.mjs';
 import { linkedPrimaryCheckout } from './knowledge/store.mjs';
 import { withPlanUpdateLock } from './plan-update.mjs';
@@ -45,26 +46,8 @@ function originDefaultName(workspace) {
 }
 
 function ensureWorktreeIgnore(root) {
-  const rel = '.gitignore';
-  const gitignore = path.join(root, rel);
-  const line = '.worktrees\n';
-  let stat = null;
-  try {
-    stat = fs.lstatSync(gitignore);
-  } catch {
-    stat = null;
-  }
-  if (stat?.isSymbolicLink()) return;
-  if (!stat) {
-    writeFileContained(root, rel, line);
-    return;
-  }
-  if (!stat.isFile()) return;
-  const text = readFileNoFollow(gitignore, { root });
-  if (text == null) return;
-  const lines = text.split(/\r?\n/);
-  if (lines.some((entry) => entry === '.worktrees' || entry === '.worktrees/')) return;
-  appendFileContained(root, rel, line, { newlineGuard: true });
+  const local = ensureLocalGitExclude(root, ['/.worktrees/']);
+  if (!local?.git) throw usage('worktree: Git-local exclude metadata is unsafe or unavailable; inspect info/exclude before retrying');
 }
 
 function carryCheckoutPlans(primary, dest) {

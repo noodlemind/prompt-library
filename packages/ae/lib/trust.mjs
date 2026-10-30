@@ -9,6 +9,8 @@ import { runtimeSetting } from '../corpus/hooks/lib/runtime-identity.mjs';
 import { aeWorktreePrimary } from './worktree.mjs';
 import { withPlanUpdateLock } from './plan-update.mjs';
 
+import { resolveProjectAuthority } from './project-authority.mjs';
+
 export const TRUST_SCHEMA_VERSION = 1;
 
 export const PINNED_FILES = Object.freeze([
@@ -55,19 +57,24 @@ export function projectIdentity(workspace) {
   return { root, id: crypto.createHash('sha256').update(root).digest('hex').slice(0, 16) };
 }
 
-export function policyDigest(workspace, files = PINNED_FILES) {
+export function policyDigest(workspace, files = PINNED_FILES, options) {
   const hash = crypto.createHash('sha256');
-  let root;
-  try { root = canonicalPath(path.resolve(workspace)); } catch { return null; }
+  let root, authority;
+  try {
+    root = canonicalPath(path.resolve(workspace));
+    authority = resolveProjectAuthority(root, options);
+  } catch { return null; }
+  // Preserve existing shared approvals; local authority has a distinct identity.
+  if (authority.mode === 'local') hash.update(`local-authority-v1\0${authority.directory}\0`);
   for (const rel of files) {
-    const full = path.join(root, rel);
+    const full = path.join(authority.directory, path.basename(rel));
     hash.update(rel);
     try {
-      if (!assertNoSymlinkAncestors(root, rel)) return null;
+      if (!assertNoSymlinkAncestors(authority.root, path.relative(authority.root, full))) return null;
       hash.update('\0present\0');
       const stat = fs.lstatSync(full, { throwIfNoEntry: false });
       if (!stat) { hash.update('\0absent\0'); continue; }
-      const content = readFileNoFollow(full, { root, maxBytes: 1024 * 1024, encoding: null });
+      const content = readFileNoFollow(full, { root: authority.root, maxBytes: 1024 * 1024, encoding: null });
       if (content === null) return null;
       hash.update(content);
     } catch { return null; }
@@ -75,18 +82,18 @@ export function policyDigest(workspace, files = PINNED_FILES) {
   return hash.digest('hex');
 }
 
-function routingFilePresent(workspace) {
-  try { return Boolean(fs.lstatSync(path.join(workspace, '.github', 'harness', 'routing.yaml'), { throwIfNoEntry: false })); }
+function routingFilePresent(workspace, options) {
+  try { return Boolean(fs.lstatSync(resolveProjectAuthority(workspace, options).files['routing.yaml'], { throwIfNoEntry: false })); }
   catch { return true; }
 }
 
 /** Current digest, or the pre-routing digest when that file is still absent. */
-export function digestMatchesApproval(recordDigest, workspace) {
+export function digestMatchesApproval(recordDigest, workspace, options) {
   if (!recordDigest) return false;
-  const current = policyDigest(workspace);
+  const current = policyDigest(workspace, PINNED_FILES, options);
   if (!current) return false;
   if (recordDigest === current) return true;
-  if (!routingFilePresent(workspace) && recordDigest === policyDigest(workspace, LEGACY_PINNED_FILES)) return true;
+  if (!routingFilePresent(workspace, options) && recordDigest === policyDigest(workspace, LEGACY_PINNED_FILES, options)) return true;
   return false;
 }
 
@@ -148,13 +155,13 @@ function writeStore({ copilotHome, home } = {}, store) {
   return written;
 }
 
-function approvalState(record, workspace, store) {
+function approvalState(record, workspace, store, options) {
   if (store.unreadable) return { state: 'untrusted', reason: 'the trust store could not be read, so nothing is trusted' };
   if (record?.status === 'conflict') return { state: 'untrusted', reason: 'conflicting approvals for this project require a new approval' };
   if (record?.status === 'revoked') return { state: 'revoked', reason: 'trust was explicitly revoked' };
-  if (policyDigest(workspace) === null) return { state: 'untrusted', reason: 'a pinned policy source is unreadable, unsafe, nonregular or larger than 1 MiB' };
+  if (policyDigest(workspace, PINNED_FILES, options) === null) return { state: 'untrusted', reason: 'a pinned policy source is unreadable, unsafe, nonregular or larger than 1 MiB' };
   if (record?.status === 'trusted') {
-    if (digestMatchesApproval(record.digest, workspace)) return { state: 'trusted', reason: `approved ${record.approvedAt}` };
+    if (digestMatchesApproval(record.digest, workspace, options)) return { state: 'trusted', reason: `approved ${record.approvedAt}` };
     return { state: 'stale', reason: 'the policy files have changed since this project was approved' };
   }
   return { state: 'untrusted', reason: 'this project has never been approved' };
@@ -182,8 +189,9 @@ export function trustStatus({ workspace, copilotHome, home }) {
   const identity = projectIdentity(workspace);
   const store = readStore({ copilotHome, home });
   const record = projectApproval(store, identity);
-  const digest = policyDigest(workspace);
-  const own = approvalState(record, workspace, store);
+  const digest = policyDigest(workspace, PINNED_FILES, { home: home || harnessGlobalHome() });
+  const authorityOptions = { home: home || harnessGlobalHome() };
+  const own = approvalState(record, workspace, store, authorityOptions);
   let state = own.state;
   let reason = own.reason;
   let inherited = false;
@@ -197,7 +205,7 @@ export function trustStatus({ workspace, copilotHome, home }) {
       const primaryIdentity = projectIdentity(primary);
       const primaryRecord = projectApproval(store, primaryIdentity);
       inheritedFrom = primaryIdentity.root;
-      if (approvalState(primaryRecord, primary, store).state === 'trusted' && digestMatchesApproval(primaryRecord.digest, workspace)) {
+      if (approvalState(primaryRecord, primary, store, authorityOptions).state === 'trusted' && digestMatchesApproval(primaryRecord.digest, workspace, authorityOptions)) {
         state = 'trusted';
         inherited = true;
         reason = `inherited from trusted primary ${primaryIdentity.root}`;
@@ -224,7 +232,8 @@ export function trustStatus({ workspace, copilotHome, home }) {
     digest,
     approvedAt,
     approvedDigest,
-    pinned: [...PINNED_FILES],
+    pinned: (() => { try { return Object.values(resolveProjectAuthority(workspace, authorityOptions).files); } catch { return [...PINNED_FILES]; } })(),
+    authority: (() => { try { const selected = resolveProjectAuthority(workspace, authorityOptions); return { mode: selected.mode, directory: selected.directory }; } catch (error) { return { mode: 'unavailable', error: error.message }; } })(),
     store: trustStorePath({ copilotHome, home }),
   };
 }
@@ -245,7 +254,7 @@ export function approveProject({ workspace, copilotHome, home, now = new Date().
         hint: `inspect ${trustStorePath({ copilotHome, home })} by hand — overwriting it would silently discard every approval it holds`,
       });
     }
-    const digest = policyDigest(workspace);
+    const digest = policyDigest(workspace, PINNED_FILES, { home: home || harnessGlobalHome() });
     if (!digest) throw Object.assign(new Error('refusing to approve unreadable, unsafe, nonregular or oversized pinned policy sources'), { code: 'E_TARGET', exit: 1, hint: 'inspect the pinned files and restore bounded regular sources inside the project before approving' });
     store.version = TRUST_SCHEMA_VERSION;
     setProjectApproval(store, identity, { status: 'trusted', approvedAt: now, digest });

@@ -3,8 +3,14 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { nodeAuthority } from './authority-bin.mjs';
 import { PROOF_AUTHORITY_TIMEOUT_MS } from './proof-authority.mjs';
-import { harnessHome } from './external-plans.mjs';
+import { harnessHome, projectStoreDir } from './external-plans.mjs';
 import { policySourceBinding, snapshotRel, validPolicySnapshot, readPolicySource } from './policy-snapshot.mjs';
+
+import { selectProjectAuthority } from './project-authority.mjs';
+
+function sourceBinding(workspace, home) {
+  return policySourceBinding(workspace, home, process.env.HARNESS_ENFORCEMENT, selectProjectAuthority(workspace, projectStoreDir(workspace, { home }), { home }));
+}
 
 export function loadHookPolicy(workspace, { ttlKey = 'gate_ttl_minutes', ttlDefault = 30, rule = 'plan' } = {}) {
   const safe = { enforcement: 'enforce', baseEnforcement: 'enforce', ttl: ttlDefault, source: 'safe-default', refreshFailed: true };
@@ -12,7 +18,7 @@ export function loadHookPolicy(workspace, { ttlKey = 'gate_ttl_minutes', ttlDefa
   let binding;
   let snapshot;
   try {
-    binding = policySourceBinding(workspace, home);
+    binding = sourceBinding(workspace, home);
     const full = path.join(home, snapshotRel(workspace));
     if (fs.lstatSync(path.dirname(full)).isSymbolicLink() || fs.lstatSync(full).isSymbolicLink()) return safe;
     snapshot = JSON.parse(readPolicySource(full)?.toString('utf8') || 'null');
@@ -26,7 +32,7 @@ export function loadHookPolicy(workspace, { ttlKey = 'gate_ttl_minutes', ttlDefa
     if (result.error || result.status !== 0) return safe;
     try {
       snapshot = JSON.parse(result.stdout);
-      binding = policySourceBinding(workspace, home);
+      binding = sourceBinding(workspace, home);
     } catch { return safe; }
     if (!validPolicySnapshot(snapshot, binding)) return safe;
   }

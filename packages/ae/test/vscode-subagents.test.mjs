@@ -50,7 +50,7 @@ test('install --configure-vscode writes the nested subagent setting and doctor V
   const settingsPath = path.join(userDir, 'settings.json');
   const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   assert.equal(settings[SETTING], true);
-  assert.equal(settings['chat.hookFilesLocations']['~/.copilot/hooks'], true);
+  assert.equal(settings['chat.hookFilesLocations'][path.join(copilot, 'hooks').replace(/\\/g, '/')], true);
 
   const doctor = spawnSync(process.execPath, [
     binPath, 'doctor', '--host', 'vscode', '--json',

@@ -9,7 +9,7 @@ import { loadPolicy } from './policy.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
 import { loadManifest } from './recall-rank.mjs';
-import { resolveHarnessBin, RUNNER_VERSION } from './resolve-harness-bin.mjs';
+import { resolveHarnessBin, RUNNER_VERSION, workspaceRunnerStatus } from './resolve-harness-bin.mjs';
 import { globalHarnessShimPath, findHarnessOnPath } from './global-bin.mjs';
 import { readLock } from './lock.mjs';
 import { planDigest } from './evidence.mjs';
@@ -17,7 +17,7 @@ import { loadPlan } from './plan-parse.mjs';
 import { runVerify } from './verify.mjs';
 import { approveProject } from './trust.mjs';
 import { readSession, writeSession } from './session.mjs';
-import { parseVSCodeSettings } from './vscode-settings.mjs';
+import { parseVSCodeSettings, vscodeCustomizationLocations } from './vscode-settings.mjs';
 import { harnessGlobalHome, resolveIntelliJHome, resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
 import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings, readSavedLearningFiles, matchingLocalStoreIds, carriedBytesDiffer } from './knowledge/store.mjs';
@@ -84,14 +84,14 @@ function loadInstalledHookConfig(hookRoot) {
   }
 }
 
-function vscodeDiscoveryConfigured(settingsPaths) {
+function vscodeDiscoveryConfigured(settingsPaths, copilotHome) {
   for (const settingsPath of settingsPaths) {
     if (!fs.existsSync(settingsPath)) continue;
     try {
       const settings = parseVSCodeSettings(fs.readFileSync(settingsPath, 'utf8'));
-      const hooks = settings['chat.hookFilesLocations']?.['~/.copilot/hooks'] === true;
+      const locations = Object.entries(vscodeCustomizationLocations(copilotHome)).every(([key, location]) => settings[key]?.[location] === true);
       const nested = settings['chat.subagents.allowInvocationsFromSubagents'] === true;
-      if (hooks && nested) return true;
+      if (locations && nested && settings['chat.useAgentSkills'] === true && settings['chat.customAgentInSubagent.enabled'] === true) return true;
     } catch {
       // A parseable-settings check is represented by this false result.
     }
@@ -350,7 +350,7 @@ async function installedHookChecks({ copilotHome, settingsPaths = [], target }) 
   return [
     { id: `${prefix}1`, name: `${host} hook bundle installed`, pass: installed, hint: `Run: ae install --target ${target}` },
     { id: `${prefix}2`, name: `${host} hook configuration and commands resolvable`, pass: Boolean(loaded.config), hint: loaded.error || 'Mechanical compatibility probe; actual native host discovery is unverified' },
-    ...(vscode ? [{ id: 'V3', name: 'VS Code user hook discovery configured', pass: vscodeDiscoveryConfigured(settingsPaths), hint: 'Run: ae install --configure-vscode — sets chat.hookFilesLocations and chat.subagents.allowInvocationsFromSubagents' }] : []),
+    ...(vscode ? [{ id: 'V3', name: 'VS Code user customization discovery configured', pass: vscodeDiscoveryConfigured(settingsPaths, copilotHome), hint: 'Run: ae install --target vscode --configure-vscode with the selected --copilot-home — sets agents, instructions, skills, chat.hookFilesLocations and chat.subagents.allowInvocationsFromSubagents' }] : []),
     { id: `${prefix}4`, name: `${host} compatible mutation payload recognized`, pass: Boolean(probe.recognized), hint: 'Inspect payload normalization and hook events' },
     { id: `${prefix}5`, name: 'Missing-gate mutation denied', pass: Boolean(probe.missingGateDenied), hint: 'Inspect PreToolUse policy output' },
     { id: `${prefix}6`, name: 'Gated scoped mutation allowed', pass: Boolean(probe.gatedAllowed), hint: 'Inspect plan gate and scope handling' },
@@ -620,7 +620,7 @@ function routingPolicyCheck(workspace) {
     pass: !invalid,
     optional: true,
     hint: loaded.missing
-      ? 'No .github/harness/routing.yaml — new plans record a skipped snapshot'
+      ? 'No routing.yaml in the selected project configuration — new plans record a skipped snapshot'
       : invalid
         ? loaded.errors.join('; ')
         : 'routing.yaml parsed',
@@ -804,7 +804,6 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   }
 
   const resolved = resolveHarnessBin({ workspace: flags.workspace, copilotHome });
-  const runnerPath = path.join(flags.workspace, '.harness', 'run.mjs');
   checks.push({
     id: 'H12',
     name: 'Harness CLI resolvable',
@@ -814,15 +813,9 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
       ? `Resolved via ${resolved.source}: ${resolved.bin}`
       : 'Run: ae install, then init-repo (creates .harness/run.mjs)',
   });
-    const runnerExists = fs.existsSync(runnerPath);
-  let runnerCurrent = false;
-  if (runnerExists) {
-    try {
-      runnerCurrent = fs.readFileSync(runnerPath, 'utf8').includes(`@harness-runner-version ${RUNNER_VERSION}`);
-    } catch {
-      // Unreadable — treat as not current; the hint's remedy rewrites it.
-    }
-  }
+  const runnerStatus = workspaceRunnerStatus(flags.workspace);
+  const runnerExists = runnerStatus.state !== 'missing';
+  const runnerCurrent = runnerStatus.state === 'current';
   checks.push({
     id: 'H13',
     name: 'Workspace harness runner',
@@ -831,7 +824,11 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
       ? 'Run: ae init-repo'
       : runnerCurrent
         ? `.harness/run.mjs is current (v${RUNNER_VERSION})`
-        : `.harness/run.mjs predates runner v${RUNNER_VERSION} — regenerate with: ae init-repo (or run ae upgrade from this workspace)`,
+        : runnerStatus.state === 'stale'
+          ? `.harness/run.mjs predates runner v${RUNNER_VERSION} or differs from its generated content — regenerate with: ae init-repo (or run ae upgrade from this workspace)`
+          : runnerStatus.state === 'newer'
+            ? '.harness/run.mjs requires a newer AE installation; upgrade the selected CLI before regenerating'
+            : '.harness/run.mjs is custom, unsafe or unreadable; preserve and inspect it, or use the installed ae command directly',
     optional: true,
   });
 

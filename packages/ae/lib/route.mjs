@@ -6,6 +6,7 @@ import { createStyle } from './style.mjs';
 import { loadPlan } from './plan-parse.mjs';
 import { parseImpactedFiles } from './plan-scope.mjs';
 import { isPrimitivePath } from './primitive-governance.mjs';
+import { projectAuthorityFile } from './project-authority.mjs';
 import { isProjectTrusted } from './trust.mjs';
 import {
   ID_RE,
@@ -174,7 +175,7 @@ export function primitiveReadRoots(copilotHome) {
 }
 
 export function routeWorkspace({ workspace, impacted, risk, domains, primitive, planLock, roots, copilotHome }) {
-  const policyPath = path.join(workspace, '.github', 'harness', 'routing.yaml');
+  const policyPath = projectAuthorityFile(workspace, 'routing.yaml').path;
   if (fs.existsSync(policyPath) && !isProjectTrusted({ workspace, copilotHome, home: process.env.HARNESS_HOME })) {
     return { ok: true, errors: [], snapshot: emptySnapshot('project is not trusted') };
   }

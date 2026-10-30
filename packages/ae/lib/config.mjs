@@ -5,6 +5,8 @@ import { EXIT } from './style.mjs';
 import { writeFileContained, readFileNoFollow, assertNoSymlinkAncestors, canonicalPath } from './fs-safe.mjs';
 import { DEFAULT_PROVIDER, PROVIDER_IDS } from './provider.mjs';
 
+import { projectAuthorityFile } from './project-authority.mjs';
+
 export const CONFIG_SCHEMA_VERSION = 1;
 
 export const AGENT_LIMITS = Object.freeze({
@@ -276,9 +278,9 @@ export const SCOPES = Object.freeze(['user', 'project']);
 /** Where each scope's file lives. Project sits beside policy.yaml and
  * checks.yaml, because a reader looking for harness configuration should find
  * all of it in one directory. */
-export function configPathFor(scope, { copilotHome, workspace }) {
+export function configPathFor(scope, { copilotHome, workspace, home }) {
   if (scope === 'user') return path.join(copilotHome, 'harness', 'config.yaml');
-  if (scope === 'project') return path.join(workspace, '.github', 'harness', 'config.yaml');
+  if (scope === 'project') return projectAuthorityFile(workspace, 'config.yaml', { home }).path;
   throw usageError(`unknown scope: ${scope}`, `scope must be one of: ${SCOPES.join(', ')}`);
 }
 
@@ -351,11 +353,18 @@ export function loadConfigFile(file, { root = path.dirname(file) } = {}) {
   return { exists: true, values, errors };
 }
 
-export function resolveConfig({ copilotHome, workspace, projectTrusted = true } = {}) {
+export function resolveConfig({ copilotHome, workspace, projectTrusted = true, home } = {}) {
   const userFile = configPathFor('user', { copilotHome, workspace });
-  const projectFile = configPathFor('project', { copilotHome, workspace });
+  let projectFile;
   const user = loadConfigFile(userFile, { root: copilotHome });
-  const project = loadConfigFile(projectFile, { root: workspace });
+  let project;
+  try {
+    const authority = projectAuthorityFile(workspace, 'config.yaml', { home });
+    projectFile = authority.path;
+    project = loadConfigFile(projectFile, { root: authority.root });
+  } catch (error) {
+    project = { exists: true, values: {}, errors: [error.message] };
+  }
 
   const values = {};
   const provenance = {};
@@ -420,7 +429,7 @@ export function resolveConfig({ copilotHome, workspace, projectTrusted = true } 
   };
 }
 
-export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
+export function setConfigValue({ scope, key, value, copilotHome, workspace, home }) {
   if (!SCOPES.includes(scope)) {
     throw usageError(`unknown scope: ${scope}`, `scope must be one of: ${SCOPES.join(', ')}`);
   }
@@ -428,8 +437,8 @@ export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
     throw usageError(`${key} is user-scoped`, 'use --scope user');
   }
   const coerced = coerceValue(key, value);
-  const file = configPathFor(scope, { copilotHome, workspace });
-  const existing = loadConfigFile(file, { root: scope === 'user' ? copilotHome : workspace });
+  const file = configPathFor(scope, { copilotHome, workspace, home });
+  const existing = loadConfigFile(file, { root: scope === 'user' ? copilotHome : projectAuthorityFile(workspace, 'config.yaml', { home }).root });
   if (existing.errors.length && existing.exists) {
         throw Object.assign(new Error(`refusing to write over a config with errors: ${existing.errors[0]}`), {
       code: 'E_TARGET',
@@ -439,7 +448,7 @@ export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
   }
 
   const merged = { version: CONFIG_SCHEMA_VERSION, ...existing.values, [key]: coerced };
-  const root = scope === 'user' ? copilotHome : workspace;
+  const root = scope === 'user' ? copilotHome : projectAuthorityFile(workspace, 'config.yaml', { home }).root;
   const rel = path.relative(root, file);
   const written = writeFileContained(root, rel, YAML.stringify(merged));
   if (!written) {
@@ -452,7 +461,7 @@ export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
   return { file: written, key, value: coerced, scope };
 }
 
-export function unsetConfigValue({ scope, keys, copilotHome, workspace }) {
+export function unsetConfigValue({ scope, keys, copilotHome, workspace, home }) {
   if (!SCOPES.includes(scope)) {
     throw usageError(`unknown scope: ${scope}`, `scope must be one of: ${SCOPES.join(', ')}`);
   }
@@ -462,8 +471,8 @@ export function unsetConfigValue({ scope, keys, copilotHome, workspace }) {
       throw usageError(`unknown config key: ${key}`, `known keys: ${CONFIG_KEYS.join(', ')}`);
     }
   }
-  const file = configPathFor(scope, { copilotHome, workspace });
-  const existing = loadConfigFile(file, { root: scope === 'user' ? copilotHome : workspace });
+  const file = configPathFor(scope, { copilotHome, workspace, home });
+  const existing = loadConfigFile(file, { root: scope === 'user' ? copilotHome : projectAuthorityFile(workspace, 'config.yaml', { home }).root });
   if (!existing.exists) return { file, keys: named, scope, removed: [] };
   if (existing.errors.length) {
     throw Object.assign(new Error(`refusing to write over a config with errors: ${existing.errors[0]}`), {
@@ -476,7 +485,7 @@ export function unsetConfigValue({ scope, keys, copilotHome, workspace }) {
   if (!removed.length) return { file, keys: named, scope, removed };
   const remaining = { ...existing.values };
   for (const key of removed) delete remaining[key];
-  const root = scope === 'user' ? copilotHome : workspace;
+  const root = scope === 'user' ? copilotHome : projectAuthorityFile(workspace, 'config.yaml', { home }).root;
   const written = writeFileContained(root, path.relative(root, file), YAML.stringify({ version: CONFIG_SCHEMA_VERSION, ...remaining }));
   if (!written) {
     throw Object.assign(new Error(`could not write ${file}`), {

@@ -202,11 +202,16 @@ function emptyObserved() {
 }
 
 function checksObservation(root) {
-  const rel = '.github/harness/checks.yaml';
-  const full = assertNoSymlinkAncestors(root, rel);
-  if (!full) return { path: path.join(root, rel), present: false, status: 'unsafe' };
-  const stat = fs.lstatSync(full, { throwIfNoEntry: false });
-  return { path: full, present: Boolean(stat?.isFile()), status: stat ? (stat.isFile() ? 'present' : 'nonregular') : 'missing' };
+  // This is advisory file presence, not effective policy or execution authority.
+  // Preserve the bounded repository metadata path without resolving private
+  // project configuration or performing another Git identity read.
+  const shared = path.join(root, '.github/harness/checks.yaml');
+  if (fs.lstatSync(shared, { throwIfNoEntry: false })) {
+    const full = assertNoSymlinkAncestors(root, '.github/harness/checks.yaml');
+    const stat = full && fs.lstatSync(full, { throwIfNoEntry: false });
+    return { path: shared, present: Boolean(stat?.isFile()), status: stat?.isFile() ? 'present' : 'unsafe' };
+  }
+  return { path: null, present: false, status: 'not-observed' };
 }
 
 function inspectRepo(repo, options = {}) {
@@ -222,8 +227,10 @@ function inspectRepoNow(repo, { normalizeIdentity = false, diagnostics = true } 
   const stat = fs.lstatSync(repo.root, { throwIfNoEntry: false });
   if (!stat) { warnings.push('Local root is missing; repository observation is unavailable.'); return result; }
   if (!stat.isDirectory()) throw failure(`repo ${repo.id} root is not a directory`);
-  result.checks = checksObservation(repo.root);
-  if (!result.checks.present) warnings.push(`Named checks file is ${result.checks.status}.`);
+  if (diagnostics) {
+    result.checks = checksObservation(repo.root);
+    if (!result.checks.present) warnings.push(`Named checks file is ${result.checks.status}.`);
+  }
   if (!assertNoSymlinkAncestors(repo.root, '.git')) throw failure(`repo ${repo.id} Git identity path is unsafe or symlinked`);
   const prefix = readGitArgs(repo.root, { timeout: GIT_TIMEOUT, env: gitEnvironment() });
   if (!prefix) { warnings.push('Git configuration metadata is unavailable or malformed.'); return result; }

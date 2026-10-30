@@ -62,26 +62,34 @@ npm pack
 `npm run check:repo` retains the repository contract tests and requires a full checkout. Source CI runs both checks and packs with lifecycle scripts enabled. Packaging does not require repository-only `.cursor/`, `.github/`, documentation, or test files.
 
 ```bash
-ae init-repo    # product repo stubs: plans, checks, policy
+ae init-repo    # private checks and policy; no product configuration diff
+ae init-repo --shared  # explicit team configuration to review and commit
 ae prepare      # starter docs/specs/overview.md and docs/adr/0000-architecture.md
 ae migrate      # move gitignored docs/plans and docs/solutions out of the product tree
 ```
 
-### Pin version (product repos)
+### Project setup and selected version
 
-```json
-{ "devDependencies": { "ae-harness": "0.13.0" } }
-```
+Personal configuration lives in `~/.ae/projects/<repo-id>/authority/`. Existing
+`.github/harness/` configuration remains selected. `ae init-repo --shared`
+publishes shared project configuration; commit the returned inventory as a
+reviewed setup change before product work. A teammate installs their own AE
+runtime and reviews the commands with their own local approval.
 
-Or root `.harness-version` with the same pin.
+`.harness/` contains private runtime artifacts, including its regenerated runner.
+Git-local excludes keep untracked runtime files out of product changes without
+rewriting the root `.gitignore`. Already-tracked artifacts remain tracked until
+the team explicitly migrates them.
 
-`$PLAN` is the single plan resolved from the PR; `$BASE_SHA` is the PR base SHA. The supplied workflow template sets both values.
+Check `ae --version` on each machine. The global runner does not read
+`.harness-version` or enforce a repository dependency pin. Install the chosen
+checkout or qualified archive deliberately; arbitrary version compatibility is
+not implied.
 
-```yaml
-- run: ae validate-plan --plan "$PLAN" --workspace . --json
-- run: ae gate --phase implement --plan "$PLAN" --workspace . --json
-- run: ae verify --plan "$PLAN" --base "$BASE_SHA" --enforcement enforce --workspace . --json
-```
+The supplied manual workflow template provides plan diagnostics using an
+explicit checksum-pinned archive and committed plan. It does not transfer local
+approvals, run product checks, or establish delivery completion. Private plans
+are unavailable on fresh CI until deliberately shared.
 
 ## Dual tracks
 
@@ -105,7 +113,7 @@ The optional `ae agent --profile deliver` loop enforces explicit orientation wit
 | `inventory show` / `inventory refresh --editor <family>` | Optional sourced local IDE snapshot in the selected Harness home |
 | `domain show --name <name>` | Read-only local membership and identity drift from an existing domain configuration |
 | `status` / `uninstall` | Version/lock; remove tracked files only |
-| `init-repo` | Plan/session paths + checks/policy stubs; migrates leftover gitignored `docs/` artifacts |
+| `init-repo` | Private project setup; `--shared` publishes reviewable team policy and checks |
 | `prepare` | Starter spec and ADR when those paths are missing; skips files that already exist |
 | `migrate` | Move gitignored `docs/plans` and `docs/solutions` to `.harness/plans` and `~/.ae/projects/<repo-id>/` |
 
@@ -315,7 +323,7 @@ Human lines: ledger rows (`✓` / `!` / `✗`; ASCII under `NO_COLOR`). `--json`
 | 7 | network |
 | 130 | interrupted |
 
-Gate and verify keep their documented policy-driven exits. New ordinary full plans use `plan_schema: 2`, short plans use `short-v2`, domain plans use full schema 3 `.hplan` records, and supported ordinary experiments use full schema 4 `.hplan` records. Schema 4 preserves domain validation. Legacy plans retain their declared guarantee. Named checks live in `.github/harness/checks.yaml`.
+Gate and verify keep their documented policy-driven exits. New ordinary full plans use `plan_schema: 2`, short plans use `short-v2`, domain plans use full schema 3 `.hplan` records, and supported ordinary experiments use full schema 4 `.hplan` records. Schema 4 preserves domain validation. Legacy plans retain their declared guarantee. Named checks use the selected private or shared source reported by `ae checks list --json`.
 
 ### Experiments
 

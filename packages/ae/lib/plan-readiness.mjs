@@ -10,7 +10,7 @@ import { domainLinkCheck } from './domain-delivery.mjs';
 import { sharedIntentCheck } from './domain-bindings.mjs';
 import { hashIntentFile } from './intent-sources.mjs';
 
-const CHECKS_REL = '.github/harness/checks.yaml';
+import { projectAuthorityFile } from './project-authority.mjs';
 
 function result(id, pass, message) {
   return { id, pass, message };
@@ -25,36 +25,37 @@ export function gapEvidenceCheck(workspace, plan) {
   return result('gap-evidence', !stale.length, stale.length ? `Capability gap evidence changed or is unavailable: ${stale.map(gap => gap.id).join(', ')}` : `${bound.length} capability gap evidence bindings are current`);
 }
 
-export function loadConfiguredChecks(workspace) {
-  const full = path.join(workspace, CHECKS_REL);
-  if (!fs.existsSync(full)) return { present: false, checks: null, error: null };
+export function loadConfiguredChecks(workspace, options) {
+  let source;
   try {
-    const content = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024 });
+    source = projectAuthorityFile(workspace, 'checks.yaml', options);
+    if (!fs.lstatSync(source.path, { throwIfNoEntry: false })) return { present: false, checks: null, error: null, source: source.path };
+    const content = readFileNoFollow(source.path, { root: source.root, maxBytes: 1024 * 1024 });
     if (content === null) throw new Error('Named check source is unreadable or nonregular');
     const parsed = YAML.parse(content, { maxAliasCount: 50 });
     if (parsed?.version !== 1 || !parsed.checks || typeof parsed.checks !== 'object' || Array.isArray(parsed.checks)) {
-      return { present: true, checks: null, error: `${CHECKS_REL} must declare version: 1 and checks` };
+      return { present: true, checks: null, error: `${source.display} must declare version: 1 and checks`, source: source.path };
     }
-    return { present: true, checks: parsed.checks, error: null };
+    return { present: true, checks: parsed.checks, error: null, source: source.path };
   } catch (error) {
-    return { present: true, checks: null, error: `Invalid ${CHECKS_REL}: ${error.message}` };
+    return { present: true, checks: null, error: `Invalid ${source?.display || 'project checks.yaml'}: ${error.message}`, source: source?.path };
   }
 }
 
 /** Bind the authoritative YAML parse to the gate session so hydrated hooks do
  * not need package resolution or a second, weaker YAML parser. */
-export function configuredCheckSnapshot(workspace) {
-  const full = path.join(workspace, CHECKS_REL);
-  const loaded = loadConfiguredChecks(workspace);
+export function configuredCheckSnapshot(workspace, options) {
+  const loaded = loadConfiguredChecks(workspace, options);
+  const source = loaded.error ? null : projectAuthorityFile(workspace, 'checks.yaml', options);
   if (loaded.error) return { digest: null, commands: [], error: loaded.error };
-  const source = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024 });
+  const bytes = readFileNoFollow(source.path, { root: source.root, maxBytes: 1024 * 1024 });
   const commands = Object.entries(loaded.checks || {})
     .filter(([, config]) => Array.isArray(config?.command)
       && config.command.length > 0
       && config.command.every((part) => typeof part === 'string' && part.length > 0))
     .map(([name, config]) => ({ name, argv: config.command.slice() }));
   return {
-    digest: source === null ? null : crypto.createHash('sha256').update(source).digest('hex'),
+    digest: bytes === null ? null : crypto.createHash('sha256').update(bytes).digest('hex'),
     commands,
     error: null,
   };
@@ -129,7 +130,7 @@ export function validatePlanReadiness(workspace, plan, { copilotHome } = {}) {
     )
   );
 
-  const configured = loadConfiguredChecks(workspace);
+  const configured = loadConfiguredChecks(workspace, { home: planHome(workspace, plan) });
   if (configured.error) {
     checks.push(result('configured-checks', false, configured.error));
   } else if (configured.present) {
@@ -159,7 +160,7 @@ export function validatePlanReadiness(workspace, plan, { copilotHome } = {}) {
           : 'Required checks are relevant to the expected output types'
       )
     );
-  } else checks.push(result('configured-checks', false, 'No configured named checks; configure .github/harness/checks.yaml'));
+  } else checks.push(result('configured-checks', false, `No configured named checks; configure ${configured.source || 'the selected project checks.yaml'}`));
 
   return { pass: checks.every((check) => check.pass), checks };
 }

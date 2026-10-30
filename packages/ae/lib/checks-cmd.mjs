@@ -6,6 +6,7 @@ import { redactedJson } from './redact.mjs';
 import { inertLine } from './knowledge/store.mjs';
 import { CHECKS_REL, loadNamedChecks, validateCommand, runNamedCheck, CHECK_TIMEOUT_DEFAULT_SECONDS } from './checks.mjs';
 import { resolveCopilotHome } from './paths.mjs';
+import { projectAuthorityFile } from './project-authority.mjs';
 import { isProjectTrusted } from './trust.mjs';
 
 const ui = createStyle({ argv: process.argv.slice(2) });
@@ -20,10 +21,10 @@ function notFoundError(message, hint) {
   return Object.assign(new Error(message), { code: 'E_NOT_FOUND', exit: EXIT.notFound, hint });
 }
 
-function readChecks(workspace) {
-  const { checks, error } = loadNamedChecks(workspace);
+function readChecks(workspace, options) {
+  const { checks, error } = loadNamedChecks(workspace, options);
   if (error) {
-        throw notFoundError(error, `define checks in ${CHECKS_REL} with version: 1`);
+        throw notFoundError(error, 'define version: 1 checks in the selected project authority shown by ae init-repo');
   }
   return checks;
 }
@@ -52,41 +53,43 @@ function context(argv) {
 }
 
 export async function checksResultOf(argv, ctx = {}) {
-  const { verb, name, workspace, copilotHome } = context(argv);
+  const { verb, name, workspace, copilotHome, flags } = context(argv);
   if (!verb) throw usageError('checks requires a verb', `ae checks <${CHECKS_VERBS.join('|')}>`);
   if (!CHECKS_VERBS.includes(verb)) {
     throw usageError(`unknown checks verb: ${verb}`, `one of ${CHECKS_VERBS.join(', ')}`);
   }
-  const checks = readChecks(workspace);
+  const checks = readChecks(workspace, { home: flags.harnessHome });
+  const source = projectAuthorityFile(workspace, 'checks.yaml', { home: flags.harnessHome });
+  const configPath = source.mode === 'shared' ? CHECKS_REL : source.path;
   const names = Object.keys(checks).sort();
 
   if (verb === 'list') {
     return {
       schema: 1,
       verb,
-      config: CHECKS_REL,
+      config: configPath,
       checks: names.map((n) => describeCheck(n, checks[n])),
     };
   }
 
   if (!name) throw usageError(`checks ${verb} requires a check name`, `ae checks ${verb} <name>`);
   if (!(name in checks)) {
-    throw notFoundError(`no check named ${JSON.stringify(name)} in ${CHECKS_REL}`, names.length ? `defined here: ${names.join(', ')}` : 'no checks are defined');
+    throw notFoundError(`no check named ${JSON.stringify(name)} in ${configPath}`, names.length ? `defined here: ${names.join(', ')}` : 'no checks are defined');
   }
 
   if (verb === 'show') {
-    return { schema: 1, verb, config: CHECKS_REL, check: describeCheck(name, checks[name]) };
+    return { schema: 1, verb, config: configPath, check: describeCheck(name, checks[name]) };
   }
 
-    if (!isProjectTrusted({ workspace, copilotHome })) {
+    if (!isProjectTrusted({ workspace, copilotHome, home: flags.harnessHome })) {
     throw Object.assign(new Error(`refusing to run ${JSON.stringify(name)}: this project is not trusted`), {
       code: 'E_DENIED',
       exit: EXIT.needsApproval,
       hint: `a named check runs commands this repository authored — read them with \`ae checks show ${name}\`, then \`ae trust approve\``,
     });
   }
-    const outcome = await runNamedCheck(workspace, name, checks[name], { signal: ctx.signal, copilotHome, events: ctx.events });
-    return { schema: 1, verb, config: CHECKS_REL, status: statusForOutcome(outcome), check: describeCheck(name, checks[name]), outcome };
+    const outcome = await runNamedCheck(workspace, name, checks[name], { signal: ctx.signal, copilotHome, home: flags.harnessHome, events: ctx.events });
+    return { schema: 1, verb, config: configPath, status: statusForOutcome(outcome), check: describeCheck(name, checks[name]), outcome };
 }
 
 /** The unified status vocabulary for a check's legacy outcome status. */

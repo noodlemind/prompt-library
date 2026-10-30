@@ -104,7 +104,7 @@ test('VS Code doctor distinguishes a missing installed hook bundle from package 
   const sourceHooks = path.join(packageRoot, 'corpus', 'hooks');
   fs.cpSync(sourceHooks, path.join(assetsRoot, 'hooks'), { recursive: true });
   const settingsPath = path.join(tempDir('harness-vscode-'), 'settings.json');
-  fs.writeFileSync(settingsPath, JSON.stringify(mergeVSCodeSettings({})));
+  fs.writeFileSync(settingsPath, JSON.stringify(mergeVSCodeSettings({}, { copilotHome })));
 
   const result = await runDoctor({
     copilotHome,
@@ -413,7 +413,7 @@ test('init-repo creates harness runner', () => {
   const workspace = tempDir('harness-workspace-');
   const copilotHome = tempDir('harness-copilot-home-');
   const harnessHome = tempDir('harness-home-');
-  const result = runHarness(['init-repo', '--workspace', workspace, '--copilot-home', copilotHome], {
+  const result = runHarness(['init-repo', '--shared', '--workspace', workspace, '--copilot-home', copilotHome], {
     env: { HARNESS_HOME: harnessHome },
   });
   assert.equal(result.status, 0, result.stderr);

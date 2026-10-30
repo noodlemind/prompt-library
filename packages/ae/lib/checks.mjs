@@ -13,6 +13,8 @@ import { createRedactor, redactionMarker } from './redact.mjs';
 import { artifactPathsProblem, allocateCheckArtifacts, captureCheckArtifacts, discardCheckArtifacts } from './check-artifacts.mjs';
 import { isExperimentCheck, consumeExperimentInvocation } from './experiment-contract.mjs';
 
+import { projectAuthorityFile } from './project-authority.mjs';
+
 export const CHECKS_REL = '.github/harness/checks.yaml';
 
 /** The complete schema a check entry accepts. Anything else is ignored. */
@@ -31,19 +33,21 @@ function resultCheck(id, status, message, extra = {}) {
   return { id, status, message, ...extra };
 }
 
-export function loadNamedChecks(workspace) {
-  const full = path.join(workspace, CHECKS_REL);
-  if (!fs.existsSync(full)) return { checks: null, error: `Trusted check config not found: ${CHECKS_REL}` };
+export function loadNamedChecks(workspace, options) {
+  let source;
   try {
-        const content = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024 });
+    source = projectAuthorityFile(workspace, 'checks.yaml', options);
+    const full = source.path;
+    if (!fs.lstatSync(full, { throwIfNoEntry: false })) return { checks: null, error: `Trusted check config not found: ${full}`, source: full };
+    const content = readFileNoFollow(full, { root: source.root, maxBytes: 1024 * 1024 });
     if (content === null) throw new Error('Named check source is unreadable or nonregular');
     const parsed = YAML.parse(content, { maxAliasCount: 50 });
-    if (parsed?.version !== 1 || !parsed.checks || typeof parsed.checks !== 'object') {
-      return { checks: null, error: `${CHECKS_REL} must declare version: 1 and checks` };
+    if (parsed?.version !== 1 || !parsed.checks || typeof parsed.checks !== 'object' || Array.isArray(parsed.checks)) {
+      return { checks: null, error: `${source.display} must declare version: 1 and checks` };
     }
-    return { checks: parsed.checks, error: null };
+    return { checks: parsed.checks, error: null, source: source.path, sourceRoot: source.root, sourceMode: source.mode };
   } catch (error) {
-    return { checks: null, error: `Invalid ${CHECKS_REL}: ${error.message}` };
+    return { checks: null, error: `Invalid project checks${source ? ` ${source.display}` : ''}: ${error.message}` };
   }
 }
 
@@ -138,7 +142,7 @@ export async function runNamedCheck(workspace, name, config, { signal, onStdout,
   const timeoutSeconds = config.timeout_seconds ?? CHECK_TIMEOUT_DEFAULT_SECONDS;
 
     const home = copilotHome ?? resolveCopilotHome(null);
-  const cfg = resolveConfig({ copilotHome: home, workspace, projectTrusted: isProjectTrusted({ workspace, copilotHome: home, home: harnessHome }) });
+  const cfg = resolveConfig({ copilotHome: home, home: harnessHome, workspace, projectTrusted: isProjectTrusted({ workspace, copilotHome: home, home: harnessHome }) });
     if (cfg.errors.length) {
     return finish({
       status: 'unavailable',

@@ -280,7 +280,7 @@ const TUI_NOTES = Object.freeze({
   agent: 'optional model loop — host still owns mutations',
   status: 'version, home, and what is installed',
   doctor: 'is install, hooks, and knowledge healthy?',
-  'init-repo': 'create the repo-local harness files and indexes',
+  'init-repo': 'initialize private project configuration and indexes; --shared creates team configuration',
   prepare: 'write starter spec and ADR files if they are missing',
   migrate: 'move gitignored docs/plans and docs/solutions out of the product tree',
   recall: 'search team solutions and learnings',

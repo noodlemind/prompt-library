@@ -1,119 +1,107 @@
-name: Harness plan verification
+name: AE plan diagnostics (manual)
 
+# No delivery proof: this template never approves trust or runs product commands.
+# New private plans live on their author's machine and are unavailable in CI.
+# Select an intentionally committed ordinary plan and a separately qualified AE
+# archive. A trusted named-check CI workflow needs its own reviewed authority
+# and cannot inherit a developer's local approval or editor review evidence.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
-      base_sha:
-        description: Optional base commit for manual diff verification
-        required: false
-      enforcement:
-        description: observe, warn, or enforce
-        required: false
-        default: enforce
+      archive_url:
+        description: Public HTTPS URL of a separately qualified ae-harness archive
+        required: true
+      archive_sha256:
+        description: Expected SHA-256 of the qualified archive (64 hexadecimal characters)
+        required: true
+      plan_path:
+        description: Explicit committed ordinary plan under docs/plans (Markdown)
+        required: true
 
 permissions:
   contents: read
 
 jobs:
-  harness-verification:
-    name: Harness verification (required when enforced)
+  plan-diagnostics:
+    name: Plan readiness and token budgets (no delivery proof)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
-      HARNESS_ENFORCEMENT: ${{ inputs.enforcement || vars.HARNESS_ENFORCEMENT || 'warn' }}
+      AE_HOME: ${{ runner.temp }}/ae-diagnostic-home
+      AE_NO_EVENTS: '1'
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install pinned AE
-        run: |
-          set -euo pipefail
-          : "${HARNESS_VERSION:?Harness version must be configured in the HARNESS_VERSION repository variable}"
-          npm install --global "ae-harness@${HARNESS_VERSION}"
-          test "$(ae --version)" = "$HARNESS_VERSION"
-        env:
-          HARNESS_VERSION: ${{ vars.HARNESS_VERSION }}
-
-      - name: Token budget gate (fails on cap regressions)
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Read-only: exits non-zero if a tracked surface (engineer agent,
-          # any SKILL.md, context pack) exceeds its budget. No telemetry
-          # history required; degrades to a pass when no artifacts are present.
-          ae report --check --workspace .
-
-      - name: Resolve exactly one linked plan for product changes
-        id: plan
+      - name: Validate explicit diagnostic inputs
+        id: inputs
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || inputs.base_sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          ARCHIVE_URL: ${{ inputs.archive_url }}
+          ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+          PLAN: ${{ inputs.plan_path }}
         run: |
           set -euo pipefail
-          if [[ -z "${BASE_SHA:-}" || "$BASE_SHA" =~ ^0+$ ]]; then
-            BASE_SHA="$(git rev-parse "${HEAD_SHA}^" 2>/dev/null || true)"
-          fi
-          if [[ -z "$BASE_SHA" ]] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo "Unable to resolve a valid base commit; provide workflow_dispatch input base_sha." >&2
+          if [[ ! "$ARCHIVE_URL" =~ ^https://[^[:space:]]+$ || ! "$ARCHIVE_SHA256" =~ ^[a-fA-F0-9]{64}$ ]]; then
+            echo "Provide a public HTTPS archive URL and its independently qualified SHA-256." >&2
             exit 1
           fi
-          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
-          mapfile -t changed < <(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
-          mapfile -t product < <(printf '%s\n' "${changed[@]}" | grep -Ev '^(docs/plans/|docs/)' || true)
-          if [[ ${#product[@]} -eq 0 ]]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "No product files changed; plan verification is not required."
-            exit 0
+          if [[ "$PLAN" != docs/plans/*.md || "$PLAN" == *..* || "$PLAN" == *$'\n'* || "$PLAN" == *$'\r'* ]]; then
+            echo "Select an explicit committed ordinary Markdown plan under docs/plans." >&2
+            exit 1
           fi
-          mapfile -t plan_candidates < <(printf '%s\n' "${changed[@]}" | grep -E '^docs/plans/[0-9]{4}-[0-9]{2}-[0-9]{2}[^/]*\.md$' || true)
-          plans=()
-          for candidate in "${plan_candidates[@]}"; do
-            if [[ -f "$candidate" ]]; then
-              plans+=("$candidate")
-            fi
-          done
-          if [[ ${#plans[@]} -ne 1 ]]; then
-            message="Product changes must resolve exactly one live linked plan; found ${#plans[@]}."
-            if [[ "$HARNESS_ENFORCEMENT" == "enforce" ]]; then
-              echo "$message" >&2
-              exit 1
-            fi
-            echo "::warning::$message"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          git ls-files --error-unmatch -- "$PLAN" >/dev/null
+          if [[ ! -f "$PLAN" || -L "$PLAN" || "$(realpath -- "$PLAN")" != "$PWD/$PLAN" ]]; then
+            echo "The selected plan must be a regular file inside this checkout without redirected ancestors." >&2
+            exit 1
           fi
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "path=${plans[0]}" >> "$GITHUB_OUTPUT"
 
-      - name: Validate explicit plan and implement gate
-        if: steps.plan.outputs.skip != 'true'
+      - name: Install the exact qualified archive offline
+        id: install
         shell: bash
         env:
-          PLAN: ${{ steps.plan.outputs.path }}
+          ARCHIVE_URL: ${{ inputs.archive_url }}
+          ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
         run: |
           set -euo pipefail
-          ae validate-plan --plan "$PLAN" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
-          ae gate --phase implement --plan "$PLAN" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
+          archive="$RUNNER_TEMP/ae-diagnostic-candidate.tgz"
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --max-time 120 --max-filesize 67108864 --output "$archive" -- "$ARCHIVE_URL"
+          printf '%s  %s\n' "$ARCHIVE_SHA256" "$archive" | sha256sum --check --status
+          npm install --global --offline --ignore-scripts --no-audit --no-fund \
+            --prefix "$RUNNER_TEMP/ae-diagnostic-install" "$archive"
+          echo "$RUNNER_TEMP/ae-diagnostic-install/bin" >> "$GITHUB_PATH"
 
-      - name: Run named checks and plan-to-diff verification
-        if: steps.plan.outputs.skip != 'true'
+      - name: Token budget gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ae-diagnostics"
+          ae --version > "$RUNNER_TEMP/ae-diagnostics/ae-version.txt"
+          # Missing optional budget surfaces contribute no measurement.
+          # A budget pass is not behavioral proof or native-host qualification.
+          ae report --check --workspace . > "$RUNNER_TEMP/ae-diagnostics/budgets.txt"
+
+      - name: Inspect explicit plan readiness without executing named checks
+        if: always() && steps.install.outcome == 'success'
         shell: bash
         env:
-          PLAN: ${{ steps.plan.outputs.path }}
-          BASE_SHA: ${{ steps.plan.outputs.base_sha }}
-        run: ae verify --plan "$PLAN" --base "$BASE_SHA" --enforcement "$HARNESS_ENFORCEMENT" --workspace . --json
+          PLAN: ${{ inputs.plan_path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ae-diagnostics"
+          ae validate-plan --plan "$PLAN" --enforcement enforce --workspace . --json \
+            > "$RUNNER_TEMP/ae-diagnostics/plan-readiness.json"
 
-      - name: Upload verification evidence
-        if: always() && steps.plan.outcome == 'success' && steps.plan.outputs.skip != 'true'
+      - name: Upload diagnostic observations
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: harness-verification-evidence
-          path: .harness/evidence/*.json
-          if-no-files-found: error
+          name: ae-plan-diagnostics
+          path: ${{ runner.temp }}/ae-diagnostics/
+          if-no-files-found: warn

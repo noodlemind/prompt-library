@@ -171,6 +171,7 @@ export function parseFlags(argv) {
   for (let i = 0; i < scan.length; i++) {
     const a = scan[i];
     if (a === '--dry-run') flags.dryRun = true;
+    else if (a === '--shared') flags.shared = true;
     else if (a === '--verbose' || a === '-v') flags.verbose = true;
     else if (a === '--json') flags.json = true;
     else if (a === '--effective-policy') flags.effectivePolicy = true;

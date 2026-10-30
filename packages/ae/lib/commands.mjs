@@ -154,6 +154,7 @@ export async function cmdInstallOrUpgrade(command, argv) {
   const homeKey = home => process.platform === 'win32' ? installationRoot(home).toLowerCase() : installationRoot(home);
   const copilotSelected = flags.targets.has('vscode') || flags.targets.has('cli');
   const intellijHome = flags.targets.has('intellij') ? resolveIntelliJHome() : null;
+  if (copilotSelected && flags.configureVsCode) configureVSCodeSettings({ ...flags, dryRun: true }, () => {});
   // Validate every selected path before deduplicating physical home ownership.
   for (const target of flags.targets) {
     const home = target === 'intellij' ? intellijHome : copilotHome;

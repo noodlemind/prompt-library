@@ -11,9 +11,9 @@ import { policyDigest } from './trust.mjs';
 import { captureWorkingSources } from './repo-map/working-sources.mjs';
 import { DEFAULT_MAX_BYTES } from './fs-safe.mjs';
 
-export function validateContextSnapshot({ workspace, snapshot, targets }) {
+export function validateContextSnapshot({ workspace, snapshot, targets, home }) {
   if (snapshot?.version !== 2) return { pass: true };
-  const currentPolicy = policyDigest(workspace);
+  const currentPolicy = policyDigest(workspace, undefined, { home });
   if (!currentPolicy || snapshot.state !== 'validated' || snapshot.policyDigest !== currentPolicy) return { pass: false, reason: 'context-stale: reorient after source or policy changes' };
   if (snapshot.sourceState?.digest) {
     const current = captureWorkingSources(workspace);

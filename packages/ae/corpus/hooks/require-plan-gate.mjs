@@ -5,9 +5,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { selectProjectAuthority } from './lib/project-authority.mjs';
+import { readPolicySource } from './lib/policy-snapshot.mjs';
 import { readProductDiff } from './lib/product-diff.mjs';
 import { callProofAuthority } from './lib/proof-authority.mjs';
-import { resolveAcceptedPlan } from './lib/external-plans.mjs';
+import { resolveAcceptedPlan, projectStoreDir, harnessHome } from './lib/external-plans.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { syncSessionIdentity } from './lib/session-state.mjs';
 import { skillActivationSourceCurrent } from './lib/skill-activation.mjs';
@@ -277,9 +279,12 @@ function requiredChecks(planText) {
 }
 
 function configuredChecksDigest(workspace) {
-  const configPath = path.join(workspace, '.github', 'harness', 'checks.yaml');
-  if (!fs.existsSync(configPath)) return null;
-  return crypto.createHash('sha256').update(fs.readFileSync(configPath)).digest('hex');
+  try {
+    const home = harnessHome();
+    const authority = selectProjectAuthority(workspace, projectStoreDir(workspace, { home }), { home });
+    const bytes = readPolicySource(authority.files['checks.yaml']);
+    return bytes === null ? null : crypto.createHash('sha256').update(bytes).digest('hex');
+  } catch { return null; }
 }
 
 function normalizeArg(value) {

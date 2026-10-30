@@ -208,7 +208,7 @@ const result=(verb==='status'?trustStatus:revokeProject)({workspace,home,copilot
 
 test('new initialization keeps enforce and reports missing behavioral checks without replacing authored policy', t => {
   const s = fixture(t), logs = [];
-  const stats = runInitRepo({ ...s, flags: { home: s.home }, log: value => logs.push(value) });
+  const stats = runInitRepo({ ...s, flags: { home: s.home, shared: true }, log: value => logs.push(value) });
   assert.equal(loadPolicy(s.workspace, null, { copilotHome: s.home, home: s.home }).enforcement, 'enforce');
   approveProject(s);
   assert.equal(loadPolicy(s.workspace, null, { copilotHome: s.home, home: s.home }).enforcement, 'enforce');

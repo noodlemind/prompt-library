@@ -32,9 +32,9 @@ Installed to `~/.copilot/bin/ae` on every `ae install`. Add to PATH with `ae ins
 | Checkout | `npm install -g ./packages/ae` from the repository root, then `ae install` |
 | Local clone | `node packages/ae/bin/ae.mjs install --configure-path` |
 
-**Per-repo bootstrap:** `ae init-repo` creates `.harness/run.mjs` (delegates to global harness + sets `--workspace`).
+**Per-repo bootstrap:** `ae init-repo` creates private project configuration in the external AE project store and `.harness/run.mjs` (delegates to the selected installation + sets `--workspace`). `ae init-repo --shared` explicitly publishes team configuration under `.github/harness/`. Review its returned commit inventory before locking product work. Existing shared configuration stays selected; user approval remains private.
 
-- Pin version in product repos: `devDependencies`, a globally installed package, or `.harness-version` (see harness README).
+- Select a deliberately installed AE version and inspect `ae --version`. The global runner does not enforce a product dependency pin or read `.harness-version`.
 - If `ae` is not on `PATH`, install from a checkout of this repository with `npm install -g ./packages/ae` at the repository root, then `ae install --configure-path`. The package is not on the npm registry.
 - Do not use `npx ae-harness` in agent runtime instructions. There is no published registry package to execute.
 - Start with `.harness/context-pack.md` after `orient`. Expand missing evidence with `orient --read --context-version 2`; keep source identities and reported limits.
@@ -62,7 +62,7 @@ This table tracks only what differs in runtime character across commands — whi
 |---------|------|--------|-------|
 | `install` / `upgrade` | human/CI | none | mutates `~/.copilot/` |
 | `doctor` | human/CI | none | read-only (`--host vscode` runs an isolated hook-lifecycle fixture) |
-| `init-repo` | human/CI | writes¹ | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
+| `init-repo` | human/CI | writes¹ | writes private project configuration, local runtime state and Git-local excludes; `--shared` publishes team configuration |
 | `prepare` | human/CI | none | writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` only when missing |
 | `status` / `uninstall` | human/CI | none | read-only / mutates `~/.copilot/` (uninstall removes hydrated files) |
 | `orient` | agent-runtime | writes | mutates `.harness/` (context-pack, repo-map, session) |
@@ -203,11 +203,11 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 }
 ```
 
-Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
+Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from the selected local or shared check source reported by `ae checks list --json` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
 
 Use focused TDD checks during implementation. The Engineer prepares a review packet, dispatches its required judgment, and assembles raw results before running authoritative `ae verify`. Read-only coordinators cannot start CLI commands using `terminalLastCommand`; incomplete coverage remains a verification prerequisite. Under content-v1, selected intent bytes are also bound and changed bytes require an explicit source amendment. Legacy plans retain their declared paths-only guarantee until deliberately migrated.
 
-**Per-check severity (policy v2).** `.github/harness/policy.yaml` may declare `version: 2` with an optional `checks:` map assigning each verify check a severity — the check-level knob is orthogonal to the run-level `enforcement` mode:
+**Per-check severity (policy v2).** The selected project `policy.yaml` may declare `version: 2` with an optional `checks:` map assigning each verify check a severity — the check-level knob is orthogonal to the run-level `enforcement` mode:
 
 | Severity | Effect of a failed check |
 |----------|--------------------------|

@@ -162,7 +162,7 @@ export function createWorkspaceContentBinding({ workspace, changedFiles = [], pl
 export function proofPolicyDigest(workspace, copilotHome = resolveCopilotHome(), home) {
   const policy = loadPolicy(workspace, null, { copilotHome, home });
   const trust = trustStatus({ workspace, copilotHome, home });
-  return digest(JSON.stringify({ source: policyDigest(workspace), trust: trust.state, approval: trust.approvedDigest, enforcement: policy.enforcement, rules: policy.rules, checks: policy.checkSeverities, ttl: policy.evidenceTtlHours }));
+  return digest(JSON.stringify({ source: policyDigest(workspace, undefined, { home }), trust: trust.state, approval: trust.approvedDigest, enforcement: policy.enforcement, rules: policy.rules, checks: policy.checkSeverities, ttl: policy.evidenceTtlHours }));
 }
 
 export function createEvidenceBinding({ workspace, plan, base = null, changedFiles = [], copilotHome }) {
@@ -202,7 +202,7 @@ export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24, 
   const required = plan.fm.verification?.required;
   if (!Array.isArray(evidence.checks) || !Array.isArray(required) || !required.length || required.some(id => !evidence.checks.some(check => check.id === id && check.status === 'passed' && ['behavior', 'type-check'].includes(check.proof))) || !evidence.checks.some(check => required.includes(check.id) && check.status === 'passed' && check.proof === 'behavior') || !evidence.checks.some(check => check.id === 'criteria-evidence' && check.status === 'passed')) return { pass: false, message: 'Verification record lacks executed proof for the current acceptance criteria' };
   if (evidence.binding.policyDigest !== proofPolicyDigest(workspace, copilotHome, planTrustHome(workspace, plan))) return { pass: false, message: 'Policy or trust changed after verification; refresh trust and reverify' };
-  const configured = loadNamedChecks(workspace);
+  const configured = loadNamedChecks(workspace, { home: planTrustHome(workspace, plan) });
   if (configured.error) return { pass: false, message: configured.error };
   for (const id of required) {
     if (!configured.checks[id]) return { pass: false, message: 'Required named check is missing' };

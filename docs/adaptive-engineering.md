@@ -30,6 +30,26 @@ ae prepare
 
 `ae prepare` writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` when those paths are missing. Edit them. A later run leaves an existing file alone. Orient lists them as `intentSources`. Plan lock hashes them. If `docs/` is gitignored, prepare writes nothing and orient says to un-ignore those paths. Prepare does not rewrite a spec from the code.
 
+Initialization defaults to personal configuration under
+`~/.ae/projects/<repo-id>/authority/`, with no new product configuration to
+commit. Existing shared `.github/harness/` authority remains selected.
+`ae init-repo --shared` explicitly publishes shared configuration and returns
+the exact commit inventory. Complete that setup change before locking an
+unrelated product plan. Approval is always user-local; cloning team policy does
+not clone a person's execution decision.
+
+Policy, checks, routing, configuration, hooks and evidence resolve one selected
+source. They do not overlay competing local/shared files or fall back from an
+unsafe source. Changing source identity or accepted bytes invalidates approval
+and proof. `ae trust status` names the pinned files.
+
+Runtime `.harness/` state and `.worktrees/` use narrowly scoped Git-local
+excludes; routine setup does not edit the root `.gitignore`. Already-tracked
+runtime artifacts remain visible until explicitly migrated. Initialization
+refreshes a private codebase map rather than rewriting a shared authored map.
+The generated runner is checked by content and ownership, so stale generated
+install guidance is refreshed while custom and newer runners are preserved.
+
 New `init-repo` policy stubs use `enforce`; existing authored policies remain unchanged. Initialization leaves behavioral checks for the project owner to define and reports that prerequisite. A person reviews the exact check commands and pinned policy files before approving trust. Installing AE or passing doctor does not grant that approval or prove a task. Unreadable, redirected, nonregular or oversized pinned sources cannot establish current trust. Ordinary policy changes require a new authority decision; agents manage routine lifecycle recovery within the accepted authority.
 
 Then select `@engineer` in Copilot Chat.
@@ -135,7 +155,7 @@ Workflow activation records bind an actual complete read to the selected install
 
 `ae status --effective-policy --json` reports the CLI policy authority, rule-specific modes, positive freshness limits, trust binding, and resolver version. Installed hooks refresh that snapshot when source bytes, trust, or environment change. An unavailable or invalid authority fails closed. A command override is scoped to its invocation and is never cached as a hook policy.
 
-Named checks are argv arrays in `.github/harness/checks.yaml`. The Harness runs them without a shell. Policy exemptions and waivers are explicit. A missing check is not a pass.
+Named checks are argv arrays in the selected project `checks.yaml`; `ae checks list --json` reports its exact path. The Harness runs them without a shell. Policy exemptions and waivers are explicit. A missing check is not a pass.
 
 A named check may declare an `artifacts` list of explicit relative JSON filenames. The runner supplies a unique invocation directory under `.harness/evidence/check-artifacts/` through `HARNESS_CHECK_ARTIFACT_DIR`. It accepts at most 16 JSON objects of at most 1 MiB each, then stores redacted bytes and records their paths, byte lengths, and SHA-256 hashes. Missing output, malformed JSON, unsafe paths, symlinks, and nonregular files fail the check. Evidence validation rereads required artifacts and rejects changed or missing bytes. Concurrent invocations cannot overwrite one shared latest file. Artifact presence never replaces the helper's behavioral assertion and exit result. Checks without declarations retain their existing output guarantee.
 

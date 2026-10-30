@@ -1,9 +1,10 @@
+import { projectAuthorityFile } from './project-authority.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { runNamedCheck, loadNamedChecks, CHECKS_REL } from './checks.mjs';
+import { runNamedCheck, loadNamedChecks } from './checks.mjs';
 import { validateCheckArtifacts } from './check-artifacts.mjs';
 import { readFileNoFollow, assertNoSymlinkAncestors, writeFileContained } from './fs-safe.mjs';
 import { isProjectTrusted } from './trust.mjs';
@@ -43,6 +44,13 @@ function trustedCheck(id, config, mode, experiment, runtime, evaluator) {
   return { id, config, configDigest: experimentDigest(config) };
 }
 
+export function snapshotExperimentCheckSource(workspace, options) {
+  const authority = projectAuthorityFile(workspace, 'checks.yaml', options);
+  const captured = fileBinding(authority.root, authority.relative.split(path.sep).join('/'), { json: false });
+  if (authority.mode === 'local') captured.binding.path = authority.path;
+  return captured;
+}
+
 export function snapshotExperimentInputs({ workspace, plan, copilotHome, home } = {}) {
   workspace = fs.realpathSync(workspace);
   if (process.platform !== 'darwin') fail('experiment isolation is unsupported on this host');
@@ -58,8 +66,8 @@ export function snapshotExperimentInputs({ workspace, plan, copilotHome, home } 
   validateLinearWorkload(parseExperimentJson(workloadRead.bytes), candidateValue.weights.length);
   const candidate = { ...candidateRead.binding, dimensions: candidateValue.weights.length };
   const workload = workloadRead.binding;
-  const checksRead = fileBinding(workspace, CHECKS_REL, { json: false });
-  const named = loadNamedChecks(workspace); if (named.error) fail(named.error);
+  const checksRead = snapshotExperimentCheckSource(workspace, { home });
+  const named = loadNamedChecks(workspace, { home }); if (named.error) fail(named.error);
   const runtime = { path: fs.realpathSync(process.execPath), version: process.version, sha256: binaryDigest(process.execPath) };
   const evaluator = { path: fs.realpathSync(EXPERIMENT_EVALUATOR_PATH), sha256: binaryDigest(EXPERIMENT_EVALUATOR_PATH) };
   const checks = { score: trustedCheck(experiment.scorer_check, named.checks[experiment.scorer_check], 'score', experiment, runtime, evaluator), guard: trustedCheck(experiment.correctness_checks[0], named.checks[experiment.correctness_checks[0]], 'guard', experiment, runtime, evaluator) };

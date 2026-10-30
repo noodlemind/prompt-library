@@ -830,11 +830,13 @@ registerCommand({
 
 registerCommand({
   name: 'init-repo',
-  summary: 'seed the .harness workspace in a product repo',
+  summary: 'initialize private project setup, or explicitly share repository configuration',
   group: 'workspace',
   sideEffect: 'mutate',
     surfaces: ['cli', 'tui'],
-  args: { positionals: [], flags: [] },
+  args: { positionals: [], flags: [
+    { name: '--shared', type: 'boolean', description: 'create reviewable .github/harness project configuration instead of private configuration' },
+  ] },
   handler: cmdInitRepo,
 });
 
