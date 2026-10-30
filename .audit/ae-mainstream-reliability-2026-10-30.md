@@ -130,9 +130,9 @@ Audit evidence used actual CLI calls, real two-process probes, source reads and 
 
 The execution environment briefly became unavailable during repair preparation, before production changes. It was restored and the source state rechecked before resuming. Interrupted preparation and unreturned test invocations establish no successful repair evidence.
 
-### Final repair qualification
+### Complete-suite qualification before the Windows prefix correction
 
-The runtime and regression source was frozen clean at `f4461229cd930d51dee869d10a7699d9e6431f42`. Subsequent audit-result edits change this report only; they do not change the package or test payload.
+The runtime and regression source was frozen clean at `f4461229cd930d51dee869d10a7699d9e6431f42`. Report-only commits do not change the package or test payload. The subsequent Windows correction below changes one internal temporary-path prefix and adds its regression; its current qualification is recorded separately in PR104 and the retained candidate artifacts.
 
 | Evidence | Result | Practical limit |
 |---|---|---|
@@ -147,9 +147,17 @@ The runtime and regression source was frozen clean at `f4461229cd930d51dee869d10
 
 These are overlapping selections, not additive totals. The first diagnostic full run exposed the owner-file compatibility defect and is superseded by the final frozen run. Its failed observations were retained. The final source log SHA-256 is `2c4d1466b35f3d39e7339f6c5d59bf2f845569f87affdebc01474041cb55b07b`.
 
-Final archive: `ae-harness-0.14.0.tgz`, 35,692,702 bytes, SHA-256 `a52670027fa5b0fcfdf6e969b22ffd92904d59aab5ae64f6e1f1fc9b9e47fd6c`. Payload inspection found no JAR and no vendored pstack parser. The earlier 85db345 archive was superseded by this empty-stamp correction and is not the final package.
+Archive qualified at that revision: `ae-harness-0.14.0.tgz`, 35,692,702 bytes, SHA-256 `a52670027fa5b0fcfdf6e969b22ffd92904d59aab5ae64f6e1f1fc9b9e47fd6c`. Payload inspection found no JAR and no vendored pstack parser. This archive and the earlier 85db345 archive are superseded as shipping candidates by the Windows correction below. Use the latest PR qualification/archive identity rather than an older receipt.
 
 The required review packet at the frozen code revision collected architecture, simplicity, capability maintenance, primitive boundary, skill description and security judgments. The exact code revision and test receipts remain distinct from report-only commits and the GitHub commit identities used to apply the same trees to the PR.
+
+### Windows candidate correction and current evidence
+
+Real Node20 and Node24 Windows package jobs on PR head `5a77c5ce0b0c9d6845983b368bcc7461f923842a` exposed a further runtime defect during compounding. Private lock retirement repeated the full hashed resource name under its recovery directory. The resulting directory template was 273 characters and `mkdtemp` returned `ENOENT`. The retained Windows delivery transcript identifies the actual failing operation, not merely a timeout or an inferred path problem.
+
+The follow-up at local code revision `d49fa99` changes one line to use a short, unique `.retired-` prefix in the same owned parent, reducing the observed template to 192 characters. Ownership, canonical lock identity, recovery guards and private retirement validation remain unchanged. A hashed-resource regression explicitly simulates the Windows directory-path bound on Linux; it failed before the correction. Related Node24 lock/delivery/recovery tests passed **73/73**, and oldest-Node lock tests passed **18/18**. These local checks do not substitute for the new real Windows package run.
+
+The subsequent complete-suite result, exact replacement archive identity and fresh Linux/Windows job outcomes are recorded in the PR's validation section and retained CI artifacts. This avoids treating the earlier full-suite or archive receipts as evidence for different bytes. Native editor/model qualification remains separate even when package jobs pass.
 
 ### Remaining release boundaries
 

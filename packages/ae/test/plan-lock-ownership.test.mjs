@@ -237,3 +237,29 @@ for (const problem of ['multiple-stamps', 'nonempty-stamp', 'unsafe-pid', 'symli
     if (problem === 'symlink-stamp') assert.ok(fs.lstatSync(stamp).isSymbolicLink());
   });
 }
+
+test('retirement of a hashed learning resource stays within the simulated Windows directory-path limit', t => {
+  const root = tempDir('retirement-path-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const suffix = path.join('.harness', 'learning');
+  const padding = 'p'.repeat(Math.max(1, 86 - root.length - suffix.length - 2));
+  const directory = path.join(root, padding, suffix);
+  fs.mkdirSync(directory, { recursive: true });
+  const full = path.join(directory, `plan-${'a'.repeat(64)}.json`);
+  fs.writeFileSync(full, 'Accepted learning decision.\n');
+  const lock = planUpdateLockDir(full), mkdtemp = fs.mkdtempSync;
+  const calls = [];
+  fs.mkdtempSync = (prefix, ...args) => {
+    calls.push(prefix);
+    if (prefix.length + 6 > 248) throw Object.assign(new Error('simulated Windows directory-path limit'), { code: 'ENOENT', path: prefix });
+    return mkdtemp.call(fs, prefix, ...args);
+  };
+  try {
+    assert.equal(withPlanUpdateLock(full, () => 'committed'), 'committed');
+  } finally { fs.mkdtempSync = mkdtemp; }
+  assert.equal(calls.length, 1);
+  assert.equal(path.dirname(calls[0]), `${lock}.recovery`, 'retirement remains inside its owned recovery guard');
+  assert.ok(path.basename(calls[0]).length < 20, 'the temporary stem must not duplicate the hashed resource basename');
+  assert.equal(fs.existsSync(lock), false);
+  assert.equal(fs.existsSync(`${lock}.recovery`), false);
+});

@@ -103,7 +103,7 @@ function removePlanLock(dir, token) {
 
 function retirePlanLock(dir, token, parent = path.dirname(dir)) {
   if (planLockOwner(dir)?.token !== token) throw usage('plan-update: lock ownership lost; inspect the retained lock');
-  const retirement = fs.mkdtempSync(path.join(parent, `.${path.basename(dir)}.retired-`));
+  const retirement = fs.mkdtempSync(path.join(parent, '.retired-'));
   try {
     const retired = path.join(retirement, 'lock');
     fs.renameSync(dir, retired);
