@@ -33,7 +33,7 @@ export function experimentFixture(t, { linked = true, candidate = [0, 0], contra
   };
   git(primary, 'branch', '-M', 'main');
   const raw = (workspace, ...args) => spawnSync(process.execPath, [experimentBin, ...args, '--workspace', workspace, '--harness-home', home, '--copilot-home', copilotHome, '--json', '--no-events'], { cwd: workspace, env, encoding: 'utf8', timeout: 45_000 });
-  const initialized = raw(primary, 'init-repo');
+  const initialized = raw(primary, 'init-repo', '--shared');
   assert.equal(initialized.status, 0, initialized.stdout + initialized.stderr);
   fs.mkdirSync(path.join(primary, 'config'), { recursive: true });
   fs.mkdirSync(path.join(primary, 'fixtures'), { recursive: true });

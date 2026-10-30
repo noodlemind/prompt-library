@@ -107,7 +107,9 @@ test('passed verification becomes stale after an executable change and cannot re
   const product = path.join(workspace, 'src/example.js');
   fs.appendFileSync(product, '// Candidate script\n');
   fs.chmodSync(product, 0o755);
-  const copilotHome = path.join(workspace, '.harness/copilot'), home = path.join(workspace, '.harness/home');
+  const fixtureHomes = tempDir('harness-proof-state-');
+  t.after(() => fs.rmSync(fixtureHomes, { recursive: true, force: true }));
+  const copilotHome = path.join(fixtureHomes, 'copilot'), home = path.join(fixtureHomes, 'home');
   const args = ['verify', '--plan', planPath, '--base', 'HEAD', '--workspace', workspace, '--copilot-home', copilotHome, '--harness-home', home, '--json'];
   const verified = runHarness(args);
   assert.equal(verified.status, 0, verified.stdout + verified.stderr);

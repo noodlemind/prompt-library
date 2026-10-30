@@ -42,7 +42,7 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
     ...(facts.slice.neighborhood?.files || []).filter(file => file.sha256).map(file => [file.rel, file.sha256]),
     ...impactSources.map(source => [source.location, source.sha256]),
   ]);
-  const currentPlan = facts.active ? loadPlan(workspace, facts.active.path) : null;
+  const currentPlan = facts.active ? loadPlan(workspace, facts.active.path, { home: flags.harnessHome || flags.home }) : null;
   const planChanged = facts.active && (!currentPlan || planDigest(currentPlan.text) !== identity.task.contractDigest);
   const currentPolicy = policyDigest(workspace, undefined, { home: flags.harnessHome || flags.home });
   const changed = Boolean(facts.slice.impactContext?.coverage.sourceState === 'changed-or-unavailable' || planChanged || !currentPolicy || currentPolicy !== identity.policyDigest || !snapshot.valid || !after.valid || snapshot.state.digest !== after.state.digest || evidence.some((record) =>

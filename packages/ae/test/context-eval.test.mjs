@@ -7,9 +7,10 @@ import { test } from 'node:test';
 import { contextAgentArgs, prepareCase, resolveStudyOutput, runChecks, runStudy, summarizeStudy } from '../eval/context/study.mjs';
 import { agentResultOf } from '../lib/agent-cmd.mjs';
 import { buildTaskHandoff, validateContextSnapshot } from '../lib/task-handoff.mjs';
-import { readSession } from '../lib/session.mjs';
+import { readSession, writeSession } from '../lib/session.mjs';
 import { readOrientSlice } from '../lib/orient-read.mjs';
 import { buildChildEnv } from '../lib/exec-policy.mjs';
+import { projectStoreDir } from '../lib/project-layout.mjs';
 
 const simple = {
   id: 'example', split: 'development', family: 'known-file',
@@ -125,16 +126,38 @@ test('reset preparation preserves the accepted contract and requires fresh sourc
   const task = JSON.parse(fs.readFileSync(new URL('../eval/context/cases.json', import.meta.url))).cases.find(task => task.id === 'reset-pricing');
   const fixture = await prepareCase({ task, root: directory(t), id: 'reset' });
   const before = readSession(fixture.workspace);
-  const handoff = buildTaskHandoff({ workspace: fixture.workspace, task: task.prompt });
+  const handoff = buildTaskHandoff({ workspace: fixture.workspace, task: task.prompt, home: fixture.harnessHome });
   assert.equal(handoff.contract?.intent, 'Add a fixed fee of 2 after tax.');
   assert.deepEqual(handoff.contract.constraints, ['Preserve the current TAX_RATE export.', 'Preserve the synchronous total(amount) interface.']);
   assert.equal(handoff.plan.locked, true);
   assert.equal(handoff.requiresRead, true);
   assert.equal(handoff.evidence.find(row => row.location === 'src/price.mjs')?.state, 'changed');
-  assert.equal(validateContextSnapshot({ workspace: fixture.workspace, snapshot: before.contextSnapshot, targets: ['src/price.mjs'] }).pass, false);
+  assert.equal(validateContextSnapshot({ workspace: fixture.workspace, snapshot: before.contextSnapshot, targets: ['src/price.mjs'], home: fixture.harnessHome }).pass, false);
   const current = readOrientSlice({ workspace: fixture.workspace, copilotHome: fixture.copilotHome, flags: { home: fixture.harnessHome, contextVersion: 2 }, query: 'Resume accepted pricing', files: task.seeds });
   assert.notEqual(current.evidence[0].sha256, before.contextSnapshot.evidence[0].sha256);
-  assert.equal(validateContextSnapshot({ workspace: fixture.workspace, snapshot: readSession(fixture.workspace).contextSnapshot, targets: ['src/price.mjs'] }).pass, true);
+  assert.equal(validateContextSnapshot({ workspace: fixture.workspace, snapshot: readSession(fixture.workspace).contextSnapshot, targets: ['src/price.mjs'], home: fixture.harnessHome }).pass, true);
+});
+
+test('managed plan context and handoff retain the selected external home and refuse another home', async t => {
+  const task = JSON.parse(fs.readFileSync(new URL('../eval/context/cases.json', import.meta.url))).cases.find(task => task.id === 'reset-pricing');
+  const fixture = await prepareCase({ task, root: directory(t), id: 'selected-home' });
+  const session = readSession(fixture.workspace), previous = path.join(fixture.workspace, session.activePlan);
+  const plan = path.join(projectStoreDir(fixture.workspace, { home: fixture.harnessHome }), 'plans', path.basename(previous));
+  fs.mkdirSync(path.dirname(plan), { recursive: true });
+  fs.renameSync(previous, plan);
+  writeSession(fixture.workspace, { ...session, activePlan: plan });
+  const record = readOrientSlice({ workspace: fixture.workspace, copilotHome: fixture.copilotHome,
+    flags: { home: fixture.harnessHome, contextVersion: 2, plan }, query: task.resume.intent, files: task.seeds });
+  assert.equal(record.coverage.sourceState, 'validated', record.coverage.validationReason);
+  const snapshot = readSession(fixture.workspace).contextSnapshot;
+  assert.equal(validateContextSnapshot({ workspace: fixture.workspace, snapshot, targets: task.seeds, home: fixture.harnessHome }).pass, true);
+  const wrongHome = path.join(fixture.trial, 'unselected-home');
+  fs.mkdirSync(wrongHome);
+  assert.equal(validateContextSnapshot({ workspace: fixture.workspace, snapshot, targets: task.seeds, home: wrongHome }).pass, false);
+  assert.equal(buildTaskHandoff({ workspace: fixture.workspace, home: fixture.harnessHome, task: task.prompt }).contract.intent, task.resume.intent);
+  const wrongHandoff = buildTaskHandoff({ workspace: fixture.workspace, home: wrongHome, task: task.prompt });
+  assert.equal(wrongHandoff.plan, null);
+  assert.equal(wrongHandoff.requiresRead, true);
 });
 
 test('reset contract edits remain scope violations after a correct repair', async t => {

@@ -987,7 +987,7 @@ export async function runAgentLoop({
       messages = compactMessages(messages, {
         keepTurns: TRANSCRIPT_FULL_TURNS,
         mode: retentionPolicy === 'structured' ? 'structured' : isAutonomous ? 'all' : 'explore',
-        handoff: retentionPolicy === 'structured' ? buildTaskHandoff({ workspace, task, domainPlan: deliveryState.domainPlan }) : null,
+        handoff: retentionPolicy === 'structured' ? buildTaskHandoff({ workspace, task, domainPlan: deliveryState.domainPlan, home: runHarnessHome }) : null,
       });
       if (now() >= deadline) { stop = 'time-budget'; break; }
 

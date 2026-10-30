@@ -95,7 +95,7 @@ export function beforeDeliveryTool(call, options) {
   if (productMutation) {
     const session = readSession(options.workspace);
     if (!session?.lastOrientReadAt || !session.files?.length) return { pass: false, reason: 'missing-orient-read: call ae orient --read --query <task> --file <each touched file> before product edits.' };
-    const current = validateContextSnapshot({ workspace: options.workspace, snapshot: session.contextSnapshot, targets: normalized.targets });
+    const current = validateContextSnapshot({ workspace: options.workspace, snapshot: session.contextSnapshot, targets: normalized.targets, home: options.harnessHome });
     if (!current.pass) return current;
   }
   return { pass: true };

@@ -1,16 +1,23 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import YAML from 'yaml';
 import { buildPlanSkeleton } from '../lib/plan-new.mjs';
+import { tempDir } from './helpers/temp.mjs';
 
 const binPath = path.resolve(import.meta.dirname, '..', 'bin', 'ae.mjs');
+const roots = [];
+after(() => roots.forEach(root => fs.rmSync(root, { recursive: true, force: true })));
+const aeHome = ws => path.join(path.dirname(ws), 'harness-home');
+const copilotHome = ws => path.join(path.dirname(ws), '.copilot-home');
+const runtimeEnv = ws => ({ ...process.env, COPILOT_HOME: copilotHome(ws), AE_HOME: aeHome(ws), HARNESS_HOME: aeHome(ws) });
 
 function workspace() {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-plannew-'));
+  const root = tempDir('harness-plannew-');
+  roots.push(root);
+  const ws = path.join(root, 'product');
   fs.mkdirSync(path.join(ws, 'docs', 'plans'), { recursive: true });
   fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'policy.yaml'), 'version: 1\nenforcement: enforce\ngate_ttl_minutes: 30\nevidence_ttl_hours: 24\n');
@@ -23,12 +30,12 @@ function workspace() {
 }
 
 function harness(ws, args) {
-  const home = path.join(ws, '.copilot-home');
+  const home = copilotHome(ws);
   fs.mkdirSync(home, { recursive: true });
   const r = spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
     cwd: ws,
     encoding: 'utf8',
-    env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') },
+    env: runtimeEnv(ws),
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
@@ -146,14 +153,14 @@ test('CLI: plan-new slices at the `--` boundary — no value flag swallows it, n
       binPath, 'plan-new', '--type', 'feat', '--slug', 'boundary-demo', '--intent', 'Do the thing',
       '--date', '2026-07-21', '--workspace', ws, '--title', '--', '--json',
     ],
-    { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: path.join(ws, '.copilot-home'), HARNESS_HOME: path.join(ws, 'harness-home') } }
+    { cwd: ws, encoding: 'utf8', env: runtimeEnv(ws) }
   );
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /plan-new/, 'the human ledger renders');
   assert.throws(() => JSON.parse(r.stdout), 'the post-boundary --json must be inert content, not the output selector');
-  const written = fs.readdirSync(path.join(ws, 'harness-home'), { recursive: true }).find((name) => String(name).endsWith('boundary-demo-plan.md'));
+  const written = fs.readdirSync(aeHome(ws), { recursive: true }).find((name) => String(name).endsWith('boundary-demo-plan.md'));
   assert.ok(written, 'plan file is outside the repo');
-  const content = fs.readFileSync(path.join(ws, 'harness-home', String(written)), 'utf8');
+  const content = fs.readFileSync(path.join(aeHome(ws), String(written)), 'utf8');
   const frontmatter = YAML.parse(content.match(/^---\n([\s\S]*?)\n---/)[1]);
   assert.equal(frontmatter.title, 'Boundary Demo', 'the boundary token must never become the --title value');
   fs.rmSync(ws, { recursive: true, force: true });
