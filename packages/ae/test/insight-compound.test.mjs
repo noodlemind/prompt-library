@@ -120,11 +120,12 @@ const run = (args, env = {}) => {
     env: { ...process.env, ...(harnessHome ? { HARNESS_HOME: harnessHome } : {}), ...env },
   });
 };
-const runAsync = (args, env = {}) =>
+const runAsync = (args, env = {}, { timeoutMs = 0 } = {}) =>
   new Promise((resolve) => {
     const harnessHome = cliHarnessHome(args, env);
     const child = spawn(process.execPath, [binPath, ...args], {
       env: { ...process.env, ...(harnessHome ? { HARNESS_HOME: harnessHome } : {}), ...env },
+      timeout: timeoutMs,
     });
     let stdout = '';
     let stderr = '';
@@ -132,6 +133,14 @@ const runAsync = (args, env = {}) =>
     child.stderr.on('data', (d) => (stderr += d));
     child.on('close', (code) => resolve({ status: code, stdout, stderr }));
   });
+
+function captureAcquisitionBusy(result) {
+  if (result.status !== 2) return false;
+  try {
+    const error = JSON.parse(result.stderr.trim()).error;
+    return error?.code === 'E_USAGE' && error.message === 'plan-update: plan is locked by another update';
+  } catch { return false; }
+}
 
 test('compound --insight writes a kind: insight doc without any plan or evidence', () => {
   const ws = keepSolutionsInWorkspace(tempDir('insight-ws-'));
@@ -272,15 +281,27 @@ test('compound --insight reads body from --body-file and indexes the doc', () =>
   assert.match(manifest, /retry-storms-need-jitter/);
 });
 
-test('P1#1: N concurrent same-title captures never overwrite — N distinct files and N distinct reported paths', async () => {
+test('P1#1: N concurrent same-title captures never overwrite — N distinct files and N distinct reported paths', async t => {
   const ws = keepSolutionsInWorkspace(tempDir('insight-race-ws-'));
   const home = tempDir('insight-race-home-');
+  t.after(() => [ws, home].forEach(dir => fs.rmSync(dir, { recursive: true, force: true })));
   const N = 16;
   const args = [
     'compound', '--insight', '--title', 'Concurrent duplicate lesson',
     '--body', 'Racing observation.', '--workspace', ws, '--copilot-home', home, '--json',
   ];
-  const results = await Promise.all(Array.from({ length: N }, () => runAsync(args)));
+  const capture = async () => {
+    const deadline = Date.now() + 30000;
+    let result;
+    for (let attempt = 0; attempt < 4 && Date.now() < deadline; attempt++) {
+      result = await runAsync(args, {}, { timeoutMs: Math.max(1, deadline - Date.now()) });
+      // This exact refusal occurs before the publication callback. Other errors
+      // may follow a write and cannot safely retry an anonymous capture.
+      if (!captureAcquisitionBusy(result)) return result;
+    }
+    return result;
+  };
+  const results = await Promise.all(Array.from({ length: N }, capture));
   for (const r of results) assert.equal(r.status, 0, r.stderr || r.stdout);
 
   const reported = results.map((r) => JSON.parse(r.stdout).path);
@@ -290,6 +311,41 @@ test('P1#1: N concurrent same-title captures never overwrite — N distinct file
   const dir = path.join(projectStoreDir(ws, { home: path.join(home, 'hh') }), 'docs', 'solutions', 'insights');
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
   assert.equal(files.length, N, `all ${N} episode files must survive — no silent overwrite (got ${files.length})`);
+});
+
+test('capture acquisition refusal publishes nothing and one retry after release publishes one episode', async t => {
+  const dir = tempDir('insight-busy-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const ws = keepSolutionsInWorkspace(path.join(dir, 'product')), home = path.join(dir, 'copilot');
+  const knowledge = path.join(home, 'knowledge'); fs.mkdirSync(knowledge, { recursive: true });
+  const held = path.join(dir, 'held'), release = path.join(dir, 'release');
+  const script = `import fs from 'node:fs';import {withPlanUpdateLock} from ${JSON.stringify(pathToFileURL(path.join(packageRoot, 'lib/plan-update.mjs')).href)};
+withPlanUpdateLock(${JSON.stringify(path.join(knowledge, 'manifest.yaml'))},()=>{fs.writeFileSync(${JSON.stringify(held)},'');const deadline=Date.now()+20000;while(!fs.existsSync(${JSON.stringify(release)})){if(Date.now()>deadline)throw Error('release timed out');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}});`;
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', script], { timeout: 30000 });
+  t.after(() => { if (holder.exitCode === null) holder.kill(); });
+  let holderError = '';
+  holder.stderr.on('data', chunk => holderError += chunk);
+  const finished = new Promise(resolve => holder.on('close', status => resolve(status)));
+  const started = Date.now();
+  while (!fs.existsSync(held)) {
+    assert.ok(Date.now() - started < 10000, 'holder must acquire the real publication lock');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const args = ['compound', '--insight', '--title', 'Busy capture', '--body', 'One observation.', '--workspace', ws, '--copilot-home', home, '--json'];
+  const episodes = path.join(projectStoreDir(ws, { home: path.join(home, 'hh') }), 'docs/solutions/insights');
+  let refused, filesBeforeRelease;
+  try {
+    refused = await runAsync(args, {}, { timeoutMs: 15000 });
+    filesBeforeRelease = fs.existsSync(episodes) ? fs.readdirSync(episodes).filter(file => file.endsWith('.md')) : [];
+  } finally { fs.writeFileSync(release, ''); }
+  assert.equal(await finished, 0, holderError);
+  assert.equal(captureAcquisitionBusy(refused), true, refused.stderr || refused.stdout);
+  assert.deepEqual(filesBeforeRelease, []);
+  const retried = await runAsync(args, {}, { timeoutMs: 15000 });
+  assert.equal(retried.status, 0, retried.stderr || retried.stdout);
+  const result = JSON.parse(retried.stdout);
+  assert.deepEqual(fs.readdirSync(episodes).filter(file => file.endsWith('.md')), [path.basename(result.path)]);
+  assert.match(fs.readFileSync(cliEpisode(ws, home, result.path), 'utf8'), /One observation\./);
 });
 
 test('P1#1: a pre-existing file at the chosen suffix forces the next suffix (exclusive-create, never overwrite)', () => {

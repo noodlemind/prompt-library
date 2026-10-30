@@ -7,6 +7,7 @@ import { writeFileContained, readFileNoFollow, canonicalPath, assertNoSymlinkAnc
 import { harnessGlobalHome, resolveCopilotHome } from './paths.mjs';
 import { runtimeSetting } from '../corpus/hooks/lib/runtime-identity.mjs';
 import { aeWorktreePrimary } from './worktree.mjs';
+import { withPlanUpdateLock } from './plan-update.mjs';
 
 export const TRUST_SCHEMA_VERSION = 1;
 
@@ -56,36 +57,43 @@ export function projectIdentity(workspace) {
 
 export function policyDigest(workspace, files = PINNED_FILES) {
   const hash = crypto.createHash('sha256');
+  let root;
+  try { root = canonicalPath(path.resolve(workspace)); } catch { return null; }
   for (const rel of files) {
-    const full = path.join(workspace, rel);
+    const full = path.join(root, rel);
     hash.update(rel);
     try {
+      if (!assertNoSymlinkAncestors(root, rel)) return null;
       hash.update('\0present\0');
-      const content = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024, encoding: null });
-      if (content === null && !fs.existsSync(full)) throw new Error('absent');
-      hash.update(content === null ? 'unreadable' : content);
-    } catch {
-      hash.update('\0absent\0');
-    }
+      const stat = fs.lstatSync(full, { throwIfNoEntry: false });
+      if (!stat) { hash.update('\0absent\0'); continue; }
+      const content = readFileNoFollow(full, { root, maxBytes: 1024 * 1024, encoding: null });
+      if (content === null) return null;
+      hash.update(content);
+    } catch { return null; }
   }
   return hash.digest('hex');
 }
 
 function routingFilePresent(workspace) {
-  return fs.existsSync(path.join(workspace, '.github', 'harness', 'routing.yaml'));
+  try { return Boolean(fs.lstatSync(path.join(workspace, '.github', 'harness', 'routing.yaml'), { throwIfNoEntry: false })); }
+  catch { return true; }
 }
 
 /** Current digest, or the pre-routing digest when that file is still absent. */
 export function digestMatchesApproval(recordDigest, workspace) {
   if (!recordDigest) return false;
-  if (recordDigest === policyDigest(workspace)) return true;
+  const current = policyDigest(workspace);
+  if (!current) return false;
+  if (recordDigest === current) return true;
   if (!routingFilePresent(workspace) && recordDigest === policyDigest(workspace, LEGACY_PINNED_FILES)) return true;
   return false;
 }
 
-function parseStoreFile(file) {
+function parseStoreFile(file, root) {
   try {
-    const doc = YAML.parse(readFileNoFollow(file, { maxBytes: 1024 * 1024 }) || 'null', { maxAliasCount: 50 });
+    if (!assertNoSymlinkAncestors(root, path.relative(root, file))) throw new Error('unsafe trust store');
+    const doc = YAML.parse(readFileNoFollow(file, { root, maxBytes: 1024 * 1024 }) || 'null', { maxAliasCount: 50 });
     if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
       return { version: TRUST_SCHEMA_VERSION, projects: {}, unreadable: true };
     }
@@ -99,21 +107,32 @@ function parseStoreFile(file) {
   }
 }
 
-function readStore({ copilotHome, home } = {}) {
+function withTrustStoreLock(options, action) {
+  const root = trustRoot(options);
+  if (!assertNoSymlinkAncestors(root, 'trust.yaml')) throw Object.assign(new Error('trust store path is unsafe or symlinked'), { code: 'E_TARGET', exit: 1 });
+  fs.mkdirSync(root, { recursive: true });
+  return withPlanUpdateLock(path.join(root, 'trust.yaml'), action);
+}
+
+function readStore({ copilotHome, home } = {}, { locked = false, migrate = true } = {}) {
   const file = trustStorePath({ copilotHome, home });
-  if (fs.existsSync(file)) return parseStoreFile(file);
-  const legacy = legacyTrustStorePath(copilotHome || resolveCopilotHome(undefined));
-  if (path.resolve(legacy) === path.resolve(file) || !fs.existsSync(legacy)) {
-    return { version: TRUST_SCHEMA_VERSION, projects: {} };
-  }
-  const parsed = parseStoreFile(legacy);
-  if (parsed.unreadable) return parsed;
   try {
+    const root = trustRoot({ copilotHome, home });
+    if (!assertNoSymlinkAncestors(root, 'trust.yaml')) throw new Error('unsafe trust store');
+    if (fs.lstatSync(file, { throwIfNoEntry: false })) return parseStoreFile(file, root);
+    const legacyRoot = path.resolve(copilotHome || resolveCopilotHome(undefined));
+    const legacy = legacyTrustStorePath(legacyRoot);
+    if (path.resolve(legacy) === path.resolve(file)) return { version: TRUST_SCHEMA_VERSION, projects: {} };
+    if (!assertNoSymlinkAncestors(legacyRoot, path.relative(legacyRoot, legacy))) throw new Error('unsafe legacy trust store');
+    if (!fs.lstatSync(legacy, { throwIfNoEntry: false })) return { version: TRUST_SCHEMA_VERSION, projects: {} };
+    if (!locked && migrate) return withTrustStoreLock({ copilotHome, home }, () => readStore({ copilotHome, home }, { locked: true }));
+    const parsed = parseStoreFile(legacy, legacyRoot);
+    if (parsed.unreadable || !migrate) return parsed;
     writeStore({ copilotHome, home }, parsed);
-  } catch {
     return parsed;
+  } catch {
+    return { version: TRUST_SCHEMA_VERSION, projects: {}, unreadable: true };
   }
-  return parsed;
 }
 
 function writeStore({ copilotHome, home } = {}, store) {
@@ -133,6 +152,7 @@ function approvalState(record, workspace, store) {
   if (store.unreadable) return { state: 'untrusted', reason: 'the trust store could not be read, so nothing is trusted' };
   if (record?.status === 'conflict') return { state: 'untrusted', reason: 'conflicting approvals for this project require a new approval' };
   if (record?.status === 'revoked') return { state: 'revoked', reason: 'trust was explicitly revoked' };
+  if (policyDigest(workspace) === null) return { state: 'untrusted', reason: 'a pinned policy source is unreadable, unsafe, nonregular or larger than 1 MiB' };
   if (record?.status === 'trusted') {
     if (digestMatchesApproval(record.digest, workspace)) return { state: 'trusted', reason: `approved ${record.approvedAt}` };
     return { state: 'stale', reason: 'the policy files have changed since this project was approved' };
@@ -170,7 +190,7 @@ export function trustStatus({ workspace, copilotHome, home }) {
   let inheritedFrom = null;
   let approvedAt = record?.approvedAt ?? null;
   let approvedDigest = record?.digest ?? null;
-  const ownDecides = store.unreadable || record?.status === 'revoked' || record?.status === 'trusted' || record?.status === 'conflict';
+  const ownDecides = store.unreadable || digest === null || record?.status === 'revoked' || record?.status === 'trusted' || record?.status === 'conflict';
   if (!ownDecides) {
     const primary = aeWorktreePrimary(workspace);
     if (primary) {
@@ -215,36 +235,41 @@ export function isProjectTrusted({ workspace, copilotHome, home }) {
 }
 
 export function approveProject({ workspace, copilotHome, home, now = new Date().toISOString() }) {
-  const identity = projectIdentity(workspace);
-  const store = readStore({ copilotHome, home });
-  if (store.unreadable) {
-    throw Object.assign(new Error('refusing to write over an unreadable trust store'), {
-      code: 'E_TARGET',
-      exit: 1,
-      hint: `inspect ${trustStorePath({ copilotHome, home })} by hand — overwriting it would silently discard every approval it holds`,
-    });
-  }
-  const digest = policyDigest(workspace);
-  store.version = TRUST_SCHEMA_VERSION;
-  setProjectApproval(store, identity, { status: 'trusted', approvedAt: now, digest });
-  writeStore({ copilotHome, home }, store);
-  return trustStatus({ workspace, copilotHome, home });
+  return withTrustStoreLock({ copilotHome, home }, () => {
+    const identity = projectIdentity(workspace);
+    const store = readStore({ copilotHome, home }, { locked: true, migrate: false });
+    if (store.unreadable) {
+      throw Object.assign(new Error('refusing to write over an unreadable trust store'), {
+        code: 'E_TARGET',
+        exit: 1,
+        hint: `inspect ${trustStorePath({ copilotHome, home })} by hand — overwriting it would silently discard every approval it holds`,
+      });
+    }
+    const digest = policyDigest(workspace);
+    if (!digest) throw Object.assign(new Error('refusing to approve unreadable, unsafe, nonregular or oversized pinned policy sources'), { code: 'E_TARGET', exit: 1, hint: 'inspect the pinned files and restore bounded regular sources inside the project before approving' });
+    store.version = TRUST_SCHEMA_VERSION;
+    setProjectApproval(store, identity, { status: 'trusted', approvedAt: now, digest });
+    writeStore({ copilotHome, home }, store);
+    return trustStatus({ workspace, copilotHome, home });
+  });
 }
 
 export function revokeProject({ workspace, copilotHome, home, now = new Date().toISOString() }) {
-  const identity = projectIdentity(workspace);
-  const store = readStore({ copilotHome, home });
-  if (store.unreadable) {
-    throw Object.assign(new Error('refusing to write over an unreadable trust store'), {
-      code: 'E_TARGET',
-      exit: 1,
-      hint: `inspect ${trustStorePath({ copilotHome, home })} by hand`,
-    });
-  }
-  store.version = TRUST_SCHEMA_VERSION;
-  setProjectApproval(store, identity, { status: 'revoked', revokedAt: now });
-  writeStore({ copilotHome, home }, store);
-  return trustStatus({ workspace, copilotHome, home });
+  return withTrustStoreLock({ copilotHome, home }, () => {
+    const identity = projectIdentity(workspace);
+    const store = readStore({ copilotHome, home }, { locked: true, migrate: false });
+    if (store.unreadable) {
+      throw Object.assign(new Error('refusing to write over an unreadable trust store'), {
+        code: 'E_TARGET',
+        exit: 1,
+        hint: `inspect ${trustStorePath({ copilotHome, home })} by hand`,
+      });
+    }
+    store.version = TRUST_SCHEMA_VERSION;
+    setProjectApproval(store, identity, { status: 'revoked', revokedAt: now });
+    writeStore({ copilotHome, home }, store);
+    return trustStatus({ workspace, copilotHome, home });
+  });
 }
 
 export function trustError(message, hint) {

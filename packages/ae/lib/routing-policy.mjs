@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
+import { assertNoSymlinkAncestors, canonicalPath, readFileNoFollow } from './fs-safe.mjs';
 
 export const ROUTING_VERSION = 1;
 export const ID_RE = /^[a-z][a-z0-9-]{0,63}$/;
@@ -16,10 +17,12 @@ const RULE_TARGET = Object.freeze({
 
 export function loadRoutingPolicy(workspace) {
   const full = path.join(workspace, '.github', 'harness', 'routing.yaml');
-  if (!fs.existsSync(full)) return { missing: true, policy: null, errors: [] };
   let text;
   try {
-    text = fs.readFileSync(full, 'utf8');
+    if (!assertNoSymlinkAncestors(canonicalPath(workspace), '.github/harness/routing.yaml')) throw new Error('source is unsafe or symlinked');
+    if (!fs.lstatSync(full, { throwIfNoEntry: false })) return { missing: true, policy: null, errors: [] };
+    text = readFileNoFollow(full, { root: workspace, maxBytes: 1024 * 1024 });
+    if (text === null) throw new Error('source is unreadable, nonregular or larger than 1 MiB');
   } catch (error) {
     return { missing: false, policy: null, errors: [`routing.yaml unreadable: ${error.message}`] };
   }

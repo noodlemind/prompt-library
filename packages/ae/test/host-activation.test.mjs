@@ -62,7 +62,7 @@ for (const camel of [false, true]) test(`installed full skill read in documented
     : { tool_response: undefined, tool_result: { result_type: 'success', text_result_for_llm: body } };
   const activation = f.read(undefined, undefined, extra);
   assert.equal(activation?.complete, true);
-  assert.equal(activation.source.path, f.source);
+  assert.equal(activation.source.path, fs.realpathSync.native(f.source));
   assert.equal(activation.source.sha256, hash(body));
 });
 

@@ -280,6 +280,7 @@ export function deliveryFixture(t, runtimeRoot = root) {
   fs.mkdirSync(ws);
   fs.mkdirSync(copilot);
   fs.writeFileSync(path.join(ws, '.gitignore'), '.harness/\n');
+  fs.writeFileSync(path.join(ws, 'package.json'), '{"type":"module"}\n');
   writeChecks(ws, { behavior: { command: [process.execPath, '-e', "import('./src/example.js').then(m => { if (m.value !== 2) process.exit(1); })"] } });
   fs.writeFileSync(path.join(ws, '.github/harness/policy.yaml'), 'version: 1\nenforcement: enforce\n');
   initGit(ws);

@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { plansWriteTarget, projectStoreDir } from './project-layout.mjs';
 import { harnessGlobalHome } from './paths.mjs';
 import { runMigrateLayout } from './migrate-layout.mjs';
+import { loadConfiguredChecks } from './plan-readiness.mjs';
+import { validateCommand } from './checks.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
@@ -33,7 +35,7 @@ checks: {}
 `;
 
 const POLICY_STUB = `version: 1
-enforcement: observe
+enforcement: enforce
 gate_ttl_minutes: 30
 evidence_ttl_hours: 24
 exemptions: []
@@ -161,5 +163,11 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
     log('skip knowledge store arming (failed)');
   }
 
+  const configured = loadConfiguredChecks(workspace);
+  if (!Object.entries(configured.checks || {}).some(([name, check]) => !validateCommand(name, check) && check.proof !== 'type-check')) {
+    const message = 'Declare at least one real behavioral check in .github/harness/checks.yaml, then have a person review the exact commands and approve project trust before delivery.';
+    stats.prerequisites = [{ id: 'named-checks', message }];
+    log(message);
+  }
   return stats;
 }

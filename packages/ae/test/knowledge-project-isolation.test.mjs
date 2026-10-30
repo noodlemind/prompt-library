@@ -144,7 +144,7 @@ test('changed postings cannot impersonate the recorded corpus and fall back to t
 test('ranked search uses one captured manifest for its generation and returned document metadata', (t) => {
   const f = fixture(t);
   f.invoke(f.alpha, 'index');
-  const file = path.join(f.copilotHome, 'knowledge', 'manifest.yaml');
+  const file = fs.realpathSync.native(path.join(f.copilotHome, 'knowledge', 'manifest.yaml'));
   const captured = loadManifest(f.copilotHome, f.alpha, { home: f.home });
   const open = fs.openSync, read = fs.readSync;
   let changed = false, manifestFd;

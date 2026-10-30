@@ -6,9 +6,9 @@ argument-hint: "[optional product repo path]"
 
 # Harness Doctor
 
-Run `ae doctor --workspace <product-path> --host vscode --json`. Harness owns discovery, runtime probes, check criteria, counts and diagnostic hints. Read its actual check results. Diagnose causes and choose an authorized repair; do not manually reproduce its check list or infer success from the presence of files.
+Select the target from the requested host or observed session: `vscode`, `cli`, or `intellij`. Run `ae doctor --workspace <product-path> --target <selected-target> --json`, preserving the selected homes with `--copilot-home`, `--ae-home`, and the configured `AE_INTELLIJ_HOME` when applicable. If the target is unknown, run base diagnosis without `--target` and report native target readiness as unselected. Harness owns discovery, runtime probes, check criteria, counts and diagnostic hints. Read its actual results, diagnose causes, and choose an authorized repair; file presence alone is not success.
 
-The VS Code hook probe uses an isolated fixture and the installed bundle. Passing it proves that executable contract on the fixture. Live editor invocation and a real product flow require their own evidence. Report an unsupported host as degraded; explicit gate and verify remain available.
+The VS Code and CLI hook probes use isolated fixtures and the installed bundle. Passing them proves those executable contracts, not live host activation. IntelliJ customization health does not establish mutation enforcement: native lifecycle hooks are unavailable. Report unsupported hosts as degraded; explicit gate and verify require an available CLI.
 
 Doctor is read-only. Product changes enter Engineer Deliver mode. When an agreed product adapter is available, read `<copilot-home>/skills/references/installed-product-proof.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/installed-product-proof.md --json` prints the same file.
 

@@ -13,7 +13,8 @@ import { DEFAULT_MAX_BYTES } from './fs-safe.mjs';
 
 export function validateContextSnapshot({ workspace, snapshot, targets }) {
   if (snapshot?.version !== 2) return { pass: true };
-  if (snapshot.state !== 'validated' || snapshot.policyDigest !== policyDigest(workspace)) return { pass: false, reason: 'context-stale: reorient after source or policy changes' };
+  const currentPolicy = policyDigest(workspace);
+  if (!currentPolicy || snapshot.state !== 'validated' || snapshot.policyDigest !== currentPolicy) return { pass: false, reason: 'context-stale: reorient after source or policy changes' };
   if (snapshot.sourceState?.digest) {
     const current = captureWorkingSources(workspace);
     if (!current.valid || current.state.digest !== snapshot.sourceState.digest) return { pass: false, reason: 'context-stale: reload the current source generation' };

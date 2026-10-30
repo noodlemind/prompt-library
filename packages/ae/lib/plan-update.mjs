@@ -61,7 +61,7 @@ export function planUpdateRoots(workspace, { home, domainContext } = {}) {
   ];
 }
 
-/** Directory created while a plan-update holds the file. Empty, and removed when the update finishes. */
+/** Directory containing the current owner's token while a plan-update holds the file. */
 export function planUpdateLockDir(full) {
   return path.join(path.dirname(full), `.${path.basename(full)}.lock`);
 }
@@ -70,34 +70,123 @@ function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function singleLockEntry(dir) {
+  const entries = fs.opendirSync(dir, { bufferSize: 2 });
+  try {
+    const first = entries.readSync();
+    return first && !entries.readSync() ? first : null;
+  } finally { entries.closeSync(); }
+}
+
+function planLockOwner(dir) {
+  try {
+    const stat = fs.lstatSync(dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
+    const entry = singleLockEntry(dir);
+    const match = entry?.name.match(/^owner-v1-([1-9][0-9]{0,15})-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/);
+    if (!match || !Number.isSafeInteger(Number(match[1]))) return null;
+    const stamp = path.join(dir, entry.name), stampStat = fs.lstatSync(stamp);
+    if (!stampStat.isDirectory() || stampStat.isSymbolicLink()) return null;
+    const contents = fs.opendirSync(stamp, { bufferSize: 1 });
+    try { if (contents.readSync()) return null; }
+    finally { contents.closeSync(); }
+    return { version: 1, pid: Number(match[1]), token: match[2], stamp: entry.name };
+  } catch { return null; }
+}
+
+function removePlanLock(dir, token) {
+  const owner = planLockOwner(dir);
+  if (owner?.token !== token) throw usage('plan-update: lock ownership lost; inspect the retained lock');
+  fs.rmdirSync(path.join(dir, owner.stamp));
+  fs.rmdirSync(dir);
+}
+
+function retirePlanLock(dir, token, parent = path.dirname(dir)) {
+  if (planLockOwner(dir)?.token !== token) throw usage('plan-update: lock ownership lost; inspect the retained lock');
+  const retirement = fs.mkdtempSync(path.join(parent, `.${path.basename(dir)}.retired-`));
+  try {
+    const retired = path.join(retirement, 'lock');
+    fs.renameSync(dir, retired);
+    removePlanLock(retired, token);
+  } finally {
+    try { fs.rmdirSync(retirement); } catch { /* preserve mismatched or unexpected retired contents */ }
+  }
+}
+
 function acquirePlanLock(full) {
   const lockDir = planUpdateLockDir(full);
+  const recovery = `${lockDir}.recovery`;
+  const owner = { version: 1, token: randomUUID(), pid: process.pid };
   const start = Date.now();
   while (true) {
+    const recovering = fs.lstatSync(recovery, { throwIfNoEntry: false });
+    if (recovering) {
+      if (!recovering.isDirectory() || recovering.isSymbolicLink()) throw usage('plan-update: unsafe lock recovery path; inspect before retrying');
+      if (Date.now() - start > LOCK_WAIT_MS) throw usage('plan-update: lock recovery is busy; inspect the retained recovery directory before retrying');
+      sleepMs(25);
+      continue;
+    }
     try {
-      fs.mkdirSync(lockDir);
-      return lockDir;
+      fs.mkdirSync(lockDir, { mode: 0o700 });
+      // Empty owner directories keep legacy in-repo plan locks out of Git-observed proof scope.
+      try { fs.mkdirSync(path.join(lockDir, `owner-v1-${owner.pid}-${owner.token}`), { mode: 0o700 }); }
+      catch {
+        try { fs.rmdirSync(lockDir); } catch { /* retain a nonempty or changed lock for inspection */ }
+        throw usage('plan-update: lock owner could not be recorded');
+      }
+      if (fs.lstatSync(recovery, { throwIfNoEntry: false })) {
+        retirePlanLock(lockDir, owner.token);
+        continue;
+      }
+      return { dir: lockDir, token: owner.token };
     } catch (error) {
       if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error;
       if (Date.now() - start > LOCK_WAIT_MS) {
         if (error.code !== 'EEXIST') throw error;
         throw usage('plan-update: plan is locked by another update');
       }
-      if (error.code === 'EEXIST') try {
-        if (Date.now() - fs.statSync(lockDir).mtimeMs > LOCK_STALE_MS) {
-          fs.rmdirSync(lockDir);
-          continue;
+      if (error.code === 'EEXIST') {
+        const stat = fs.lstatSync(lockDir, { throwIfNoEntry: false });
+        if (!stat) continue;
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw usage('plan-update: unsafe lock path; inspect before removing it');
+        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          const previous = planLockOwner(lockDir);
+          if (!previous) throw usage('plan-update: lock owner is unreadable; inspect before removing it');
+          let absent = false;
+          try { process.kill(previous.pid, 0); }
+          catch (error) {
+            if (error.code === 'ESRCH') absent = true;
+            else throw usage('plan-update: lock owner liveness is unavailable; absence is not proven');
+          }
+          if (absent) {
+            try { fs.mkdirSync(recovery, { mode: 0o700 }); }
+            catch (error) { if (error.code === 'EEXIST') continue; throw error; }
+            try {
+              if (planLockOwner(lockDir)?.token !== previous.token) continue;
+              const retired = path.join(recovery, 'retired');
+              fs.renameSync(lockDir, retired);
+              removePlanLock(retired, previous.token);
+            } finally {
+              try { fs.rmdirSync(recovery); } catch { /* retain unexpected recovery contents for inspection */ }
+            }
+            continue;
+          }
         }
-      } catch {
-        // A competing releaser may already have removed the lock; retry within the same budget.
       }
       sleepMs(25);
     }
   }
 }
 
-function releasePlanLock(lockDir) {
-  try { fs.rmdirSync(lockDir); } catch { /* the lock is already gone */ }
+function releasePlanLock(lock) {
+  const recovery = `${lock.dir}.recovery`;
+  try { fs.mkdirSync(recovery, { mode: 0o700 }); }
+  catch { throw usage('plan-update: lock recovery is busy; inspect before releasing the retained lock'); }
+  try {
+    retirePlanLock(lock.dir, lock.token, recovery);
+  } finally {
+    try { fs.rmdirSync(recovery); } catch { /* preserve a mismatched retired owner for inspection */ }
+  }
 }
 
 export function withPlanUpdateLock(full, fn) {

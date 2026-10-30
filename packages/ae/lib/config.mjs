@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { EXIT } from './style.mjs';
-import { writeFileContained } from './fs-safe.mjs';
+import { writeFileContained, readFileNoFollow, assertNoSymlinkAncestors, canonicalPath } from './fs-safe.mjs';
 import { DEFAULT_PROVIDER, PROVIDER_IDS } from './provider.mjs';
 
 export const CONFIG_SCHEMA_VERSION = 1;
@@ -317,11 +317,14 @@ export function coerceValue(key, raw) {
   return spec.validate ? spec.validate(value) : value;
 }
 
-export function loadConfigFile(file) {
-  if (!fs.existsSync(file)) return { exists: false, values: {}, errors: [] };
+export function loadConfigFile(file, { root = path.dirname(file) } = {}) {
   let doc;
   try {
-    doc = YAML.parse(fs.readFileSync(file, 'utf8'), { maxAliasCount: 50 });
+    if (!fs.lstatSync(file, { throwIfNoEntry: false })) return { exists: false, values: {}, errors: [] };
+    if (!assertNoSymlinkAncestors(canonicalPath(root), path.relative(path.resolve(root), path.resolve(file)))) throw new Error('configuration source is unsafe or symlinked');
+    const text = readFileNoFollow(file, { root, maxBytes: 1024 * 1024 });
+    if (text === null) throw new Error('configuration source is unreadable, nonregular or larger than 1 MiB');
+    doc = YAML.parse(text, { maxAliasCount: 50 });
   } catch (error) {
     return { exists: true, values: {}, errors: [`${file}: ${error.message}`] };
   }
@@ -351,8 +354,8 @@ export function loadConfigFile(file) {
 export function resolveConfig({ copilotHome, workspace, projectTrusted = true } = {}) {
   const userFile = configPathFor('user', { copilotHome, workspace });
   const projectFile = configPathFor('project', { copilotHome, workspace });
-  const user = loadConfigFile(userFile);
-  const project = loadConfigFile(projectFile);
+  const user = loadConfigFile(userFile, { root: copilotHome });
+  const project = loadConfigFile(projectFile, { root: workspace });
 
   const values = {};
   const provenance = {};
@@ -426,7 +429,7 @@ export function setConfigValue({ scope, key, value, copilotHome, workspace }) {
   }
   const coerced = coerceValue(key, value);
   const file = configPathFor(scope, { copilotHome, workspace });
-  const existing = loadConfigFile(file);
+  const existing = loadConfigFile(file, { root: scope === 'user' ? copilotHome : workspace });
   if (existing.errors.length && existing.exists) {
         throw Object.assign(new Error(`refusing to write over a config with errors: ${existing.errors[0]}`), {
       code: 'E_TARGET',
@@ -460,7 +463,7 @@ export function unsetConfigValue({ scope, keys, copilotHome, workspace }) {
     }
   }
   const file = configPathFor(scope, { copilotHome, workspace });
-  const existing = loadConfigFile(file);
+  const existing = loadConfigFile(file, { root: scope === 'user' ? copilotHome : workspace });
   if (!existing.exists) return { file, keys: named, scope, removed: [] };
   if (existing.errors.length) {
     throw Object.assign(new Error(`refusing to write over a config with errors: ${existing.errors[0]}`), {

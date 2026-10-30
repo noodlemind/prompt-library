@@ -951,5 +951,5 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
 
   const required = checks.filter((c) => !c.optional);
   const pass = required.every((c) => c.pass);
-  return { checks, pass, diagnostics: recoveryDiagnostics({ source: 'doctor', checks, workspace, copilotHome, home: flags.harnessHome || flags.home || harnessGlobalHome() }) };
+  return { checks, pass, diagnostics: recoveryDiagnostics({ source: 'doctor', checks, workspace, copilotHome, target, home: flags.harnessHome || flags.home || harnessGlobalHome() }) };
 }

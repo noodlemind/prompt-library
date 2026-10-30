@@ -44,9 +44,13 @@ Installed to `~/.copilot/bin/ae` on every `ae install`. Add to PATH with `ae ins
 
 | Code | Meaning |
 |------|---------|
-| `0` | Pass |
-| `1` | Fail — stop before `editFiles` or compound |
-| `2` | Warn — may proceed with Activity log (strict profile: treat as block) |
+| `0` | Command completed; inspect its result |
+| `1` | Failure |
+| `2` | Usage refusal (`E_USAGE`) or command-specific advisory; inspect the result |
+| `3`–`9` | Setup, approval, conflict, doctor, network, timeout, or target failure |
+| `130` | Interrupted or cancelled |
+
+A nonzero exit never establishes mutation or completion authority. Read stdout and stderr, including structured `ok:false` errors, and inspect the command-specific `pass`, `outcome` and advisory checks. An advisory result may be reported as such; `E_USAGE` means the operation was refused. Require the current passed gate and verification records before the corresponding next operation.
 
 **Envelope versioning (Phase 1 workbench, additive).** `--output` is a lane-bearing, opt-in surface, not a blanket capability every command gained — only the commands named below accept it; every other registered command now REJECTS `--output` with a structured `E_USAGE` error (exit 2) naming the lane-bearing commands, instead of silently ignoring it and rendering plain ledger output (fixed post-P1.6; see `lib/registry.mjs`'s `assertLaneSupported`). The lane-bearing set today: `orient`, `learnings`, `status`, and the Phase 2 retrieval commands `search`, `lookup`, `tree`, `recall` and `get` accept `--output json-envelope|agent` (`--output=value` works too) — `json-envelope` wraps the command's result in a versioned `{schema, command, status, ...}` envelope, `agent` renders a budgeted plain-text summary for LLM callers; `verify` additionally accepts `--output jsonl`, streaming row-per-event with a terminal `result` row (no `json-envelope`/`agent` support of its own). `status` in all of these uses one shared vocabulary — `ok\|failed\|cancelled\|timed-out`, plus `blocked` where gate-like semantics already use it. These are opt-in, additive lanes: legacy results documented below (the default ledger render and `--json`) remain **unversioned** — no `schema` field or wrapper. Named-check truncation metadata is additive; retained diagnostics are bounded and sanitized as described below. Recognized secret redaction (Phase 1 AC6) is applied at one shared emission boundary (`lib/redact.mjs#redactedJson`) that every legacy serializer routes through before anything reaches stdout, so a payload that contains a registered secret emits `«redacted:<kind>»` where the credential used to be. Existing core fields remain available; a recognized credential value is redacted. Do not rely on `--output` for a command not named above — it will error, not silently no-op; a command's help (`ae help <command>`) also states whether it supports a lane.
 

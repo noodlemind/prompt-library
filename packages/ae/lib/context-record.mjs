@@ -44,7 +44,8 @@ export function buildContextRecord({ workspace, flags = {}, query = '', facts })
   ]);
   const currentPlan = facts.active ? loadPlan(workspace, facts.active.path) : null;
   const planChanged = facts.active && (!currentPlan || planDigest(currentPlan.text) !== identity.task.contractDigest);
-  const changed = Boolean(facts.slice.impactContext?.coverage.sourceState === 'changed-or-unavailable' || planChanged || policyDigest(workspace) !== identity.policyDigest || !snapshot.valid || !after.valid || snapshot.state.digest !== after.state.digest || evidence.some((record) =>
+  const currentPolicy = policyDigest(workspace);
+  const changed = Boolean(facts.slice.impactContext?.coverage.sourceState === 'changed-or-unavailable' || planChanged || !currentPolicy || currentPolicy !== identity.policyDigest || !snapshot.valid || !after.valid || snapshot.state.digest !== after.state.digest || evidence.some((record) =>
     (record.sha256 && inspectSourceFile(workspace, record.location, { maxBytes: DEFAULT_MAX_BYTES }).hash !== record.sha256) ||
     (factHashes.has(record.location) && factHashes.get(record.location) !== record.sha256)));
   const stableFacts = { ...facts.slice, trust: { state: facts.slice.trust.state, digest: facts.slice.trust.digest } };
