@@ -26,6 +26,7 @@ export function promoteProjectAuthority(workspace, { home = harnessGlobalHome(),
   workspace = path.resolve(workspace); home = path.resolve(home);
   assertExternalStateHome(workspace, home);
   const project = projectStoreDir(workspace, { home });
+  assertExternalStateHome(workspace, home, project);
   const local = path.join(project, 'authority'), shared = path.join(workspace, '.github', 'harness');
   const fail = message => { throw Object.assign(new Error(`Project authority promotion: ${message}`), { code: 'E_PROJECT_AUTHORITY', exit: 1 }); };
   const safeDirectory = (root, full) => {

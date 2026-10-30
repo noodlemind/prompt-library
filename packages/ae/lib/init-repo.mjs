@@ -45,7 +45,9 @@ waivers: []
 `;
 
 export function runInitRepo({ workspace, flags, log, copilotHome }) {
-  assertExternalStateHome(workspace, flags.home || harnessGlobalHome());
+  const stateHome = flags.home || harnessGlobalHome();
+  assertExternalStateHome(workspace, stateHome);
+  assertExternalStateHome(workspace, stateHome, projectStoreDir(workspace, { home: stateHome }));
   const stats = { created: [] };
   if (flags.shared) stats.promotion = promoteProjectAuthority(workspace, { home: flags.home || harnessGlobalHome(), dryRun: Boolean(flags.dryRun) });
   const migrated = runMigrateLayout({

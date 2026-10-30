@@ -8,6 +8,7 @@ import { runInitRepo } from '../lib/init-repo.mjs';
 import { projectStoreDir } from '../lib/project-layout.mjs';
 import { validatePlanScope } from '../lib/plan-scope.mjs';
 import { lookupEntity } from '../lib/retrieval/lookup.mjs';
+import { workspaceStorageId } from '../lib/knowledge/store.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-personal-setup-'));
@@ -130,4 +131,16 @@ test('an external home alias cannot redirect private setup into product files', 
   assert.throws(() => init(f, { home: alias }), /state home.*outside.*product/i);
   assert.deepEqual(fs.readdirSync(target), []);
   assert.equal(fs.existsSync(path.join(f.workspace, '.harness')), false);
+});
+
+test('initialization refuses a derived project store that is itself the product checkout', t => {
+  const f = fixture(t), home = path.join(f.root, 'state');
+  f.git(['remote', 'add', 'origin', 'https://example.invalid/team/inside-store.git']);
+  const workspace = path.join(home, 'projects', workspaceStorageId(f.workspace, { home }));
+  fs.mkdirSync(path.dirname(workspace), { recursive: true });
+  fs.renameSync(f.workspace, workspace);
+  for (const shared of [false, true]) {
+    assert.throws(() => runInitRepo({ workspace, copilotHome: f.copilotHome, flags: { home, shared }, log() {} }), /state home.*outside.*product/i);
+  }
+  assert.deepEqual(fs.readdirSync(workspace).sort(), ['.git', 'app.js']);
 });
