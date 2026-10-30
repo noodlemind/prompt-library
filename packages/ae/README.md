@@ -76,6 +76,9 @@ publishes shared project configuration; commit the returned inventory as a
 reviewed setup change before product work. A teammate installs their own AE
 runtime and reviews the commands with their own local approval.
 
+Keep `--ae-home` outside the product checkout. Setup refuses an in-repository
+state home before creating artifacts; it does not silently hide that directory.
+
 `.harness/` contains private runtime artifacts, including its regenerated runner.
 Git-local excludes keep untracked runtime files out of product changes without
 rewriting the root `.gitignore`. Already-tracked artifacts remain tracked until

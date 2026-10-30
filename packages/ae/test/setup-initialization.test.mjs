@@ -105,3 +105,29 @@ test('shared commit inventory includes optional config in preview, promotion and
     assert.deepEqual(result.authority.files, ['config.yaml', 'policy.yaml', 'checks.yaml', 'routing.yaml'].map(n => `.github/harness/${n}`));
   }
 });
+
+test('personal and shared setup refuse an in-product state home before creating artifacts', t => {
+  for (const shared of [false, true]) {
+    const f = fixture(t);
+    assert.throws(() => init(f, { home: path.join(f.workspace, '.ae'), shared }), /state home.*outside.*product/i);
+    assert.equal(f.git(['status', '--porcelain']), '');
+    assert.equal(fs.existsSync(path.join(f.workspace, '.harness')), false);
+    assert.equal(fs.existsSync(path.join(f.workspace, '.ae')), false);
+  }
+});
+
+test('nested workspace cannot hide an in-product home in its parent checkout', t => {
+  const f = fixture(t), nested = path.join(f.workspace, 'src');
+  fs.mkdirSync(nested);
+  assert.throws(() => runInitRepo({ ...f, workspace: nested, flags: { home: path.join(f.workspace, '.ae') }, log() {} }), /state home.*outside.*product/i);
+  assert.equal(f.git(['status', '--porcelain']), '');
+});
+
+test('an external home alias cannot redirect private setup into product files', t => {
+  const f = fixture(t), target = path.join(f.workspace, '.ae'), alias = path.join(f.root, 'state-alias');
+  fs.mkdirSync(target);
+  fs.symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => init(f, { home: alias }), /state home.*outside.*product/i);
+  assert.deepEqual(fs.readdirSync(target), []);
+  assert.equal(fs.existsSync(path.join(f.workspace, '.harness')), false);
+});

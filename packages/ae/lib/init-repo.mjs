@@ -11,7 +11,7 @@ import { harnessGlobalHome } from './paths.mjs';
 import { runMigrateLayout } from './migrate-layout.mjs';
 import { loadConfiguredChecks } from './plan-readiness.mjs';
 import { validateCommand } from './checks.mjs';
-import { resolveProjectAuthority, promoteProjectAuthority, PROJECT_AUTHORITY_FILES } from './project-authority.mjs';
+import { resolveProjectAuthority, promoteProjectAuthority, PROJECT_AUTHORITY_FILES, assertExternalStateHome } from './project-authority.mjs';
 import { readFileNoFollow, writeFileContained } from './fs-safe.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
@@ -45,6 +45,7 @@ waivers: []
 `;
 
 export function runInitRepo({ workspace, flags, log, copilotHome }) {
+  assertExternalStateHome(workspace, flags.home || harnessGlobalHome());
   const stats = { created: [] };
   if (flags.shared) stats.promotion = promoteProjectAuthority(workspace, { home: flags.home || harnessGlobalHome(), dryRun: Boolean(flags.dryRun) });
   const migrated = runMigrateLayout({

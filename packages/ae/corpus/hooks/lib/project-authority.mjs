@@ -7,6 +7,33 @@ function failure(message) {
   return Object.assign(new Error(message), { code: 'E_PROJECT_AUTHORITY', exit: 1, hint: 'Choose one local or shared project configuration; inspect both locations before moving any policy files.' });
 }
 
+function plannedCanonical(full) {
+  const suffix = [];
+  let current = path.resolve(full);
+  while (!fs.lstatSync(current, { throwIfNoEntry: false })) {
+    suffix.unshift(path.basename(current));
+    const parent = path.dirname(current);
+    if (parent === current) throw failure('State home identity is unavailable');
+    current = parent;
+  }
+  return path.join(fs.realpathSync.native(current), ...suffix);
+}
+
+/** State remains private even when callers select a custom home or a subfolder. */
+export function assertExternalStateHome(workspace, home, projectStore) {
+  let product = plannedCanonical(workspace);
+  for (let candidate = product; ; candidate = path.dirname(candidate)) {
+    if (fs.lstatSync(path.join(candidate, '.git'), { throwIfNoEntry: false })) { product = candidate; break; }
+    if (path.dirname(candidate) === candidate) break;
+  }
+  for (const selected of [home, projectStore].filter(Boolean)) {
+    const relative = path.relative(product, plannedCanonical(selected));
+    if (!relative || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      throw failure('AE state home must be outside the product checkout; select --ae-home outside this repository');
+    }
+  }
+}
+
 function present(root, directory) {
   const relative = path.relative(root, directory);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw failure('Project authority directory is outside its selected root');
@@ -27,6 +54,7 @@ function present(root, directory) {
 
 /** The CLI and hydrated hooks select one complete source, never an overlay. */
 export function selectProjectAuthority(workspace, projectStore, { home, mode } = {}) {
+  assertExternalStateHome(workspace, home, projectStore);
   if (mode !== undefined && !['local', 'shared'].includes(mode)) throw failure('Project authority mode must be local or shared');
   const shared = path.join(workspace, '.github', 'harness');
   const local = path.join(projectStore, 'authority');

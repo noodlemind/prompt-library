@@ -38,6 +38,10 @@ the exact commit inventory. Complete that setup change before locking an
 unrelated product plan. Approval is always user-local; cloning team policy does
 not clone a person's execution decision.
 
+The state home must stay outside the product checkout. An in-repository
+`--ae-home`, including a redirected alias or one above a selected subfolder,
+is refused before initialization writes; choose an external directory instead.
+
 Policy, checks, routing, configuration, hooks and evidence resolve one selected
 source. They do not overlay competing local/shared files or fall back from an
 unsafe source. Changing source identity or accepted bytes invalidates approval

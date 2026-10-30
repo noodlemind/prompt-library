@@ -4,9 +4,9 @@ import { withPlanUpdateLock } from './plan-update.mjs';
 import path from 'node:path';
 import { projectStoreDir } from './project-layout.mjs';
 import { harnessGlobalHome } from './paths.mjs';
-import { selectProjectAuthority, PROJECT_AUTHORITY_FILES } from '../corpus/hooks/lib/project-authority.mjs';
+import { selectProjectAuthority, PROJECT_AUTHORITY_FILES, assertExternalStateHome } from '../corpus/hooks/lib/project-authority.mjs';
 
-export { PROJECT_AUTHORITY_FILES };
+export { PROJECT_AUTHORITY_FILES, assertExternalStateHome };
 
 export function resolveProjectAuthority(workspace, { home = harnessGlobalHome(), mode } = {}) {
   const root = path.resolve(workspace);
@@ -24,6 +24,7 @@ export function projectAuthorityFile(workspace, name, options) {
 /** Explicit setup publication; normal reads never migrate or merge authority. */
 export function promoteProjectAuthority(workspace, { home = harnessGlobalHome(), dryRun = false } = {}) {
   workspace = path.resolve(workspace); home = path.resolve(home);
+  assertExternalStateHome(workspace, home);
   const project = projectStoreDir(workspace, { home });
   const local = path.join(project, 'authority'), shared = path.join(workspace, '.github', 'harness');
   const fail = message => { throw Object.assign(new Error(`Project authority promotion: ${message}`), { code: 'E_PROJECT_AUTHORITY', exit: 1 }); };
