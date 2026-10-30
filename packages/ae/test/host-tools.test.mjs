@@ -47,6 +47,7 @@ function flagType(command, name) {
 function checkInvocation(raw) {
   const parts = tokens(raw).filter((part) => !part.startsWith('#'));
   if (parts[0] !== 'ae' || parts.length < 2) return null;
+  if (parts[1] === '--version' || parts[1] === '-V') return null;
   if (parts[1] === 'help') {
     const subject = parts[2];
     if (subject && subject !== '<command>' && !subject.startsWith('-') && !getCommand(subject)) {
@@ -77,6 +78,14 @@ function checkInvocation(raw) {
   }
   return null;
 }
+
+test('corpus invocation validation accepts version metadata and retains unknown-command refusals', () => {
+  assert.equal(checkInvocation('ae --version'), null);
+  assert.equal(checkInvocation('ae -V'), null);
+  assert.match(checkInvocation('ae --versoin'), /unknown command/);
+  assert.match(checkInvocation('ae nonexistent-command'), /unknown command/);
+  assert.match(checkInvocation('ae orient --nonexistent-flag'), /not a flag/);
+});
 
 test('library code spawns only git or node', () => {
   const problems = [];
