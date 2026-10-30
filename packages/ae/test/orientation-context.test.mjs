@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { makeScopes, initGit, runHarness } from './helpers/index.mjs';
+import { makeScopes, initGit, runHarness, cliHarnessHome } from './helpers/index.mjs';
 import { buildContextPack } from '../lib/context-pack.mjs';
 import { parseFlags } from '../lib/flags.mjs';
 import { collectOrientationFacts } from '../lib/orientation-facts.mjs';
@@ -114,11 +114,14 @@ test('an explicit version two read records source identities for later edit chec
 test('bare version two refresh replaces a stale session snapshot before edits resume', (t) => {
   const f = fixture(t);
   f.invoke('--read', '--context-version', '2', '--query', 'alpha', '--file', 'a.mjs');
+  const before = JSON.parse(fs.readFileSync(path.join(f.workspace, '.harness/session.json'), 'utf8')).contextSnapshot;
   fs.writeFileSync(path.join(f.workspace, 'a.mjs'), 'export const alpha = 2;\n');
+  assert.equal(validateContextSnapshot({ workspace: f.workspace, snapshot: before, targets: ['a.mjs'], home: cliHarnessHome() }).pass, false);
   const current = f.invoke('--read', '--context-version', '2');
   const session = JSON.parse(fs.readFileSync(path.join(f.workspace, '.harness/session.json'), 'utf8'));
   assert.equal(session.contextSnapshot.evidence[0].sha256, current.evidence[0].sha256);
-  assert.equal(validateContextSnapshot({ workspace: f.workspace, snapshot: session.contextSnapshot, targets: ['a.mjs'] }).pass, true);
+  assert.equal(validateContextSnapshot({ workspace: f.workspace, snapshot: session.contextSnapshot, targets: ['a.mjs'], home: cliHarnessHome() }).pass, true);
+  assert.equal(validateContextSnapshot({ workspace: f.workspace, snapshot: session.contextSnapshot, targets: ['a.mjs'], home: f.copilotHome }).pass, false);
 });
 
 test('bare expansion restores the selection from the most recent explicit read', (t) => {

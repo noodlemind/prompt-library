@@ -1,145 +1,180 @@
-# AE host portability: implementation plan
+# AE host portability: implementation and qualification plan
 
-Date: October 30, 2026. Owner: AE maintainers. Status: first implementation slice implemented for draft review; later phases remain planned.
+Date: October 30, 2026. Owner: AE maintainers. Status: software implementation scope complete; final automated validation is recorded separately, and native runtime/model/OS qualification remains open.
 
-## Goal and authorized scope
+## Goal and authorization
 
-AE should install as one harness/CLI and let a user configure one or more supported hosts from the same Engineer, skills, specialist criteria and project state. Host configuration must not create a separately maintained Engineer workflow. Each integration must state what it can do and what has actually been qualified.
+Install one AE harness/CLI, then let a user configure one or more selected hosts from the same Engineer, skills, specialist criteria and project state. Native configuration must not create separately maintained Engineer behavior. Each integration states both its declared capabilities and the limits of observed qualification.
 
-The user authorized this work with: “Prepare a detailed plan and start implementing this change in a new PR.” That authorizes the shared-contract extraction, necessary generated entry assets, tests, documentation and a new reviewable PR. It does not authorize merging, publishing a package, granting project trust, changing user host configuration or claiming unobserved native behavior.
+The initial user request was: “Prepare a detailed plan and start implementing this change in a new PR.” Subsequent user direction expanded this PR from the first extraction slice to completing the planned software mechanics. The resulting scope includes canonical behavior, complete corpus projections, selected-host setup/status/removal, native event bridges, a bounded local MCP surface and portable packaging. It does not include merging, publishing a package, changing the user's actual host setup, approving trust or representing unobserved native behavior as passed.
 
-This file is the committed roadmap and design record. It is not a replacement for the CLI-owned execution plan or its gate, review, verification and completion state.
+This committed document records the design, implementation sequence and remaining qualification. CLI-owned plans retain execution state, gate, review, verification and completion authority.
 
 ## Baseline and dependency
 
-- Merged main: `0d44caad145bb3ef8ab9a7cf301ecfa00569615a`.
-- Stabilization dependency: open PR [#104](https://github.com/noodlemind/prompt-library/pull/104), inspected at `a89869b2151d804633dd9dfe862ed7c87a24b4b0`.
-- The new implementation is stacked on that revision. PR #104 remains independently reviewable; its subsequent changes may require rebasing this work.
-- The prior host-portability assessment found that Engineer's normative behavior lives inside a Copilot agent file, while the skill redirects to that agent. Existing host-named wrapper files and short profiles do not establish installed integrations or native denial behavior.
-- PR #104 already separates selected-target recovery, canonical `AE_HOME` state and private/shared project authority. Preserve those fixes. Do not restart state or policy migration as part of this extraction.
+- Merged main when work began: `0d44caad145bb3ef8ab9a7cf301ecfa00569615a`.
+- Stabilization dependency: open PR [#104](https://github.com/noodlemind/prompt-library/pull/104), first inspected at `a89869b2151d804633dd9dfe862ed7c87a24b4b0`; its later observed head is `b6d8ecb5723b0e781bdc30bfcc879de7b0d239d6`. Main remains `0d44caad145bb3ef8ab9a7cf301ecfa00569615a`.
+- Stabilization commit `63fcdddb9b175d7bc1fbe4ff451e4fcde1e2f354` was incorporated into the portability working branch. This is not a merge of PR #104 into main. PR [#106](https://github.com/noodlemind/prompt-library/pull/106) remains stacked on #104; incorporate subsequent dependency changes and rerun affected checks, then retarget after #104 merges.
+- The first stage extracted behavior from the Copilot agent, generated two committed examples and documented later phases. Its Claude file was only a reviewable example. The expanded implementation adds full runtime projections; the earlier limited export is not the runtime setup mechanism.
+- Preserve #104's canonical `AE_HOME`, private/shared project authority, selected-target recovery and ownership protections. Host portability does not require restarting project-state migration.
 
-## Architectural decision
+## Architecture and ownership
 
-Keep the corpus. Separate behavior from native representation inside it.
+The corpus stays. Behavior, native representation, publication and execution each have an owner.
 
-| Owner | Responsibility | Does not own |
+| Owner | Implemented responsibility | Boundary |
 | --- | --- | --- |
-| `corpus/skills/engineer/references/contract.md` | One authored Engineer behavior contract; host-neutral `<skills-root>` addresses | Native tool IDs, agent frontmatter, installer destinations |
-| `corpus/skills/engineer/SKILL.md` | Discover and activate that contract with progressive references | A second lifecycle or mandatory Copilot redirect |
-| `corpus/hosts/engineer-adapters.json` | Native metadata and skill-root mappings for generated projections | Kernel policy or independently authored behavior |
-| `lib/hosts/engineer-exports.mjs` | Deterministic rendering and drift checks | Host execution, authentication or inferred qualifications |
-| Existing Harness CLI | Intent, scope, gate, checks, evidence, review records and learning authority | Host model selection or a new agent loop |
-| Future host integration | Setup, discovery, native tool/event translation and observed capability reporting | A fork of the Engineer's rules |
+| `corpus/skills/engineer/references/contract.md` | One authored Engineer behavior contract with neutral skill-root addresses | No native tool catalogue or installer policy |
+| `corpus/skills/engineer/SKILL.md` | Discover and activate shared behavior with progressive references | No mandatory Copilot redirect or second lifecycle |
+| `corpus/hosts/engineer-adapters.json` and `lib/hosts/engineer-exports.mjs` | Metadata/rendering for the two committed, inspectable Copilot/Claude examples | These examples are not a complete runtime installer |
+| `lib/hosts/projection.mjs` | Translate the current corpus's skills, roles, known root references and applicable instruction representations for a selected host | Generated configuration does not prove native activation |
+| `lib/hosts/setup.mjs` | Selected roots, owned assets, conflicts, hook merging, setup/status/removal and dry-run | No project trust approval or inferred native qualification |
+| `lib/hosts/personal-skill.mjs` | Validated schema 1 personal skill publication under the selected native binding | Cannot replace shipped skills or create unmapped native roles/instructions |
+| `lib/hosts/resource-read.mjs` | Selected native skill discovery and managed role/rule integrity reads | No native invocation or independent review proof |
+| `lib/hosts/native-hook.mjs` | Native event normalization, effect classification and output mapping around existing kernel hooks | No blanket permission for unfamiliar native/MCP tools |
+| `lib/hosts/mcp-server.mjs` | Ten fixed local stdio tools forwarding to existing CLI operations and startup workspace | No arbitrary shell, model loop or network listener |
+| `lib/hosts/plugin-package.mjs` | Portable skills/criteria package and explicit-workspace MCP configuration | No bundled executable, native hooks or independent review provenance |
+| Existing Harness kernel | Accepted intent, scope, gates, checks, evidence, review records and learning authority | No host model selection |
 
-The Copilot projection remains inline: preserving behavior does not depend on an additional read of the extracted contract during an existing agent session. Native skill reads, tool declarations, delegation allowlist, handoffs and token budget remain review obligations. The experimental Claude Code projection lives outside `corpus/agents/` so Copilot hydration and primitive inventory do not treat it as another Copilot agent.
+The Copilot Engineer remains inline and generated, preserving immediate behavior without another activation prerequisite. Its current metadata and native skill-read obligations remain source-contract checks. The existing primitive registry is not expanded merely because the same roles are projected into another representation.
 
-Canonical procedures use package-relative references where possible. A native projection can render the selected skill root, but that alone does not remove path assumptions from every supporting procedure. Those remaining dependencies must be audited before an integration is operationally supported.
+## Delivered software phases
 
-## First PR: shared Engineer contract and generated exports
+### 1. Canonical Engineer behavior
 
-### Scope
+The shared contract owns modes, intent-before-mutation, successful implement gate, genuine skill activation, review/verification requirements, consultation responsibility and finding dispositions. The Engineer skill activates it rather than outsourcing ownership to `@engineer`.
 
-1. Add tests before the renderer for one canonical behavioral source, exact projections, deterministic regeneration and drift refusal.
-2. Extract existing Engineer behavior into the shared contract using `<skills-root>`. Preserve modes, intent-before-mutation, successful implement gate, genuine skill activation, review and verification requirements, consultation responsibility and finding dispositions.
-3. Replace the Engineer skill's mandatory redirect with activation of the shared contract. Keep concrete trigger and confusable cases.
-4. Render the existing Copilot agent from the contract and native metadata. Preserve current permissions and metadata; do not broaden its tool or specialist authority.
-5. Render an experimental Claude Code entry asset with native metadata, outside Copilot's installed agent directory.
-6. Provide `scripts/generate-engineer.mjs --write` and `--check`, exposed by `generate:engineer` and `check:engineer`. Integrate drift validation with the package's release check and include required assets in standalone distributions.
-7. Update source ownership documentation and record actual validation and limitations in the PR.
+`npm --prefix packages/ae run generate:engineer` regenerates the two committed examples; `check:engineer` and release validation detect drift. Generation retains Copilot authority and prompt budgets. Tests must distinguish exact source-to-projection parity from semantic host qualification.
 
-### Acceptance criteria
+### 2. Neutral installation and explicit host selection
 
-- Copilot's required behavior, native skill-read activation and declared authority survive extraction. Existing prompt budgets continue to apply.
-- Generated files match the canonical source plus their native mapping. Changing one generated output causes the check to fail; regeneration restores the expected output.
-- The Engineer skill can load the contract without resolving `@engineer` as its behavioral owner.
-- The Claude export contains no Copilot tool IDs or Copilot entry syntax as required native configuration. It is explicitly experimental and unqualified.
-- Standalone source/package validation can find the canonical source, renderer, generation/check entry and exports without the parent repository or global configuration.
-- Existing installation, hook payloads, gate semantics, trust decisions, state locations and primitive counts remain unchanged.
+Installing the npm package installs `ae`. Native configuration is a separate user selection:
 
-### Exclusions and evidence limits
+```bash
+npm install -g ./packages/ae
+ae host list
+ae host setup --host claude-code
+ae host status --host claude-code
+```
 
-This PR does not add `ae install --target claude-code`, interactive host selection, automatic Claude setup, specialist/instruction export, Claude hooks, MCP exposure or plugin packaging. It does not establish native activation, model outcomes, isolated review equivalence or uniform mutation denial. Supporting skills still contain Copilot path assumptions. The Claude file is reviewable export material, not a ready operational integration.
+New integration IDs are `claude-code`, `codex`, `cursor` and `terminal`. Explicit Copilot IDs are `copilot-vscode`, `copilot-cli` and `copilot-intellij`; compatibility aliases retain existing surface names. Copilot setup delegates to the established installer instead of maintaining another implementation. The old `ae install`/`upgrade` behavior remains compatible.
 
-No new skill or specialist is added to the capability registry. This is extraction and projection of the existing Engineer contract, not promotion of another capability. The experimental Claude export deliberately omits delegation until role exports and their allowlists are implemented; it does not grant unrestricted Agent authority.
+A fresh TUI does not automatically configure VS Code. Upkeep for an already selected legacy installation remains available. Adding one integration does not choose another on the user's behalf.
 
-## Follow-on phases
+`setup`, `status` and `remove` accept `--host`, `--config-home`, `--skills-home` and `--ae-home`, plus `--json`. Repeat root overrides for later operations. `--dry-run` reports mutations without publication. Status reports asset configuration/drift separately from `nativeQualification: unverified`.
 
-### Phase 2: precise host capabilities and setup ownership
+### 3. Complete runtime corpus projections
 
-Separate runtime installation from host integration. A generic AE installation must not configure an editor implicitly. A user can choose hosts during setup and add or remove one later while preserving shared state. Make the meaning of `cli` precise with a compatible Copilot CLI alias; do not silently change existing target semantics.
+Setup projects the current skills, supporting references, knowledge, specialist roles and applicable instruction criteria. Known Copilot-root references are translated to the selected roots. Claude receives its role/rule representation; Codex receives TOML role definitions and explicit skill-root separation; Cursor receives its role/rule representation; terminal receives manual-use assets.
 
-Define an adapter identity from runtime, surface and supported version range. Include OS, trust/settings and configuration fingerprint in observations. VS Code alone is not a runtime identity: Copilot and another provider inside that editor can use different hooks and tool payloads.
+| Host | Default configuration | Default skills | Capability boundary |
+| --- | --- | --- | --- |
+| Claude Code | `~/.claude` | `~/.claude/skills` | Main-agent delegation and subagent mode differ; preserve reported limits. |
+| Codex | `~/.codex` | `~/.agents/skills` | Parent permissions remain authoritative; role prose does not create tool isolation. |
+| Cursor | `~/.cursor` | `~/.cursor/skills` | Stop follow-up is advisory and bounded. |
+| Terminal | `<AE_HOME>/terminal` | `<AE_HOME>/terminal/skills` | Manual CLI path, without native hooks or isolated agent registration. |
 
-Record declared capabilities separately from observations: instruction/skill discovery, workspace binding, reads, edits, execution, delegation, before-action denial, after-action observation, completion controls, session identity and resume. File presence proves configuration only. Unknown native behavior remains unknown. Diagnostics distinguish configured, mechanically tested and native-qualified status without converting one into another.
+`AE_SKILLS_HOME` separates native skill discovery and activation from the configuration root. The selected skills path participates in content resolution; Codex must not infer its skills directory from `~/.codex`.
 
-Setup/upgrade/uninstall must merge only owned configuration, retain unrelated user assets, avoid duplicate hooks and support dry-run. Repair guidance must preserve the selected host and homes. A missing required capability blocks its dependent operation; an optional fallback reports its weaker guarantee.
+Scoped instructions preserve their path criteria. Where a host lacks an equivalent native instruction representation, matching criteria are available through the generated instruction reference. A missing required tool, independent reviewer or isolated delegation capability must be reported; serial criteria use is not independent-context proof.
 
-Exit criterion: a generic install configures no host; selecting one integration changes only its owned files; coexistence and uninstall fixtures preserve the other integration and user-authored settings.
+### 4. Owned setup, upgrade and removal
 
-### Phase 3: complete corpus projection and address resolution
+Setup records generated file ownership and native hook groups, merges with unrelated user configuration and refuses conflicting unowned/modified assets. Roots and sources reject unsafe redirection. A shared skills directory cannot be silently acquired from another integration.
 
-Audit the transitive procedures Engineer loads, including planning, architecture, creation, review, learning and error handling. Remove installation-root assumptions through a shared content resolver or explicit native mappings. Do not use prompt search to guess a corpus path. Preserve complete-read evidence and source hashes where activation participates in an existing gate.
+Repeat setup refreshes the selected integration's generated content. Removal deletes unchanged owned assets/groups while preserving changed user files and unrelated configuration. Neither removal nor a host switch deletes project plans, episodes or other shared AE state. Dry-run performs no publication. Native hook trust and project check trust remain person decisions.
 
-Separate specialist judgment criteria from native metadata and translate scoped instruction activation deliberately. Export only required existing primitives; do not expand the ship set or delegation authority merely because another host supports additional tools. Keep model choices host-owned. A host without isolated subagents must report that limitation; serial review criteria are not evidence of independent context.
+These mechanics need disposable fixtures for fresh setup, replay, modified-owned and unowned collisions, redirected paths, mid-publication failure, coexistence and selective removal. Passing those fixtures establishes software behavior in their environment, not that a running editor consumed the result.
 
-Exit criterion: representative Answer, Investigate, Review and Deliver tasks can resolve every needed procedure from a selected installation. A missing artifact or ambiguous root fails explicitly. Exported tool and delegation permissions remain no broader than the accepted role.
+### 4a. Personal resources and explicit unsupported writers
 
-### Phase 4: qualify two runtimes, then Codex
+A selected native host can create personal skills through
+`ae resources create skill <name> --file - --copilot-home <config> --skills-home <skills>`.
+The stdin decision is schema 1 with a complete valid skill `text` and optional
+`expectedDigest`. The writer requires current host ownership bindings, refuses
+setup-managed shipped-skill replacement and guards personal replacement with
+the observed digest. Personal skills are not setup-owned and survive removal
+of the integration.
 
-Use Copilot and Claude Code for the first paired native qualification, then implement Codex mappings against current official runtime documentation. Reuse `packages/ae/eval/host/README.md` and the existing verification recipe rather than adding a separate evaluation framework.
+`resources list`, `show` and `validate` with the same roots read native skills
+and managed role/rule bytes. Their format/integrity evidence does not prove
+host invocation. Native personal agents and instructions have no mapped writer
+in this release (`personalRoleCreation: false`); creation and legacy
+bundle/primitive mutations are refused under the native binding. Use a
+capability proposal for the missing writer, preserving this boundary until its
+permissions, schema, ownership and native behavior have their own implementation
+and tests. Projection of existing shipped roles/instructions remains supported.
 
-Qualify startup discovery, skill activation, correct workspace binding, accepted plan delivery, forbidden native edit and shell write, out-of-scope edit, failed verification, stale proof, cancellation/resume and truthful completion. Exercise each declared mutation path. Validate actual resulting files and retained evidence, not only a mocked hook response.
+### 5. Native hooks around the existing kernel
 
-Map event payloads, tool effects, deny outputs, errors/timeouts, completion and subagent coverage per runtime. An after-write event cannot prevent an already-completed write. Native tools outside AE mediation remain a documented exclusion unless observed interception covers them. No integration claim implies operating-system confinement.
+Native bridges cover context/start, before-tool decisions, after-tool observations, compaction and completion where the host exposes the necessary semantics. They reuse existing checks rather than reimplement gates or proof rules in host configuration.
 
-Exit criterion: each advertised capability has retained native evidence tied to runtime, version, OS and settings. Tests that are unavailable remain a coverage gap rather than being marked passed.
+Claude and Codex mappings distinguish native before/after events and completion responses. Codex users must review/trust configured hooks through `/hooks`; generating a file does not complete that user step. Cursor's stop event can request bounded follow-up but cannot establish hard completion blocking. Terminal integration installs no native hooks.
 
-### Phase 5: thin MCP surface and portable packaging
+Unknown native tool effects are refused rather than silently classified as reads. An unfamiliar MCP namespace is not a blanket exception. Optional MCP tools remain a separate surface; mediation covers only the operations actually routed through AE. After-action notification cannot undo or prevent an already completed mutation. Error/timeout semantics and alternate tool paths require actual native qualification.
 
-Expose selected existing AE operations through MCP only after their input/output schemas and authority semantics are stable. CLI and MCP call the same implementation. Preserve workspace binding, typed inputs, validation, effects, cancellation, errors and provenance. Do not turn an unrestricted dispatch tool into a shell gateway or duplicate lifecycle state.
+### 6. Bounded local MCP interface
 
-Use Agent Skills and AGENTS.md at their appropriate procedure and project-context boundaries. Add Agent Plugins packaging where clients support its skills/MCP format; retain generated native exports elsewhere. Native hooks and agent semantics remain client-specific. A package that validates is not thereby an installed or enforced host integration.
+```bash
+ae mcp serve --workspace <repo> --copilot-home <config> --skills-home <skills>
+```
 
-This is distinct from a generic optional-tools broker. Keep external GitHub/Jira/etc. connections native-first and reuse host authentication where sufficient. Do not make remote credential mediation a prerequisite for portability.
+The stdio server fixes the workspace and selected roots at startup. Ten tools expose orientation, status, reference retrieval, gate, verify, plan creation/update, review preparation/assembly and compounding. Authored decisions go to existing CLI writers, preserving their validation, state, trust, review and proof authority. There is no generic command dispatcher, arbitrary shell, new LLM loop or network listener.
 
-Exit criterion: paired CLI/MCP operations produce equivalent accepted effects/errors, package fixtures load the portable assets in supported clients, and unsupported clients have an explicit native path without changing the kernel.
+The implemented negotiated compatibility versions are `2025-11-25`, `2025-03-26` and `2024-11-05`. This is explicitly a legacy stdio compatibility surface, not a claim of the 2026 per-request protocol. Future protocol upgrades need their own negotiated semantics and interoperability tests.
 
-### Phase 6: broader hosts and compatibility maintenance
+Reference retrieval through MCP does not establish required native skill activation. Tools outside this mediation remain outside its enforcement. Tests cover fixed schemas, invalid/unknown inputs, workspace binding, bounded input/output, cancellation and forwarding results/errors without converting failures to success.
 
-Add Cursor, additional JetBrains runtimes and other hosts according to demand and observed capabilities. Maintain a versioned compatibility record and rerun native negative controls when hook/tool semantics change. Cloud and local environments receive separate qualification. Do not infer cloud behavior from local editor configuration.
+### 7. Portable Agent Plugins package
 
-## Storage, migration and compatibility
+```bash
+ae host export --output-directory <new-directory> --workspace <repo>
+```
 
-- Keep shared runtime/corpus authority in the installed AE package or AE-owned root; native host directories hold generated integrations.
-- Retain the existing `AE_HOME` project store for private plans, episodes and caches. Preserve source identity, prior migration behavior and rollback records.
-- Keep optional deliberate team policy/checks versioned separately from personal host preferences. Existing `.github/harness` configuration remains compatible; renaming that directory is not a prerequisite for behavioral portability.
-- Follow PR #104's personal/shared setup ownership. Do not require a product `.gitignore` edit to hide personal AE state, and do not exempt all `.github` files from scope verification.
-- Make generated ownership/version explicit before future automatic replacement. Preserve user-authored files and refuse unsafe path redirection. Uninstall cannot remove shared state merely because one host is removed.
+Export publishes a new Agent Plugins 1.0 directory containing skills, specialist judgment criteria, `plugin.json` and MCP configuration explicitly bound to an existing Git workspace. Existing output is refused. The configured product workspace is not inferred from the plugin directory; export again for another workspace.
 
-## Verification strategy
+The client requires a compatible separately installed `ae` CLI and Node.js >=20. The package does not install executables, credentials, native agents or hooks, and does not grant trust. Specialist criteria are references, not independent review provenance or role-specific permission isolation. Client support, loading, permissions and presentation remain client-owned.
 
-| Evidence | Current-slice checks | What remains unproved |
+## Qualification work still open
+
+Software implementation and generated configuration are not native runtime qualification. No Windows/macOS editor session, actual user host setup or model-driven delivery is claimed by this PR's Linux/disposable fixtures. Keep the existing native protocol in `packages/ae/eval/host/README.md` as the qualification owner.
+
+Qualify at least Copilot and Claude Code, then Codex and Cursor, under explicit runtime/version, surface, OS, trust/settings and configuration identities. Record separate observations for skills, role discovery, native tool invocation, before-action denial, after-action handling, delegation, completion and resume. A successful MCP call cannot stand in for an untested native edit hook.
+
+| Native scenario | Required observation | Failure classification |
 | --- | --- | --- |
-| Canonical/projection contract | Exact source-to-output parity, metadata preservation, unsupported-host refusal, deterministic regeneration, deliberate output drift | Native host activation or semantic model quality |
-| Existing corpus behavior | Prompt contracts, corpus references, actual activation/source-binding regressions, resource validation | Cross-host hook compatibility |
-| Distribution | Release validation and standalone archive/source checks include required generator inputs and exports | Installation into a live Claude session |
-| Native qualification | Follow-on repeated task and negative-control matrix | Universal enforcement or OS confinement |
+| Fresh setup/discovery | Engineer loads the current contract and binds the right workspace without tool-name coaching | Installation or activation gap |
+| Edit before accepted intent | Covered native edit and shell paths deny before any product bytes change | Missing pre-action coverage |
+| Accepted scoped delivery | Intent, gate, implementation, required review and verification retain current evidence | Workflow/translation gap |
+| Out-of-plan action | Attempt every declared native edit/process path; inspect actual files and receipts | Scope coverage narrower than advertised |
+| Stale proof | Changed source/intent cannot complete or compound using old proof | Freshness or authority defect |
+| Failure and timeout | Native errors/timeouts do not create false success; exact fall-through behavior is recorded | Host failure-semantics gap |
+| Cancellation/resume | Resume preserves workspace, accepted authority and current evidence | Recovery/identity gap |
+| Missing capability | Required absent review, tool or hook blocks its dependent operation or reports its exact weaker guarantee | Silent unsupported behavior |
+| Two-host coexistence | Upgrade/remove one integration preserves the other and user settings | Ownership defect |
 
-Inspect actual named checks before binding them. Run the new focused regressions plus relevant existing contracts and package/release checks. Do not treat an untrusted project or missing host session as approved execution authority. Record a blocked Harness proof separately from direct test results. Retain failures and environmental limits in the PR instead of weakening assertions.
+Inspect actual product bytes, native transcripts and retained receipts. Configuration existence and mocked event response prove only their bounded software assertions. Advertise a guarded capability only for observed paths and versions, with exclusions. No hook or MCP claim establishes OS-level confinement.
 
-The pivotal assumption is that AE's engineering discipline comes from its shared contract and deterministic state rather than Copilot-specific orchestration. The paired native lifecycle test is the test of that assumption. Initial measurements should include time to first valid task, manual interventions, missing required steps, false completion and scope violations. Small trials guide promotion; they do not establish universal reliability.
+## Verification and evidence accounting
 
-## Rollout and rollback
+Automated checks cover canonical/export parity, native metadata/permissions, corpus references and activation paths, full projections, root overrides, ownership/conflict/replay/removal, personal-skill replacement and removal preservation, selected native resource discovery/validation and explicit unsupported-writer refusals, native normalization and decisions, CLI registration, fixed MCP tools and transport limits, portable export, neutral TUI startup and standalone packaging. Release checks must include the canonical source and runtime modules without requiring parent-repository assets or global host setup.
 
-Land the shared-contract extraction independently before widening install targets. Review the new PR against its stacked base; after #104 merges, retarget/rebase and rerun affected checks. Keep the currently generated Copilot behavior inline during the first rollout so an extra activation hop cannot break existing sessions.
+Final automated counts and failed/blocked checks belong in the PR's validation record; do not infer them from this roadmap. A blocked Harness proof remains distinct from direct test results. Preserve failures without weakening assertions or granting trust from the agent. Passing fixtures does not mark native qualification complete.
 
-If projection or release validation regresses, revert the extraction PR as a unit. It changes no state schema or user configuration, so no state rollback is required. Future installer migrations need their own versioned backups, owned-file inventory, dry-run and restoration proof before release. Do not publish a universal-host claim until the corresponding compatibility evidence exists.
+The pivotal assumption remains that AE's useful discipline comes from shared behavior and deterministic state rather than a single provider's orchestration. The paired native delivery/negative-control exercise tests that assumption. Measure time to first valid task, manual interventions, omitted required steps, false completion and scope violations. Small trials guide support decisions; they do not establish universal reliability.
 
-## First-slice implementation evidence
+## Storage and compatibility
 
-- Direct focused regressions: 93 passed across `prompt-library-contracts`, `corpus-references`, `corpus-reference`, `host-activation` and `corpus-home`. The named prompt-contracts entry includes the four export tests, covering canonical parity, native metadata, unsupported hosts, standalone regeneration, drift and redirected-output refusal.
-- Distribution regressions: 9 passed across `release-version` and `package-standalone`, including packing, offline archive installation, package-local validation and repacking without global/editor configuration.
-- `npm run check:release`, `npm run check:engineer`, corpus resource validation and `git diff --check` passed. Archive enumeration confirmed that the canonical contract, adapter metadata, renderer, generator and Claude export ship together.
-- Independent static review found two corrected issues: remaining native `@engineer` routing in the portable skill and unrestricted Claude delegation. The reviewed Copilot body is byte-identical to the baseline; parsed metadata preserves its tools, delegation allowlist and handoffs. No remaining blocking finding was reported for this slice.
-- Authoritative `ae verify` was attempted and did **not** pass. This checkout has no person-approved trust decision, so Harness refused to execute the repo-authored named check. Required bound multi-perspective review coverage also remains outstanding. Independent static review and direct tests are not substitutes for that bound record. Trust was not self-approved, and completion/compounding was not fabricated.
-- Native Copilot/Claude sessions, Windows/macOS qualification and model outcomes were not exercised here. The draft should receive trusted-checkout verification and bound review before promotion; the Claude integration still requires the follow-on work above.
+Keep canonical corpus/runtime authority in the installed AE package and native generated configuration in the selected host roots. Preserve `AE_HOME` project state, existing private/shared policy authority and legacy state bindings. Deliberate team policy/checks remain distinct from personal host preferences and hook trust.
+
+The legacy `.github/harness` path remains compatible. Host portability does not require renaming it or exempting all `.github` changes from verification. Follow #104's local excludes and ownership rules instead of requiring root `.gitignore` edits to hide personal runtime state.
+
+Native host assets record ownership before replacement/removal. Project trust is never copied from another user, host or plugin package. A configured runtime does not imply approved repo-authored commands. The runtime/CLI version and generated asset version still need deliberate upgrade selection.
+
+## Rollout, rollback and continuing maintenance
+
+Review PR #106 against its open #104 dependency so the portability diff remains isolated. After #104 merges into main, retarget/rebase and rerun affected checks. Incorporating a dependency commit into the working branch does not mean that dependency is merged upstream. No upstream merge, package publication or real-user setup is part of implementation verification.
+
+The canonical extraction and projections can be reverted with this PR; the kernel/state schema has no portability-driven migration. User-selected host removal operates from the generated ownership record and preserves changed/unowned files. Retain backups and receipts when a later rollout deliberately replaces existing configuration. Never delete project state to roll back one host.
+
+Maintain runtime+surface+version compatibility observations as vendors change hook/tool contracts. Qualify cloud and local surfaces separately. A future MCP revision, new host or broader tool classification requires current primary documentation, scoped regression controls and native trials before expanding advertised guarantees.

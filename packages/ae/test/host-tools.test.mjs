@@ -47,6 +47,7 @@ function flagType(command, name) {
 function checkInvocation(raw) {
   const parts = tokens(raw).filter((part) => !part.startsWith('#'));
   if (parts[0] !== 'ae' || parts.length < 2) return null;
+  if (parts[1] === '--version' || parts[1] === '-V') return null;
   if (parts[1] === 'help') {
     const subject = parts[2];
     if (subject && subject !== '<command>' && !subject.startsWith('-') && !getCommand(subject)) {
@@ -78,13 +79,25 @@ function checkInvocation(raw) {
   return null;
 }
 
+test('corpus invocation validation accepts version metadata and retains unknown-command refusals', () => {
+  assert.equal(checkInvocation('ae --version'), null);
+  assert.equal(checkInvocation('ae -V'), null);
+  assert.match(checkInvocation('ae --versoin'), /unknown command/);
+  assert.match(checkInvocation('ae nonexistent-command'), /unknown command/);
+  assert.match(checkInvocation('ae orient --nonexistent-flag'), /not a flag/);
+});
+
 test('library code spawns only git or node', () => {
   const problems = [];
   const literal = /\b(?:spawnSync|spawn|execFileSync|execSync|execFile)\(\s*(['"`])([^'"`]+)\1/g;
   for (const file of walk(lib).filter((full) => full.endsWith('.mjs'))) {
     const text = fs.readFileSync(file, 'utf8');
     for (const match of text.matchAll(literal)) {
-      const windowsTreeKill = match[2] === 'taskkill' && file.endsWith(`${path.sep}lib${path.sep}runner.mjs`);
+      // Both process owners use a fixed argv Windows descendant cleanup;
+      // neither exposes command selection or shell execution to callers.
+      const windowsTreeKill = match[2] === 'taskkill' && [
+        path.join(lib, 'runner.mjs'), path.join(lib, 'hosts', 'mcp-server.mjs'),
+      ].includes(file);
       if (match[2] !== 'git' && !windowsTreeKill) problems.push(`${path.relative(packageRoot, file)} spawns ${match[2]}`);
     }
     if (/\b(?:which|where|taskkill|powershell|pwsh)\b/.test(text) && !text.includes('Do not')) {

@@ -308,7 +308,7 @@ const TOOL_NAMES = new Set(DELIVER_AGENT_TOOLS.map((t) => t.name));
 
 export const AGENT_VALUE_FLAGS = Object.freeze([
   '--agent', '--provider', '--model', '--max-turns', '--max-seconds', '--tool-timeout',
-  '--workspace', '--copilot-home', '--ae-home', '--harness-home', '--output', '--plan', '--host', '--limit', '--query',
+  '--workspace', '--copilot-home', '--skills-home', '--ae-home', '--harness-home', '--output', '--plan', '--host', '--limit', '--query',
   '--profile', '--verify-cmd',
   '--retention-policy',
   '--context-policy', '--file',
@@ -987,7 +987,7 @@ export async function runAgentLoop({
       messages = compactMessages(messages, {
         keepTurns: TRANSCRIPT_FULL_TURNS,
         mode: retentionPolicy === 'structured' ? 'structured' : isAutonomous ? 'all' : 'explore',
-        handoff: retentionPolicy === 'structured' ? buildTaskHandoff({ workspace, task, domainPlan: deliveryState.domainPlan }) : null,
+        handoff: retentionPolicy === 'structured' ? buildTaskHandoff({ workspace, task, domainPlan: deliveryState.domainPlan, home: runHarnessHome }) : null,
       });
       if (now() >= deadline) { stop = 'time-budget'; break; }
 

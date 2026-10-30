@@ -1,7 +1,7 @@
 {
   "name": "ae-harness",
   "version": "0.14.0",
-  "description": "Adaptive Engineering CLI for GitHub Copilot",
+  "description": "Host-neutral Adaptive Engineering CLI and native agent integrations",
   "homepage": "https://github.com/noodlemind/prompt-library",
   "license": "UNLICENSED",
   "type": "module",

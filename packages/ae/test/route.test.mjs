@@ -31,8 +31,16 @@ specialists:
     agent: security-sentinel
 `;
 
-function trust(ws, copilotHome) {
-  approveProject({ workspace: ws, copilotHome, home: path.join(ws, 'harness-home') });
+function scopes(t, prefix) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, 'product');
+  fs.mkdirSync(workspace);
+  return { workspace, copilotHome: path.join(root, 'copilot'), home: path.join(root, 'ae') };
+}
+
+function trust(ws, copilotHome, home) {
+  approveProject({ workspace: ws, copilotHome, home });
 }
 
 function inventory(root) {
@@ -157,14 +165,13 @@ test('classification keeps an existing path, raises risk, and abstains', () => {
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-test('plan-new keeps primitive: true when the host names no primitive path', () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'prim-route-'));
-  const home = path.join(ws, 'home');
+test('plan-new keeps primitive: true when the host names no primitive path', (t) => {
+  const { workspace: ws, copilotHome: home, home: harnessHome } = scopes(t, 'prim-route-');
   fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
   inventory(path.join(ws, '.github'));
-  trust(ws, home);
+  trust(ws, home, harnessHome);
   fs.writeFileSync(path.join(ws, 'classification.json'), JSON.stringify({
     version: 1,
     source: 'host-subagent',
@@ -184,7 +191,7 @@ test('plan-new keeps primitive: true when the host names no primitive path', () 
     binPath, 'plan-new', '--type', 'feat', '--slug', 'new-skill', '--intent', 'Add a skill',
     '--date', '2026-09-25', '--classification', 'classification.json', '--json',
     '--workspace', ws, '--copilot-home', home,
-  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') } });
+  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: harnessHome } });
   assert.equal(result.status, 0, result.stderr + result.stdout);
   const planPath = JSON.parse(result.stdout).path;
   const frontmatter = YAML.parse(fs.readFileSync(planPath, 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]);
@@ -192,8 +199,8 @@ test('plan-new keeps primitive: true when the host names no primitive path', () 
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-test('an untrusted routing policy is not bound into a plan', () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'untrusted-route-'));
+test('an untrusted routing policy is not bound into a plan', (t) => {
+  const { workspace: ws, copilotHome } = scopes(t, 'untrusted-route-');
   fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
   fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
   fs.writeFileSync(path.join(ws, 'src', 'OrderService.java'), 'class OrderService {}');
@@ -206,7 +213,7 @@ test('an untrusted routing policy is not bound into a plan', () => {
     domains: [],
     primitive: false,
     planLock: false,
-    copilotHome: path.join(ws, 'home'),
+    copilotHome,
   });
   assert.equal(routed.ok, true);
   assert.equal(routed.snapshot.skipped, true);
@@ -215,16 +222,15 @@ test('an untrusted routing policy is not bound into a plan', () => {
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-test('high uncertainty still binds a declared Java path', () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'abstain-route-'));
-  const home = path.join(ws, 'home');
+test('high uncertainty still binds a declared Java path', (t) => {
+  const { workspace: ws, copilotHome: home, home: harnessHome } = scopes(t, 'abstain-route-');
   fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
   fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
   fs.writeFileSync(path.join(ws, 'src', 'OrderService.java'), 'class OrderService {}');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
   inventory(path.join(ws, '.github'));
-  trust(ws, home);
+  trust(ws, home, harnessHome);
   fs.writeFileSync(path.join(ws, 'classification.json'), JSON.stringify({
     version: 1,
     source: 'host-subagent',
@@ -244,7 +250,7 @@ test('high uncertainty still binds a declared Java path', () => {
     '--impacted', 'src/OrderService.java', '--date', '2026-09-26',
     '--classification', 'classification.json', '--json',
     '--workspace', ws, '--copilot-home', home,
-  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') } });
+  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: harnessHome } });
   assert.equal(result.status, 0, result.stderr + result.stdout);
   const planPath = JSON.parse(result.stdout).path;
   const frontmatter = YAML.parse(fs.readFileSync(planPath, 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]);
@@ -269,16 +275,15 @@ test('context pack keeps Gate and Routing inside the byte budget', () => {
   assert.match(body, /java\/SKILL\.md/);
 });
 
-test('plan-new binds java from a host classification file and does not import a provider', () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-route-'));
-  const home = path.join(ws, 'home');
+test('plan-new binds java from a host classification file and does not import a provider', (t) => {
+  const { workspace: ws, copilotHome: home, home: harnessHome } = scopes(t, 'plan-route-');
   fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
   fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
   fs.writeFileSync(path.join(ws, 'src', 'OrderService.java'), 'class OrderService {}');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
   inventory(path.join(ws, '.github'));
-  trust(ws, home);
+  trust(ws, home, harnessHome);
   fs.writeFileSync(path.join(ws, 'classification.json'), JSON.stringify({
     version: 1,
     source: 'host-subagent',
@@ -298,14 +303,14 @@ test('plan-new binds java from a host classification file and does not import a 
     binPath, 'plan-new', '--type', 'feat', '--slug', 'order-check', '--intent', 'Add token checks',
     '--date', '2026-09-23', '--classification', 'classification.json', '--json',
     '--workspace', ws, '--copilot-home', home,
-  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') } });
+  ], { cwd: ws, encoding: 'utf8', env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: harnessHome } });
   assert.equal(result.status, 0, result.stderr + result.stdout);
   const planPath = JSON.parse(result.stdout).path;
   const frontmatter = YAML.parse(fs.readFileSync(planPath, 'utf8').match(/^---\n([\s\S]*?)\n---/)[1]);
   assert.deepEqual(frontmatter.routing.skills.required, ['java', 'ensure-plan']);
   assert.equal(frontmatter.playbook, 'feature');
   assert.equal(frontmatter.skills_used.includes('java'), false);
-  const routeEnv = { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') };
+  const routeEnv = { ...process.env, COPILOT_HOME: home, HARNESS_HOME: harnessHome };
   const route = spawnSync(process.execPath, [binPath, 'route', '--plan', planPath, '--workspace', ws, '--json'], { cwd: ws, encoding: 'utf8', env: routeEnv });
   assert.equal(route.status, 0, route.stderr + route.stdout);
   assert.equal(fs.existsSync(planPath) || true, true);
@@ -322,15 +327,14 @@ test('plan-new binds java from a host classification file and does not import a 
   fs.rmSync(ws, { recursive: true, force: true });
 });
 
-test('plan-new --from relocks an unlocked plan and refuses a second lock', () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'relock-'));
-  const home = path.join(ws, 'home');
+test('plan-new --from relocks an unlocked plan and refuses a second lock', (t) => {
+  const { workspace: ws, copilotHome: home, home: harnessHome } = scopes(t, 'relock-');
   fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
   fs.mkdirSync(path.join(ws, 'docs', 'plans'), { recursive: true });
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'checks.yaml'), 'version: 1\nchecks:\n  unit-tests:\n    command: [npm, test]\n');
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'routing.yaml'), POLICY);
   inventory(path.join(ws, '.github'));
-  trust(ws, home);
+  trust(ws, home, harnessHome);
   const rel = 'docs/plans/2026-09-23-feat-order-plan.md';
   fs.writeFileSync(path.join(ws, rel), `---
 plan_schema: 1
@@ -369,7 +373,7 @@ Keep this body.
   const run = (args) => spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
     cwd: ws,
     encoding: 'utf8',
-    env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') },
+    env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: harnessHome },
   });
   const first = run(['plan-new', '--from', rel, '--json']);
   assert.equal(first.status, 0, first.stderr + first.stdout);
