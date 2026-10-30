@@ -4,6 +4,10 @@ The executable is `ae`, distributed as `ae-harness`. `@engineer` and `/engineer`
 
 You start with two parts. The Engineer decides what to do. The Harness checks the work and keeps the record.
 
+Engineer's shared behavior is authored in [the contract](../packages/ae/corpus/skills/engineer/references/contract.md), inside the existing corpus. The Engineer skill activates that contract. Native metadata and skill-root mappings live in `packages/ae/corpus/hosts/engineer-adapters.json`; the renderer produces the existing inline Copilot agent and an experimental Claude Code export. This preserves Copilot's immediate behavior without adding another activation prerequisite. Generated files are projections, not separately authored workflows.
+
+Run `npm --prefix packages/ae run generate:engineer` after changing a source, then `npm --prefix packages/ae run check:engineer`. Release validation also rejects drift. The Claude file is reviewable export material only: the current installer does not configure Claude Code, supporting skills still have Copilot path assumptions, and no native hook or delegation parity is established. The [host-portability plan](../.audit/ae-host-portability-plan-2026-10-30.md) separates this first slice from user-selected host setup, specialist/instruction translation and native qualification.
+
 The [native architecture research and implementation record](../.audit/ae-native-architecture-2026-10-29.md) maps pstack's mechanisms and iteration history to AE's own contracts, reassesses PR #104, and records the resulting changes and qualification.
 
 The Engineer is the only entry. It answers a question, investigates a system, delivers a change, or reviews a result. The Harness orients the work, locks a plan, gates edits, runs the named checks, and stores the evidence. A change is done when current verification passes, required review results are collected, and Harness records completion.

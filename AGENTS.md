@@ -10,6 +10,8 @@ This is a skill-driven prompt library for software development teams. The primar
 
 The system is skill-first. Skills are the primary reusable workflow contracts; agents, instructions, checks, plans, and solution docs support those skills.
 
+Engineer behavior is authored once in `packages/ae/corpus/skills/engineer/references/contract.md`. `packages/ae/corpus/hosts/engineer-adapters.json` owns native metadata and skill-root mappings; `lib/hosts/engineer-exports.mjs` renders the inline Copilot agent and experimental Claude Code export. Edit the sources, then run `npm --prefix packages/ae run generate:engineer`; `check:engineer` and release validation reject drift. Do not hand-edit generated entry points. The Claude export is reviewable source, not an installed or native-qualified integration; supporting skills still contain Copilot path assumptions.
+
 - **Skills** (`packages/ae/corpus/skills/*/SKILL.md`, read from `~/.copilot/skills/`): 28 workflows (internal support: `ensure-plan`, experimental accepted-plan continuation `caffeinated`, on-demand `ensure-capability`, `auto-compound`, `auto-skill-draft`, per-role model setup `setup-models`; design-before-code: `architect`; memory/utility: `recall`, `index-memory`, `codebase-context`, `consolidate`; single public entry **`@engineer`** plus user-invocable `/engineer`, `/harness-doctor`, `/project-readme`, and `/triage-issues` — every other surviving skill is engineer-internal, loaded on demand). Engineer mode selection routes incoming work; Answer mode handles quick Q&A directly without plans or edits. `/project-readme` creates or updates project README files. `/create-primitive` decides and creates the right primitive type. Domain skills include `/java`, `/python`, `/sql`, and `/aws`. The connected skill chain `/brainstorming` (optional) → `/capture-issue` → `/plan-issue` → `/deepen-plan` (optional) → Engineer Deliver mode → `/code-review` → `/compound-learnings` is an internal sequence used only within Deliver mode.
 - **Agents** (`packages/ae/corpus/agents/*.agent.md`, read from `~/.copilot/agents/`): 22 agents — 17 stateless domain experts, 1 delivery classifier, 1 engineer, 1 code-implementer, plus 2 internal coordinator agents. Agents are used when work needs separate judgment, tool authority, runtime profile, isolation, or accountability. Active language/cloud/data reviewers include Java, Python, SQL, and AWS.
 - **Instructions** (`packages/ae/corpus/instructions/*.instructions.md`, 5 files, read from `~/.copilot/instructions/`): Scoped context that activates based on file patterns.
@@ -47,7 +49,8 @@ docs/
 packages/ae/  — CLI package
   corpus/
     skills/        — 28 skill directories with SKILL.md
-    agents/        — 22 agent definitions (17 specialists + 1 delivery classifier + 1 engineer + 1 implementer + 2 coordinators)
+    agents/        — 22 Copilot agent definitions (Engineer is generated)
+    hosts/         — native metadata and experimental generated exports; not Copilot hydration inputs
     instructions/  — 5 scoped instructions (harness-global, TypeScript, Python, Java, PostgreSQL)
     hooks/         — install-time Copilot hooks
     knowledge/     — team-wide solutions + manifest (hydrated to ~/.copilot/knowledge/)

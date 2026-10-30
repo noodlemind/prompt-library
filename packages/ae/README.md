@@ -47,6 +47,33 @@ beside each project's postings. Global notes remain shared. Older unbound privat
 rows are omitted with rebuild guidance until `ae index` runs in that repository;
 another project's private rows are never a fallback corpus.
 
+### Engineer source and host exports
+
+Engineer behavior is authored once in
+[the shared contract](corpus/skills/engineer/references/contract.md), activated
+by the Engineer skill. `corpus/hosts/engineer-adapters.json` supplies native
+metadata and skill-root mappings. The generated Copilot agent keeps its inline
+behavior and current installation path.
+
+After editing either source, run from this package:
+
+```bash
+npm run generate:engineer
+npm run check:engineer
+```
+
+The equivalent direct script uses `node scripts/generate-engineer.mjs --write`
+or `--check`. Release validation rejects stale generated exports.
+
+`corpus/hosts/claude-code/engineer.md` is an experimental generated export for
+review. It is not automatically installed; `ae install --target claude-code`
+remains unsupported. Supporting skills still contain Copilot path assumptions,
+and this export proves neither native activation nor hook/delegation coverage.
+Its tools omit delegation until specialist exports can preserve role allowlists.
+See the [phased plan](../../.audit/ae-host-portability-plan-2026-10-30.md) for the
+remaining integration and qualification work. Existing installation, trust,
+state locations and kernel behavior are unchanged by this extraction.
+
 ### Validate and pack
 
 From `packages/ae/` in a checkout, or from a standalone copy of that package:
