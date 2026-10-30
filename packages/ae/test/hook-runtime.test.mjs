@@ -1147,7 +1147,8 @@ test('SessionStart runtime context reinforces the critical Engineer Investigate 
   assert.equal(result.status, 0, result.stderr);
   const output = outputJson(result);
   assert.match(output.additionalContext, /@engineer[\s\S]{0,100}Mode: Answer\|Investigate\|Review\|Deliver/i);
-  assert.match(output.additionalContext, /check\/action\/mark[\s\S]{0,100}confirmed race\/retry defect/i);
+  assert.match(output.additionalContext, /confirmation rule in engineer\.agent\.md/i);
+  assert.doesNotMatch(output.additionalContext, /confirmed race\/retry defect/i);
   assert.match(output.additionalContext, /missing-implement-gate[\s\S]{0,160}ensure-plan\/SKILL\.md/i);
 });
 

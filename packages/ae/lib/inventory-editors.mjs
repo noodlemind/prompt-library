@@ -7,7 +7,7 @@ import { readPluginJar, parsePluginXml } from './inventory-jar.mjs';
 
 export const EDITOR_FAMILIES = Object.freeze(['vscode', 'cursor', 'jetbrains']);
 const DEFAULT_LIMITS = Object.freeze({ directories: 1024, files: 2048, bytes: 32 * 1024 * 1024, milliseconds: 2000 });
-export const INVENTORY_SETTINGS_KEYS = Object.freeze(['chat.agentFilesLocations', 'chat.instructionsFilesLocations', 'chat.agentSkillsLocations', 'chat.hookFilesLocations', 'chat.customAgentInSubagent.enabled', 'chat.useAgentSkills']);
+export const INVENTORY_SETTINGS_KEYS = Object.freeze(['chat.agentFilesLocations', 'chat.instructionsFilesLocations', 'chat.agentSkillsLocations', 'chat.hookFilesLocations', 'chat.customAgentInSubagent.enabled', 'chat.useAgentSkills', 'chat.subagents.allowInvocationsFromSubagents']);
 const SETTINGS_KEYS = new Set(INVENTORY_SETTINGS_KEYS);
 const JETBRAINS_DIRECTORY = /^(?:IntelliJIdea|IdeaIC|PyCharm|PyCharmCE|WebStorm|Rider|CLion|DataGrip|GoLand|RubyMine|PhpStorm|RustRover|AndroidStudio)[0-9][A-Za-z0-9.-]{0,40}$/;
 const LAUNCHERS = {

@@ -66,7 +66,7 @@ import {
   TREE_SUBJECT_NAMES,
 } from './retrieval/search-cmd.mjs';
 import { LOOKUP_KINDS, LOOKUP_KIND_SUMMARIES } from './retrieval/lookup.mjs';
-import { parseFlags, hasFlag } from './flags.mjs';
+import { parseFlags, hasFlag, INSTALLED_TARGETS, RECOGNIZED_UNINSTALLED_TARGETS } from './flags.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { resolveCopilotHome } from './paths.mjs';
 import { createEnvelope, createErrorEnvelope, STATUS } from './envelope.mjs';
@@ -750,9 +750,9 @@ registerCommand({
 // --- setup ------------------------------------------------------------
 
 const INSTALL_FLAGS = [
-  { name: '--target', type: 'string', valueName: 't,..', description: 'vscode,cli,intellij', required: false, default: null, tui: 'cli-only' },
+  { name: '--target', type: 'string', valueName: 't,..', description: `installed: ${INSTALLED_TARGETS.join(', ')}. Recognized but not installed: ${RECOGNIZED_UNINSTALLED_TARGETS.join(', ')}`, required: false, default: null, tui: 'cli-only' },
   { name: '--autonomy', type: 'string', valueName: 'mode', description: 'full | balanced | strict', required: false, default: null, tui: 'cli-only' },
-  { name: '--configure-vscode', type: 'boolean', description: 'merge VS Code chat.* discovery settings', required: false, default: false, tui: 'cli-only' },
+  { name: '--configure-vscode', type: 'boolean', description: 'merge VS Code chat.* discovery settings, including chat.subagents.allowInvocationsFromSubagents', required: false, default: false, tui: 'cli-only' },
   { name: '--configure-path', type: 'boolean', description: 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)', required: false, default: false, tui: 'cli-only' },
   { name: '--force-profile', type: 'boolean', description: 'overwrite knowledge/profile.md', required: false, default: false, tui: 'cli-only' },
   { name: '--force-knowledge-reset', type: 'boolean', description: 'overwrite knowledge/solutions (danger)', required: false, default: false, tui: 'cli-only' },

@@ -2,10 +2,6 @@
 
 Shared context loaded into every agent and skill session.
 
-## Project
-
-Skill-driven prompt library for software development using GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Install hydrates agents, skills, and instructions into the user profile. Product repositories do not receive a copy of that corpus.
-
 ## Primitives
 
 Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rules.
@@ -29,15 +25,15 @@ Skills = workflows. Agents = isolated judgment. Instructions = file-pattern rule
 
 ## Orchestration
 
-The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via the `agent` tool. Subagents run in isolated context — include all necessary context in the task prompt. `/plan-issue` and `/code-review` may delegate bounded judgment to their coordinators (`plan-coordinator`, `code-review-coordinator`) when the `agent` tool is available. The Engineer applies planning decisions and owns CLI review preparation and assembly; the review coordinator returns packet-bound raw results. Coordinators use `agents:` allowlists and dispatch in parallel batches of 3-4. Missing required judgment remains incomplete coverage.
+The engineer selects the skill/flow first, then delegates only when separate judgment, authority, or isolation improves the result. Coordinators delegate to specialist subagents via the `agent` tool. Subagents run in isolated context — include all necessary context in the task prompt. plan-issue and the code-review skill may delegate bounded judgment to their coordinators (`plan-coordinator`, `code-review-coordinator`) when the `agent` tool is available. The Engineer applies planning decisions and owns CLI review preparation and assembly; the review coordinator returns packet-bound raw results. Coordinators use `agents:` allowlists and dispatch in parallel batches of 3-4. Missing required judgment remains incomplete coverage.
 
 Engineer harness: `@engineer` agent file owns the only normative delivery lifecycle; read-only modes stay outside it. Runtime details: `harness-tool-contract.md`. Delegation: `subagent-context-packet.md`. Risky work: `human-approval-policy.md`.
 
-For an accepted Deliver plan with a current playbook binding, follow orient's procedure read pointer to the internal experimental `/caffeinated` skill. It continues the existing lifecycle and scoped worklist. A returned path or declaration alone is not activation evidence.
+For an accepted Deliver plan with a current playbook binding, follow orient's procedure read pointer to the internal experimental caffeinated skill. It continues the existing lifecycle and scoped worklist. A returned path or declaration alone is not activation evidence.
 
 ## Cross-Environment Tool Compatibility
 
-This library primarily targets GitHub Copilot in VS Code and IntelliJ IDEA. Agent frontmatter declares VS Code tool names. When a tool is unavailable in another host, use the closest host-native equivalent:
+These instructions target GitHub Copilot in VS Code and IntelliJ IDEA. Agent frontmatter declares VS Code tool names. When a tool is unavailable in another host, use the closest host-native equivalent:
 
 | VS Code Tool | Fallback |
 |-------------|----------|
