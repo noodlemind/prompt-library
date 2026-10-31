@@ -4,7 +4,7 @@ Use this template when creating a new skill. A personal skill is `ae resources c
 
 Before creating a skill, confirm the decision rule. Use a skill for contextual judgment protocols, evidence interpretation and semantic handoffs. Deterministic reusable operations belong in Harness. If the artifact needs a separate role or permission boundary, create an agent instead.
 
-Use `resources scaffold skill <name> --json` for metadata. Follow [resource-operations.md](../../references/resource-operations.md) for structural validation and creation. Author useful trigger/outcome evaluations; passing the validator cannot establish usefulness.
+Use `resources scaffold skill <name> --json` for metadata. Read `<copilot-home>/skills/references/resource-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/resource-operations.md --json` prints the same file. Use it for structural validation and creation. Author useful trigger/outcome evaluations; passing the validator cannot establish usefulness.
 
 ## Judgment guidance
 
@@ -61,7 +61,7 @@ Use `resources scaffold skill <name> --json` for metadata. Follow [resource-oper
 ## Error Handling
 
 - **[Skill-specific failure]** -> [Recovery behavior]
-- For common tool/subagent/file failures, follow `~/.copilot/skills/references/error-handling-patterns.md`
+- For common tool/subagent/file failures, read `<copilot-home>/skills/references/error-handling-patterns.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/error-handling-patterns.md --json` prints the same file.
 
 ## Guidelines
 [Key principles for this skill]

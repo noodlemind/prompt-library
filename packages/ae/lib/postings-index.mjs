@@ -1,9 +1,14 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
 import { tokenize, FIELD_BOOSTS } from './tokenize.mjs';
+import { readFileNoFollow, writeFileContained } from './fs-safe.mjs';
 
 // Persist tokenizer/shape compatibility, not only the manifest date.
 export const POSTINGS_INDEX_VERSION = 2;
+
+// Calendar dates cannot distinguish same-day rebuilds in a shared Copilot home.
+export const manifestFingerprint = (content) => crypto.createHash('sha256').update(content).digest('hex');
 
 function countTokens(text) {
   return tokenize(text).length;
@@ -58,12 +63,21 @@ export function buildPostingsIndex(entries) {
   return { N, avgdl, docLengths, terms, entries: entryMeta };
 }
 
-export function writePostingsIndex(indexDir, postings, meta, flags) {
+export function writePostingsIndex(indexDir, postings, meta, flags, projectManifest) {
   if (flags.dryRun) return { indexDir, entryCount: meta.entryCount };
 
   fs.mkdirSync(indexDir, { recursive: true });
-  fs.writeFileSync(path.join(indexDir, 'postings.json'), JSON.stringify(postings, null, 0), 'utf8');
-  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
+  const content = JSON.stringify(postings, null, 0);
+  const files = [
+    ...(typeof projectManifest === 'string' ? [['manifest.json', projectManifest]] : []),
+    ['postings.json', content],
+    ['meta.json', JSON.stringify({ ...meta, postingsSha256: manifestFingerprint(content) }, null, 2)],
+  ];
+  for (const [name, bytes] of files) {
+    const stat = fs.lstatSync(path.join(indexDir, name), { throwIfNoEntry: false });
+    const mode = stat ? stat.mode & 0o777 : 0o600;
+    if (!writeFileContained(indexDir, name, bytes, { mode })) throw new Error(`knowledge index ${name} publication failed`);
+  }
   return { indexDir, entryCount: meta.entryCount };
 }
 
@@ -73,27 +87,27 @@ export function loadPostingsIndex(indexDir) {
   if (!fs.existsSync(postingsPath) || !fs.existsSync(metaPath)) return null;
 
   try {
-    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    const meta = JSON.parse(readFileNoFollow(metaPath, { root: indexDir }) || 'null');
     if (meta.version !== POSTINGS_INDEX_VERSION) return null;
-    const postings = JSON.parse(fs.readFileSync(postingsPath, 'utf8'));
+    const content = readFileNoFollow(postingsPath, { root: indexDir });
+    if (content === null || !/^[a-f0-9]{64}$/.test(meta.postingsSha256 || '') || manifestFingerprint(content) !== meta.postingsSha256) return null;
+    const postings = JSON.parse(content);
     return { ...postings, meta };
   } catch {
     return null;
   }
 }
 
-export function isIndexStale(indexDir, manifestUpdated) {
-  const metaPath = path.join(indexDir, 'meta.json');
-  if (!fs.existsSync(metaPath) || !manifestUpdated) return true;
-  try {
-    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-    return meta.version !== POSTINGS_INDEX_VERSION || meta.updated !== manifestUpdated;
-  } catch {
-    return true;
-  }
+export function postingsMatchManifest(index, manifestUpdated, manifestSha256) {
+  return Boolean(index?.meta && manifestUpdated && /^[a-f0-9]{64}$/.test(manifestSha256 || '')
+    && index.meta.version === POSTINGS_INDEX_VERSION && index.meta.updated === manifestUpdated && index.meta.manifestSha256 === manifestSha256);
 }
 
-export function runBuildPostingsIndex({ entries, indexDir, manifestUpdated, flags }) {
+export function isIndexStale(indexDir, manifestUpdated, manifestSha256) {
+  return !postingsMatchManifest(loadPostingsIndex(indexDir), manifestUpdated, manifestSha256);
+}
+
+export function runBuildPostingsIndex({ entries, indexDir, manifestUpdated, manifestContent, projectManifest, flags }) {
   // Always persist meta (including entryCount: 0) so `index --status` can
   // distinguish "never built" from "built empty — no solution docs yet".
   // Previously empty rebuilds deleted .harness-index, so status forever said
@@ -104,11 +118,13 @@ export function runBuildPostingsIndex({ entries, indexDir, manifestUpdated, flag
   const meta = {
     version: POSTINGS_INDEX_VERSION,
     updated: manifestUpdated,
+    manifestSha256: typeof manifestContent === 'string' ? manifestFingerprint(manifestContent) : null,
+    ...(typeof projectManifest === 'string' ? { manifestSnapshotSha256: manifestFingerprint(projectManifest) } : {}),
     entryCount: entries.length,
     algorithm: 'bm25',
     headSha: flags?.headSha || null,
   };
 
-  writePostingsIndex(indexDir, postings, meta, flags);
+  writePostingsIndex(indexDir, postings, meta, flags, projectManifest);
   return { entryCount: entries.length, indexDir, empty: entries.length === 0 };
 }

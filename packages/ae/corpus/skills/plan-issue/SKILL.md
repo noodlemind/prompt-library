@@ -26,15 +26,15 @@ Retrieve the selected plan and current revision. If it is already locked, judge 
 
 ## Research and choose
 
-Read selected intent sources and task-relevant repository context. Use /recall for applicable prior solutions. Delegate bounded research when separate expertise is useful; otherwise research within this session. Follow the shared subagent context packet contract.
+Read selected intent sources and task-relevant repository context. Use /recall for applicable prior solutions. Delegate bounded research when separate expertise is useful; otherwise research within this session. Follow the shared subagent context packet contract. Researcher spawns use the `researcher` role. Read the matching role line in `~/.cursor/rules/ae-models.mdc` or `~/.claude/rules/ae-models.md`. Pass that model when the host spawn tool takes one. A missing file, a missing line, or `inherit` means omit the model.
 
-Choose the smallest approach that meets the goal. Identify impacted paths and meaningful acceptance criteria. Inspect trusted named checks from `.github/harness/checks.yaml`; judge assertion adequacy rather than matching a check name. Record source-backed reasoning, constraints, unresolved questions, and risk-aware review needs.
+Choose the smallest approach that meets the goal. Identify impacted paths and meaningful acceptance criteria. Inspect trusted named checks from the selected configuration source reported by `ae checks list --json`; judge assertion adequacy rather than matching a check name. Record source-backed reasoning, constraints, unresolved questions, and risk-aware review needs.
 
 For transaction races, lost updates, duplicate writes, or flush/commit misconceptions, require a failing concurrent reproduction before strategy selection. Route domain review when needed. Repeated missing capability becomes a proposal, not an inline installation.
 
 ## Submit the plan decision
 
-Use `ae plan-update --plan <path> --file <decision.json> --json` to amend criteria/check bindings, scope, phases, and authored notes. See `../references/plan-operations.md`. Supply task descriptions and phase titles; Harness writes headings, task IDs, unchecked state, dates, references, and activity. Never put executable shell strings in a plan.
+Pipe the amend JSON to `ae plan-update --plan <path> --file - --json` for criteria/check bindings, scope, phases, and authored notes. Do not write the decision JSON to a file. Read `<copilot-home>/skills/references/plan-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/plan-operations.md --json` prints the same file. Supply task descriptions and phase titles; Harness writes headings, task IDs, unchecked state, dates, references, and activity. Never put executable shell strings in a plan.
 
 Use scoped source amendments when accepting changed selected specs. Harness records old/new hashes and affected evidence. Preserve the frozen selection; a relock cannot silently accept changed source bytes.
 
@@ -44,4 +44,4 @@ Report the returned path, phase/task counts, and missing prerequisites. Engineer
 
 Use the CLI diagnostics for missing plans, unsupported schemas, stale revisions, and unavailable proof. Reread a stale revision before making a new decision; replay an interrupted operation with the same payload and ID.
 
-If optional research fails, retain successful evidence and state the gap. Follow `../references/error-handling-patterns.md` for bounded recovery. Preserve existing authorization under `../references/human-approval-policy.md`. Obtain a missing gated decision before implementing it. Scope each phase so its outcome can be verified.
+If optional research fails, retain successful evidence and state the gap. Read `<copilot-home>/skills/references/error-handling-patterns.md` with the host read tool for bounded recovery. Outside the enforce hook, `ae get --reference skills/references/error-handling-patterns.md --json` prints the same file. Read `<copilot-home>/skills/references/human-approval-policy.md` with the host read tool to preserve existing authorization. Outside the enforce hook, `ae get --reference skills/references/human-approval-policy.md --json` prints the same file. Obtain a missing gated decision before implementing it. Scope each phase so its outcome can be verified.

@@ -13,6 +13,36 @@ import { readFileNoFollow, assertNoSymlinkAncestors, canonicalPath } from './fs-
 import { readProductDiff, gitMetadataEnvironment } from '../corpus/hooks/lib/product-diff.mjs';
 
 export const CODE_REVIEWERS = Object.freeze(['architecture-strategist', 'security-sentinel', 'performance-oracle', 'code-simplicity-reviewer', 'pattern-recognition-specialist']);
+export const REVIEW_BUDGET_CAP = 3;
+const LANGUAGE_REVIEWERS = Object.freeze([
+  ['java-reviewer', /\.java$/i],
+  ['compounding-typescript-reviewer', /\.tsx?$/i],
+  ['python-reviewer', /\.py$/i],
+  ['sql-reviewer', /\.sql$/i],
+]);
+
+function crossesBoundary(file) {
+  return /\.sql$/i.test(file) || /(?:^|[\\/_.-])(?:auth|secrets?|passwords?|migrations?|schemas?|iam)(?:[\\/_.-]|$)/i.test(file);
+}
+
+export function reviewBudget(files) {
+  const paths = [...new Set((files || []).map(file => String(file).replace(/\\/g, '/')).filter(Boolean))];
+  const large = paths.length > 8;
+  const selected = ['code-simplicity-reviewer'];
+  if (paths.some(crossesBoundary) || large) selected.push('security-sentinel');
+  if (large) selected.push('architecture-strategist');
+  const languages = new Set();
+  for (const file of paths) {
+    for (const [id, pattern] of LANGUAGE_REVIEWERS) {
+      if (pattern.test(file)) languages.add(id);
+    }
+  }
+  if (languages.size === 1) {
+    const [id] = languages;
+    if (!selected.includes(id)) selected.push(id);
+  }
+  return selected.slice(0, REVIEW_BUDGET_CAP);
+}
 export const DOCUMENT_REVIEWERS = Object.freeze(['design', 'scope', 'coherence', 'feasibility']);
 export const DOCUMENT_REVIEW_DEFINITIONS = Object.freeze(['skills/document-review/references/review-criteria.md', 'skills/code-review/references/findings-schema.md']);
 export const reviewHash = value => createHash('sha256').update(stableJson(value)).digest('hex');
@@ -185,10 +215,12 @@ export function reviewPreparation({ workspace, scope, plan, kind, reviewers, fil
   const covered = selectedDocument ? scope.files.map(ref => ref.path) : [...new Set([...scope.changedFiles, ...selected])].sort(compareText);
   const discovery = kind === 'code' ? discoverReviewChecks(workspace, covered) : { checks: [], failures: [] };
   const declaredRequired = [...new Set(plan?.fm.reviews?.required || [])].sort(compareText);
-  const required = [...new Set([...(kind === 'document' ? DOCUMENT_REVIEWERS : CODE_REVIEWERS), ...declaredRequired.filter(r => r !== 'code-review'), ...reviewers, ...discovery.checks.filter(c => c.matched).map(c => c.name)])].sort(compareText);
+  const selectedReviewers = kind === 'document' ? DOCUMENT_REVIEWERS : reviewBudget(covered);
+  const required = [...new Set([...selectedReviewers, ...declaredRequired.filter(r => r !== 'code-review'), ...reviewers, ...discovery.checks.filter(c => c.matched).map(c => c.name)])].sort(compareText);
   if (required.some(id => typeof id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))) throw new Error('Invalid required review IDs');
-  const perspectives = kind === 'document' ? DOCUMENT_REVIEWERS : [...new Set([...CODE_REVIEWERS, ...reviewers, ...declaredRequired.filter(id => id !== 'code-review')])];
-  const collisions = discovery.checks.filter(c => c.matched && perspectives.includes(c.name)).map(c => `Review check name collides with a required perspective: ${c.name}`);
+  const perspectives = kind === 'document' ? DOCUMENT_REVIEWERS : [...new Set([...selectedReviewers, ...reviewers, ...declaredRequired.filter(id => id !== 'code-review')])];
+  const reserved = kind === 'document' ? perspectives : [...new Set([...CODE_REVIEWERS, ...LANGUAGE_REVIEWERS.map(([id]) => id), ...perspectives])];
+  const collisions = discovery.checks.filter(c => c.matched && reserved.includes(c.name)).map(c => `Review check name collides with a required perspective: ${c.name}`);
   const sources = kind === 'document' ? [source(corpus, DOCUMENT_REVIEW_DEFINITIONS[0], 'corpus')] : perspectives.map(id => source(corpus, `agents/${id}.agent.md`, 'corpus'));
   sources.push(source(corpus, DOCUMENT_REVIEW_DEFINITIONS[1], 'corpus'));
   const failures = [...discovery.failures, ...collisions, ...sources.filter(s => !s.sha256).map(s => `Review definition unavailable: ${s.path}`)];

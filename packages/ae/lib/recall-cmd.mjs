@@ -1,4 +1,4 @@
-import { rankRecall, findMatchingPlans } from './recall-rank.mjs';
+import { rankRecall, findMatchingPlans, loadManifest } from './recall-rank.mjs';
 import { parseQueryFromArgv } from './argv.mjs';
 import { redactRecallEntry } from './secret-scan.mjs';
 
@@ -8,6 +8,7 @@ export function runRecall({ workspace, copilotHome, flags, argv }) {
     throw new Error('recall requires a query string, e.g. ae recall "orders timeout"');
   }
 
+  const manifest = loadManifest(copilotHome, workspace, { home: flags.harnessHome || flags.home });
   const recall = rankRecall(query, {
     copilotHome,
     workspace,
@@ -15,6 +16,7 @@ export function runRecall({ workspace, copilotHome, flags, argv }) {
     collection: flags.collection,
     minScore: flags.minScore ?? 0.15,
     home: flags.harnessHome || flags.home,
+    manifest,
       }).map((e) => redactRecallEntry({
     docid: e.docid || e.id,
     path: e.path,
@@ -31,5 +33,5 @@ export function runRecall({ workspace, copilotHome, flags, argv }) {
     ? findMatchingPlans(workspace, query, flags.limit || 3)
     : [];
 
-  return { query, recall, plans };
+  return { query, recall, plans, ...(manifest.warnings?.length ? { warnings: manifest.warnings } : {}) };
 }

@@ -8,6 +8,40 @@ import { readFileNoFollow, assertNoSymlinkAncestors } from '../fs-safe.mjs';
 export const MAX_FILES_SCANNED = 4000;
 export const MAX_FILE_BYTES = 200_000;
 
+function filePrefix(prefix) {
+  if (typeof prefix !== 'string' || !prefix) return '';
+  const scope = prefix.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (!scope || scope.startsWith('/') || /^[A-Za-z]:/.test(scope) || scope.includes('\0')) return '';
+  if (scope.split('/').includes('..')) return '';
+  return scope;
+}
+
+export function listRepoFiles(workspace, { prefix = '' } = {}) {
+  const scope = filePrefix(prefix);
+  const args = ['-C', workspace, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'];
+  if (scope) args.push('--', scope);
+  const res = spawnSync('git', args, {
+    encoding: 'utf8',
+    timeout: 15_000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (res.error?.code === 'ENOENT') {
+    return { files: [], total: 0, truncated: false, unavailable: true, fallback: 'git is not installed or not on PATH. Use the host search/codebase tool' };
+  }
+  if (res.error || res.status !== 0) {
+    return { files: [], total: 0, truncated: false, unavailable: true, fallback: 'git ls-files failed. Use the host search/codebase tool' };
+  }
+  const all = [...new Set(res.stdout.split('\0').filter(Boolean))].sort();
+  const cap = MAX_FILES_SCANNED;
+  return {
+    files: all.slice(0, cap),
+    total: all.length,
+    truncated: all.length > cap,
+    unavailable: false,
+    fallback: null,
+  };
+}
+
 export function trackedSourceFiles(workspace) {
   const res = spawnSync('git', ['-C', workspace, 'ls-files', '-z'], { encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024 * 1024 });
   if (res.error || res.status !== 0) return { files: [], total: 0, inventoryHash: null, unavailable: true };

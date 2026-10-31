@@ -389,7 +389,8 @@ test('CLI: registry-dispatched learnings rejects an unknown flag with exit 2 and
 
 test('CLI: registry-dispatched status still renders the human ledger line unchanged', () => {
   const copilotHome = tempDir('registry-e2e-home3-');
-  const result = runHarness(['status', '--copilot-home', copilotHome]);
+  const workspace = tempDir('registry-e2e-ws3-');
+  const result = runHarness(['status', '--copilot-home', copilotHome, '--workspace', workspace, '--no-events']);
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /harness\s+\d+\.\d+\.\d+/);
@@ -472,7 +473,7 @@ test('CLI: get without --docid or --path is E_USAGE/exit 2 with the original mes
   const body = JSON.parse(result.stderr);
   assert.equal(body.ok, false);
   assert.equal(body.error.code, 'E_USAGE');
-  assert.equal(body.error.message, 'get requires --docid <id> or --path <relative-path>');
+  assert.equal(body.error.message, 'get requires --docid <id>, --path <relative-path>, or --reference <installed-corpus-path>');
   assert.equal(body.error.exit, 2);
 });
 

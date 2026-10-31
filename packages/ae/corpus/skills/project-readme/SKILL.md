@@ -27,8 +27,8 @@ Activate when the user wants to:
 
 **Should not trigger:**
 - "What does this repo do?" -> use @engineer Answer mode for quick Q&A
-- "Generate a plan for this feature" -> use /plan-issue
-- "Document a solved bug" -> use /compound-learnings
+- "Generate a plan for this feature" -> ask @engineer to plan it
+- "Document a solved bug" -> use the compound-learnings skill
 
 ## Inputs and Outputs
 
@@ -47,7 +47,7 @@ Identify the target README path:
 
 ### 2. Gather Repository Evidence
 
-Use `ae report --facts --json` for generated inventory, declared/resolved versions, check configuration and declared graphs. Follow [factual-context.md](../references/factual-context.md); retrieve sources for missing or unsupported parsers. Read high-signal files before editing:
+Use `ae report --facts --json` for generated inventory, declared/resolved versions, check configuration and declared graphs. Read `<copilot-home>/skills/references/factual-context.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/factual-context.md --json` prints the same file. Retrieve sources for missing or unsupported parsers. Read high-signal files before editing:
 - Existing `README.md`
 - `AGENTS.md`, `.github/copilot-instructions.md`, `.harness/agent-context.md` or `docs/agent-context.md`, and `docs/codebase-snapshot.md` when present
 - Build and dependency manifests (`package.json`, `pyproject.toml`, `pom.xml`, `build.gradle`, `requirements.txt`, `go.mod`, etc.)
@@ -91,7 +91,7 @@ Section expectations:
 
 ### 4. Edit README
 
-Reuse the current plan when its scope already includes the README. Otherwise use `/ensure-plan` with a concise full creation decision (`type: docs`), one phase, the README path, evidence-based acceptance criteria, and an inspected trusted documentation check. Full docs plans may have no required code review; retain any reviews required by the accepted plan or policy. A short plan retains its code-review requirement. Do not widen scope to code, configuration, or unrelated workflows.
+Reuse the current plan when its scope already includes the README. Otherwise use the ensure-plan skill with a concise full creation decision (`type: docs`), one phase, the README path, evidence-based acceptance criteria, and an inspected trusted documentation check. Full docs plans may have no required code review; retain any reviews required by the accepted plan or policy. A short plan retains its code-review requirement. Do not widen scope to code, configuration, or unrelated workflows.
 
 Submit a start decision and require its successful implement gate before editing. A missing adequate named check remains a verification gap; do not invent a check or claim completion.
 

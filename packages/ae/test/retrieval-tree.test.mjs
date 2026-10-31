@@ -6,7 +6,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import { runTree, MAX_DEPTH, MAX_NODES, DEFAULT_DEPTH, TREE_SUBJECTS } from '../lib/retrieval/tree.mjs';
-import { storeDir, serializeLearning } from '../lib/knowledge/store.mjs';
+import { listRepoFiles, MAX_FILES_SCANNED } from '../lib/repo-map/scan.mjs';
+import { storeDir, serializeLearning, repoId } from '../lib/knowledge/store.mjs';
 
 // Neutralize host git config, same as every other suite.
 const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
@@ -131,8 +132,8 @@ test('an unknown subject names the subjects that exist', (t) => {
 
 // --- knowledge -------------------------------------------------------------
 
-function manifest(copilotHome, entries) {
-  const lines = ['updated: 2026-01-01', 'entries:'];
+function manifest(copilotHome, entries, workspace) {
+  const lines = ['updated: 2026-01-01', ...(workspace ? [`repository: ${JSON.stringify(repoId(workspace))}`] : []), 'entries:'];
   for (const e of entries) {
     lines.push(`  - docid: ${e.docid}`);
     lines.push(`    kind: ${e.kind || 'solution'}`);
@@ -149,13 +150,13 @@ function collections(copilotHome, body) {
   write(copilotHome, 'knowledge/collections.yaml', body);
 }
 
-function seedKnowledge(copilotHome) {
+function seedKnowledge(copilotHome, workspace) {
   manifest(copilotHome, [
     { docid: 'zeta-fix', scope: 'global', path: 'solutions/patterns/zeta.md', title: 'Zeta fix', category: 'patterns', tags: ['db'] },
     { docid: 'alpha-fix', scope: 'global', path: 'solutions/patterns/alpha.md', title: 'Alpha fix', category: 'patterns', tags: ['db'] },
     { docid: 'beta-note', scope: 'global', path: 'solutions/testing/beta.md', title: 'Beta note', category: 'testing', tags: ['test'] },
     { docid: 'local-note', scope: 'product', path: 'docs/solutions/local.md', title: 'Local note', category: 'testing', tags: ['test'] },
-  ]);
+  ], workspace);
   collections(
     copilotHome,
     ['collections:', '  db-only:', '    tags: [db]', '  product-only:', '    scope: product', ''].join('\n'),
@@ -174,7 +175,7 @@ function seedLearnings(ws, home, entries) {
 
 test('tree knowledge groups the manifest by scope then category', (t) => {
   const { ws, home, copilotHome } = fixture(t);
-  seedKnowledge(copilotHome);
+  seedKnowledge(copilotHome, ws);
   const out = runTree({ subject: 'knowledge', workspace: ws, home, copilotHome });
 
   assert.equal(out.root.name, 'knowledge');
@@ -197,7 +198,7 @@ test('tree knowledge groups the manifest by scope then category', (t) => {
 
 test('a named collection filters the corpus; an unknown one names the real ones', (t) => {
   const { ws, home, copilotHome } = fixture(t);
-  seedKnowledge(copilotHome);
+  seedKnowledge(copilotHome, ws);
 
   const filtered = runTree({ subject: 'knowledge', target: 'product-only', workspace: ws, home, copilotHome });
   assert.deepEqual(names(filtered.root), ['product'], 'only the collection\'s entries survive');
@@ -225,7 +226,7 @@ test('a collection filter against a workspace with no collections says so', (t) 
 
 test('the learnings store is grouped by domain when one exists', (t) => {
   const { ws, home, copilotHome } = fixture(t);
-  seedKnowledge(copilotHome);
+  seedKnowledge(copilotHome, ws);
   seedLearnings(ws, home, [
     { domain: 'testing', slug: 'flaky-clock', trigger: 'a clock-dependent test flakes' },
     { domain: 'db', slug: 'lock-order', trigger: 'two transactions deadlock', status: 'quarantined' },
@@ -263,7 +264,7 @@ test('free text sourced from file content is redacted before it is returned', (t
 
 test('the same corpus renders byte-identically across runs', (t) => {
   const { ws, home, copilotHome } = fixture(t);
-  seedKnowledge(copilotHome);
+  seedKnowledge(copilotHome, ws);
   seedLearnings(ws, home, [
     { domain: 'testing', slug: 'zzz-last', trigger: 'z' },
     { domain: 'testing', slug: 'aaa-first', trigger: 'a' },
@@ -303,7 +304,7 @@ test('output is capped at MAX_NODES and reports the cap instead of returning it 
 
 test('tree never creates the knowledge store or any directory', (t) => {
   const { tmp, ws, home, copilotHome } = fixture(t);
-  seedKnowledge(copilotHome);
+  seedKnowledge(copilotHome, ws);
   const dir = storeDir(ws, { home });
   assert.equal(fs.existsSync(dir), false, 'precondition: no store');
   assert.equal(fs.existsSync(home), false, 'precondition: no harness home at all');
@@ -332,4 +333,22 @@ test('an empty corpus is a valid empty tree, not an error', (t) => {
   t.after(() => fs.rmSync(bare, { recursive: true, force: true }));
   const nonRepo = runTree({ subject: 'workspace', workspace: bare, home, copilotHome });
   assert.deepEqual(nonRepo.root.children, [], 'a workspace git cannot enumerate yields an empty tree, not a throw');
+});
+
+test('tree --files applies the folder filter before the path cap', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-tree-cap-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  initRepo(root);
+  for (let i = 0; i <= MAX_FILES_SCANNED; i += 1) {
+    write(root, `early/${String(i).padStart(5, '0')}.txt`, 'x\n');
+  }
+  write(root, 'late-extra/nope.mjs', 'nope\n');
+  write(root, 'late/keep.mjs', 'keep\n');
+  const unscoped = listRepoFiles(root);
+  assert.equal(unscoped.truncated, true);
+  assert.equal(unscoped.files.includes('late/keep.mjs'), false);
+  const out = runTree({ subject: 'workspace', workspace: root, files: true, target: 'late' });
+  assert.deepEqual(out.files, ['late/keep.mjs']);
+  assert.equal(out.total, 1);
+  assert.equal(out.truncated, false);
 });

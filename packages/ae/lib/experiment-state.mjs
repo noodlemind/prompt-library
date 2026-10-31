@@ -18,6 +18,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 function git(workspace, args) {
   const result = spawnSync('git', ['-c', 'core.fsmonitor=false', ...args], { cwd: workspace, env: gitMetadataEnvironment(), encoding: 'utf8', timeout: 5000, maxBuffer: MAX_BYTES });
+  if (result.error?.code === 'ENOENT') throw fail('git is not installed or not on PATH');
   if (result.error || result.status !== 0) throw fail('workspace Git identity is unavailable');
   return result.stdout.trim();
 }
@@ -318,18 +319,39 @@ export function reserveExperimentAttempt(options) {
   });
 }
 
-function processIdentity(pid) {
+const selfStartMs = String(Math.round(Date.now() - process.uptime() * 1000));
+
+function linuxStartTicks(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const end = stat.lastIndexOf(')');
+    if (end < 0) return '';
+    const ticks = stat.slice(end + 2).trim().split(/\s+/)[19];
+    return ticks && /^\d+$/.test(ticks) ? ticks : '';
+  } catch {
+    return '';
+  }
+}
+
+export function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid < 1) return null;
   try { process.kill(pid, 0); }
   catch (error) {
     if (error.code === 'ESRCH') return null;
     throw fail('process identity is unavailable; absence is not proven');
   }
-  const result = process.platform === 'win32'
-    ? spawnSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `[Console]::Write([System.Diagnostics.Process]::GetProcessById(${pid}).StartTime.ToUniversalTime().Ticks)`], { encoding: 'utf8', timeout: 4000, maxBuffer: 4096, windowsHide: true })
-    : spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
-  const identity = result.status === 0 && !result.error ? result.stdout.trim() : '';
-  if (identity && (process.platform !== 'win32' || /^[1-9][0-9]{0,19}$/.test(identity))) return process.platform === 'win32' ? `windows:${pid}:${identity}` : identity;
+  if (process.platform === 'linux' || process.platform === 'android') {
+    const ticks = linuxStartTicks(pid);
+    if (ticks) return `linux:${ticks}`;
+  } else if (process.platform === 'darwin') {
+    // Node can see that another pid is alive. It cannot read that process's kernel
+    // start time. One identity per live pid lets evaluation record the child, and a
+    // reused pid stays blocked until it exits.
+    return `darwin:${pid}`;
+  } else if (pid === process.pid && /^[1-9][0-9]{0,19}$/.test(selfStartMs)) {
+    const prefix = process.platform === 'win32' ? 'windows' : process.platform;
+    return `${prefix}:${pid}:${selfStartMs}`;
+  }
   try { process.kill(pid, 0); }
   catch (error) { if (error.code === 'ESRCH') return null; }
   throw fail('process identity is unavailable; absence is not proven');

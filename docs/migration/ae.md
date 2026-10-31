@@ -62,6 +62,17 @@ The explicit binding keeps saved plans and knowledge at their original physical 
 
 The repository owner then updates package repository/homepage URLs, Pages settings, trusted publisher configuration and release links to the renamed repository. The local directory name can remain unchanged. The `.github/harness` policy directory, `.harness` workspace records, lock filenames, JSON fields, protocol keys and historical evidence retain their existing contracts.
 
+## Recover learnings that are still on disk
+
+An empty `learnings/` directory is the shell created the first time a checkout is opened. It is not evidence that a learning file was deleted. Consolidated learning files are written only by `ae consolidate --apply`. A store whose git history has never contained a file under `learnings/` never received that command. `config.json` with `"commit": "none"` skips only the checkout mirror at `docs/knowledge/learnings/`. Schema 2 is the current store schema and accepts writes. `ae compound` and `ae remember` write episode files to `projects/<id>/docs/solutions/` in the harness home. A global publication writes `~/.copilot/knowledge/solutions/`. The harness home has no `knowledge/solutions/` directory. From the product checkout, point the command at the home you want to repair:
+
+```sh
+ae knowledge migrate-store --ae-home ~/.harness --dry-run --json
+ae knowledge migrate-store --ae-home ~/.harness --json
+```
+
+Run the command from any directory inside the product checkout. The dry run writes nothing. Its JSON `merges` array is the list of existing ids for this repo: each row has `fromId`, `toId`, and `namespace` (`knowledge` or `projects`). `stableId` is the id they merge into, and `repo` is the origin URL or the main worktree path. The real run copies a missing learning, store config, or project file only when the destination does not already have that file. A destination file with different bytes is left alone and reported as a conflict. Source directories are never deleted or overwritten. A second run reports `unchanged`. The search covers ids whose path is the main worktree, another worktree, a directory inside those trees, or an older spelling of those paths (including macOS `/var` and `/private/var`), plus learning files still stored in that store's git history, a `docs/knowledge/learnings/` mirror in the checkout, and the same ids in the home named by a migration receipt. It does not import unrelated `local-*` directories from other checkouts.
+
 ## Qualification
 
 Source tests and isolated archive checks do not establish native editor acceptance. The release notes must state the exact archive digest and distinguish automated Windows checks from the later Windows VS Code/Copilot run owned by the user. Publication also requires an owner-controlled npm name and the repository's chosen license terms. No license change is part of this migration.

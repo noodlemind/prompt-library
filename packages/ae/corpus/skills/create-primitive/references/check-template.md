@@ -1,6 +1,6 @@
 # Review Check Template
 
-Use this template when creating a review check. Checks shipped with the harness live under `packages/ae/corpus/skills/code-review/references/checks/<name>.md` and hydrate to `~/.copilot/skills/code-review/references/checks/`. Product repositories may use `.github/checks/<name>.md` for product-specific overlays.
+Use this template when creating a review check. Checks shipped with the harness live under `packages/ae/corpus/skills/code-review/references/checks/<name>.md` and hydrate to `~/.copilot/skills/code-review/references/checks/`. Read `<copilot-home>/skills/code-review/references/checks/<name>.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/code-review/references/checks/<name>.md --json` prints the same file. Product repositories may use `.github/checks/<name>.md` for product-specific overlays.
 
 Create a check when a concern is narrow, review-time oriented, and should be discovered by `/code-review`. Checks are support artifacts shipped with the harness, not universal host-native primitives.
 

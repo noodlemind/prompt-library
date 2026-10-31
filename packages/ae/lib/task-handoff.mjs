@@ -11,15 +11,16 @@ import { policyDigest } from './trust.mjs';
 import { captureWorkingSources } from './repo-map/working-sources.mjs';
 import { DEFAULT_MAX_BYTES } from './fs-safe.mjs';
 
-export function validateContextSnapshot({ workspace, snapshot, targets }) {
+export function validateContextSnapshot({ workspace, snapshot, targets, home }) {
   if (snapshot?.version !== 2) return { pass: true };
-  if (snapshot.state !== 'validated' || snapshot.policyDigest !== policyDigest(workspace)) return { pass: false, reason: 'context-stale: reorient after source or policy changes' };
+  const currentPolicy = policyDigest(workspace, undefined, { home });
+  if (!currentPolicy || snapshot.state !== 'validated' || snapshot.policyDigest !== currentPolicy) return { pass: false, reason: 'context-stale: reorient after source or policy changes' };
   if (snapshot.sourceState?.digest) {
     const current = captureWorkingSources(workspace);
     if (!current.valid || current.state.digest !== snapshot.sourceState.digest) return { pass: false, reason: 'context-stale: reload the current source generation' };
   }
   if (snapshot.plan) {
-    const plan = loadPlan(workspace, snapshot.plan);
+    const plan = loadPlan(workspace, snapshot.plan, { home });
     if (!plan || planDigest(plan.text) !== snapshot.contractDigest) return { pass: false, reason: 'context-stale: reload the current task contract' };
   }
   const relative = value => path.relative(workspace, path.resolve(workspace, value)).replaceAll('\\', '/');
@@ -34,7 +35,7 @@ export function validateContextSnapshot({ workspace, snapshot, targets }) {
   return { pass: true };
 }
 
-export function buildTaskHandoff({ workspace, task = '', domainPlan = null }) {
+export function buildTaskHandoff({ workspace, task = '', domainPlan = null, home }) {
   if (domainPlan) return {
     schema: 1, contract: null, domainPlan, requiresRead: true,
     reason: 'Reload the selected domain coordinator contract and delegated work before continuing. Local plan recovery does not establish domain state.',
@@ -43,7 +44,7 @@ export function buildTaskHandoff({ workspace, task = '', domainPlan = null }) {
   const session = readSession(workspace) || {};
   const source = session.contextSnapshot?.sourceState?.digest ? captureWorkingSources(workspace) : null;
   const generationChanged = source && (!source.valid || source.state.digest !== session.contextSnapshot.sourceState.digest);
-  const plan = session.activePlan ? loadPlan(workspace, session.activePlan) : null;
+  const plan = session.activePlan ? loadPlan(workspace, session.activePlan, { home }) : null;
   const contract = plan ? extractGoalFromPlan(plan) : { intent: task, constraints: [] };
   const references = session.contextSnapshot?.evidence || (session.files || []).map(location => ({ location }));
   const evidence = references.slice(0, 40).map(prior => {

@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
+import { appendFileContained, readFileNoFollow, writeFileContained } from './fs-safe.mjs';
+import { ensureLocalGitExclude } from './git-local-exclude.mjs';
 
 export const SESSION_DIR = '.harness';
 export const SESSION_FILE = 'session.json';
@@ -54,15 +56,28 @@ export function ensureHarnessDir(workspace, dryRun) {
   const dir = harnessDir(workspace);
     if (harnessDirEscapes(workspace)) return null;
   const gitignore = path.join(dir, '.gitignore');
+  // Preserve existing repository-owned ignore bytes. Private runtime state is
+  // excluded using Git's actual common metadata, including linked worktrees.
+  try {
+    const stat = fs.lstatSync(gitignore, { throwIfNoEntry: false });
+    if (stat && readFileNoFollow(gitignore, { root: workspace }) === null) return null;
+  } catch { return null; }
+  const local = ensureLocalGitExclude(workspace, ['/.harness/'], { dryRun });
+  if (!local) return null;
+  if (local.git) {
+    if (!dryRun) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
     const content =
       '# Ephemeral per-turn artifacts\nsession.json\ncontext-pack.md\nevents.jsonl\nruns.jsonl\nevidence/\nreviews/\ncompletions/\nlearning/\noperations/\nundo.jsonl\nundo/\nlocks/\nplans/\ncodebase-map.md\nagent-context.md\n';
   if (!fs.existsSync(gitignore)) {
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(gitignore, content, 'utf8');
+      if (!writeFileContained(workspace, path.join(SESSION_DIR, '.gitignore'), content, { exclusive: true })) return null;
     }
   } else if (!dryRun) {
-    const current = fs.readFileSync(gitignore, 'utf8');
+    const current = readFileNoFollow(gitignore, { root: workspace });
+    if (current === null) return null;
     const lines = current.split(/\r?\n/);
     const missing = [
       'session.json',
@@ -83,7 +98,7 @@ export function ensureHarnessDir(workspace, dryRun) {
     ].filter((entry) => !lines.includes(entry));
     if (missing.length) {
       const separator = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
-      fs.appendFileSync(gitignore, `${separator}${missing.join('\n')}\n`, 'utf8');
+      if (!appendFileContained(workspace, path.join(SESSION_DIR, '.gitignore'), `${separator}${missing.join('\n')}\n`)) return null;
     }
   }
   return dir;

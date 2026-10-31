@@ -6,7 +6,7 @@ import { EXIT } from '../style.mjs';
 import { redactSecrets } from '../secret-scan.mjs';
 import { readFileNoFollow } from '../fs-safe.mjs';
 import { tokenize, FIELD_BOOSTS } from '../tokenize.mjs';
-import { loadPostingsIndex, isIndexStale } from '../postings-index.mjs';
+import { loadPostingsIndex, postingsMatchManifest } from '../postings-index.mjs';
 import { loadManifest, rankRecall, findMatchingPlans } from '../recall-rank.mjs';
 import { loadCollections, entryMatchesCollection, resolveIndexDir } from '../recall-config.mjs';
 import { storeDir, inertLine, readStaleExclusions, repoId } from '../knowledge/store.mjs';
@@ -328,13 +328,13 @@ function codeSource({ mode, query, workspace, home, explain, headSha }) {
 
 // ----------------------------------------------------------- knowledge
 
-function knowledgeGeneration({ mode, copilotHome, workspace, updated, home }) {
+function knowledgeGeneration({ mode, copilotHome, workspace, updated, sha256, home }) {
   if (!updated) return null;
-  if (mode !== 'ranked') return updated;
+  if (mode !== 'ranked') return `${updated}:${sha256}`;
   const indexDir = resolveIndexDir(copilotHome, workspace, home);
   const index = loadPostingsIndex(indexDir);
-  const fresh = Boolean(index) && !isIndexStale(indexDir, updated) && index.N > 0;
-  return `${fresh ? 'bm25' : 'overlap'}@${updated}`;
+  const fresh = postingsMatchManifest(index, updated, sha256) && index.N > 0;
+  return `${fresh ? 'bm25' : 'overlap'}@${updated}:${sha256}`;
 }
 
 const KNOWLEDGE_TEXT_FIELDS = ['symptom', 'title', 'summary', 'excerpt', 'module'];
@@ -353,14 +353,14 @@ const knowledgeFields = (entry) => [
 ];
 
 function knowledgeSource({ mode, query, workspace, copilotHome, home, explain, collection, collections, queryTokens }) {
-  const manifest = loadManifest(copilotHome, workspace);
+  const manifest = loadManifest(copilotHome, workspace, { home });
     if (manifest.error) return failed('knowledge', `knowledge manifest unreadable: ${manifest.error}`);
   if (!manifest.path) return skipped('knowledge', 'no knowledge manifest — build one with: ae index');
 
-  const generation = knowledgeGeneration({ mode, copilotHome, workspace, updated: manifest.updated, home });
+  const generation = knowledgeGeneration({ mode, copilotHome, workspace, updated: manifest.updated, sha256: manifest.sha256, home });
 
   if (mode === 'ranked') {
-    const ranked = rankRecall(query, { copilotHome, workspace, limit: SOURCE_CANDIDATE_CAP, collection, home });
+    const ranked = rankRecall(query, { copilotHome, workspace, limit: SOURCE_CANDIDATE_CAP, collection, home, manifest });
     const results = [];
     for (const entry of ranked) {
       const id = knowledgeId(entry);
@@ -385,7 +385,7 @@ function knowledgeSource({ mode, query, workspace, copilotHome, home, explain, c
         }),
       );
     }
-    return sourceEntry('knowledge', 'ok', { generation, results });
+  return sourceEntry('knowledge', 'ok', { generation, reason: manifest.warnings?.join('; ') || null, results });
   }
 
   const entries = manifest.entries.filter((entry) => entryMatchesCollection(entry, collection, collections));

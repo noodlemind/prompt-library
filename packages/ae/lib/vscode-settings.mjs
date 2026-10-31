@@ -1,15 +1,27 @@
 import fs from 'fs';
+import os from 'node:os';
 import path from 'path';
-import { resolveVSCodeSettingsPaths } from './paths.mjs';
+import { resolveCopilotHome, resolveVSCodeSettingsPaths } from './paths.mjs';
+import { readFileNoFollow, writeFileContained } from './fs-safe.mjs';
+import { EXIT } from './style.mjs';
 
+const LOCATION_KEYS = {
+  'chat.agentFilesLocations': 'agents',
+  'chat.instructionsFilesLocations': 'instructions',
+  'chat.agentSkillsLocations': 'skills',
+  'chat.hookFilesLocations': 'hooks',
+};
 const MERGE_KEYS = {
-  'chat.agentFilesLocations': { '~/.copilot/agents': true },
-  'chat.instructionsFilesLocations': { '~/.copilot/instructions': true },
-  'chat.agentSkillsLocations': { '~/.copilot/skills': true },
-  'chat.hookFilesLocations': { '~/.copilot/hooks': true },
   'chat.customAgentInSubagent.enabled': true,
   'chat.useAgentSkills': true,
+  'chat.subagents.allowInvocationsFromSubagents': true,
 };
+
+export function vscodeCustomizationLocations(copilotHome = path.join(os.homedir(), '.copilot')) {
+  const home = path.resolve(copilotHome);
+  const prefix = path.relative(path.join(os.homedir(), '.copilot'), home) === '' ? '~/.copilot' : home.replace(/\\/g, '/');
+  return Object.fromEntries(Object.entries(LOCATION_KEYS).map(([key, directory]) => [key, `${prefix}/${directory}`]));
+}
 
 function stripJsonComments(text) {
   let output = '';
@@ -76,12 +88,14 @@ function stripTrailingCommas(text) {
 }
 
 export function parseVSCodeSettings(text) {
-  return JSON.parse(stripTrailingCommas(stripJsonComments(text)));
+  const value = JSON.parse(stripTrailingCommas(stripJsonComments(text)));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('settings must be a JSON object');
+  return value;
 }
 
 function deepMerge(target, source) {
   for (const [k, v] of Object.entries(source)) {
-    if (v && typeof v === 'object' && !Array.isArray(v) && target[k] && typeof target[k] === 'object') {
+    if (v && typeof v === 'object' && !Array.isArray(v) && target[k] && typeof target[k] === 'object' && !Array.isArray(target[k])) {
       deepMerge(target[k], v);
     } else {
       target[k] = v;
@@ -90,35 +104,50 @@ function deepMerge(target, source) {
   return target;
 }
 
-export function mergeVSCodeSettings(settings = {}) {
+export function mergeVSCodeSettings(settings = {}, { copilotHome } = {}) {
   const copy = JSON.parse(JSON.stringify(settings));
-  return deepMerge(copy, MERGE_KEYS);
+  const locations = Object.fromEntries(Object.entries(vscodeCustomizationLocations(copilotHome)).map(([key, location]) => [key, { [location]: true }]));
+  for (const key of Object.keys(locations)) {
+    if (Array.isArray(copy[key]) && copy[key].every(location => typeof location === 'string')) copy[key] = Object.fromEntries(copy[key].map(location => [location, true]));
+  }
+  return deepMerge(copy, { ...locations, ...MERGE_KEYS });
 }
 
 export function configureVSCodeSettings(flags, log) {
   const paths = resolveVSCodeSettingsPaths();
-  let updated = 0;
-  for (const settingsPath of paths) {
+  const failure = (settingsPath, reason) => Object.assign(new Error(`Cannot configure VS Code settings ${settingsPath}: ${reason}`), {
+    code: 'E_VSCODE_SETTINGS', exit: EXIT.syncConflict,
+    hint: 'Inspect this settings.json and restore a readable regular JSONC object, then retry ae install --target vscode --configure-vscode with the same --copilot-home. Authored settings are not replaced after a read or parse failure.',
+  });
+  // Validate every discovered profile before updating any. In particular, a
+  // malformed Insiders profile must not silently leave a partial setup.
+  const updates = paths.map(settingsPath => {
     let data = {};
-    if (fs.existsSync(settingsPath)) {
+    let stat;
+    try { stat = fs.lstatSync(settingsPath, { throwIfNoEntry: false }); }
+    catch (error) { throw failure(settingsPath, error.message); }
+    if (stat) {
       try {
-        const raw = fs.readFileSync(settingsPath, 'utf8');
+        const raw = readFileNoFollow(settingsPath, { root: path.dirname(settingsPath), maxBytes: 1024 * 1024 });
+        if (raw === null) throw new Error('source is unreadable, symlinked, nonregular or larger than 1 MiB');
         data = parseVSCodeSettings(raw);
       } catch (e) {
-        log(`warn: could not parse ${settingsPath}: ${e.message}`);
-        continue;
+        throw failure(settingsPath, e.message);
       }
     }
-    data = mergeVSCodeSettings(data);
+    data = mergeVSCodeSettings(data, { copilotHome: resolveCopilotHome(flags.copilotHome) });
+    return { settingsPath, content: JSON.stringify(data, null, 2) + '\n', mode: stat ? stat.mode & 0o777 : 0o600 };
+  });
+  for (const { settingsPath, content, mode } of updates) {
     if (flags.dryRun) {
       log(`would update ${settingsPath}`);
-      updated++;
       continue;
     }
-    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+    try {
+      fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+      if (!writeFileContained(path.dirname(settingsPath), path.basename(settingsPath), content, { mode })) throw new Error('safe atomic write refused');
+    } catch (error) { throw failure(settingsPath, error.message); }
     log(`updated ${settingsPath}`);
-    updated++;
   }
-  return updated;
+  return updates.length;
 }

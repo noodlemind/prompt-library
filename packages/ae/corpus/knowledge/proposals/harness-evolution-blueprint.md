@@ -3,7 +3,7 @@
 Status: **approved.**
 The `## Human Decision` section records approval on 2026-08-06; its listed conditions
 remain binding on every implementation phase (per Decision Handling semantics in
-[`capability-gap-proposal.md`](../../skills/references/capability-gap-proposal.md)).
+`<copilot-home>/skills/references/capability-gap-proposal.md`, read with the host read tool. Outside the enforce hook, `ae get --reference skills/references/capability-gap-proposal.md --json` prints the same file).
 This document is the approved design, not a behavior reference — current behavior is
 documented in `docs/adaptive-engineer-harness.md` and the harness tool contract as each phase ships.
 
@@ -50,7 +50,7 @@ every section below. Alternatives are not reconsidered.
 | Verification evidence | `verify.mjs`, `evidence.mjs` | Binding `{base, planDigest, changedFiles, workspaceDigest}` |
 | Events | `events.mjs` | `EVENT_TYPES` allow-list (known latent gap: `init_repo`/`recall`/`validate_plan`/`index` writes are silently dropped; `knowledge`-type events already flow) |
 | Doctor | `doctor.mjs` | H1–H17, K1–K4, V1–V9 |
-| Capability governance | `knowledge/capability-registry.yaml`, `capability-gap-proposal.md` | Lifecycle + registry mutation rules |
+| Capability governance | Read `<copilot-home>/knowledge/capability-registry.yaml` and `<copilot-home>/skills/references/capability-gap-proposal.md` with the host read tool. Outside the enforce hook, `ae get --reference knowledge/capability-registry.yaml --json` and `ae get --reference skills/references/capability-gap-proposal.md --json` print the same files. | Lifecycle + registry mutation rules |
 | Memory model + threat model | `docs/adaptive-engineer-harness.md` | Three tiers, one writer each; day-granular episode dates are load-bearing |
 
 ## 3. Per-proposal mapping

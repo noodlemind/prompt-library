@@ -1,6 +1,6 @@
 # Primitive creation decisions
 
-Use [resource-operations.md](../../references/resource-operations.md) for scaffolding, validation, registration, replacement and proposal contracts. The installed CLI owns metadata, supported host tools, reference containment, limits and inventory counts. Obtain canonical shapes from `resources scaffold`; do not copy a second tool catalogue or reconstruct its validator in a prompt.
+Read `<copilot-home>/skills/references/resource-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/resource-operations.md --json` prints the same file. Use it for scaffolding, validation, registration, replacement and proposal contracts. The installed CLI owns metadata, supported host tools, reference containment, limits and inventory counts. Obtain canonical shapes from `resources scaffold`; do not copy a second tool catalogue or reconstruct its validator in a prompt.
 
 ## Artifact choice
 
@@ -35,4 +35,4 @@ Use [check-template.md](check-template.md). Keep one concern per check and concr
 
 ## Evidence and activation
 
-Structural validation is necessary but does not establish usefulness, semantic overlap, check adequacy or promotion value. Evaluate realistic trigger and outcome cases. Preserve real task evidence and disclose unsupported hosts. Dormant proposals remain dormant until authorized activation through the existing writer and [human-approval-policy.md](../../references/human-approval-policy.md).
+Structural validation is necessary but does not establish usefulness, semantic overlap, check adequacy or promotion value. Evaluate realistic trigger and outcome cases. Preserve real task evidence and disclose unsupported hosts. Dormant proposals remain dormant until authorized activation through the existing writer. Read `<copilot-home>/skills/references/human-approval-policy.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/human-approval-policy.md --json` prints the same file.

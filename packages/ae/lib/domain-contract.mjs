@@ -5,6 +5,7 @@ import YAML from 'yaml';
 import { harnessGlobalHome } from './paths.mjs';
 import { assertNoSymlinkAncestors, canonicalPath, readFileNoFollow } from './fs-safe.mjs';
 import { readGitArgs } from '../corpus/hooks/lib/product-diff.mjs';
+import { cachedGitObservation } from './git-observation-cache.mjs';
 
 const DOMAIN_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const MAX_CONFIG_BYTES = 64 * 1024;
@@ -201,22 +202,35 @@ function emptyObserved() {
 }
 
 function checksObservation(root) {
-  const rel = '.github/harness/checks.yaml';
-  const full = assertNoSymlinkAncestors(root, rel);
-  if (!full) return { path: path.join(root, rel), present: false, status: 'unsafe' };
-  const stat = fs.lstatSync(full, { throwIfNoEntry: false });
-  return { path: full, present: Boolean(stat?.isFile()), status: stat ? (stat.isFile() ? 'present' : 'nonregular') : 'missing' };
+  // This is advisory file presence, not effective policy or execution authority.
+  // Preserve the bounded repository metadata path without resolving private
+  // project configuration or performing another Git identity read.
+  const shared = path.join(root, '.github/harness/checks.yaml');
+  if (fs.lstatSync(shared, { throwIfNoEntry: false })) {
+    const full = assertNoSymlinkAncestors(root, '.github/harness/checks.yaml');
+    const stat = full && fs.lstatSync(full, { throwIfNoEntry: false });
+    return { path: shared, present: Boolean(stat?.isFile()), status: stat?.isFile() ? 'present' : 'unsafe' };
+  }
+  return { path: null, present: false, status: 'not-observed' };
 }
 
-function inspectRepo(repo, { normalizeIdentity = false, diagnostics = true } = {}) {
+function inspectRepo(repo, options = {}) {
+  const normalizeIdentity = Boolean(options.normalizeIdentity);
+  const diagnostics = options.diagnostics !== false;
+  return cachedGitObservation(['inspect', repo.root, repo.id, repo.origin ?? null, normalizeIdentity, diagnostics], () => inspectRepoNow(repo, { normalizeIdentity, diagnostics }));
+}
+
+function inspectRepoNow(repo, { normalizeIdentity = false, diagnostics = true } = {}) {
   const warnings = [];
   const observed = emptyObserved();
   const result = { id: repo.id, status: 'unavailable', expected: { origin: repo.origin ?? null, root: repo.root, ...(repo.local_identity ? { local_identity: repo.local_identity } : {}) }, observed, checks: { path: path.join(repo.root, '.github/harness/checks.yaml'), present: false, status: 'unavailable' }, warnings };
   const stat = fs.lstatSync(repo.root, { throwIfNoEntry: false });
   if (!stat) { warnings.push('Local root is missing; repository observation is unavailable.'); return result; }
   if (!stat.isDirectory()) throw failure(`repo ${repo.id} root is not a directory`);
-  result.checks = checksObservation(repo.root);
-  if (!result.checks.present) warnings.push(`Named checks file is ${result.checks.status}.`);
+  if (diagnostics) {
+    result.checks = checksObservation(repo.root);
+    if (!result.checks.present) warnings.push(`Named checks file is ${result.checks.status}.`);
+  }
   if (!assertNoSymlinkAncestors(repo.root, '.git')) throw failure(`repo ${repo.id} Git identity path is unsafe or symlinked`);
   const prefix = readGitArgs(repo.root, { timeout: GIT_TIMEOUT, env: gitEnvironment() });
   if (!prefix) { warnings.push('Git configuration metadata is unavailable or malformed.'); return result; }

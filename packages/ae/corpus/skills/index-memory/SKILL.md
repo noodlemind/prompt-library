@@ -7,7 +7,7 @@ argument-hint: "[optional — ignored; use ae index]"
 
 # Index Memory (CLI-first)
 
-Rebuild `knowledge/manifest.yaml` deterministically. Contract: [`harness-tool-contract.md`](../references/harness-tool-contract.md).
+Rebuild the manifest deterministically. Read `<copilot-home>/knowledge/manifest.yaml` with the host read tool. Outside the enforce hook, `ae get --reference knowledge/manifest.yaml --json` prints the same file. Read `<copilot-home>/skills/references/harness-tool-contract.md` with the host read tool for the contract. Outside the enforce hook, `ae get --reference skills/references/harness-tool-contract.md --json` prints the same file.
 
 ## Step
 

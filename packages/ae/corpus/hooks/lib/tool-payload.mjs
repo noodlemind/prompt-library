@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { authorityBin } from './authority-bin.mjs';
 
 export const FILE_MUTATION_TOOLS = new Set([
@@ -581,7 +582,8 @@ export function harnessControlCommand(tokens, workspace) {
     const verb = args[1], options = {
       render: ['--file', '--sources', '--renderer', '--layout', '--timeout', '--scale'],
       graph: ['--root', '--operation', '--depth', '--limit', '--max-nodes', '--timeout', '--scale'],
-      flow: ['--flow', '--limit', '--max-nodes', '--timeout', '--scale'], status: ['--receipt'],
+      flow: ['--flow', '--limit', '--max-nodes', '--timeout', '--scale'],
+      formal: ['--file', '--model', '--max-nodes', '--timeout', '--scale'], status: ['--receipt'],
     };
     if (!Object.hasOwn(options, verb)) return null;
     const boolean = new Set(['--json', '--dry-run', '--no-events', '--no-color', '--verbose', '-v', ...(verb === 'status' ? [] : ['--png'])]);
@@ -597,8 +599,9 @@ export function harnessControlCommand(tokens, workspace) {
       if (!value || value.startsWith('-') || Buffer.byteLength(value) > 4096 || /[\x00-\x1f\x7f]/.test(value)) return null;
       values.set(name, value);
     }
-    const required = { render: '--file', graph: '--root', flow: '--flow', status: '--receipt' }[verb];
+    const required = { render: '--file', graph: '--root', flow: '--flow', formal: '--file', status: '--receipt' }[verb];
     if (!values.has(required)) return null;
+    if (verb === 'formal' && (!values.has('--model') || !/^[A-Za-z][A-Za-z0-9_]*\.tla$/.test(values.get('--model')))) return null;
     const contained = (value, scope = false) => {
       if (scope && value === '.') return true;
       return value.length <= 1024 && !/[\x00-\x1f\x7f\\:]/.test(value) && !path.isAbsolute(value) && !path.win32.isAbsolute(value)
@@ -607,7 +610,7 @@ export function harnessControlCommand(tokens, workspace) {
     for (const key of ['--file', '--root', '--receipt']) if (values.has(key) && !contained(values.get(key))) return null;
     if (values.has('--sources') && values.get('--sources').split(',').some(value => !contained(value.trim(), true))) return null;
     const file = values.get('--file');
-    if (file && !/\.(?:mmd|mermaid|d2)$/.test(file)) return null;
+    if (file && !(verb === 'formal' ? /\.json$/ : /\.(?:mmd|mermaid|d2)$/).test(file)) return null;
     const renderer = values.get('--renderer') || (file?.endsWith('.d2') ? 'd2' : undefined);
     if (renderer && !['pele', 'd2'].includes(renderer)) return null;
     if (values.has('--layout') && (renderer !== 'd2' || !['tala', 'elk', 'dagre'].includes(values.get('--layout')))) return null;
@@ -708,7 +711,7 @@ export function harnessControlCommand(tokens, workspace) {
       if (boolean.has(name) && split < 0) continue;
       if (!valued.has(name)) return null;
       const value = split < 0 ? args[++index] : token.slice(split + 1);
-      if (!value || value.startsWith('-') || /[\u0000-\u001f\u007f]/.test(value)) return null;
+      if (!value || (value.startsWith('-') && !(name === '--file' && value === '-' && ['plan-new', 'plan-update'].includes(verb))) || /[\u0000-\u001f\u007f]/.test(value)) return null;
       values.set(name, value);
     }
     const name = values.get('--name');
@@ -893,8 +896,17 @@ function parseToolInput(value) {
 }
 
 export function normalizeToolPayload(payload = {}) {
-  const input = parseToolInput(payload.tool_input);
-  const toolName = String(payload.tool_name || payload.toolName || '').trim();
+  // Copilot CLI's native envelopes use runtime names; PascalCase registration
+  // supplies Claude-compatible names. Keep their effects identical.
+  const canonicalName = value => {
+    const name = String(value || '').trim();
+    return ({ bash: 'Bash', powershell: 'Bash', view: 'Read', create: 'Write', str_replace_editor: 'Edit' })[name] || name;
+  };
+  const inputs = [payload.tool_input, payload.toolArgs, payload.toolInput].filter(value => value != null).map(parseToolInput);
+  const input = inputs[0] || {};
+  const names = [payload.tool_name, payload.toolName].filter(value => value != null).map(canonicalName);
+  const toolName = names[0] || '';
+  const conflicting = names.some(name => name !== toolName) || inputs.some(value => !isDeepStrictEqual(value, input));
   const targets = [];
   for (const candidate of [
     payload.filePath,
@@ -922,6 +934,7 @@ export function normalizeToolPayload(payload = {}) {
     : { mutation: false, targets: [], mkdirTargets: [] };
   targets.push(...shell.targets);
   const terminalEffects = command ? analyzeTerminalEffects(command, workspace) : { opaqueInvocations: [], invocations: [], ambiguous: false, hasOpaque: false };
+  if (conflicting) { terminalEffects.ambiguous = true; terminalEffects.hasOpaque = true; }
   const uniqueTargets = [...new Set(targets)];
   // Fail closed on unrecognized tools: any payload naming a concrete file
   // target is a mutation unless the tool is a known read-only or terminal tool
@@ -950,9 +963,11 @@ export function normalizeToolPayload(payload = {}) {
 export function toolMutationSucceeded(payload = {}) {
   if (payload.success === false || payload.ok === false) return false;
   if (payload.error || payload.tool_error || payload.toolError) return false;
-  if ((payload.hook_event_name || payload.hookEventName) === 'PostToolUseFailure') return false;
-  if (payload.tool_response && typeof payload.tool_response === 'object') {
-    if (payload.tool_response.success === false || payload.tool_response.error) return false;
+  if (['PostToolUseFailure', 'postToolUseFailure'].includes(payload.hook_event_name || payload.hookEventName)) return false;
+  for (const result of [payload.tool_response, payload.tool_result, payload.toolResult]) {
+    if (!result || typeof result !== 'object') continue;
+    const type = result.result_type ?? result.resultType;
+    if (result.success === false || result.error || type !== undefined && type !== 'success') return false;
   }
   return true;
 }

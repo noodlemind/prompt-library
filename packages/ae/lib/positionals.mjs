@@ -7,7 +7,7 @@ export const VALUE_FLAGS = Object.freeze(new Set([
   '--editor', '--name', '--launcher', '--installation', '--user-data', '--config-root', '--plugins-root',
   '--limit', '--lines', '--match', '--max-bytes', '--max-seconds', '--max-turns',
   '--min-score', '--model', '--new', '--offset', '--old', '--ops', '--output', '--path', '--phase', '--plan',
-  '--profile', '--provider', '--query', '--reason', '--review-completed', '--risk', '--scope', '--session', '--shows', '--since',
+  '--profile', '--provider', '--query', '--reason', '--reference', '--review-completed', '--risk', '--scope', '--session', '--shows', '--since',
   '--retention-policy',
   '--context-policy',
   '--question-kind', '--generation',

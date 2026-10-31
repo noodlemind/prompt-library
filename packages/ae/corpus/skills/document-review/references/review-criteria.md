@@ -4,19 +4,21 @@ This file defines WHAT each review persona evaluates. The skill body (SKILL.md) 
 
 Four personas evaluate documents from complementary perspectives. Each persona's criteria are adapted based on document type (brainstorm, plan, spec).
 
+Flag extra scope. A finding whose only effect is a new scenario, check, or abstraction the stated goal did not name is itself the defect.
+
 ## Persona: Design
 
 **Focus:** Information architecture, user flows, interaction states, completeness of described behavior.
 
 | Document Type | Evaluation Criteria |
 |--------------|-------------------|
-| **Brainstorm** | Are user scenarios concrete enough to plan from? Are edge cases identified? Are flows described with clear entry/exit points? |
+| **Brainstorm** | Are user scenarios concrete enough to plan from? Are the edge cases the problem already names written down? Are flows described with clear entry/exit points? |
 | **Plan** | Do implementation units cover all described user behaviors? Are UI states complete (loading, error, empty, success)? Are interaction flows traceable from requirement to unit? |
 | **Spec** | Are all user-facing behaviors specified with inputs, actions, and expected outputs? Are state transitions documented? Are error states handled? |
 
 **P1 findings:** Missing flows that would cause an implementer to invent behavior. Contradictory user experience descriptions.
-**P2 findings:** Incomplete edge case coverage. Missing error states for described interactions.
-**P3 findings:** Minor UX clarity improvements. Additional scenario suggestions.
+**P2 findings:** An error state a described interaction already names and does not handle.
+**P3 findings:** Minor UX clarity improvements.
 
 ## Persona: Scope
 
@@ -58,4 +60,4 @@ Four personas evaluate documents from complementary perspectives. Each persona's
 
 **P1 findings:** Approach will fail due to architectural constraints. Critical dependency missing or unavailable.
 **P2 findings:** Approach is feasible but fragile. Dependency order is likely wrong. Test scenarios don't cover realistic failure modes.
-**P3 findings:** Minor feasibility concerns. Suggestions for more robust approaches.
+**P3 findings:** Minor feasibility concerns.

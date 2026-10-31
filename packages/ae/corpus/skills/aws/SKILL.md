@@ -25,7 +25,7 @@ Apply AWS engineering guidance as an on-demand skill. Use this for AWS SDK usage
 
 ## Workflow
 
-1. **Load scoped conventions**: Read this skill's `references/aws-sdk.md` for Java AWS SDK work (on-demand, so it does not stack on every Java file). Also apply language-specific instructions for the implementation language.
+1. **Load scoped conventions**: Read this skill's `<copilot-home>/skills/aws/references/aws-sdk.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/aws/references/aws-sdk.md --json` prints the same file. Use it for Java AWS SDK work (on-demand, so it does not stack on every Java file). Also apply language-specific instructions for the implementation language.
 2. **Classify risk**:
    - SDK call or local test change -> proceed with focused verification.
    - IAM, production infrastructure, queue/topic topology, encryption, or data movement -> require a plan through `/capture-issue` and `/plan-issue`.
@@ -40,9 +40,7 @@ Apply AWS engineering guidance as an on-demand skill. Use this for AWS SDK usage
    - Prefer LocalStack/Testcontainers or host-approved cloud test environments for integration behavior.
    - Review IAM/action/resource scope before completion.
 6. **Review route**:
-   - Use `@aws-reviewer` for AWS service, IAM, resilience, and observability review.
-   - Add `@security-sentinel` for auth/secrets/data exposure risk.
-   - Add `@java-reviewer`, `@python-reviewer`, or other language reviewers for implementation quality.
+   - Do not dispatch reviewers after a task. The finished-diff budget includes security when a path crosses a real boundary.
 
 ## Guardrails
 

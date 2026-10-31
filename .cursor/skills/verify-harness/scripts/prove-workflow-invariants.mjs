@@ -66,7 +66,7 @@ async function fixture(runtimeRoot) {
   receipt.lifecycle.resources.push(owned);
   const ws = path.join(owned, 'product'), home = path.join(owned, 'state'), copilot = path.join(owned, 'copilot');
   const bin = path.join(runtimeRoot, 'bin/ae.mjs');
-  const env = { ...process.env, ...GIT_ENV, CI: '', HARNESS_ALLOW_INPLACE: '', AE_HOME: home, HARNESS_HOME: home, COPILOT_HOME: copilot, AE_BIN: bin, HARNESS_BIN: bin, HARNESS_ENFORCEMENT: 'enforce' };
+  const env = { ...process.env, ...GIT_ENV, CI: '', HARNESS_ALLOW_INPLACE: '', HOME: owned, USERPROFILE: owned, AE_HOME: home, HARNESS_HOME: home, COPILOT_HOME: copilot, AE_BIN: bin, HARNESS_BIN: bin, HARNESS_ENFORCEMENT: 'enforce' };
   write(path.join(ws, '.gitignore'), '.harness/\n');
   write(path.join(ws, 'package.json'), '{"type":"module"}\n');
   write(path.join(ws, 'src/example.js'), 'export const value = 1;\n');

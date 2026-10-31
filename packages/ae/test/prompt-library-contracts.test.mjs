@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import YAML from 'yaml';
 import { estimateTokens } from '../lib/token-meter.mjs';
 import { CONTEXT_PACK_MAX_BYTES } from '../lib/context-pack.mjs';
 import { hasCommand, describeCommand } from '../lib/registry.mjs';
+import { harnessControlCommand } from '../corpus/hooks/lib/tool-payload.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -37,6 +38,36 @@ function isTracked(rel) {
   const out = execFileSync('git', ['-C', repoRoot, 'ls-files', '--', rel], { encoding: 'utf8' }).trim();
   return out.length > 0;
 }
+
+test('doctor procedure preserves the selected target and distinguishes unselected native support', () => {
+  const skill = read('packages/ae/corpus/skills/harness-doctor/SKILL.md');
+  assert.match(skill, /--target <selected-target>/);
+  assert.match(skill, /vscode.*cli.*intellij/);
+  assert.match(skill, /selected.*homes/i);
+  assert.match(skill, /target is unknown[\s\S]*without `--target`/i);
+  assert.doesNotMatch(skill, /`ae doctor[^`]*--host vscode[^`]*`/);
+  assert.match(skill, /IntelliJ[\s\S]*native lifecycle hooks.*unavailable/i);
+});
+
+test('agent exit guidance preserves actual usage refusals and command-specific advisories', () => {
+  const contract = read('packages/ae/corpus/skills/references/harness-tool-contract.md');
+  assert.doesNotMatch(contract, /\| `2` \| Warn.*may proceed/i);
+  assert.match(contract, /`2`[^\n]*[Uu]sage.*E_USAGE/);
+  assert.match(contract, /nonzero[^.]*never[^.]*authority/i);
+  assert.match(contract, /command-specific[^.]*advisory/i);
+  assert.match(contract, /stderr/);
+  for (const args of [['status', '--bogus'], ['install', '--target', 'codex']]) {
+    const result = spawnSync(process.execPath, [path.join(repoRoot, 'packages/ae/bin/ae.mjs'), ...args, '--json', '--no-events'], {
+      cwd: repoRoot, encoding: 'utf8', timeout: 10_000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 2);
+    const error = JSON.parse(result.stderr);
+    assert.equal(error.ok, false);
+    assert.equal(error.error.code, 'E_USAGE');
+    assert.equal(result.stdout, '', 'refused commands do not emit successful output');
+  }
+});
 
 test('canonical concept doc defines task modes, ownership, gap handling, and runtime modes', () => {
   const model = read(architecturePath);
@@ -81,7 +112,7 @@ test('docs surface is the adaptive engineering explanation', () => {
     .readdirSync(docsRoot)
     .filter((name) => !name.startsWith('.') && !generated.has(name))
     .sort();
-  assert.deepEqual(topLevel, ['adaptive-engineering.md', 'diagrams', 'migration', 'site', 'structural-knowledge.md']);
+  assert.deepEqual(topLevel, ['adaptive-engineering.md', 'diagrams', 'migration', 'model-preferences.md', 'site', 'structural-knowledge.md', 'workspace-layout-detection.md']);
   assert.equal(exists('docs/architecture'), false, 'docs/architecture should be removed');
   for (const name of supersededArchitectureDocs) {
     assert.equal(exists(`docs/${name}`), false, `docs/${name} should be removed`);
@@ -127,7 +158,7 @@ test('engineer agent is frozen, thin, and leaves the delivery checklist to the h
   }
   assert.match(engineer, /Switch .* to Deliver before editing/i);
   assert.match(engineer, /For changed work/i);
-  assert.match(engineer, /\/code-review[\s\S]{0,80}require passed `ae verify`/);
+  assert.match(engineer, /code-review[\s\S]{0,80}require passed `ae verify`/);
   assert.match(engineer, /ae plan-update/);
   assert.match(engineer, /architect\/SKILL\.md/);
   assert.match(engineer, /do not edit the CLI's state store in the editor/i);
@@ -146,7 +177,9 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   assert.match(engineer, /requested file mutation enters Deliver before the first edit/i);
   assert.match(engineer, /blocked[\s\S]*ensure-plan[\s\S]*start decision[\s\S]*implement gate before editing/i);
   assert.match(engineer, /skill, agent, instruction, prompt, check, reference, or solution[\s\S]{0,100}create-primitive/i);
-  assert.match(engineer, /read `~\/\.copilot\/skills\/create-primitive\/SKILL\.md`[\s\S]{0,180}not activation/i);
+  assert.match(engineer, /skills\/create-primitive\/SKILL\.md[\s\S]{0,180}not activation/i);
+  assert.match(engineer, /host read tool[\s\S]{0,220}not activation/i);
+  assert.doesNotMatch(engineer, /ae get --reference skills\/create-primitive\/SKILL\.md/);
   assert.match(engineer, /Capture for Later[\s\S]{0,120}Plan and Fix[\s\S]{0,120}Leave in Chat/i);
   assert.match(engineer, /Name the mode first/i);
   assert.match(engineer, /shared state and interleavings[\s\S]{0,100}confirmed only when evidence demonstrates/i);
@@ -157,7 +190,68 @@ test('engineer recovers blocked mutations, routes primitives, and exposes findin
   assert.equal(handoffs.get('Plan and Fix')?.send, false);
   assert.match(handoffs.get('Plan and Fix')?.prompt || '', /proportional plan/i);
   assert.match(globalWorkflow, /@engineer[\s\S]{0,160}name the mode first/i);
-  assert.match(globalWorkflow, /call a defect confirmed only when evidence demonstrates/i);
+  assert.doesNotMatch(globalWorkflow, /confirmed only when evidence demonstrates/i);
+  assert.doesNotMatch(globalWorkflow, /confirmed race/i);
+});
+
+test('gated reads name a host file read the hook already records', () => {
+  const engineer = read('packages/ae/corpus/agents/engineer.agent.md');
+  const gate = read('packages/ae/corpus/hooks/require-plan-gate.mjs');
+  const context = read('packages/ae/corpus/hooks/load-context.mjs');
+  const review = read('packages/ae/corpus/skills/code-review/SKILL.md');
+  const personas = read('packages/ae/corpus/skills/code-review/references/review-personas.md');
+  const loop = read('packages/ae/corpus/skills/references/tool-native-loop.md');
+  const spec = read('packages/ae/corpus/agents/spec-flow-analyzer.agent.md');
+  for (const source of [engineer, gate, context]) {
+    assert.match(source, /host read tool/);
+    assert.match(source, /not-truncated/);
+    assert.match(source, /<copilot-home>\/skills\/create-primitive\/SKILL\.md/);
+  }
+  assert.match(gate, /skills\/create-primitive\/SKILL\.md[\s\S]{0,240}not activation/);
+  assert.doesNotMatch(gate, /ae get --reference skills\/create-primitive\/SKILL\.md/);
+  assert.doesNotMatch(context, /ae get --reference skills\/ensure-plan\/SKILL\.md/);
+  for (const source of [review, personas, loop, spec]) {
+    assert.match(source, /host search/);
+    assert.match(source, /outside the enforce hook/i);
+    assert.match(source, /ae tree workspace --files --json/);
+  }
+  for (const args of [
+    ['ae', 'get', '--reference', 'skills/create-primitive/SKILL.md', '--json'],
+    ['ae', 'tree', 'workspace', '--files', '--json'],
+    ['ae', 'search', 'plan', '--match', 'literal', '--source', 'code', '--json'],
+  ]) {
+    assert.equal(harnessControlCommand(args, process.cwd()), null, args.join(' '));
+  }
+});
+
+test('corpus ae reads lead with the host tool and stay optional outside enforce', () => {
+  const problems = [];
+  const walk = (dir, out = []) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full, out);
+      else if (entry.name.endsWith('.md')) out.push(full);
+    }
+    return out;
+  };
+  const corpus = path.join(repoRoot, 'packages/ae/corpus');
+  const command = /`ae (?:get|tree|search)\b|(?<!`)ae (?:get|tree|search)\b/g;
+  for (const full of walk(corpus)) {
+    const rel = path.relative(repoRoot, full);
+    read(rel).split('\n').forEach((line, index) => {
+      command.lastIndex = 0;
+      let match;
+      while ((match = command.exec(line))) {
+        const before = line.slice(0, match.index);
+        const host = /host (?:read|search|list)/i.test(before);
+        const outside = /outside the enforce hook/i.test(line);
+        if (!host || !outside) {
+          problems.push(`${rel}:${index + 1} ${host ? 'missing outside enforce' : 'missing host tool'}: ${line.trim().slice(0, 160)}`);
+        }
+      }
+    });
+  }
+  assert.deepEqual(problems, []);
 });
 
 test('every agent handoff declares a target agent that exists', () => {
@@ -208,7 +302,7 @@ test('existing skills own structured findings, proportional plans, and primitive
     'security or concurrency',
     'unclear verification',
   ]) assert.match(ensure, new RegExp(phrase, 'i'), `fast plan missing ${phrase}`);
-  assert.match(ensure, /read `.github\/harness\/checks\.yaml`[\s\S]{0,180}never invent/i);
+  assert.match(ensure, /read the selected check source[\s\S]{0,180}ae checks list --json[\s\S]{0,180}never invent/i);
   assert.match(ensure, /schema-validation[\s\S]{0,100}no schema output/i);
   assert.match(ensure, /ae plan-update/);
 
@@ -222,7 +316,7 @@ test('existing skills own structured findings, proportional plans, and primitive
     assert.match(primitive, new RegExp(option.replaceAll('/', '\\/'), 'i'), `migration decision missing ${option}`);
   }
   assert.match(primitive, /actually loaded in the current chat session[\s\S]{0,180}not claim activation/i);
-  assert.match(primitive, /~\/\.copilot\/skills\/java\/SKILL\.md[\s\S]{0,120}~\/\.copilot\/skills\/aws\/SKILL\.md/i);
+  assert.match(primitive, /ae get --reference skills\/java\/SKILL\.md[\s\S]{0,160}ae get --reference skills\/aws\/SKILL\.md/i);
   assert.match(primitive, /map every acceptance criterion/i);
   assert.match(primitive, /do not invent check names/i);
 });
@@ -270,6 +364,89 @@ test('review delegation keeps CLI authority with the Engineer and returns packet
   const skill = read('packages/ae/corpus/skills/code-review/SKILL.md');
   assert.match(skill, /Engineer owns[\s\S]{0,180}prepare[\s\S]{0,180}assemble/i);
   assert.match(skill, /coordinator[\s\S]{0,140}raw results/i);
+});
+
+test('review runs once on the finished diff and stops after two rounds', () => {
+  const principles = read('packages/ae/corpus/skills/references/delivery-principles.md');
+  const budget = principles.split('## review-budget')[1].split('\n## ')[0];
+  assert.match(budget, /once before `ae verify`/i);
+  assert.match(budget, /not after each task/i);
+  assert.match(budget, /cap the default at three/i);
+  assert.match(budget, /files the fix touched/i);
+  assert.match(budget, /two rounds/i);
+  assert.match(budget, /defect in the spec/i);
+  const surfaces = [
+    'packages/ae/corpus/agents/engineer.agent.md',
+    'packages/ae/corpus/instructions/harness-global.instructions.md',
+    'packages/ae/corpus/skills/code-review/SKILL.md',
+    'packages/ae/corpus/skills/code-review/references/review-personas.md',
+    'packages/ae/corpus/skills/references/playbooks/feature.md',
+    'packages/ae/corpus/skills/references/playbooks/refactor.md',
+    'packages/ae/corpus/skills/java/SKILL.md',
+    'packages/ae/corpus/skills/aws/SKILL.md',
+    'packages/ae/corpus/skills/document-review/SKILL.md',
+  ].map(read).join('\n');
+  assert.match(read('packages/ae/corpus/agents/engineer.agent.md'), /code-review` once/);
+  assert.doesNotMatch(surfaces, /five mandatory|engaged on every review|prepare and collect a new review|Review the diff with `\/code-review`/i);
+  assert.doesNotMatch(surfaces, /until (?:there are )?zero findings|until no findings|review after each task/i);
+  assert.match(read('packages/ae/corpus/skills/code-review/SKILL.md'), /packet's required reviewers/i);
+});
+
+test('delivery keeps the smallest change and review flags extra code', () => {
+  const smallest = read('packages/ae/corpus/skills/references/delivery-principles.md')
+    .split('## smallest-change')[1]
+    .split('\n## ')[0];
+  assert.match(smallest, /smallest change that meets the spec/i);
+  assert.match(smallest, /helper, option, dependency, abstraction, or comment/i);
+  assert.match(smallest, /real boundary/i);
+  assert.match(smallest, /untrusted input, auth, persistence, or a process edge/i);
+  assert.match(read('packages/ae/corpus/skills/references/delivery-principles.md'), /same edit has already been repeated/);
+
+  const review = read('packages/ae/corpus/skills/code-review/SKILL.md');
+  assert.match(review, /Extra code is the defect/);
+  assert.match(review, /Before finishing, the diff is the smallest change that meets the spec/);
+
+  const personas = read('packages/ae/corpus/skills/code-review/references/review-personas.md');
+  assert.match(personas, /Flag extra code/);
+  assert.doesNotMatch(personas, /defense-in-depth improvements/);
+  assert.doesNotMatch(personas, /duplicated logic that should be extracted/);
+  assert.doesNotMatch(personas, /unhandled edge cases in specs/);
+
+  const schema = read('packages/ae/corpus/skills/code-review/references/findings-schema.md');
+  assert.match(schema, /Extra code is the defect/);
+  assert.doesNotMatch(schema, /Missing validation on public API/);
+
+  const engineer = read('packages/ae/corpus/agents/engineer.agent.md');
+  assert.match(engineer, /smallest change that meets the spec/);
+  assert.match(engineer, /Investigate\*\* names evidence and never calls `plan-new` or `ensure-plan`/);
+  assert.doesNotMatch(engineer, /fix the findings/);
+
+  const globalWorkflow = read('packages/ae/corpus/instructions/harness-global.instructions.md');
+  assert.match(globalWorkflow, /smallest change that meets the spec/);
+  assert.doesNotMatch(globalWorkflow, /fixes the findings/);
+
+  assert.match(
+    read('packages/ae/corpus/agents/code-implementer.agent.md'),
+    /helper, option, dependency, or comment the task did not name/,
+  );
+  assert.match(read('packages/ae/corpus/skills/references/playbooks/feature.md'), /smallest change that meets those criteria/);
+  assert.match(read('packages/ae/corpus/skills/references/playbooks/bug-fix.md'), /smallest fix that meets the spec/);
+  assert.doesNotMatch(read('packages/ae/corpus/agents/spec-flow-analyzer.agent.md'), /Unicode, timezone/);
+  assert.match(
+    read('packages/ae/corpus/agents/pattern-recognition-specialist.agent.md'),
+    /three similar lines until a fourth copy/,
+  );
+  assert.doesNotMatch(read('packages/ae/corpus/agents/security-sentinel.agent.md'), /defense gaps/);
+  const perspectives = read('packages/ae/corpus/skills/code-review/references/review-perspectives.md');
+  assert.doesNotMatch(perspectives, /Input validation at all entry points/);
+  assert.doesNotMatch(perspectives, /Duplication that should be extracted/);
+  const criteria = read('packages/ae/corpus/skills/document-review/references/review-criteria.md');
+  assert.match(criteria, /Flag extra scope/);
+  assert.doesNotMatch(criteria, /Additional scenario suggestions/);
+  assert.doesNotMatch(criteria, /Suggestions for more robust approaches/);
+  const java = read('packages/ae/corpus/instructions/java.instructions.md');
+  assert.doesNotMatch(java, /defensive null checks/);
+  assert.match(java, /untrusted input/);
 });
 
 test('document review preserves one packet and routes managed-plan fixes through decisions', () => {
@@ -422,15 +599,13 @@ test('hooks and CI enforce explicit plans and passed verification evidence', () 
 
   const workflow = read('.github/workflow-templates/harness-plan-verification.yml');
   assert.match(workflow, /validate-plan --plan/);
-  assert.match(workflow, /gate --phase implement --plan/);
-  assert.match(workflow, /verify --plan/);
+  assert.doesNotMatch(workflow, /ae (?:gate|verify|trust approve)\b/);
   assert.match(workflow, /upload-artifact@v4/);
-  assert.match(workflow, /HARNESS_ENFORCEMENT/);
-  assert.match(workflow, /exactly one/i);
-  assert.match(workflow, /plan_candidates/);
-  assert.match(workflow, /\[\[ -f "\$candidate" \]\]/);
-  assert.match(workflow, /steps\.plan\.outcome == 'success'/);
-  assert.ok(workflow.includes("^docs/plans/[0-9]{4}-[0-9]{2}-[0-9]{2}[^/]*\\.md$"));
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /plan_path:/);
+  assert.match(workflow, /No delivery proof/i);
+  assert.match(workflow, /private plans/i);
+  assert.match(workflow, /persist-credentials: false/);
 
   const policy = YAML.parse(read('.github/harness/policy.yaml'));
   assert.equal(policy.version, 1);
@@ -770,9 +945,9 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   }
 
   const workflow = read('.github/workflow-templates/harness-plan-verification.yml');
-  assert.match(workflow, /HARNESS_VERSION:\?Harness version must be configured/i);
-  assert.match(workflow, /base_sha:/i);
-  assert.doesNotMatch(workflow, /grep -Ev ['"]\^\(docs\/plans\/\|docs\/\|\\\.github\/\)/);
+  assert.match(workflow, /archive_sha256:/i);
+  assert.match(workflow, /sha256sum --check/i);
+  assert.doesNotMatch(workflow, /pull_request:|pull_request_target:/);
 
   const checks = YAML.parse(read('.github/harness/checks.yaml'));
   assert.match(checks.checks['prompt-contracts'].command.join(' '), /prompt-library-contracts\.test\.mjs/);
@@ -789,8 +964,8 @@ test('review fixes preserve thin wrappers, complete skill metadata, and CI pinni
   assert.match(concept, /reviews:\s*\n\s+required:[\s\S]*completed:[\s\S]*critical_open:/);
 
   const packageReadme = read('packages/ae/README.md');
-  assert.match(packageReadme, /\$PLAN[^\n]*single plan resolved from the PR/i);
-  assert.match(packageReadme, /\$BASE_SHA[^\n]*PR base SHA/i);
+  assert.match(packageReadme, /manual[^\n]*diagnostic/i);
+  assert.match(packageReadme, /private plans/i);
 
   assert.match(read('packages/ae/corpus/skills/references/harness-tool-contract.md'), /ae help <command>/);
   assert.match(read(architecturePath), /bounded delegation/i);
@@ -866,7 +1041,7 @@ function filesUnder(relDir, found) {
   const abs = path.join(repoRoot, relDir);
   if (!fs.existsSync(abs)) return;
   for (const name of fs.readdirSync(abs)) {
-    if (name === 'node_modules' || name === '.git') continue;
+    if (name === 'node_modules' || name === '.git' || name === '.harness') continue;
     const rel = `${relDir}/${name}`;
     const stat = fs.statSync(path.join(repoRoot, rel));
     if (stat.isDirectory()) filesUnder(rel, found);
@@ -908,6 +1083,55 @@ test('repository startup context preserves Engineer review authority and exact-c
   assert.match(document, /authoriz/i);
   assert.match(document, /revision-bound|ae plan-update/);
   assert.doesNotMatch(document, /P2\/P3 auto-applied/);
+});
+
+test('setup-models asks for confirmed slugs and spawn sites omit a missing model', () => {
+  const skill = read('packages/ae/corpus/skills/setup-models/SKILL.md');
+  const frontmatter = YAML.parse(skill.match(/^---\n([\s\S]*?)\n---/)[1]);
+  assert.equal(frontmatter.name, 'setup-models');
+  assert.equal(frontmatter['user-invocable'], false);
+  assert.ok(frontmatter.description.length <= 220);
+  for (const phrase of [
+    'paste',
+    'not confirmed',
+    'inherit',
+    'unlimited — max reasoning',
+    'large — xhigh reasoning',
+    'medium — high reasoning',
+    'small — medium reasoning',
+    'engineer',
+    'specialist',
+    'researcher',
+    'reviewer',
+    're-run',
+    '.cursor/rules/ae-models.mdc',
+    '.claude/rules/ae-models.md',
+    'alwaysApply: true',
+    'opus',
+    'effort',
+    'USERPROFILE',
+    'Copilot',
+    'by hand',
+    'Codex',
+    'model_reasoning_effort',
+    '33881',
+  ]) assert.match(skill, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), `setup skill missing ${phrase}`);
+  assert.match(skill, /does not call a model/i);
+  assert.doesNotMatch(skill, /\b(rg|grep|find|sed|awk|jq)\b/);
+  const sites = [
+    'packages/ae/corpus/skills/references/engineer-delegation-matrix.md',
+    'packages/ae/corpus/skills/references/subagent-context-packet.md',
+    'packages/ae/corpus/skills/code-review/SKILL.md',
+    'packages/ae/corpus/skills/document-review/SKILL.md',
+    'packages/ae/corpus/skills/plan-issue/SKILL.md',
+  ];
+  for (const rel of sites) {
+    const text = read(rel);
+    assert.match(text, /ae-models\.mdc/);
+    assert.match(text, /ae-models\.md/);
+    assert.match(text, /omit the model/i);
+    assert.match(text, /inherit/);
+  }
 });
 
 test('host hook reference requires proof after recorded potential terminal mutations', () => {

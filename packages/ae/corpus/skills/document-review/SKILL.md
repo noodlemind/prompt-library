@@ -34,7 +34,7 @@ user-invocable: false
 
 ## References
 
-- **Evaluation criteria:** Read `references/review-criteria.md` for what each persona evaluates per document type
+- **Evaluation criteria:** Read `<copilot-home>/skills/document-review/references/review-criteria.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/document-review/references/review-criteria.md --json` prints the same file. It states what each persona evaluates per document type.
 
 ## Workflow
 
@@ -49,7 +49,7 @@ Classify the document type:
 
 ### 2. Select and Dispatch Personas
 
-Read `references/review-criteria.md` for the evaluation criteria per persona and document type.
+Read `<copilot-home>/skills/document-review/references/review-criteria.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/document-review/references/review-criteria.md --json` prints the same file. It states the evaluation criteria per persona and document type.
 
 The Engineer runs `ae review prepare --domain document --file <document> --json` once before dispatch. Bind `--plan <path>` only when its review obligations are compatible with document review. Use a standalone document packet for a plan that requires code review; document judgments cannot satisfy that obligation. Use the exact source path returned in the packet, including an absolute path for a current-project plan outside the checkout. The packet supplies the source references and four required perspectives. Four personas evaluate every document:
 1. **Design** — information architecture, flows, interaction states, behavior completeness
@@ -57,11 +57,11 @@ The Engineer runs `ae review prepare --domain document --file <document> --json`
 3. **Coherence** — internal consistency, contradictions, terminology drift, structural issues
 4. **Feasibility** — technical feasibility, architecture conflicts, dependency gaps, implementability
 
-**Orchestration:** If the `agent` tool is available for subagent delegation, delegate to 4 personas as isolated subagents in parallel. Each receives:
+**Orchestration:** If the `agent` tool is available for subagent delegation, delegate to 4 personas as isolated subagents in parallel. Those personas use the `reviewer` role. Read the matching role line in `~/.cursor/rules/ae-models.mdc` or `~/.claude/rules/ae-models.md`. Pass that model when the host spawn tool takes one. A missing file, a missing line, or `inherit` means omit the model. Each receives:
 - The full document content
 - The document type classification
-- Their persona's evaluation criteria from `references/review-criteria.md`
-- The shared `../code-review/references/findings-schema.md` JSON contract, packet source paths, and instruction to return its actual completion status and exact document locations
+- Their persona's evaluation criteria from `<copilot-home>/skills/document-review/references/review-criteria.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/document-review/references/review-criteria.md --json` prints the same file
+- The shared findings schema. Read `<copilot-home>/skills/code-review/references/findings-schema.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/code-review/references/findings-schema.md --json` prints the same file. Pass its JSON contract, the packet source paths, and an instruction to return the actual completion status and exact document locations
 
 Otherwise, apply each persona's perspective sequentially within this session.
 
@@ -85,13 +85,13 @@ Decide semantic overlap and severity from the document's goals and evidence. Nea
 - Skip P3 improvements
 - Return the document path and proposed changes; include the updated path when the Engineer has applied them
 
-The Engineer applies accepted fixes. For a Harness-managed plan, return authored amendments for `ae plan-update --file` against its observed revision; never edit the project-store plan in the editor. Product document edits enter Deliver and require a successful implement gate before mutation. Existing authorization covers necessary corrections; a review request alone supplies no new mutation authority. Prepare a fresh packet after changing the reviewed content.
+The Engineer applies accepted fixes. For a Harness-managed plan, return authored amendments for `ae plan-update --file` against its observed revision; never edit the project-store plan in the editor. Product document edits enter Deliver and require a successful implement gate before mutation. Existing authorization covers necessary corrections; a review request alone supplies no new mutation authority. A fix re-prepares only the changed document. Stop after two rounds and report what remains.
 
 ### 5. Offer Next Action
 
 After improvements:
 - **Proceed to next step** — `/plan-issue` (for brainstorms) or `@engineer` Deliver mode (for plans)
-- **Review again** — another pass for further refinement
+- **Stop** — after two rounds, report the findings that remain
 - **Done** — return to user
 
 ## Error Handling

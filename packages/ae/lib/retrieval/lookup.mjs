@@ -10,6 +10,7 @@ import { collectEpisodes } from '../knowledge/consolidate.mjs';
 import { readStructuralIndex } from '../structural/shape.mjs';
 import { planReadDirs } from '../project-layout.mjs';
 import { getCorpusRoot } from '../assets.mjs';
+import { projectAuthorityFile } from '../project-authority.mjs';
 import { assertSourceCurrent, parseSourceReference, sourceHash } from './source-evidence.mjs';
 
 /** The settled kind list, in the order the architecture doc states it. */
@@ -141,7 +142,7 @@ function symbolEntity({ workspace, identifier, home }) {
 }
 
 function documentEntity({ workspace, copilotHome, identifier, home }) {
-  const entry = findEntryByDocid(copilotHome, workspace, identifier);
+  const entry = findEntryByDocid(copilotHome, workspace, identifier, { home });
   if (!entry) throw notFound({ kind: 'document', identifier, hint: 'a docid from the knowledge manifest' });
   const resolved = resolveDocPath(copilotHome, workspace, entry, { home });
   const raw = resolved?.full ? readFileNoFollow(resolved.full, { root: resolved.root }) : null;
@@ -222,9 +223,10 @@ function skillEntity({ identifier, copilotHome }) {
   throw notFound({ kind: 'skill', identifier, hint: 'a skill directory name under the Copilot home or the packaged corpus' });
 }
 
-function checkEntity({ workspace, identifier }) {
-  const rel = '.github/harness/checks.yaml';
-  const { raw } = readUnderWorkspace(workspace, rel);
+function checkEntity({ workspace, identifier, home }) {
+  const source = projectAuthorityFile(workspace, 'checks.yaml', { home });
+  const rel = source.mode === 'shared' ? '.github/harness/checks.yaml' : source.path;
+  const raw = readFileNoFollow(source.path, { root: source.root, maxBytes: 1024 * 1024 });
   if (raw === null) throw notFound({ kind: 'check', identifier, hint: `no ${rel} in this workspace` });
   // Deliberately a line scan rather than a YAML parse: lookup is a read-only
   // navigation command and must not fail because an unrelated part of the file

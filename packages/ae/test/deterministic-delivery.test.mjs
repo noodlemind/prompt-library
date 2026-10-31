@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { approveProject } from '../lib/trust.mjs';
 import { loadPlan } from '../lib/plan-parse.mjs';
 import { validatePlanSchema } from '../lib/plan-schema.mjs';
@@ -25,7 +26,7 @@ function installPackage(t) {
   const cache = path.join(dir, 'npm-cache');
   const npmStep = (label, args, cwd) => {
     const started = Date.now();
-    const result = spawnSync(process.execPath, [npm, ...args, '--cache', cache, '--no-audit', '--no-fund', '--timing', '--logs-dir', logsDir], { cwd, encoding: 'utf8', timeout: 60000 });
+    const result = spawnSync(process.execPath, [npm, ...args, '--cache', cache, '--no-audit', '--no-fund', '--timing', '--logs-dir', logsDir], { cwd, encoding: 'utf8', timeout: 180_000, stdio: ['ignore', 'pipe', 'pipe'] });
     const diagnostic = { kind: 'package-proof', label, platform: process.platform, node: process.version, durationMs: Date.now() - started,
       status: result.status, signal: result.signal, error: result.error ? { code: result.error.code, message: result.error.message } : null,
       npm, cache: { selected: cache, isolated: true }, logsDir,
@@ -36,8 +37,8 @@ function installPackage(t) {
     assert.equal(result.status, 0, redactedJson({ ...diagnostic, logs: diagnostic.logs.map(log => ({ name: log.name, text: log.text.slice(-4096) })) }));
     return result;
   };
-  const packed = npmStep('pack', ['pack', '--json', '--pack-destination', dir], root);
-  const archive = path.join(dir, JSON.parse(packed.stdout)[0].filename);
+  const packed = process.env.AE_TEST_ARCHIVE ? null : npmStep('pack', ['pack', '--json', '--pack-destination', dir], root);
+  const archive = process.env.AE_TEST_ARCHIVE ? path.resolve(process.env.AE_TEST_ARCHIVE) : path.join(dir, JSON.parse(packed.stdout)[0].filename);
   npmStep('offline-install', ['install', '--prefix', dir, '--offline', '--ignore-scripts', '--omit=optional', archive], dir);
   return path.join(dir, 'node_modules/ae-harness');
 }
@@ -113,10 +114,34 @@ test('installed package proves behavior, hook layout, stale replay and completio
   assert.equal(gitPath.status, 0, gitPath.stderr);
   installedEnv.PATH = path.dirname(gitPath.stdout.trim().split(/\r?\n/)[0]);
   assert.ok(spawnSync('harness', ['--version'], { env: installedEnv }).error, 'installed hook proof must not depend on harness in PATH');
-  const installedHook = (name) => f.receipt('installed-hook', [name], spawnSync(process.execPath, [path.join(hooks, name)], { cwd: f.ws, env: installedEnv, input: JSON.stringify({ cwd: f.ws, hook_event_name: 'Stop' }), encoding: 'utf8', timeout: 15000 }));
+  const installedHook = (name, payload = {}) => f.receipt('installed-hook', [name], spawnSync(process.execPath, [path.join(hooks, name)], { cwd: f.ws, env: installedEnv, input: JSON.stringify({ cwd: f.ws, session_id: 'delivery-proof', hook_event_name: 'Stop', ...payload }), encoding: 'utf8', timeout: 15000 }));
+  const unrelated = path.join(path.dirname(f.ws), 'unrelated');
+  fs.mkdirSync(unrelated);
+  initGit(unrelated);
+  fs.writeFileSync(path.join(path.dirname(f.ws), 'inactive.code-workspace'), JSON.stringify({ folders: [{ path: f.ws }, { path: unrelated }] }));
+  const orientation = JSON.parse(f.cli('orient', '--query', 'Return two', '--file', 'src/example.js', '--json').stdout);
+  assert.equal(orientation.layout.boundRoot, fs.realpathSync.native(f.ws));
+  assert.deepEqual(orientation.layout.roots, [], 'an inactive workspace must not widen task scope');
+  assert.equal(orientation.layout.workspaceFile, null);
+  assert.equal(orientation.layout.domainSuggestion, null);
   const plan = JSON.parse(f.cli('plan-new', '--goal', 'Return two', '--acceptance', 'value is two', '--constraint', 'Preserve API', '--verification-check', 'behavior', '--json').stdout).path;
   assert.equal(f.cli('gate', '--plan', plan, '--json').status, 0);
   f.hook('record-successful-edit.mjs', { tool_name: 'replace_string_in_file', tool_input: { filePath: 'src/example.js' }, tool_response: 'File edited successfully' });
+  const skillPath = path.join(f.copilot, 'skills/create-primitive/SKILL.md'), skillText = fs.readFileSync(skillPath, 'utf8');
+  const decoy = path.join(f.ws, 'tmp/skills/create-primitive/SKILL.md');
+  fs.mkdirSync(path.dirname(decoy), { recursive: true });
+  fs.writeFileSync(decoy, skillText);
+  const readSkill = filePath => installedHook('record-successful-edit.mjs', { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { filePath },
+    tool_result: { result_type: 'success', text_result_for_llm: skillText } });
+  assert.equal(readSkill(decoy).status, 0);
+  const sessionPath = path.join(f.ws, '.harness/session.json');
+  assert.equal(JSON.parse(fs.readFileSync(sessionPath)).activatedSkills?.['create-primitive'], undefined, 'same-suffix decoy is not the installed skill');
+  assert.equal(readSkill(skillPath).status, 0);
+  const activation = JSON.parse(fs.readFileSync(sessionPath)).activatedSkills['create-primitive'];
+  assert.equal(activation.complete, true, 'whole returned CLI source establishes mechanical complete-read evidence');
+  assert.equal(activation.source.path, fs.realpathSync.native(skillPath));
+  assert.equal(activation.source.sha256, createHash('sha256').update(skillText).digest('hex'));
+  fs.rmSync(path.join(f.ws, 'tmp'), { recursive: true });
   assert.equal(JSON.parse(f.cli('verify', '--plan', plan, '--base', 'HEAD', '--json').stdout).outcome, 'failed');
   assert.equal(JSON.parse(installedHook('require-verification.mjs').stdout).hookSpecificOutput.decision, 'block');
   fs.writeFileSync(path.join(f.ws, 'src/example.js'), 'export const value = 2;\n');
@@ -255,6 +280,7 @@ export function deliveryFixture(t, runtimeRoot = root) {
   fs.mkdirSync(ws);
   fs.mkdirSync(copilot);
   fs.writeFileSync(path.join(ws, '.gitignore'), '.harness/\n');
+  fs.writeFileSync(path.join(ws, 'package.json'), '{"type":"module"}\n');
   writeChecks(ws, { behavior: { command: [process.execPath, '-e', "import('./src/example.js').then(m => { if (m.value !== 2) process.exit(1); })"] } });
   fs.writeFileSync(path.join(ws, '.github/harness/policy.yaml'), 'version: 1\nenforcement: enforce\n');
   initGit(ws);

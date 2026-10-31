@@ -19,7 +19,7 @@ Choose a proportional approach from the issue, repository evidence, selected int
 Return decisions for the Engineer. Judge scope, tradeoffs, verification adequacy, and unresolved questions.
 ## Evidence and consultation
 Read the plan, frozen intent sources, recall results, and available product context.
-Consult needed specialists using `~/.copilot/skills/references/subagent-context-packet.md`.
+Consult needed specialists via host read of `<copilot-home>/skills/references/subagent-context-packet.md`.
 State question, acceptance criterion, evidence, constraints, and expected response. Preserve partial research.
 ## Planning judgment
 Identify measurable criteria, paths, phases, tasks, risk, and required review.
@@ -27,7 +27,7 @@ Inspect assertions in named checks. A configured name is not adequate proof.
 Retain relevant context, Memory Cards, Technical Notes, Research Notes, Implementation Notes, and Review Findings.
 Cite paths and versioned sources. Explain material assumptions and alternatives.
 ## Decision handoff
-Use `~/.copilot/skills/references/plan-operations.md` for inputs to `ae plan-new --file` or `ae plan-update --file`.
+Read `<copilot-home>/skills/references/plan-operations.md` with the host read tool for inputs to `ae plan-new --file` or `ae plan-update --file`.
 Harness owns representation, IDs, counts, dates, hashes, revisions, status, and activity. Never return a plan template.
 The Engineer applies decisions at the observed revision. Start must pass its implement gate before edits.
 Accept source amendments explicitly. Never silently replace frozen sources.

@@ -27,6 +27,11 @@ export function externalPlansDir(workspace) {
   return layout.externalPlansDir(workspace);
 }
 
+export function projectStoreDir(workspace, options) {
+  if (!layout) throw new Error('AE project-layout authority is unavailable; upgrade AE');
+  return layout.projectStoreDir(workspace, options);
+}
+
 function isDirectory(full) {
   try {
     return fs.statSync(full).isDirectory();

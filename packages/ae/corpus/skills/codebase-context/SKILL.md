@@ -25,18 +25,18 @@ Explain the product from source-bound Harness facts and targeted code inspection
 
 ## Workflow
 
-1. Run `ae report --facts --json` for file/version counts, plan states, check inventory, declared graphs and index currentness. See [factual-context.md](../references/factual-context.md). Retrieve omitted rows or original sources when necessary; do not reconstruct counts or lockfile versions in the model.
+1. Run `ae report --facts --json` for file/version counts, plan states, check inventory, declared graphs and index currentness. Read `<copilot-home>/skills/references/factual-context.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/factual-context.md --json` prints the same file. Retrieve omitted rows or original sources when necessary; do not reconstruct counts or lockfile versions in the model.
 2. Inspect the README, relevant entry points, repository context, configuration and solutions to understand purpose, conventions, boundaries and data flow. Choose which facts matter to onboarding.
 3. Use the productGraph for declared product delegation. The separate harnessGraph describes installed capabilities. Neither supplies inferred architecture or a proven runtime pipeline. If architecture or flow diagrams are useful, explain the source-backed inference and label it as inferred; include uncertain relationships explicitly.
 4. Write the requested snapshot with purpose, stack, important paths, conventions, relevant knowledge, explanations and source references. Preserve source digests from the factual report instead of inventing a generated date. Keep the narrative concise and make unresolved gaps visible.
 
-For dependency, change-impact or prior-lesson questions, read [Structural evidence](references/structural-evidence.md). Select explicit question kind and bounded seeds, then inspect the cited original sources. Keep simple literal lookups direct.
+For dependency, change-impact or prior-lesson questions, read `<copilot-home>/skills/codebase-context/references/structural-evidence.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/codebase-context/references/structural-evidence.md --json` prints the same file. Select explicit question kind and bounded seeds, then inspect the cited original sources. Keep simple literal lookups direct.
 
 ## Shared application flows
 
-Read [flow-models.md](references/flow-models.md) when explicitly generating a shared model, or when a relevant orientation or compound pointer calls for inspection. Harness prepares committed default-branch source bindings and publishes an agent-authored structured statechart. Inspect those exact sources before authoring; no command invokes an LLM or fetches a remote. The model is optional descriptive context, not accepted intent or verification proof. Do not generate a model during ordinary onboarding unless requested.
+Read `<copilot-home>/skills/codebase-context/references/flow-models.md` with the host read tool when explicitly generating a shared model, or when a relevant orientation or compound pointer calls for inspection. Outside the enforce hook, `ae get --reference skills/codebase-context/references/flow-models.md --json` prints the same file. Harness prepares committed default-branch source bindings and publishes an agent-authored structured statechart. Inspect those exact sources before authoring; no command invokes an LLM or fetches a remote. The model is optional descriptive context, not accepted intent or verification proof. Do not generate a model during ordinary onboarding unless requested.
 
-Read [diagrams.md](references/diagrams.md) when a requested explanation benefits from a rendered architecture, dependency, or flow view. The Engineer authors and interprets the view; Harness renders bounded local inputs and records their provenance. Rendering does not establish architecture correctness.
+Read `<copilot-home>/skills/codebase-context/references/diagrams.md` with the host read tool when a requested explanation benefits from a rendered architecture, dependency, or flow view. Outside the enforce hook, `ae get --reference skills/codebase-context/references/diagrams.md --json` prints the same file. The Engineer authors and interprets the view; Harness renders bounded local inputs and records their provenance. Rendering does not establish architecture correctness.
 
 ## Guardrails
 

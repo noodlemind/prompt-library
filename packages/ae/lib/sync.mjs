@@ -56,9 +56,28 @@ export function resolveContainedPath(root, rel) {
     return assertNoSymlinkAncestors(rootResolved, relative);
 }
 
+function installTarget(root, rel) {
+  const target = resolveContainedPath(root, rel);
+  if (!target) throw Object.assign(new Error(`refusing an unsafe install target: ${rel}`), { code: 'E_TARGET', exit: 1 });
+  return target;
+}
+
 function fileHash(filePath) {
   const buf = fs.readFileSync(filePath);
   return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+function hashBytes(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+const PROMPT_LIBRARY_PROJECT = '\n## Project\n\nSkill-driven prompt library for software development using GitHub Copilot in VS Code and IntelliJ IDEA on Windows. Install hydrates agents, skills, and instructions into the user profile. Product repositories do not receive a copy of that corpus.\n';
+
+/** Installed global instructions describe the user's host, not this repository's own project blurb. */
+export function installedCopilotInstructions(source) {
+  const text = String(source).replace(/\r\n/g, '\n');
+  if (!text.includes(PROMPT_LIBRARY_PROJECT)) return source;
+  return text.replace(PROMPT_LIBRARY_PROJECT, '\n');
 }
 
 function renderTargetAsset(src, rel, targetRoot) {
@@ -165,7 +184,7 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
     const relFiles = walkFiles(srcDir, srcDir).map((f) => `${top}/${f}`);
     for (const rel of relFiles) {
       const src = path.join(assetsRoot, rel);
-      const dest = path.join(targetRoot, rel);
+      const dest = installTarget(targetRoot, rel);
       const destDir = path.dirname(dest);
       const relPosix = rel.replace(/\\/g, '/');
       const rendered = renderTargetAsset(src, relPosix, targetRoot);
@@ -213,13 +232,14 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
   const copilotMd = path.join(assetsRoot, 'copilot-instructions.md');
   if (fs.existsSync(copilotMd)) {
     const rel = 'copilot-instructions.md';
-    const dest = path.join(targetRoot, rel);
-    const srcHash = fileHash(copilotMd);
+    const dest = installTarget(targetRoot, rel);
+    const rendered = Buffer.from(installedCopilotInstructions(fs.readFileSync(copilotMd, 'utf8')), 'utf8');
+    const srcHash = hashBytes(rendered);
     const destHash = fs.existsSync(dest) ? fileHash(dest) : null;
     if (srcHash !== destHash) {
       if (!flags.dryRun) {
         fs.mkdirSync(targetRoot, { recursive: true });
-        fs.copyFileSync(copilotMd, dest);
+        fs.writeFileSync(dest, rendered);
       }
       stats[destHash ? 'updated' : 'created']++;
       log(flags.dryRun ? `would update: ${rel}` : `update: ${rel}`);
@@ -234,8 +254,8 @@ export function syncAssetsToTarget(assetsRoot, targetRoot, flags, log) {
 
 export function seedProfile(assetsRoot, targetRoot, flags, log) {
   const template = path.join(assetsRoot, 'knowledge', 'profile.md.template');
-  const dest = path.join(targetRoot, 'knowledge', 'profile.md');
   if (!fs.existsSync(template)) return;
+  const dest = installTarget(targetRoot, 'knowledge/profile.md');
   if (fs.existsSync(dest) && !flags.forceProfile) {
     if (flags.verbose) log('skip profile.md (exists)');
     return;
@@ -272,7 +292,7 @@ export function mergeIntelliJInstructions(assetsRoot, intellijRoot, flags, log) 
     parts.push(`<!-- Source: ${f} -->\n${text.trim()}`);
   }
   if (parts.length === 0) return;
-  const dest = path.join(intellijRoot, 'global-copilot-instructions.md');
+  const dest = installTarget(intellijRoot, 'global-copilot-instructions.md');
   const body = parts.join('\n\n');
   if (!flags.dryRun) {
     fs.mkdirSync(intellijRoot, { recursive: true });

@@ -8,15 +8,28 @@ CLI for the **Adaptive Engineer Harness**: install/hydrate Copilot assets, run t
 
 Developers use Copilot **`@engineer`**. The kernel never starts an LLM on the host path.
 
+AE's native formal-evidence compiler is informed by [Lauren Tan's pstack `/statechart`
+v0.15.36](https://github.com/cursor/plugins/tree/4dd1d05818d19792e7cd6e818f1667f95f7e1dbe/pstack/skills/statechart).
+Lauren's checking/evidence/projection boundaries and counterexample presentation inform
+`ae diagrams formal --file <formal-verification.json> --model <Module.tla>`.
+This draws retained counterexamples or positive explored graphs through bundled
+rendering, with no Java, JAR, checker invocation, or runtime download. The optional
+formal-check starter's `--capture-graph` retains same-run graph evidence using
+only a checker deliberately configured by its caller. Keep the receipt beside
+its referenced `Module.graph.dot` when copying a retained artifact bundle.
+AE ships no pstack implementation. See [third-party notices](THIRD-PARTY-NOTICES.md).
+
 ## Install
 
-Before the first registry publication, install from the source checkout or a qualified archive. The package workflow produces candidate archives; publication is an owner action.
+`ae-harness` is not published to the npm registry. From the repository root:
 
 ```bash
-npm install -g ae-harness@latest
-# local monorepo:
 npm install -g ./packages/ae
+```
 
+That installs the `ae` command from this checkout. Then:
+
+```bash
 ae tui                    # first launch hydrates VS Code + CLI automatically
 ae doctor --host vscode
 ```
@@ -28,6 +41,11 @@ installation or upgrade. `ae install --configure-vscode` and
 `ae upgrade` remain available for explicit/non-TUI setup.
 
 The npm package includes `corpus/`. `ae install` copies that tree onto the Copilot home.
+
+Knowledge indexes bind their actual corpus and retain project-private metadata
+beside each project's postings. Global notes remain shared. Older unbound private
+rows are omitted with rebuild guidance until `ae index` runs in that repository;
+another project's private rows are never a fallback corpus.
 
 ### Validate and pack
 
@@ -44,26 +62,37 @@ npm pack
 `npm run check:repo` retains the repository contract tests and requires a full checkout. Source CI runs both checks and packs with lifecycle scripts enabled. Packaging does not require repository-only `.cursor/`, `.github/`, documentation, or test files.
 
 ```bash
-ae init-repo    # product repo stubs: plans, checks, policy
+ae init-repo    # private checks and policy; no product configuration diff
+ae init-repo --shared  # explicit team configuration to review and commit
 ae prepare      # starter docs/specs/overview.md and docs/adr/0000-architecture.md
 ae migrate      # move gitignored docs/plans and docs/solutions out of the product tree
 ```
 
-### Pin version (product repos)
+### Project setup and selected version
 
-```json
-{ "devDependencies": { "ae-harness": "0.13.0" } }
-```
+Personal configuration lives in `~/.ae/projects/<repo-id>/authority/`. Existing
+`.github/harness/` configuration remains selected. `ae init-repo --shared`
+publishes shared project configuration; commit the returned inventory as a
+reviewed setup change before product work. A teammate installs their own AE
+runtime and reviews the commands with their own local approval.
 
-Or root `.harness-version` with the same pin.
+Keep `--ae-home` outside the product checkout. Setup refuses an in-repository
+state home before creating artifacts; it does not silently hide that directory.
 
-`$PLAN` is the single plan resolved from the PR; `$BASE_SHA` is the PR base SHA. The supplied workflow template sets both values.
+`.harness/` contains private runtime artifacts, including its regenerated runner.
+Git-local excludes keep untracked runtime files out of product changes without
+rewriting the root `.gitignore`. Already-tracked artifacts remain tracked until
+the team explicitly migrates them.
 
-```yaml
-- run: ae validate-plan --plan "$PLAN" --workspace . --json
-- run: ae gate --phase implement --plan "$PLAN" --workspace . --json
-- run: ae verify --plan "$PLAN" --base "$BASE_SHA" --enforcement enforce --workspace . --json
-```
+Check `ae --version` on each machine. The global runner does not read
+`.harness-version` or enforce a repository dependency pin. Install the chosen
+checkout or qualified archive deliberately; arbitrary version compatibility is
+not implied.
+
+The supplied manual workflow template provides plan diagnostics using an
+explicit checksum-pinned archive and committed plan. It does not transfer local
+approvals, run product checks, or establish delivery completion. Private plans
+are unavailable on fresh CI until deliberately shared.
 
 ## Dual tracks
 
@@ -87,9 +116,11 @@ The optional `ae agent --profile deliver` loop enforces explicit orientation wit
 | `inventory show` / `inventory refresh --editor <family>` | Optional sourced local IDE snapshot in the selected Harness home |
 | `domain show --name <name>` | Read-only local membership and identity drift from an existing domain configuration |
 | `status` / `uninstall` | Version/lock; remove tracked files only |
-| `init-repo` | Plan/session paths + checks/policy stubs; migrates leftover gitignored `docs/` artifacts |
+| `init-repo` | Private project setup; `--shared` publishes reviewable team policy and checks |
 | `prepare` | Starter spec and ADR when those paths are missing; skips files that already exist |
 | `migrate` | Move gitignored `docs/plans` and `docs/solutions` to `.harness/plans` and `~/.ae/projects/<repo-id>/` |
+
+Per-role models are a user rule, not an install stamp. Ask `@engineer` to load `setup-models`. It writes `~/.cursor/rules/ae-models.mdc` on Cursor, or `~/.claude/rules/ae-models.md` on Claude Code. A missing line or `inherit` omits the spawn model. Copilot subagents inherit the session model; set `model` in an agent file by hand. Codex profiles are also set by hand (`model` and `model_reasoning_effort`). `ae` does not call a model. See [model preferences](../../docs/model-preferences.md).
 
 `doctor --json` and `gate --json` include `diagnostics` alongside their existing results. Schema 1 reports failed check IDs, blocking or advisory severity, evidence pointers, retry conditions, and proposed next actions. Command actions are argument arrays scoped to the selected workspace and homes. The CLI does not execute them. Inspect guidance before retrying a gate. Changed locked intent requires an explicit amendment.
 
@@ -118,7 +149,7 @@ initialize this repo (`init-repo`) from the palette
 | `recall` / `get` / `search` / `lookup` / `tree` | Retrieval |
 | `graph deps` / `dependents` / `path` / `explain` / `impact` | Bounded structural evidence and change-impact candidates |
 | `flows prepare` / `flows publish` / `flows status` / `flows show` | Optional source-bound descriptive application model |
-| `diagrams render` / `graph` / `flow` / `status` | Local SVG/HTML views, optional PNG, and source freshness receipts |
+| `diagrams render` / `graph` / `flow` / `formal` / `status` | Local SVG/HTML views, recorded formal counterexamples, optional PNG, and source freshness receipts |
 | `edit` / `write` / `apply` / `undo` | Mutations (`undo` operator-only) |
 | `exec` / `bash` | Governed process / shell |
 | `todo` | Durable worklist (`.harness/todo.json`) |
@@ -295,7 +326,7 @@ Human lines: ledger rows (`✓` / `!` / `✗`; ASCII under `NO_COLOR`). `--json`
 | 7 | network |
 | 130 | interrupted |
 
-Gate and verify keep their documented policy-driven exits. New ordinary full plans use `plan_schema: 2`, short plans use `short-v2`, domain plans use full schema 3 `.hplan` records, and supported ordinary experiments use full schema 4 `.hplan` records. Schema 4 preserves domain validation. Legacy plans retain their declared guarantee. Named checks live in `.github/harness/checks.yaml`.
+Gate and verify keep their documented policy-driven exits. New ordinary full plans use `plan_schema: 2`, short plans use `short-v2`, domain plans use full schema 3 `.hplan` records, and supported ordinary experiments use full schema 4 `.hplan` records. Schema 4 preserves domain validation. Legacy plans retain their declared guarantee. Named checks use the selected private or shared source reported by `ae checks list --json`.
 
 ### Experiments
 

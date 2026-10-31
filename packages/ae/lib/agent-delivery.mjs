@@ -10,6 +10,7 @@ import { resolveDomainContext } from './domain-context.mjs';
 import { resolvePlanUpdateFile } from './plan-update.mjs';
 import { readFileNoFollow } from './fs-safe.mjs';
 import { readEvidence } from './evidence.mjs';
+import { READ_SOURCE } from './get-cmd.mjs';
 import { harnessControlCommand, normalizeToolPayload, unwrapShellSegments } from '../corpus/hooks/lib/tool-payload.mjs';
 import { validateContextSnapshot } from './task-handoff.mjs';
 
@@ -94,7 +95,7 @@ export function beforeDeliveryTool(call, options) {
   if (productMutation) {
     const session = readSession(options.workspace);
     if (!session?.lastOrientReadAt || !session.files?.length) return { pass: false, reason: 'missing-orient-read: call ae orient --read --query <task> --file <each touched file> before product edits.' };
-    const current = validateContextSnapshot({ workspace: options.workspace, snapshot: session.contextSnapshot, targets: normalized.targets });
+    const current = validateContextSnapshot({ workspace: options.workspace, snapshot: session.contextSnapshot, targets: normalized.targets, home: options.harnessHome });
     if (!current.pass) return current;
   }
   return { pass: true };
@@ -123,8 +124,9 @@ export function afterDeliveryTool(call, result, options) {
   if (call.name === 'todo') return { pass: true };
   return hook('record-successful-edit.mjs', {
     ...toolPayload(call, options.workspace, options.sessionId),
+    ...(call.name === 'read' && result[READ_SOURCE] ? { tool_input: { ...call.input, path: result[READ_SOURCE] } } : {}),
     success: result.status === 'ok' && result.exitCode === 0,
-    ...(call.name === 'read' ? { tool_response: { truncated: result.truncated } } : {}),
+    ...(call.name === 'read' ? { tool_response: { truncated: result.truncated, sha256: result.sha256 } } : {}),
   }, options);
 }
 

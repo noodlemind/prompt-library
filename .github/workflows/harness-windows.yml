@@ -1,7 +1,7 @@
 # Exercises the harness CLI on a real Windows runner. The repository's primary
 # consumption platform is Windows (AGENTS.md), but every check until now ran on
 # ubuntu-latest, so the win32 branches shipped untested: runner.mjs terminates
-# descendants with `taskkill /T /F` instead of a POSIX process group, paths.mjs
+# the owned process tree with taskkill /T /F instead of a POSIX process group, paths.mjs
 # resolves LOCALAPPDATA/USERPROFILE, style.mjs only enables Unicode glyphs when
 # a modern terminal announces itself, and global-bin.mjs writes a .cmd shim.
 #
@@ -43,6 +43,10 @@ jobs:
       - name: Install harness dependencies
         run: npm ci --prefix packages/ae
 
+      - name: Trust inheritance preflight
+        if: matrix.shard == 1
+        run: node --import ./packages/ae/test/helpers/isolate-runtime-env.mjs --test --test-name-pattern="inherited trust stops" ./packages/ae/test/trust.test.mjs
+
       - name: Harness test suite (Windows)
         env:
           HARNESS_PARENT_PROFILE_LOG: ${{ github.workspace }}/.harness/diagnostics/windows-parent-full
@@ -50,8 +54,6 @@ jobs:
         run: |
           $preloadRoot = $env:GITHUB_WORKSPACE.Replace('\', '/')
           $env:NODE_OPTIONS = '--require="' + $preloadRoot + '/packages/ae/test/helpers/domain-parent-profile.cjs"'
-          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoLogo -NoProfile -NonInteractive -Command '[Console]::Write([System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks)'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/ci-tests.mjs --shard ${{ matrix.shard }} --shards 4 2>&1 | Tee-Object -FilePath windows-tests.log
           exit $LASTEXITCODE
 
@@ -190,7 +192,7 @@ jobs:
           Write-Host 'redaction held on Windows'
           exit 0
 
-      - name: Runner descendant termination via taskkill
+      - name: Runner cancellation terminates the owned process
         id: cancellation
         continue-on-error: true
         shell: pwsh
@@ -219,10 +221,10 @@ jobs:
 
           // A parent that spawns a NON-detached grandchild, so termination has to reach
           // the whole tree: on POSIX the grandchild stays inside the process group
-          // runProcess created for the direct child (detached: true), and on win32 it
-          // stays inside the pid tree that `taskkill /T` walks. The grandchild outlives
-          // its parent, so a termination that only reached the direct child leaves it
-          // running and this probe reports it.
+          // runProcess created for the direct child (detached: true). On win32,
+          // taskkill /T /F ends the owned process and its descendants. A grandchild
+          // that still outlives that stop is reaped by the probe. The owned process
+          // must still cancel.
           const childSource = `
           const { spawn } = require('node:child_process');
           const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, ${SLEEP_MS})'], { stdio: 'ignore' });
@@ -282,23 +284,27 @@ jobs:
             failures.push(`EXPECTED settledMs >= ${ABORT_AT_MS} (child alive when the abort fired), GOT ${settledMs}`);
           }
           if (settledMs > 15000) failures.push(`EXPECTED termination to settle promptly after the abort, GOT ${settledMs}ms`);
-          if (grandchildPid === null) failures.push('EXPECTED a grandchild pid on stdout; tree termination was never exercised');
-          if (grandchildAlive) failures.push(`EXPECTED the grandchild (pid ${grandchildPid}) to die with the tree, but it is still alive`);
+          if (grandchildPid === null) failures.push('EXPECTED a grandchild pid on stdout; cancellation was never exercised');
+          if (grandchildAlive) {
+            failures.push(`EXPECTED the grandchild (pid ${grandchildPid}) to die with the tree, but it is still alive`);
+            try { process.kill(grandchildPid); } catch { /* already gone */ }
+            console.log('grandchild outlived the owned process; reaped by the probe');
+          }
           if (failures.length) {
             for (const failure of failures) console.error(failure);
             process.exit(1);
           }
-          console.log('runner cancellation terminated the whole tree');
+          console.log('runner cancellation terminated the owned process');
           '@
           Set-Content -Path win-cancel.mjs -Value $script
           $out = & node win-cancel.mjs 2>&1 | Out-String -Width 4096
           $code = $LASTEXITCODE
           Write-Host $out
           Write-Host "[exit $code]"
-          Add-Content -Path win-output/scenarios.txt -Value "`n=== runner cancellation (taskkill path) ===`n$out[exit $code]"
+          Add-Content -Path win-output/scenarios.txt -Value "`n=== runner cancellation (owned process) ===`n$out[exit $code]"
           if ($code -eq 0) {
             Add-Content -Path $env:GITHUB_OUTPUT -Value 'result=pass'
-            Add-Content -Path $env:GITHUB_OUTPUT -Value 'reason=cancellation terminated the whole process tree, grandchild included'
+            Add-Content -Path $env:GITHUB_OUTPUT -Value 'reason=cancellation terminated the owned process'
             Add-Content -Path win-output/scenarios.txt -Value 'RESULT: pass'
             exit 0
           }
@@ -321,7 +327,7 @@ jobs:
           Add-Content -Path $env:GITHUB_OUTPUT -Value 'result=fail'
           Add-Content -Path $env:GITHUB_OUTPUT -Value "reason=$reason"
           Add-Content -Path win-output/scenarios.txt -Value "RESULT: fail - $reason"
-          Write-Host "::error title=Runner descendant termination via taskkill::${reason}"
+          Write-Host "::error title=Runner cancellation terminates the owned process::${reason}"
           exit 1
 
       - name: Environment fingerprint
@@ -373,7 +379,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $suiteResult = if ($env:SUITE_OUTCOME -eq 'success') { 'pass' } else { 'fail' }
           $inventoryResult = if ($env:INVENTORY_OUTCOME -eq 'success') { 'pass' } else { 'fail' }
-          $names = @('Harness test suite (Windows)', 'Complete same-revision test inventory', 'Redaction on Windows', 'Runner descendant termination via taskkill')
+          $names = @('Harness test suite (Windows)', 'Complete same-revision test inventory', 'Redaction on Windows', 'Runner cancellation terminates the owned process')
           $results = @($suiteResult, $inventoryResult, $env:REDACTION_RESULT, $env:CANCELLATION_RESULT)
           $reasons = @(('shard outcome: ' + $env:SUITE_OUTCOME), ('inventory outcome: ' + $env:INVENTORY_OUTCOME), $env:REDACTION_REASON, $env:CANCELLATION_REASON)
 

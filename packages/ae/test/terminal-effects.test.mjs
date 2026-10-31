@@ -515,3 +515,18 @@ test('decision authoring rejects a hard link to protected lifecycle state', (t) 
   fs.writeFileSync(alias, '{}');
   assert.equal(f.hook('guard-critical-files.mjs', '', { tool_name: 'create_file', tool_input: { filePath: '.harness/decisions/start.json' } }).continue, true);
 });
+
+test('opaque terminal admission binds personal checks and refuses changed local authority', async t => {
+  const f = fixture(t);
+  const { projectStoreDir } = await import('../lib/project-layout.mjs');
+  const local = path.join(projectStoreDir(f.workspace, { home: f.home }), 'authority');
+  fs.mkdirSync(local, { recursive: true });
+  const checks = path.join(local, 'checks.yaml');
+  fs.copyFileSync(path.join(f.workspace, '.github/harness/checks.yaml'), checks);
+  fs.rmSync(path.join(f.workspace, '.github/harness'), { recursive: true });
+  f.gate(); f.approve();
+  assert.equal(f.hook('require-plan-gate.mjs', 'node generator.mjs').continue, true);
+  assert.match(f.hook('require-plan-gate.mjs', 'node unrelated.mjs').permissionDecisionReason, /out-of-plan-verification/);
+  fs.appendFileSync(checks, '# authority changed\n');
+  assert.equal(f.hook('require-plan-gate.mjs', 'node generator.mjs').permissionDecision, 'deny');
+});

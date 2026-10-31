@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { buildContextPack, RECALL_DATA_PREAMBLE, CONTEXT_PACK_MAX_BYTES } from '../lib/context-pack.mjs';
-import { loadManifest } from '../lib/recall-rank.mjs';
+import { loadManifest, rankRecall } from '../lib/recall-rank.mjs';
 import { DEFAULT_MAX_BYTES } from '../lib/fs-safe.mjs';
 import { ensureStore, listLearnings, serializeLearning } from '../lib/knowledge/store.mjs';
 
@@ -110,23 +110,49 @@ test('a recall TITLE that is secret-shaped is also redacted', () => {
 
 // P3 — read-size cap on loadManifest (uncapped-read DoS guard). -------------
 
-test('loadManifest skips an over-cap manifest instead of reading it whole', () => {
+test('loadManifest refuses an over-cap manifest explicitly without reading its contents', (t) => {
   const home = tmp('cap-home-');
+  const workspace = tmp('cap-ws-');
+  t.after(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
   const kdir = path.join(home, 'knowledge');
   fs.mkdirSync(kdir, { recursive: true });
   const mp = path.join(kdir, 'manifest.yaml');
-    const fd = fs.openSync(mp, 'w');
+  const fd = fs.openSync(mp, 'w');
   fs.ftruncateSync(fd, DEFAULT_MAX_BYTES + 1);
   fs.closeSync(fd);
 
-  const res = loadManifest(home, tmp('cap-ws-'));
+  const manifestStat = fs.statSync(mp);
+  const isManifest = (file) => {
+    if (typeof file !== 'number') return String(file) === mp;
+    const stat = fs.fstatSync(file);
+    return stat.dev === manifestStat.dev && stat.ino === manifestStat.ino;
+  };
+  let contentReads = 0;
+  const readSync = fs.readSync;
+  const readFileSync = fs.readFileSync;
+  t.mock.method(fs, 'readSync', (file, ...args) => {
+    if (isManifest(file)) contentReads++;
+    return readSync(file, ...args);
+  });
+  t.mock.method(fs, 'readFileSync', (file, ...args) => {
+    if (isManifest(file)) contentReads++;
+    return readFileSync(file, ...args);
+  });
+
+  const res = loadManifest(home, workspace);
   assert.deepEqual(res.entries, [], 'no entries from the over-cap manifest');
-  assert.equal(res.path, null, 'the over-cap manifest is not adopted as the source (so rankRecall will not throw on it)');
-  assert.match(res.error, /read cap/, 'the skip is noted');
+  assert.equal(res.path, mp, 'a present invalid manifest retains its source for diagnostics');
+  assert.match(res.error, /read cap/, 'the refusal identifies the read cap');
+  assert.throws(() => rankRecall('x', { copilotHome: home, workspace }), /manifest parse failed.*read cap/,
+    'recall reports the invalid source instead of treating it as absent');
+  assert.equal(contentReads, 0, 'the size cap rejects the manifest before any content read');
 
   // No false refusal: a normal small manifest still loads.
   fs.writeFileSync(mp, 'entries:\n  - id: a\n    path: docs/solutions/x.md\n');
-  const ok = loadManifest(home, tmp('cap-ws2-'));
+  const ok = loadManifest(home, workspace);
   assert.equal(ok.path, mp);
   assert.equal(ok.entries.length, 1);
 });

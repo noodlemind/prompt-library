@@ -213,14 +213,14 @@ export function buildNeighborhood({ workspace, files = [], maxFiles = MAX_FILES_
  * when that file or docs/plans already exists; otherwise the map lives under
  * gitignored .harness/codebase-map.md.
  */
-export function writeCodebaseMap({ workspace, dryRun = false, maxTokens = 2500 }) {
+export function writeCodebaseMap({ workspace, dryRun = false, maxTokens = 2500, local = false }) {
   // The map stays lexical-only (preferStructural: false): it must
   // be byte-identical across hosts for the same tree, and whether a given
   // host has built a structural index is host-local state that must never
   // leak into a committed artifact.
   const map = buildRepoMap({ workspace, query: '', maxTokens, title: 'Codebase Map', preferStructural: false });
   if (map.empty) return null;
-  const rel = codebaseMapWriteRel(workspace);
+  const rel = local ? '.harness/codebase-map.md' : codebaseMapWriteRel(workspace);
   if (!dryRun) {
     // Refuse to write through a symlinked `docs/` (or a pre-planted symlink
     // at the target itself) — a naive mkdir+write would otherwise follow

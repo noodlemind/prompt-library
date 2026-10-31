@@ -68,6 +68,7 @@ test('VS Code configuration explicitly discovers hydrated user hooks', () => {
   const settings = mergeVSCodeSettings({ 'chat.hookFilesLocations': { 'custom/hooks': true } });
   assert.equal(settings['chat.hookFilesLocations']['custom/hooks'], true);
   assert.equal(settings['chat.hookFilesLocations']['~/.copilot/hooks'], true);
+  assert.equal(settings['chat.subagents.allowInvocationsFromSubagents'], true);
 });
 
 test('VS Code settings parser preserves URL strings and accepts JSONC comments', () => {
@@ -89,7 +90,7 @@ test('VS Code doctor proves discovery, gate, post-tool, and completion behavior'
   fs.cpSync(sourceHooks, path.join(assetsRoot, 'hooks'), { recursive: true });
   syncAssetsToTarget(assetsRoot, copilotHome, { dryRun: false, preserveKnowledge: true, verbose: false }, () => {});
   const settingsPath = path.join(tempDir('harness-vscode-'), 'settings.json');
-  fs.writeFileSync(settingsPath, JSON.stringify(mergeVSCodeSettings({})));
+  fs.writeFileSync(settingsPath, JSON.stringify(mergeVSCodeSettings({}, { copilotHome })));
 
   const result = await runDoctor({
     copilotHome,

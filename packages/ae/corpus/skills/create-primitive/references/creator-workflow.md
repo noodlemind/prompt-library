@@ -1,6 +1,6 @@
 # Creator Workflow
 
-Read this reference in full before governed primitive changes. The owning [Create Primitive skill](../SKILL.md) defines activation and authority.
+Read this reference in full before governed primitive changes. Read `<copilot-home>/skills/create-primitive/SKILL.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/create-primitive/SKILL.md --json` prints the same file. That skill defines activation and authority.
 
 ## Pipeline Role
 
@@ -70,7 +70,7 @@ Activation means this `SKILL.md` was actually loaded in the current chat session
 
 For a Java/Spring/AWS migration request, explicitly compare: Existing /java skill; Existing /aws skill; Reference under /java; Reference under /aws; New cross-domain migration skill. Select the smallest justified reusable option. Dense migration guidance belongs in a reference rather than bloating `SKILL.md`.
 
-Inspect both repository-owned capabilities and the installed `~/.copilot/skills/java/SKILL.md` and `~/.copilot/skills/aws/SKILL.md` when those installed paths exist. State what was inspected and why reuse, a reference, or a new cross-domain skill is the smallest justified choice before editing.
+Inspect both repository-owned capabilities and, when those installed paths exist, read `<copilot-home>/skills/java/SKILL.md` and `<copilot-home>/skills/aws/SKILL.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/java/SKILL.md --json` and `ae get --reference skills/aws/SKILL.md --json` print the same files. State what was inspected and why reuse, a reference, or a new cross-domain skill is the smallest justified choice before editing.
 
 Before writing files:
 
@@ -86,11 +86,11 @@ Before writing files:
    - Add the named entry to the version 2 `capabilities` mapping in `packages/ae/corpus/knowledge/capability-registry.yaml`, with its type, lifecycle status, owner, version, origin, and applicable trigger and eval evidence. Do not use the retired `starter_skills` or `starter_agents` inventories.
    - If new agent is delegatable from `@engineer`, add to `engineer_allowlist` and `engineer.agent.md` frontmatter `agents:` (human-approved).
 
-Before the first full `ae verify`, map every acceptance criterion to trusted checks from `.github/harness/checks.yaml`, complete only the tasks and criteria actually proven, and include `prompt-contracts` and `host-contracts` when those standard primitive checks are configured. Inspect candidate commands/assertions: a specialized check for another output (such as `schema-validation` with no schema artifact) is forbidden. In a product repo where standard primitive checks are absent, use only the generic or strongest relevant local named check and state that the harness contract checks are not present. Do not invent check names, run unrelated optional checks, repair their failures, widen scope for them, or fake registry updates.
+Before the first full `ae verify`, map every acceptance criterion to trusted checks from the selected configuration source reported by `ae checks list --json`, complete only the tasks and criteria actually proven, and include `prompt-contracts` and `host-contracts` when those standard primitive checks are configured. Inspect candidate commands/assertions: a specialized check for another output (such as `schema-validation` with no schema artifact) is forbidden. In a product repo where standard primitive checks are absent, use only the generic or strongest relevant local named check and state that the harness contract checks are not present. Do not invent check names, run unrelated optional checks, repair their failures, widen scope for them, or fake registry updates.
 
 ## Capability Expansion Mode
 
-When invoked because `@engineer` or another skill found a missing capability, require `~/.copilot/skills/references/capability-gap-proposal.md` before creating or substantially changing primitives. Follow the steps in that template's `## Usage Workflow`.
+When invoked because `@engineer` or another skill found a missing capability, read `<copilot-home>/skills/references/capability-gap-proposal.md` with the host read tool before creating or substantially changing primitives. Outside the enforce hook, `ae get --reference skills/references/capability-gap-proposal.md --json` prints the same file. Follow the steps in that template's `## Usage Workflow`.
 
 Do not create primitives in non-interactive mode unless prior human approval is already recorded.
 
@@ -185,6 +185,6 @@ For per-type creation detail — agent classifications and templates, skill patt
 
 ## Validation
 
-Delegate mechanical checks, scaffolding and generated inventory to Harness through [resource-operations.md](../../references/resource-operations.md). Use the versioned creation input for metadata, reference and permission checks; use `resources validate --corpus` for ship-set edits. Registry and delegation drift are diagnosed from source declarations. Do not maintain inventory counts by hand.
+Delegate mechanical checks, scaffolding and generated inventory to Harness. Read `<copilot-home>/skills/references/resource-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/resource-operations.md --json` prints the same file. Use the versioned creation input for metadata, reference and permission checks; use `resources validate --corpus` for ship-set edits. Registry and delegation drift are diagnosed from source declarations. Do not maintain inventory counts by hand.
 
-Judge description usefulness, artifact boundary, overlap, evaluation adequacy and minimum authority from evidence. A passing structural validator does not establish that a capability is useful. Follow [human-approval-policy.md](../../references/human-approval-policy.md) for activation; existing direct authorization covers necessary work within its scope.
+Judge description usefulness, artifact boundary, overlap, evaluation adequacy and minimum authority from evidence. A passing structural validator does not establish that a capability is useful. Read `<copilot-home>/skills/references/human-approval-policy.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/human-approval-policy.md --json` prints the same file. Use it for activation; existing direct authorization covers necessary work within its scope.

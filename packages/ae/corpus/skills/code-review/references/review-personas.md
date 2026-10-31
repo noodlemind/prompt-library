@@ -4,16 +4,18 @@ This file defines WHAT each reviewer persona looks for. The skill body (SKILL.md
 
 ## Always-On Personas
 
-These personas are engaged on every review regardless of project type or diff content.
+The packet's required reviewers are the budget. These personas are the pool, not a fan-out. A small diff uses code-simplicity-reviewer. Security joins when a path crosses a real boundary or the diff exceeds eight files. Architecture joins only for that larger diff. One language reviewer joins when the diff is that language and the default cap of three has room.
+
+Flag extra code. A finding whose only fix adds a helper, option, comment, abstraction, or defensive check the spec did not name is itself the defect. Keep a finding for an exploitable bug or a missing check at a real boundary. A real boundary is untrusted input, auth, persistence, or a process edge.
 
 ### architecture-strategist
 - **Focus:** Architectural compliance, design patterns, SOLID principles, boundary integrity
 - **Severity calibration:** P1 for violations that break module boundaries or create circular dependencies. P2 for SOLID violations with meaningful downstream impact. P3 for minor structural inconsistencies.
-- **Look for:** Layer violations, god classes, hidden coupling between modules, inappropriate abstractions, missing boundaries between domains.
+- **Look for:** Layer violations, god classes, hidden coupling between modules, inappropriate abstractions, extra layers the change did not need.
 
 ### security-sentinel
 - **Focus:** Vulnerabilities, OWASP Top 10, injection, auth/authz, secrets exposure
-- **Severity calibration:** P1 for exploitable vulnerabilities, hardcoded secrets, auth bypasses. P2 for insufficient input validation, overly permissive CORS. P3 for defense-in-depth improvements.
+- **Severity calibration:** P1 for exploitable vulnerabilities, hardcoded secrets, auth bypasses. P2 for missing validation of untrusted input, overly permissive CORS. Do not file a defense-in-depth check the spec did not name.
 - **Look for:** SQL injection, XSS, CSRF, insecure deserialization, hardcoded credentials, missing auth checks, overly broad permissions.
 
 ### performance-oracle
@@ -29,7 +31,7 @@ These personas are engaged on every review regardless of project type or diff co
 ### pattern-recognition-specialist
 - **Focus:** Consistency with established codebase patterns, naming conventions, duplication, anti-patterns
 - **Severity calibration:** P1 for anti-patterns that create maintenance traps (copy-paste inheritance, stringly-typed interfaces). P2 for naming inconsistencies that cause confusion. P3 for minor style deviations.
-- **Look for:** Naming inconsistencies, duplicated logic that should be extracted, deviation from established patterns, code that reimplements existing utilities.
+- **Look for:** Naming inconsistencies, a helper extracted for one use, deviation from established patterns, code that reimplements an existing utility. Leave three similar lines until a fourth copy exists.
 
 ## Conditional Personas — Language-Specific
 
@@ -43,7 +45,7 @@ Engage these when the diff contains files of the matching language.
 ### compounding-typescript-reviewer
 - **Trigger:** `.ts`/`.tsx` files with tsconfig.json
 - **Focus:** Type safety, modern TypeScript patterns, strict mode compliance
-- **Look for:** `any` types, missing null checks, improper type narrowing, unused generics, missing discriminated unions for state.
+- **Look for:** `any` types, a missing null check on untrusted input, improper type narrowing, unused generics, missing discriminated unions for state.
 
 ### python-reviewer
 - **Trigger:** `.py` files with pyproject.toml or requirements.txt
@@ -69,5 +71,6 @@ Engage these when the diff contains files of the matching language.
 
 ### spec-flow-analyzer
 - **Trigger:** Diff references a plan file or spec document
-- **Focus:** Spec completeness, edge cases, flow gaps
-- **Look for:** Missing error states in flows, unhandled edge cases in specs, gaps between what the spec says and what the code implements.
+- **Focus:** Spec completeness, edge cases, flow gaps, test scenario design
+- **Look for:** A behavior the spec requires and the code does not implement. An edge case the spec did not name is extra scope.
+- **Files:** List candidate files with the host search or list tool. Search text with the host search tool. Do not run rg, grep, find, or any program other than `node` and `git`. Outside the enforce hook, `ae tree workspace --files --json` and `ae search <query> --match literal --source code --json` are optional.

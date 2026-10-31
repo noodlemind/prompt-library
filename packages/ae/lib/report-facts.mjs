@@ -41,12 +41,19 @@ export function planStateFacts(workspace) {
   return { total: rows.length, counts, rows, diagnostics };
 }
 
+function invocationIdentityOf(record) {
+  const results = Array.isArray(record?.results) ? record.results : [];
+  if (results.length && results.every(result => result.provenance?.independence === 'separate-reviewer')) return 'separate-reviewer';
+  if (results.some(result => result.provenance?.independence === 'rejected')) return 'rejected';
+  return 'unverified';
+}
+
 export function reviewCoverageFacts({ workspace, plan, copilotHome }) {
   if (!plan) return { pass: false, state: 'no-plan', requiredCount: 0, missingCount: 0, record: null };
   const required = plan.fm.reviews?.required || [];
   try {
     const result = validateReview({ workspace, plan, copilotHome });
-    return { pass: result.pass, state: result.pass ? 'current' : 'incomplete-or-stale', requiredCount: required.length, missingCount: result.missing?.length || 0, record: result.record?.id || null, message: brief(result.message), invocationIdentity: 'unverified' };
+    return { pass: result.pass, state: result.pass ? 'current' : 'incomplete-or-stale', requiredCount: required.length, missingCount: result.missing?.length || 0, record: result.record?.id || null, message: brief(result.message), invocationIdentity: invocationIdentityOf(result.record) };
   } catch (error) { return { pass: false, state: 'unavailable', requiredCount: required.length, missingCount: required.length, record: null, message: brief(error.message) }; }
 }
 
@@ -120,9 +127,12 @@ export function buildFactualReport({ workspace, copilotHome, planPath = null, ma
       } else diagnostics.push({ path: rel, reason: 'unsupported lockfile version' });
     } catch { diagnostics.push({ path: rel, reason: 'malformed JSON manifest' }); }
   }
-  const plans = planStateFacts(workspace), named = loadNamedChecks(workspace), checkSource = source(workspace, CHECKS_REL)?.ref || null;
+  const plans = planStateFacts(workspace), named = loadNamedChecks(workspace);
+  const checkPath = named.sourceMode === 'local' ? named.source : CHECKS_REL;
+  const checkSource = named.sourceRoot && named.source ? source(named.sourceRoot, named.source)?.ref || null : null;
+  if (checkSource && named.sourceMode === 'shared') checkSource.path = CHECKS_REL;
   const checks = Object.entries(named.checks || {}).sort(([a], [b]) => a.localeCompare(b)).map(([name, config]) => ({ name, proof: config?.proof || 'behavior', validation: validateCommand(name, config), source: checkSource }));
-  if (named.error) diagnostics.push({ path: CHECKS_REL, reason: named.error });
+  if (named.error) diagnostics.push({ path: checkPath, reason: named.error });
   const index = indexStatus({ workspace, copilotHome });
   const plane = value => ({ state: !value?.indexed ? 'missing' : value.unreadable?.length ? 'unreadable' : value.stale ? 'stale' : 'current', indexedHead: value?.indexedHead || null, currentHead: value?.currentHead || null });
   const completions = [];

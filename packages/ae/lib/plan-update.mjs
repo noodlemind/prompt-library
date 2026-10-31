@@ -13,7 +13,7 @@ import { parseFlags } from './flags.mjs';
 import { loadPlan, parsePlanFrontmatter, planFromText } from './plan-parse.mjs';
 import { completeWork, completionPrerequisites, validateCompletion } from './completion.mjs';
 import { bindLockedIntentSources, lockIntentSources, sourcePath, hashIntentFile, intentSourcesCheck } from './intent-sources.mjs';
-import { readFileNoFollow, assertNoSymlinkAncestors, writeFileContainedExclusive, canonicalPath } from './fs-safe.mjs';
+import { readBoundedInput, readFileNoFollow, assertNoSymlinkAncestors, writeFileContainedExclusive, canonicalPath } from './fs-safe.mjs';
 import { applyPlanDecision, validatePlanDecision, planRevision, planState } from './plan-decisions.mjs';
 import { runGate, publishGateSession } from './gate.mjs';
 import { loadPolicy } from './policy.mjs';
@@ -61,7 +61,7 @@ export function planUpdateRoots(workspace, { home, domainContext } = {}) {
   ];
 }
 
-/** Directory created while a plan-update holds the file. Empty, and removed when the update finishes. */
+/** Directory containing the current owner's token while a plan-update holds the file. */
 export function planUpdateLockDir(full) {
   return path.join(path.dirname(full), `.${path.basename(full)}.lock`);
 }
@@ -70,34 +70,123 @@ function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function singleLockEntry(dir) {
+  const entries = fs.opendirSync(dir, { bufferSize: 2 });
+  try {
+    const first = entries.readSync();
+    return first && !entries.readSync() ? first : null;
+  } finally { entries.closeSync(); }
+}
+
+function planLockOwner(dir) {
+  try {
+    const stat = fs.lstatSync(dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
+    const entry = singleLockEntry(dir);
+    const match = entry?.name.match(/^owner-v1-([1-9][0-9]{0,15})-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/);
+    if (!match || !Number.isSafeInteger(Number(match[1]))) return null;
+    const stamp = path.join(dir, entry.name), stampStat = fs.lstatSync(stamp);
+    if (!stampStat.isDirectory() || stampStat.isSymbolicLink()) return null;
+    const contents = fs.opendirSync(stamp, { bufferSize: 1 });
+    try { if (contents.readSync()) return null; }
+    finally { contents.closeSync(); }
+    return { version: 1, pid: Number(match[1]), token: match[2], stamp: entry.name };
+  } catch { return null; }
+}
+
+function removePlanLock(dir, token) {
+  const owner = planLockOwner(dir);
+  if (owner?.token !== token) throw usage('plan-update: lock ownership lost; inspect the retained lock');
+  fs.rmdirSync(path.join(dir, owner.stamp));
+  fs.rmdirSync(dir);
+}
+
+function retirePlanLock(dir, token, parent = path.dirname(dir)) {
+  if (planLockOwner(dir)?.token !== token) throw usage('plan-update: lock ownership lost; inspect the retained lock');
+  const retirement = fs.mkdtempSync(path.join(parent, '.retired-'));
+  try {
+    const retired = path.join(retirement, 'lock');
+    fs.renameSync(dir, retired);
+    removePlanLock(retired, token);
+  } finally {
+    try { fs.rmdirSync(retirement); } catch { /* preserve mismatched or unexpected retired contents */ }
+  }
+}
+
 function acquirePlanLock(full) {
   const lockDir = planUpdateLockDir(full);
+  const recovery = `${lockDir}.recovery`;
+  const owner = { version: 1, token: randomUUID(), pid: process.pid };
   const start = Date.now();
   while (true) {
+    const recovering = fs.lstatSync(recovery, { throwIfNoEntry: false });
+    if (recovering) {
+      if (!recovering.isDirectory() || recovering.isSymbolicLink()) throw usage('plan-update: unsafe lock recovery path; inspect before retrying');
+      if (Date.now() - start > LOCK_WAIT_MS) throw usage('plan-update: lock recovery is busy; inspect the retained recovery directory before retrying');
+      sleepMs(25);
+      continue;
+    }
     try {
-      fs.mkdirSync(lockDir);
-      return lockDir;
+      fs.mkdirSync(lockDir, { mode: 0o700 });
+      // Empty owner directories keep legacy in-repo plan locks out of Git-observed proof scope.
+      try { fs.mkdirSync(path.join(lockDir, `owner-v1-${owner.pid}-${owner.token}`), { mode: 0o700 }); }
+      catch {
+        try { fs.rmdirSync(lockDir); } catch { /* retain a nonempty or changed lock for inspection */ }
+        throw usage('plan-update: lock owner could not be recorded');
+      }
+      if (fs.lstatSync(recovery, { throwIfNoEntry: false })) {
+        retirePlanLock(lockDir, owner.token);
+        continue;
+      }
+      return { dir: lockDir, token: owner.token };
     } catch (error) {
       if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error;
       if (Date.now() - start > LOCK_WAIT_MS) {
         if (error.code !== 'EEXIST') throw error;
         throw usage('plan-update: plan is locked by another update');
       }
-      if (error.code === 'EEXIST') try {
-        if (Date.now() - fs.statSync(lockDir).mtimeMs > LOCK_STALE_MS) {
-          fs.rmdirSync(lockDir);
-          continue;
+      if (error.code === 'EEXIST') {
+        const stat = fs.lstatSync(lockDir, { throwIfNoEntry: false });
+        if (!stat) continue;
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw usage('plan-update: unsafe lock path; inspect before removing it');
+        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          const previous = planLockOwner(lockDir);
+          if (!previous) throw usage('plan-update: lock owner is unreadable; inspect before removing it');
+          let absent = false;
+          try { process.kill(previous.pid, 0); }
+          catch (error) {
+            if (error.code === 'ESRCH') absent = true;
+            else throw usage('plan-update: lock owner liveness is unavailable; absence is not proven');
+          }
+          if (absent) {
+            try { fs.mkdirSync(recovery, { mode: 0o700 }); }
+            catch (error) { if (error.code === 'EEXIST') continue; throw error; }
+            try {
+              if (planLockOwner(lockDir)?.token !== previous.token) continue;
+              const retired = path.join(recovery, 'retired');
+              fs.renameSync(lockDir, retired);
+              removePlanLock(retired, previous.token);
+            } finally {
+              try { fs.rmdirSync(recovery); } catch { /* retain unexpected recovery contents for inspection */ }
+            }
+            continue;
+          }
         }
-      } catch {
-        // A competing releaser may already have removed the lock; retry within the same budget.
       }
       sleepMs(25);
     }
   }
 }
 
-function releasePlanLock(lockDir) {
-  try { fs.rmdirSync(lockDir); } catch { /* the lock is already gone */ }
+function releasePlanLock(lock) {
+  const recovery = `${lock.dir}.recovery`;
+  try { fs.mkdirSync(recovery, { mode: 0o700 }); }
+  catch { throw usage('plan-update: lock recovery is busy; inspect before releasing the retained lock'); }
+  try {
+    retirePlanLock(lock.dir, lock.token, recovery);
+  } finally {
+    try { fs.rmdirSync(recovery); } catch { /* preserve a mismatched retired owner for inspection */ }
+  }
 }
 
 export function withPlanUpdateLock(full, fn) {
@@ -378,6 +467,7 @@ function structuredPlanUpdate({ workspace, full, input, flags, dryRun, domainCon
     const rel = `.harness/operations/plans/${reviewHash({ plan: plan.path, operation: input.id })}.json`;
     const inputDigest = reviewHash(input);
     const existing = readReviewRecord(recordRoot, rel);
+    if (!existing && fs.lstatSync(path.join(recordRoot, rel), { throwIfNoEntry: false })) throw usage('operation identity has a corrupt journal');
     const operation = reviewHash({ plan: plan.path, inputDigest });
     if (existing && (existing.version !== 1 || existing.operation !== operation || existing.inputDigest !== inputDigest || existing.plan !== plan.path || existing.value?.plan !== plan.path || existing.value?.before !== input.expect || existing.value?.action !== input.action || typeof existing.value?.text !== 'string' || planRevision(existing.value.text) !== existing.value.after || reviewHash(existing.value) !== existing.integrity)) throw usage('operation identity has different or corrupt payload');
     if (existing?.state === 'completed') return { ...existing.result, replayed: true, currentRevision: planRevision(plan.text), current: planRevision(plan.text) === existing.value.after && intentSourcesCheck(plan, workspace).pass && gapEvidenceCheck(workspace, plan).pass && validatePlanSchema(plan).pass && shared().pass && domainLinkCheck({ workspace, plan, copilotHome, home: planHome(workspace, plan) }).pass && (input.action !== 'complete' || validateCompletion({ workspace, plan, copilotHome }).pass), allowedNextActions: ['Inspect current state; a replay does not renew an expired gate'] };
@@ -407,7 +497,7 @@ function structuredPlanUpdate({ workspace, full, input, flags, dryRun, domainCon
       const prerequisites = completionPrerequisites({ workspace, plan: proposed, copilotHome });
       if (!prerequisites.pass) missing.push(prerequisites.message);
     }
-    if (missing.length || gate && (!gate.pass || gate.exitCode !== 0)) return { status: 'blocked', path: full, missing: [...new Set(missing)], allowedNextActions: ['Repair the named prerequisites, then retry the same decision if the revision is unchanged'], updated: false };
+    if (missing.length || gate && (!gate.pass || gate.exitCode !== 0)) return { status: 'blocked', path: full, missing: [...new Set(missing)], allowedNextActions: ['Repair the named prerequisites, then retry the same decision if the revision is unchanged'], ...(gate?.nextTools ? { nextTools: gate.nextTools } : {}), updated: false };
     if (!decision.amendments.every(source => source.newHash === null || hashIntentFile(workspace, source.path) === source.newHash)) throw usage('intent source changed while applying the amendment');
     if (input.intentSelection && !intentSourcesCheck(proposed, workspace).pass) throw usage('selected intent source changed before amendment publication');
     if (gate && !intentSourcesCheck(proposed, workspace).pass) throw usage('selected intent source changed before start publication');
@@ -539,8 +629,10 @@ export async function cmdPlanUpdate(argv) {
 
   for (let i = 0; i < scan.length; i++) {
     const token = scan[i];
-    if (token === '--file') {
-      ({ value: fileArg, index: i } = take(scan, i));
+    if (token === '--file' || token.startsWith('--file=')) {
+      if (token === '--file') ({ value: fileArg, index: i } = take(scan, i));
+      else fileArg = token.slice('--file='.length);
+      if (!fileArg) throw usage('plan-update: --file requires a path or - for stdin');
     } else if (token === '--plan') {
       ({ value: planArg, index: i } = take(scan, i));
     } else if (token === '--status') {
@@ -588,9 +680,12 @@ export async function cmdPlanUpdate(argv) {
       ({ value: change.old, index: i } = take(scan, i));
     } else if (token === '--new') {
       ({ value: change.next, index: i } = take(scan, i));
-    } else if (token === '--workspace') {
-      ({ value: workspace, index: i } = take(scan, i));
-      workspace = path.resolve(workspace);
+    } else if (token === '--workspace' || token.startsWith('--workspace=')) {
+      let value;
+      if (token === '--workspace') ({ value, index: i } = take(scan, i));
+      else value = token.slice('--workspace='.length);
+      if (!value || value.startsWith('--')) throw usage('plan-update: --workspace requires a path');
+      workspace = path.resolve(value);
     } else if (token === '--json') json = true;
     else if (token === '--dry-run') dryRun = true;
     else if (token === '--ae-home' || token === '--harness-home' || token === '--copilot-home' || token === '--no-events' || token === '--verbose' || token === '--no-color') {
@@ -619,8 +714,8 @@ export async function cmdPlanUpdate(argv) {
   const home = flags.harnessHome || harnessGlobalHome();
   if (fileArg) {
     if (hasChange) throw usage('--file cannot be combined with legacy mutation flags');
-    const content = readFileNoFollow(path.resolve(workspace, fileArg), { maxBytes: 1024 * 1024 });
-    if (content === null) throw usage('decision file is missing, unsafe or over 1 MiB');
+    const content = fileArg === '-' ? readBoundedInput() : readFileNoFollow(path.resolve(workspace, fileArg), { maxBytes: 1024 * 1024 });
+    if (content === null || content === '') throw usage(fileArg === '-' ? 'decision on stdin is missing, unreadable, or over 1 MiB' : 'decision file is missing, unsafe or over 1 MiB');
     let input;
     try { input = JSON.parse(content); } catch { throw usage('decision file must contain JSON'); }
     const result = updatePlanDecision({ workspace, home, planPath: planArg, input, flags, copilotHome: flags.copilotHome, dryRun });

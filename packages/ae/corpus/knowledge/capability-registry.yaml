@@ -138,6 +138,7 @@ capabilities:
   project-readme: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   python: {type: skill, status: active, owner: application-platform, version: 1, origin: starter}
   recall: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
+  setup-models: {type: skill, status: active, owner: developer-experience, version: 1, origin: starter}
   review-guardrails:
     type: skill
     status: retired
@@ -291,6 +292,11 @@ engineer_allowlist:
   - python-reviewer
   - sql-reviewer
   - aws-reviewer
+  - code-simplicity-reviewer
+  - pattern-recognition-specialist
+  - compounding-typescript-reviewer
+  - data-integrity-guardian
+  - spec-flow-analyzer
 
 growth:
   discovery: skill metadata → registry lookup when a gap is encountered

@@ -25,7 +25,7 @@ let tarball, sourceCommit;
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-installed-release-')));
 const prefix = path.join(root, 'installed'), home = path.join(root, 'harness'), copilotHome = path.join(root, 'copilot');
 const primary = path.join(root, 'primary'), workspace = path.join(root, 'issue');
-const env = { ...process.env, AE_HOME: home, HARNESS_HOME: home, COPILOT_HOME: copilotHome, HARNESS_NO_EVENTS: '1',
+const env = { ...process.env, HOME: root, USERPROFILE: root, AE_HOME: home, HARNESS_HOME: home, COPILOT_HOME: copilotHome, HARNESS_NO_EVENTS: '1',
   GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
   GIT_TRACE2: '0', GIT_TRACE2_EVENT: '0', GIT_TRACE2_PERF: '0', npm_config_cache: path.join(root, 'npm-cache') };
 for (const name of Object.keys(env)) if (name.startsWith('GIT_') && !['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM', 'GIT_TRACE2', 'GIT_TRACE2_EVENT', 'GIT_TRACE2_PERF'].includes(name)) delete env[name];
@@ -164,7 +164,7 @@ try {
   const agents = filesBelow(path.join(copilotHome, 'agents')).filter(file => file.endsWith('.agent.md'));
   const instructions = filesBelow(path.join(copilotHome, 'instructions')).filter(file => file.endsWith('.instructions.md'));
   const publicSkills = skills.filter(file => !/^user-invocable: false\s*$/m.test(fs.readFileSync(file, 'utf8'))).map(file => path.basename(path.dirname(file))).sort();
-  assert.equal(skills.length, 27); assert.equal(agents.length, 22); assert.equal(instructions.length, 5);
+  assert.equal(skills.length, 28); assert.equal(agents.length, 22); assert.equal(instructions.length, 5);
   assert.deepEqual(publicSkills, ['engineer', 'harness-doctor', 'project-readme', 'triage-issues']);
   assert.equal(agents.filter(file => !/^user-invocable: false\s*$/m.test(fs.readFileSync(file, 'utf8'))).length, 1);
   const installedHooks = json(path.join(copilotHome, 'hooks/hooks.json'));

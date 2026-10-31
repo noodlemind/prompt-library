@@ -39,14 +39,42 @@ function readAlias(id, home) {
   return alias.storageId;
 }
 
+function savedFile(dir) {
+  const stack = [dir];
+  while (stack.length) {
+    const current = stack.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) return true;
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === '.git' || entry.name === '.lock' || entry.name === '.quarantine') continue;
+        stack.push(full);
+        continue;
+      }
+      if (!entry.isFile()) return true;
+      if (entry.name === 'store.json' || entry.name === '.gitignore') continue;
+      if (entry.name === 'INDEX.md') {
+        if (fs.readFileSync(full, 'utf8').includes('\n- [')) return true;
+        continue;
+      }
+      if (entry.name === 'consolidated.jsonl' || entry.name === 'governance.jsonl') {
+        if (fs.readFileSync(full, 'utf8').trim()) return true;
+        continue;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasData(id, home) {
   if (!REPO_ID.test(id)) throw failure('invalid repository storage ID');
   return ['knowledge', 'projects'].map((namespace) => {
     const full = safePath(home, path.join(namespace, id));
     const stat = fs.lstatSync(full, { throwIfNoEntry: false });
     if (!stat) return false;
-    if (!stat.isDirectory()) throw failure(`storage path is not a directory: ${full}`);
-    return fs.readdirSync(full).length > 0;
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw failure(`storage path is not a directory: ${full}`);
+    return savedFile(full);
   }).some(Boolean);
 }
 
@@ -63,9 +91,7 @@ export function storageIdForRepo(id, { home = harnessGlobalHome(), legacyIds = [
     return recorded;
   }
   const candidates = [...new Set(legacyIds)].filter((candidate) => candidate !== id && LOCAL_ID.test(candidate) && hasData(candidate, home));
-  if (candidates.length > 1) throw failure('multiple legacy stores exist; select one with knowledge migrate-store --from-id');
-  if (!candidates.length) return id;
-  refuseCanonicalData(id, home);
+  if (!candidates.length || hasData(id, home) || candidates.length !== 1) return id;
   return candidates[0];
 }
 

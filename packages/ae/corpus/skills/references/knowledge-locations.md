@@ -2,15 +2,15 @@
 
 Where agents and skills load context. Do not duplicate this list elsewhere. Link here.
 
-The Copilot home defaults to `~/.copilot`. `--copilot-home` replaces it for one command. `COPILOT_HOME` replaces it for a process. When neither is set and `$XDG_CONFIG_HOME/copilot` already exists, that directory is the home. `--ae-home` and `AE_HOME` do not move this directory. Knowledge is `<copilot-home>/knowledge`. A literal `~/.copilot/knowledge` path below is the default home.
+The Copilot home defaults to `~/.copilot`. `--copilot-home` replaces it for one command. `COPILOT_HOME` replaces it for a process. When neither is set and `$XDG_CONFIG_HOME/copilot` already exists, that directory is the home. `--ae-home` and `AE_HOME` do not move this directory. Knowledge is `<copilot-home>/knowledge`. A literal `~/.copilot/knowledge` path below is the default home. Read `<copilot-home>/knowledge/<path>` with the host read tool. Outside the enforce hook, `ae get --reference knowledge/<path> --json` prints the same file. Do not search the product workspace for it.
 
 ## Recall order (default)
 
-1. **Global team index** — `~/.copilot/knowledge/manifest.yaml` (hydrated from `packages/ae/corpus/knowledge/manifest.yaml`); **fallback:** `packages/ae/corpus/knowledge/manifest.yaml` (cloud/Linux)
+1. **Global team index** — Read `<copilot-home>/knowledge/manifest.yaml` with the host read tool. Outside the enforce hook, `ae get --reference knowledge/manifest.yaml --json` prints the same file. It is hydrated from `packages/ae/corpus/knowledge/manifest.yaml`. **fallback:** `packages/ae/corpus/knowledge/manifest.yaml` (cloud/Linux)
 2. **Consolidated learnings (semantic, T2)** — `~/.ae/knowledge/<repo-id>/` (local, never-pushed store); `ae orient` injects the top-3 trigger-matched, attributed learnings directly into the context pack
 3. **Machine and shipped solutions** — `~/.copilot/knowledge/solutions/**/*.md` (kept across upgrade) or `packages/ae/corpus/knowledge/solutions/`
 4. **User preferences** — `~/.copilot/knowledge/profile.md` or `packages/ae/corpus/knowledge/profile.md.template`
-5. **Enterprise capability** — `~/.copilot/enterprise/capability-registry.enterprise.yaml` or `packages/ae/corpus/enterprise/`
+5. **Enterprise capability** — Read `<copilot-home>/enterprise/capability-registry.enterprise.yaml` with the host read tool. Outside the enforce hook, `ae get --reference enterprise/capability-registry.enterprise.yaml --json` prints the same file. Fallback: `packages/ae/corpus/enterprise/`
 6. **Product active plans** — `~/.ae/projects/<repo-id>/plans/` (default); existing `.harness/plans/` and `docs/plans/` remain readable legacy locations
 7. **Repo-private solution episodes** — `~/.ae/projects/<repo-id>/docs/solutions/`; committed `docs/solutions/` remains readable
 8. **Product repo context** — `.harness/agent-context.md` (default) or committed `docs/agent-context.md`, plus `README.md`

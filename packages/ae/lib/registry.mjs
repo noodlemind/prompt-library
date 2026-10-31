@@ -277,6 +277,25 @@ function flagIndex(entry) {
   return index;
 }
 
+/** `--help` and `-h` before `--` ask for command help. A value consumed by a flag does not. */
+export function commandHelpRequested(argv, entry = null) {
+  const end = argv.indexOf('--');
+  const scan = end === -1 ? argv : argv.slice(0, end);
+  const known = entry ? flagIndex(entry) : null;
+  for (let i = 0; i < scan.length; i++) {
+    const token = scan[i];
+    if (token === '--help' || token === '-h') return true;
+    if (!known || token === '-' || !token.startsWith('-')) continue;
+    const eq = token.indexOf('=');
+    if (eq !== -1) continue;
+    const def = known.get(token);
+    if (!def || def.type === 'boolean') continue;
+    const next = scan[i + 1];
+    if (next !== undefined && (def.valueIsLiteral === true || !next.startsWith('--'))) i++;
+  }
+  return false;
+}
+
 export function validateArgs(entry, argv) {
   const known = flagIndex(entry);
     const present = new Set();
@@ -337,6 +356,7 @@ export async function dispatch(argv, ctx = {}) {
   if (!entry) {
     throw usageError(`unknown command: ${name}`, 'ae help');
   }
+  if (commandHelpRequested(rest, entry)) return EXIT.ok;
   validateArgs(entry, rest);
   const lane = ctx.output;
   assertLaneSupported(entry, lane);
@@ -507,8 +527,8 @@ function agentRequireArgs(rest) {
 }
 
 function getRequireArgs(rest, flags) {
-  if (!flags.docid && !flags.path) {
-    return 'get requires --docid <id> or --path <relative-path>';
+  if (!flags.docid && !flags.path && !flags.reference) {
+    return 'get requires --docid <id>, --path <relative-path>, or --reference <installed-corpus-path>';
   }
 }
 
@@ -604,6 +624,7 @@ export function describeCommand(name) {
     options: [
       ...entry.args.flags.map((f) => [flagLabel(f), f.description || '']),
       ...(entry.extraOptions || []),
+      ...GLOBAL_FLAGS.map((f) => [flagLabel(f), f.description || '']),
     ],
   };
 }
@@ -750,7 +771,7 @@ registerCommand({
 // --- setup ------------------------------------------------------------
 
 const INSTALL_FLAGS = [
-  { name: '--target', type: 'string', valueName: 't,..', description: 'vscode,cli,intellij', required: false, default: null, tui: 'cli-only' },
+  { name: '--target', type: 'string', valueName: 't,..', description: 'installed: vscode, cli, intellij. cursor, codex, and grok are recognized but not installed', required: false, default: null, tui: 'cli-only' },
   { name: '--autonomy', type: 'string', valueName: 'mode', description: 'full | balanced | strict', required: false, default: null, tui: 'cli-only' },
   { name: '--configure-vscode', type: 'boolean', description: 'merge VS Code chat.* discovery settings', required: false, default: false, tui: 'cli-only' },
   { name: '--configure-path', type: 'boolean', description: 'append ~/.copilot/bin to shell PATH (~/.zshrc, ~/.bashrc)', required: false, default: false, tui: 'cli-only' },
@@ -787,6 +808,7 @@ registerCommand({
   args: {
     positionals: [],
     flags: [
+      { name: '--target', type: 'string', valueName: 'vscode|cli|intellij', description: 'select one installed host and its capability checks', required: false, default: null, tui: 'cli-only' },
       { name: '--host', type: 'string', valueName: 'name', description: 'run host-specific checks (vscode executes installed-hook probes)', required: false, default: null, tui: 'prompt' },
       { name: '--adapter', type: 'string', valueName: 'name', description: 'check one installed host adapter file', required: false, default: null, tui: 'cli-only' },
     ],
@@ -808,11 +830,13 @@ registerCommand({
 
 registerCommand({
   name: 'init-repo',
-  summary: 'seed the .harness workspace in a product repo',
+  summary: 'initialize private project setup, or explicitly share repository configuration',
   group: 'workspace',
   sideEffect: 'mutate',
     surfaces: ['cli', 'tui'],
-  args: { positionals: [], flags: [] },
+  args: { positionals: [], flags: [
+    { name: '--shared', type: 'boolean', description: 'create reviewable .github/harness project configuration instead of private configuration' },
+  ] },
   handler: cmdInitRepo,
 });
 
@@ -931,7 +955,7 @@ registerCommand({
     args: {
     positionals: [],
     flags: [
-      { name: '--file', type: 'string', valueName: 'decision.json', description: 'Version 1 full or short creation decision; owns dates, IDs, headings and bindings' },
+      { name: '--file', type: 'string', valueName: 'decision.json', description: 'Version 1 full or short creation decision, or - to read that JSON from stdin; owns dates, IDs, headings and bindings' },
       { name: '--type', type: 'string', valueName: 't', description: 'feat|fix|docs|refactor|chore', required: true, default: null, tui: 'prompt' },
       { name: '--slug', type: 'string', valueName: 's', description: 'lowercase-hyphen slug', required: true, default: null, tui: 'prompt' },
       { name: '--intent', type: 'string', valueName: 'text', description: 'one-line intent', required: true, default: null, tui: 'prompt' },
@@ -965,7 +989,7 @@ registerCommand({
     positionals: [],
     flags: [
       { name: '--plan', type: 'string', valueName: 'path', description: 'plan file under the external store or a legacy plan directory', required: true, default: null, tui: 'prompt', choices: 'plan', valueIsLiteral: true },
-      { name: '--file', type: 'string', valueName: 'decision.json', description: 'Versioned start, amend, progress, finding, gap or complete decision with expected revision and replay ID' },
+      { name: '--file', type: 'string', valueName: 'decision.json', description: 'Versioned start, amend, progress, finding, gap or complete decision with expected revision and replay ID, or - to read that JSON from stdin' },
       { name: '--status', type: 'string', valueName: 'name', description: 'open|planned|in-progress|review|done|blocked-capability|needs-info', required: false, default: null, tui: 'prompt' },
       { name: '--activity', type: 'string', valueName: 'line', description: 'append one activity line (repeatable)', required: false, default: null, tui: 'prompt', valueIsLiteral: true },
       { name: '--review-completed', type: 'string', valueName: 'id', description: 'add a reviews.completed id (repeatable)', required: false, default: null, tui: 'prompt' },
@@ -1107,6 +1131,7 @@ registerCommand({
     positionals: [],
     flags: [
             { name: '--docid', type: 'string', valueName: 'id', description: 'manifest doc id', required: false, default: null, tui: 'prompt' },
+      { name: '--reference', type: 'string', valueName: 'id', description: 'installed corpus file, for example skills/code-review/references/findings-schema.md. Prints that file. Does not search the workspace.', required: false, default: null, tui: 'cli-only' },
       { name: '--path', type: 'string', valueName: 'rel', description: 'relative file path', required: false, default: null, tui: 'prompt', choices: 'path' },
       { name: '--lines', type: 'number', valueName: 'n', description: `max lines (default ${GET_DEFAULT_LINES})`, required: false, default: GET_DEFAULT_LINES, tui: 'prompt' },
       { name: '--offset', type: 'number', valueName: 'n', description: 'first line of the window, 1-indexed (default 1)', required: false, default: 1, tui: 'prompt' },
@@ -1302,17 +1327,19 @@ registerCommand({
   capabilities: [],
   outputModes: ['ledger', 'json'],
   surfaces: ['cli', 'tui', 'agent'],
-  usage: '<render|graph|flow|status> [--file <path>] [--sources <paths>] [--renderer <pele|d2>] [--layout <tala|elk|dagre>] [--png] [--scale <1-4>] [--root <path>] [--operation <deps|dependents>] [--flow <id>] [--receipt <path>] [--depth <n>] [--limit <n>] [--max-nodes <n>] [--timeout <ms>] [--dry-run]',
+  usage: '<render|graph|flow|formal|status> [--file <path>] [--model <module>] [--sources <paths>] [--renderer <pele|d2>] [--layout <tala|elk|dagre>] [--png] [--scale <1-4>] [--root <path>] [--operation <deps|dependents>] [--flow <id>] [--receipt <path>] [--depth <n>] [--limit <n>] [--max-nodes <n>] [--timeout <ms>] [--dry-run]',
   verbs: [
     { verb: 'render', summary: 'render an authored Mermaid or D2 source with explicit evidence' },
     { verb: 'graph', summary: 'render a bounded current-worktree module-import view' },
     { verb: 'flow', summary: 'render a saved committed-default-branch statechart' },
+    { verb: 'formal', summary: 'draw retained formal counterexamples or positive explored state graphs without running a checker' },
     { verb: 'status', summary: 'inspect source freshness and retained artifact integrity', sideEffect: 'read' },
   ],
   args: {
     positionals: [{ name: 'verb', description: DIAGRAM_VERBS.join('|'), required: true }],
     flags: [
-      { name: '--file', type: 'string', valueName: 'path', description: 'workspace-relative .mmd, .mermaid or .d2 file', tui: 'prompt', verbs: ['render'] },
+      { name: '--file', type: 'string', valueName: 'path', description: 'workspace-relative diagram source or recorded formal-verification.json', tui: 'prompt', verbs: ['render', 'formal'] },
+      { name: '--model', type: 'string', valueName: 'module', description: 'exact .tla module in the recorded receipt; retained evidence only, no checker execution', tui: 'prompt', verbs: ['formal'] },
       { name: '--sources', type: 'string', valueName: 'paths', description: 'comma-separated source files or watched directories', tui: 'prompt', verbs: ['render'] },
       { name: '--renderer', type: 'string', valueName: 'pele|d2', description: 'bundled backend matching the source syntax', tui: 'prompt', verbs: ['render'] },
       { name: '--layout', type: 'string', valueName: 'tala|elk|dagre', description: 'D2 layout; default tala', tui: 'prompt', verbs: ['render'] },
@@ -1322,10 +1349,10 @@ registerCommand({
       { name: '--receipt', type: 'string', valueName: 'path', description: 'returned receipt path for freshness inspection', tui: 'prompt', verbs: ['status'] },
       { name: '--depth', type: 'number', valueName: 'n', description: 'graph depth 1 to 32; default 2', tui: 'prompt', verbs: ['graph'] },
       { name: '--limit', type: 'number', valueName: 'n', description: 'graph/flow edge limit 1 to 200; default 50', tui: 'prompt', verbs: ['graph', 'flow'] },
-      { name: '--max-nodes', type: 'number', valueName: 'n', description: 'view nodes 1 to 200; default 50', tui: 'prompt', verbs: ['graph', 'flow'] },
-      { name: '--timeout', type: 'number', valueName: 'ms', description: 'worker deadline 1 to 30000 ms; default 10000', tui: 'prompt', verbs: ['render', 'graph', 'flow'] },
-      { name: '--png', type: 'boolean', description: 'also write diagram.png beside the SVG', tui: 'cli-only', verbs: ['render', 'graph', 'flow'] },
-      { name: '--scale', type: 'number', valueName: '1-4', description: 'PNG pixel scale; default 2; requires --png', tui: 'prompt', verbs: ['render', 'graph', 'flow'] },
+      { name: '--max-nodes', type: 'number', valueName: 'n', description: 'view nodes 1 to 200; default 50', tui: 'prompt', verbs: ['graph', 'flow', 'formal'] },
+      { name: '--timeout', type: 'number', valueName: 'ms', description: 'worker deadline 1 to 30000 ms; default 10000', tui: 'prompt', verbs: ['render', 'graph', 'flow', 'formal'] },
+      { name: '--png', type: 'boolean', description: 'also write diagram.png beside the SVG', tui: 'cli-only', verbs: ['render', 'graph', 'flow', 'formal'] },
+      { name: '--scale', type: 'number', valueName: '1-4', description: 'PNG pixel scale; default 2; requires --png', tui: 'prompt', verbs: ['render', 'graph', 'flow', 'formal'] },
     ],
   },
   handler: cmdDiagrams,
@@ -1608,7 +1635,7 @@ registerCommand({
   sideEffect: 'mutate',
   capabilities: [],
   outputModes: ['ledger', 'json'],
-  usage: '[show|set|clear] [provider] [model] [--scope <scope>]',
+  usage: '[show|set|clear|refresh] [provider] [model] [--scope <scope>]',
   verbs: [
     { verb: 'show', summary: 'the active provider and model, and every provider you can reach', sideEffect: 'read' },
     { verb: 'set', summary: 'make a provider (and optionally a model) the default', positionals: ['provider', 'model'] },
@@ -1760,6 +1787,7 @@ registerCommand({
     ],
     flags: [
       { name: '--depth', type: 'number', valueName: 'n', description: 'tree depth (default 3, max 10)', required: false, default: 3, tui: 'prompt' },
+      { name: '--files', type: 'boolean', description: 'flat git ls-files list for the workspace, including untracked files git does not ignore', required: false, default: false, tui: 'cli-only' },
     ],
   },
   handler: cmdTree,
@@ -1857,7 +1885,7 @@ registerCommand({
     ['purge <file>', 'cascade-delete an episode and dependent learnings'],
     ['purge --all', 'reset the learnings store (episodes remain, become debt)'],
     ['commit <none|repo>', 'repo mirrors ACTIVE learnings into docs/knowledge/learnings (opt-in, never git-commits the product repo); none is the default'],
-    ['migrate-store [--from-id <id>]', 'recover saved storage after an ID change; --from-id preserves old knowledge and plans in place'],
+    ['migrate-store [--from-id <id>]', 'copy missing files from other ids of this checkout into the stable id and keep every source; --from-id preserves old knowledge and plans in place'],
   ],
     verbs: [
     { verb: 'on', summary: 'default mode: orient injects, and every writer (remember, compound --insight, consolidate --apply) is open' },
@@ -1882,7 +1910,7 @@ registerCommand({
     {
       verb: 'migrate-store',
       summary:
-        'recover saved storage after an ID change; --from-id preserves old knowledge and plans in place',
+        'copy missing learnings into the current store and keep every source; --from-id preserves old knowledge and plans in place',
     },
   ],
   args: {

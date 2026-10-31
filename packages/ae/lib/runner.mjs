@@ -70,10 +70,16 @@ function createHeadTailSink(maxBuffer) {
 
 function defaultKill(pid, signal, platform) {
   if (platform === 'win32') {
+    // Do not use a shell. taskkill is the Windows process-tree stop; Node has no tree-kill API.
+    // TerminateProcess leaves descendants holding git and file locks, and the next test waits forever.
     try {
       const result = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { timeout: DEFAULT_GROUP_REAP_TIMEOUT_MS, windowsHide: true });
-      return { status: result.status === 0 && !result.error && !result.signal ? 'confirmed' : 'failed',
-        exitCode: result.status ?? null, signalName: result.signal ?? null, errorCode: result.error?.code ?? null };
+      return {
+        status: result.status === 0 && !result.error && !result.signal ? 'confirmed' : 'failed',
+        exitCode: result.status ?? null,
+        signalName: result.signal ?? null,
+        errorCode: result.error?.code ?? null,
+      };
     } catch (error) {
       return { status: 'failed', exitCode: null, signalName: null, errorCode: error.code || null };
     }

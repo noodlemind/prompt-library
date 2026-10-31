@@ -10,7 +10,7 @@
 - API contract stability
 
 ### Security
-- Input validation at all entry points
+- Missing validation of untrusted input
 - Authentication and authorization on every endpoint
 - No hardcoded secrets or credentials
 - SQL parameterization, XSS prevention, CSRF protection
@@ -20,7 +20,7 @@
 - Algorithmic complexity in hot paths
 - N+1 query detection
 - Memory allocation in loops
-- Missing caching opportunities
+- A cache added without a measured miss
 - I/O bottleneck identification
 
 ### Simplicity
@@ -32,7 +32,7 @@
 ### Pattern Consistency
 - Naming convention adherence
 - Code organization matching existing patterns
-- Duplication that should be extracted
+- A helper extracted for one use
 - Anti-pattern detection
 
 ### Data Integrity
@@ -60,7 +60,7 @@
 - Type annotations on public functions
 - Pythonic patterns (comprehensions, context managers)
 - Specific exception handling
-- Pydantic for data validation
+- Validation of untrusted input with the project's existing tools
 
 ### SQL/Data
 - Query correctness and parameterization

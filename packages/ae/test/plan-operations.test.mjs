@@ -9,6 +9,7 @@ import YAML from 'yaml';
 import { initGit, writeVersionedPlan, writeChecks } from './helpers/cli-fixtures.mjs';
 import { approveProject } from '../lib/trust.mjs';
 import { planDigest } from '../lib/evidence.mjs';
+import { reviewHash } from '../lib/review-preparation.mjs';
 import { resolvePlanUpdateFile, convertFullPlan } from '../lib/plan-update.mjs';
 import { readPlanConversionGuard, planConversionPublished, planConversionPending, conversionPointerRel, projectStoreDir } from '../lib/project-layout.mjs';
 import { loadPlan, reloadPlan } from '../lib/plan-parse.mjs';
@@ -139,7 +140,7 @@ test('managed mutator and legacy in-repo reader share native physical plan ident
 });
 
 function legacyConversionGuardFixture(t) {
-  const f = fixture(t), native = fs.realpathSync.native, old = native(f.full), home = path.join(native(f.ws), '.harness/home');
+  const f = fixture(t), native = fs.realpathSync.native, old = native(f.full), home = native(f.home);
   const root = projectStoreDir(f.ws, { home });
   const dir = path.join(root, '.harness/operations/plans/conversions');
   fs.mkdirSync(dir, { recursive: true });
@@ -387,8 +388,10 @@ test('structured creation refuses absent criteria and fields it cannot preserve'
   }
 });
 function fixture(t, { checkCommand } = {}) {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-plan-op-'));
-  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-plan-op-'));
+  const ws = path.join(root, 'workspace'), home = path.join(root, 'ae'), copilotHome = path.join(root, 'copilot');
+  for (const directory of [ws, home, copilotHome]) fs.mkdirSync(directory);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(ws, '.gitignore'), '.harness/\ndocs/specs/\n');
   const plan = writeVersionedPlan(ws, { taskChecked: false });
   const full = path.join(ws, plan);
@@ -400,7 +403,7 @@ function fixture(t, { checkCommand } = {}) {
   if (checkCommand) writeChecks(ws, { 'unit-tests': { command: checkCommand } });
   initGit(ws);
   assert.equal(spawnSync('git', ['checkout', '-b', 'feature/proof'], { cwd: ws }).status, 0);
-  const cli = (...args) => spawnSync(process.execPath, [bin, ...args, '--workspace', ws, '--harness-home', path.join(ws, '.harness/home'), '--copilot-home', path.join(ws, '.harness/copilot'), '--json'], { cwd: ws, env: { ...process.env, HARNESS_NO_EVENTS: '1', HARNESS_ENFORCEMENT: 'enforce' }, encoding: 'utf8', timeout: 15000 });
+  const cli = (...args) => spawnSync(process.execPath, [bin, ...args, '--workspace', ws, '--harness-home', home, '--copilot-home', copilotHome, '--json'], { cwd: ws, env: { ...process.env, HARNESS_NO_EVENTS: '1', HARNESS_ENFORCEMENT: 'enforce' }, encoding: 'utf8', timeout: 15000 });
   const text = () => fs.readFileSync(full, 'utf8');
   const op = input => {
     const file = path.join(ws, '.harness/operation.json');
@@ -410,7 +413,7 @@ function fixture(t, { checkCommand } = {}) {
     return { ...r, value: r.stdout.trim() ? JSON.parse(r.stdout) : null };
   };
   const decision = (action, fields = {}) => ({ version: 1, id: `${action}-decision`, action, expect: hash(text()), ...fields });
-  return { ws, full, plan, source, text, cli, op, decision };
+  return { ws, home, copilotHome, full, plan, source, text, cli, op, decision };
 }
 
 test('start owns readiness, state and gate, with replay and interrupted gate recovery', t => {
@@ -445,6 +448,19 @@ test('stale decisions and reused operation identity cannot overwrite accepted wo
   assert.equal(f.op(stale).status, 2);
   assert.equal(f.op({ ...first, finding: { id: 'observed-1', text: 'Changed payload.' } }).status, 2);
   assert.equal(f.text(), accepted);
+});
+
+for (const content of ['{"version":1,', 'null', 'false', '0']) test(`a corrupt structured operation journal cannot be overwritten (${content})`, t => {
+  const f = fixture(t), before = f.text();
+  const input = f.decision('finding', { finding: { id: 'observed-1', text: 'Inspect the boundary.' } });
+  const journal = path.join(f.ws, '.harness/operations/plans', `${reviewHash({ plan: f.plan, operation: input.id })}.json`);
+  fs.mkdirSync(path.dirname(journal), { recursive: true });
+  fs.writeFileSync(journal, content);
+  const result = f.op(input);
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stderr, /operation identity.*corrupt journal/i);
+  assert.equal(f.text(), before);
+  assert.equal(fs.readFileSync(journal, 'utf8'), content);
 });
 
 test('blocked start returns prerequisites without publishing a transition or passing gate', t => {
@@ -670,7 +686,7 @@ test('structured creation accepts authored reasoning and phases without an agent
 
 test('structured completion preserves the proof chain and refuses unfinished later phases', t => {
   const f = fixture(t, { checkCommand: [process.execPath, '-e', "import('./src/example.js').then(m => { if (m.value !== 2) process.exit(1); })"] });
-  approveProject({ workspace: f.ws, home: path.join(f.ws, '.harness/home'), copilotHome: path.join(f.ws, '.harness/copilot') });
+  approveProject({ workspace: f.ws, home: f.home, copilotHome: f.copilotHome });
   const planned = f.op(f.decision('amend', { rationale: 'Accept phased proof.', changes: { phases: [{ title: 'Implementation', tasks: ['Fix the value.'] }, { title: 'Compatibility', tasks: ['Check the public API.'] }] } }));
   assert.equal(planned.status, 0, planned.stderr);
   assert.equal(f.op(f.decision('start')).status, 0);
@@ -703,7 +719,7 @@ test('concurrent stale decisions serialize to one accepted effect', async t => {
     const file = path.join(f.ws, `.harness/${id}.json`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ version: 1, id, action: 'finding', expect: initial, finding: { id, text: `Accepted ${id}.` } }));
-    const child = spawn(process.execPath, [bin, 'plan-update', '--workspace', f.ws, '--plan', f.plan, '--file', file, '--harness-home', path.join(f.ws, '.harness/home'), '--copilot-home', path.join(f.ws, '.harness/copilot'), '--json'], { env: { ...process.env, HARNESS_NO_EVENTS: '1' }, cwd: f.ws });
+    const child = spawn(process.execPath, [bin, 'plan-update', '--workspace', f.ws, '--plan', f.plan, '--file', file, '--harness-home', f.home, '--copilot-home', f.copilotHome, '--json'], { env: { ...process.env, HARNESS_NO_EVENTS: '1' }, cwd: f.ws });
     let output = '';
     child.stdout.on('data', data => { output += data; });
     child.stderr.on('data', data => { output += data; });
@@ -819,7 +835,7 @@ test('inapplicable worklist steps require an accepted reason and never complete 
 });
 
 test('verify gate validates bound procedure in the explicitly selected Copilot home', t => {
-  const f = fixture(t), copilotHome = path.join(f.ws, '.harness/copilot');
+  const f = fixture(t), copilotHome = f.copilotHome;
   const procedure = path.join(copilotHome, 'skills/references/playbooks/feature.md');
   fs.mkdirSync(path.dirname(procedure), { recursive: true });
   fs.writeFileSync(procedure, '# Feature\n\n1. Read the fixture.\n2. Verify its result.\n');
@@ -827,7 +843,7 @@ test('verify gate validates bound procedure in the explicitly selected Copilot h
   assert.equal(selected.status, 0, selected.stderr + selected.stdout);
   assert.equal(f.op(f.decision('start')).status, 0);
   assert.equal(f.op(f.decision('progress', { progress: { tasks: ['T1'], criteria: ['AC1'] } })).status, 0);
-  approveProject({ workspace: f.ws, copilotHome, home: path.join(f.ws, '.harness/home') });
+  approveProject({ workspace: f.ws, copilotHome, home: f.home });
   const proof = f.cli('verify', '--plan', f.plan, '--base', 'HEAD');
   assert.equal(proof.status, 0, proof.stderr + proof.stdout);
   const gate = JSON.parse(f.cli('gate', '--phase', 'verify', '--plan', f.plan).stdout);

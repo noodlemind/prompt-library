@@ -5,20 +5,24 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { selectProjectAuthority } from './lib/project-authority.mjs';
+import { readPolicySource } from './lib/policy-snapshot.mjs';
 import { readProductDiff } from './lib/product-diff.mjs';
 import { callProofAuthority } from './lib/proof-authority.mjs';
-import { resolveAcceptedPlan } from './lib/external-plans.mjs';
+import { resolveAcceptedPlan, projectStoreDir, harnessHome } from './lib/external-plans.mjs';
 import { writeHookEvent } from './lib/events.mjs';
 import { syncSessionIdentity } from './lib/session-state.mjs';
+import { skillActivationSourceCurrent } from './lib/skill-activation.mjs';
 import { preToolDenyOutput } from './lib/hook-output.mjs';
 import { loadHookPolicy, projectTrustIsCurrent } from './lib/policy.mjs';
 import { harnessControlCommand, isPersonalWritePath, isPrimitivePath, normalizeToolPayload, planUsesCreatePrimitive, unwrapShellSegments } from './lib/tool-payload.mjs';
+import { parseImpactedText } from './lib/impacted-files.mjs';
 
 const startedAt = Date.now();
 let payload = {};
 let normalized = null;
 let policy = { enforcement: 'enforce', ttl: 30 };
-const RECOVER_MISSING_GATE = 'Read ~/.copilot/skills/ensure-plan/SKILL.md; create or amend only the canonical plan, then submit a standalone ae plan-update --file start decision. Harness binds state and the implement gate. Wait for explicit success before retrying the product mutation in a later tool call';
+const RECOVER_MISSING_GATE = 'Read <copilot-home>/skills/ensure-plan/SKILL.md with the host read tool. A not-truncated read of that SKILL.md is activation. Create or amend only the canonical plan, then submit a standalone ae plan-update --file start decision. Harness binds state and the implement gate. Wait for explicit success before retrying the product mutation in a later tool call';
 const NEW_PLAN_PATH = /^(?:docs|\.harness)\/plans\/\d{4}-\d{2}-\d{2}-(?:feat|fix|docs|refactor|chore)-[a-z0-9]+(?:-[a-z0-9]+)*-plan\.md$/;
 
 function output(value) {
@@ -90,11 +94,7 @@ function readPlanRecord(text) {
 
 function impactedFiles(text) {
   const section = text.match(/## Impacted Files\s*\n([\s\S]*?)(?=\n## |$)/i)?.[1] || '';
-  return section
-    .split(/\r?\n/)
-    .map((line) => line.match(/^\s*-\s+`?([^`#]+?)`?\s*(?:#.*)?$/)?.[1]?.trim())
-    .filter(Boolean)
-    .map((entry) => entry.replace(/^\.\//, '').replace(/\\/g, '/'));
+  return parseImpactedText(section);
 }
 
 function inScope(file, entries) {
@@ -221,7 +221,7 @@ process.stdout.write(JSON.stringify(decideNext(input)));`],
 
 function sessionActivatedSkill(session, skill, sessionId, ttlMinutes) {
   const activation = session?.activatedSkills?.[skill];
-  if (!activation?.activatedAt || activation.complete === false) return false;
+  if (!activation?.activatedAt || activation.complete !== true || !skillActivationSourceCurrent(activation, skill)) return false;
   if (sessionId) return activation.sessionId === sessionId;
   // Hosts may omit session_id; accept only a fresh activation so a stale
   // record from an earlier chat cannot satisfy the governance gate.
@@ -279,9 +279,12 @@ function requiredChecks(planText) {
 }
 
 function configuredChecksDigest(workspace) {
-  const configPath = path.join(workspace, '.github', 'harness', 'checks.yaml');
-  if (!fs.existsSync(configPath)) return null;
-  return crypto.createHash('sha256').update(fs.readFileSync(configPath)).digest('hex');
+  try {
+    const home = harnessHome();
+    const authority = selectProjectAuthority(workspace, projectStoreDir(workspace, { home }), { home });
+    const bytes = readPolicySource(authority.files['checks.yaml']);
+    return bytes === null ? null : crypto.createHash('sha256').update(bytes).digest('hex');
+  } catch { return null; }
 }
 
 function normalizeArg(value) {
@@ -363,7 +366,7 @@ if (!normalized.mutation) {
 }
 const opaque = normalized.terminalEffects.hasOpaque;
 if (!normalized.targetResolved && !opaque) {
-  deny('unresolved-mutation-target', 'Mutation target could not be resolved for scope validation; next: retry the edit with an explicit file path, or read ~/.copilot/skills/ensure-plan/SKILL.md', 'unresolved');
+  deny('unresolved-mutation-target', 'Mutation target could not be resolved for scope validation; next: retry the edit with an explicit file path, or read <copilot-home>/skills/ensure-plan/SKILL.md with the host read tool', 'unresolved');
 }
 
 const relatives = normalized.targets.map((target) => {
@@ -380,7 +383,7 @@ for (const relative of relatives) {
   if (!NEW_PLAN_PATH.test(relative)) {
     deny(
       'invalid-plan-path',
-      'New plans must use docs/plans/ or .harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md with type feat|fix|docs|refactor|chore; read ~/.copilot/skills/ensure-plan/SKILL.md and do not create an undated shortcut',
+      'New plans must use docs/plans/ or .harness/plans/YYYY-MM-DD-<type>-<slug>-plan.md with type feat|fix|docs|refactor|chore; read <copilot-home>/skills/ensure-plan/SKILL.md with the host read tool and do not create an undated shortcut',
       'invalid'
     );
   }
@@ -510,14 +513,14 @@ if (governed.some(isPrimitivePath)) {
   if (!planUsesCreatePrimitive(planText)) {
     deny(
       'missing-create-primitive',
-      'Read ~/.copilot/skills/create-primitive/SKILL.md and follow it before planning or editing primitive paths; then record create-primitive in plan skills_used',
+      'Read <copilot-home>/skills/create-primitive/SKILL.md with the host read tool and follow it before planning or editing primitive paths; then record create-primitive in plan skills_used',
       'passed'
     );
   }
   if (!sessionActivatedSkill(session, 'create-primitive', normalized.sessionId, policy.ttl)) {
     deny(
       'missing-create-primitive-activation',
-      'Read ~/.copilot/skills/create-primitive/SKILL.md now and follow it; naming create-primitive in skills_used is not activation, so retry this mutation only after the successful skill read is recorded for this chat session',
+      'Read the complete current <copilot-home>/skills/create-primitive/SKILL.md with the host read tool and follow it. Partial, clipped, look-alike or changed source reads cannot establish activation. Naming create-primitive in skills_used is not activation, so retry this mutation only after that skill read is recorded for this chat session',
       'passed'
     );
   }

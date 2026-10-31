@@ -17,6 +17,7 @@ import { loadPolicy } from './policy.mjs';
 import { intentSourceBindings, intentSourcesCheck } from './intent-sources.mjs';
 import { gapEvidenceCheck } from './plan-readiness.mjs';
 import { loadNamedChecks } from './checks.mjs';
+import { cachedGitObservation } from './git-observation-cache.mjs';
 import { validatePlaybookBinding } from './playbook-binding.mjs';
 import { validateCheckArtifacts } from './check-artifacts.mjs';
 import { experimentProof } from './experiment-authority.mjs';
@@ -98,6 +99,10 @@ function validBinding(binding) {
 }
 
 function gitHead(workspace) {
+  return cachedGitObservation(['head', path.resolve(workspace)], () => readGitHead(workspace));
+}
+
+function readGitHead(workspace) {
   const head = spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000, env: gitMetadataEnvironment() });
   if (head.error || head.status !== 0) return null;
   return String(head.stdout || '').trim();
@@ -137,7 +142,9 @@ function workspaceDigest(workspace, files, planPath) {
       hash.update(`symlink\0${fs.readlinkSync(full)}\0`);
     } else if (stat.isFile()) {
       const content = fs.readFileSync(full);
-      hash.update('file\0');
+      // Bind Git's executable identity as well as bytes. The new tag also makes
+      // older byte-only proof stale instead of silently retaining its authority.
+      hash.update(`file\0${stat.mode & 0o111 ? '100755' : '100644'}\0`);
       hash.update(rel === planPath ? planContractText(content.toString('utf8')) : content);
       hash.update('\0');
     } else {
@@ -155,7 +162,7 @@ export function createWorkspaceContentBinding({ workspace, changedFiles = [], pl
 export function proofPolicyDigest(workspace, copilotHome = resolveCopilotHome(), home) {
   const policy = loadPolicy(workspace, null, { copilotHome, home });
   const trust = trustStatus({ workspace, copilotHome, home });
-  return digest(JSON.stringify({ source: policyDigest(workspace), trust: trust.state, approval: trust.approvedDigest, enforcement: policy.enforcement, rules: policy.rules, checks: policy.checkSeverities, ttl: policy.evidenceTtlHours }));
+  return digest(JSON.stringify({ source: policyDigest(workspace, undefined, { home }), trust: trust.state, approval: trust.approvedDigest, enforcement: policy.enforcement, rules: policy.rules, checks: policy.checkSeverities, ttl: policy.evidenceTtlHours }));
 }
 
 export function createEvidenceBinding({ workspace, plan, base = null, changedFiles = [], copilotHome }) {
@@ -195,7 +202,7 @@ export function validateEvidence({ workspace, plan, evidence, maxAgeHours = 24, 
   const required = plan.fm.verification?.required;
   if (!Array.isArray(evidence.checks) || !Array.isArray(required) || !required.length || required.some(id => !evidence.checks.some(check => check.id === id && check.status === 'passed' && ['behavior', 'type-check'].includes(check.proof))) || !evidence.checks.some(check => required.includes(check.id) && check.status === 'passed' && check.proof === 'behavior') || !evidence.checks.some(check => check.id === 'criteria-evidence' && check.status === 'passed')) return { pass: false, message: 'Verification record lacks executed proof for the current acceptance criteria' };
   if (evidence.binding.policyDigest !== proofPolicyDigest(workspace, copilotHome, planTrustHome(workspace, plan))) return { pass: false, message: 'Policy or trust changed after verification; refresh trust and reverify' };
-  const configured = loadNamedChecks(workspace);
+  const configured = loadNamedChecks(workspace, { home: planTrustHome(workspace, plan) });
   if (configured.error) return { pass: false, message: configured.error };
   for (const id of required) {
     if (!configured.checks[id]) return { pass: false, message: 'Required named check is missing' };

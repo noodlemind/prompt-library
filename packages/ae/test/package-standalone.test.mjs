@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const NPM_TIMEOUT_MS = 180_000;
 
 function tailText(value, limit) {
   const bytes = Buffer.from(value || '');
@@ -37,7 +38,7 @@ function npmRunner(npm, env) {
   const run = (cwd, args) => {
     const started = Date.now();
     const result = spawnSync(process.execPath, [npm, ...args], {
-      cwd, env, encoding: 'utf8', timeout: 180_000, maxBuffer: 8 * 1024 * 1024,
+      cwd, env, encoding: 'utf8', timeout: NPM_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     });
     return { ...result, elapsedMs: Date.now() - started };
   };
@@ -47,7 +48,7 @@ function npmRunner(npm, env) {
       let npmVersion = 'unknown';
       try { npmVersion = JSON.parse(fs.readFileSync(path.resolve(path.dirname(npm), '../package.json'), 'utf8')).version; } catch {}
       const receipt = { schema: 1, argv: [process.execPath, npm, ...args], cwd, nodeVersion: process.version, npmVersion,
-        timeoutMs: 180_000, elapsedMs: result.elapsedMs, exitCode: result.status, signal: result.signal,
+        timeoutMs: NPM_TIMEOUT_MS, elapsedMs: result.elapsedMs, exitCode: result.status, signal: result.signal,
         error: result.error ? { code: result.error.code, message: result.error.message } : null,
         stdout: tailText(result.stdout, 8192), stderr: tailText(result.stderr, 8192), npmDebugLog: npmDebugLog(env.npm_config_cache) };
       let evidencePath;
@@ -85,7 +86,7 @@ test('standalone command failures retain bounded private diagnostics after fixtu
   const receipt = JSON.parse(fs.readFileSync(path.join(artifacts, fs.readdirSync(artifacts)[0], 'npm-failure.json'), 'utf8'));
   assert.equal(receipt.exitCode, 42);
   assert.ok(receipt.elapsedMs >= 0);
-  assert.equal(receipt.timeoutMs, 180_000);
+  assert.equal(receipt.timeoutMs, NPM_TIMEOUT_MS);
   assert.ok(Buffer.byteLength(receipt.npmDebugLog.tail) <= 16_384);
   assert.match(receipt.npmDebugLog.tail, /private npm failure marker/);
 });

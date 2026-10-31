@@ -10,10 +10,11 @@ import {
   entryMatchesCollection,
   resolveIndexDir,
 } from './recall-config.mjs';
-import { loadPostingsIndex, isIndexStale } from './postings-index.mjs';
+import { loadPostingsIndex, postingsMatchManifest } from './postings-index.mjs';
 import { safeResolveUnderRoot } from './path-safe.mjs';
-import { readFileNoFollow, DEFAULT_MAX_BYTES } from './fs-safe.mjs';
+import { assertNoSymlinkAncestors, readFileNoFollow, DEFAULT_MAX_BYTES } from './fs-safe.mjs';
 import { planReadDirs, projectStoreDir } from './project-layout.mjs';
+import { selectProjectManifest } from './knowledge-manifest.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -72,28 +73,28 @@ function weightedOverlapScore(queryTokens, entry) {
   return overlap * 0.85 + recencyBoost(entry) * 0.15;
 }
 
-export function loadManifest(copilotHome, workspace) {
+export function loadManifest(copilotHome, workspace, { home } = {}) {
   const paths = [
-    path.join(copilotHome, 'knowledge', 'manifest.yaml'),
-    path.join(workspace, 'knowledge', 'manifest.yaml'),
+    { root: copilotHome, file: path.join(copilotHome, 'knowledge', 'manifest.yaml'), workspaceBound: false },
+    { root: workspace, file: path.join(workspace, 'knowledge', 'manifest.yaml'), workspaceBound: true },
   ];
-  let lastError = null;
-  for (const p of paths) {
-    if (!fs.existsSync(p)) continue;
+  for (const { root, file, workspaceBound } of paths) {
     try {
-            const size = fs.statSync(p).size;
-      if (size > DEFAULT_MAX_BYTES) {
-        lastError = `manifest exceeds ${DEFAULT_MAX_BYTES}-byte read cap (${size}) — skipped`;
-        continue;
-      }
+      const readRoot = fs.lstatSync(root, { throwIfNoEntry: false }) ? fs.realpathSync.native(root) : path.resolve(root);
+      const contained = assertNoSymlinkAncestors(readRoot, path.relative(root, file));
+      if (!contained) throw new Error('knowledge manifest is unsafe or symlinked');
+      if (!fs.lstatSync(contained, { throwIfNoEntry: false })) continue;
+      const content = readFileNoFollow(contained, { root: readRoot, maxBytes: DEFAULT_MAX_BYTES });
+      if (content === null) throw new Error(`knowledge manifest is unsafe, unreadable or exceeds the ${DEFAULT_MAX_BYTES}-byte read cap`);
       const yaml = require('yaml');
-      const doc = yaml.parse(fs.readFileSync(p, 'utf8'));
-      return { entries: doc.entries || [], path: p, updated: doc.updated || null, error: null };
+      const doc = yaml.parse(content);
+      if (!doc || typeof doc !== 'object' || Array.isArray(doc) || doc.entries != null && !Array.isArray(doc.entries)) throw new Error('knowledge manifest entries must be an array');
+      return selectProjectManifest({ workspace, copilotHome, home, shared: { entries: doc.entries || [], path: file, updated: doc.updated || null, repository: doc.repository || null, workspaceBound, error: null } });
     } catch (err) {
-      lastError = err.message || String(err);
+      return { entries: [], path: file, updated: null, error: err.message || String(err) };
     }
   }
-  return { entries: [], path: null, updated: null, error: lastError };
+  return selectProjectManifest({ workspace, copilotHome, home, shared: { entries: [], path: null, updated: null, error: null } });
 }
 
 function rankWithBm25(queryTokens, index, entriesById, minScore) {
@@ -134,8 +135,8 @@ function rankWithOverlap(queryTokens, entries, minScore) {
     .sort((a, b) => b.score - a.score);
 }
 
-export function rankRecall(query, { copilotHome, workspace, limit = 3, collection = null, minScore = 0.15, home } = {}) {
-  const { entries, updated, path: manifestPath, error } = loadManifest(copilotHome, workspace);
+export function rankRecall(query, { copilotHome, workspace, limit = 3, collection = null, minScore = 0.15, home, manifest } = {}) {
+  const { entries, updated, sha256, path: manifestPath, error } = manifest || loadManifest(copilotHome, workspace, { home });
   if (error && manifestPath) {
     throw new Error(
       `manifest parse failed (${manifestPath}): ${error} — run npm install in packages/ae or ae index`
@@ -152,7 +153,7 @@ export function rankRecall(query, { copilotHome, workspace, limit = 3, collectio
 
   const indexDir = resolveIndexDir(copilotHome, workspace, home);
   const index = loadPostingsIndex(indexDir);
-  const useBm25 = index && !isIndexStale(indexDir, updated) && index.N > 0;
+  const useBm25 = postingsMatchManifest(index, updated, sha256) && index.N > 0;
 
   let scored;
   if (useBm25) {
@@ -230,7 +231,8 @@ export function resolveDocPath(copilotHome, workspace, entry, { home } = {}) {
   return null;
 }
 
-export function findEntryByDocid(copilotHome, workspace, docid) {
-  const { entries } = loadManifest(copilotHome, workspace);
+export function findEntryByDocid(copilotHome, workspace, docid, { home } = {}) {
+  const { entries, error } = loadManifest(copilotHome, workspace, { home });
+  if (error) throw new Error(error);
   return entries.find((e) => e.id === docid || e.docid === docid) || null;
 }

@@ -15,7 +15,7 @@ import { configuredCheckSnapshot, validatePlanReadiness } from './plan-readiness
 import { readPlanRecord } from './plan-record.mjs';
 import { validatePlanSchema } from './plan-schema.mjs';
 import { intentSourcesCheck } from './intent-sources.mjs';
-import { inspectIsolation, worktreeGateMessage } from './worktree.mjs';
+import { inspectIsolation, isolatedWorktreeDestination, planSlugFromPath, worktreeGateMessage } from './worktree.mjs';
 import { recoveryDiagnostics } from './diagnostics.mjs';
 
 export function runGate({ workspace, flags, query = '', planOverride = null, domainContext = null }) {
@@ -238,6 +238,16 @@ export function runGate({ workspace, flags, query = '', planOverride = null, dom
     exitCode = Math.max(exitCode, 2);
   }
 
+  const slug = planSlugFromPath(plan?.path);
+  const quote = (value) => {
+    const text = String(value);
+    return /^[A-Za-z0-9_./:+@=-]+$/.test(text) ? text : `"${text.replaceAll('"', '')}"`;
+  };
+  const stdinDecision = (checkout, action) => [
+    `ae plan-update --workspace ${quote(path.resolve(checkout))} --plan ${quote(plan?.path || '<path>')} --file - --json`,
+    `{"version":1,"id":"${action}-decision","action":"${action}","expect":"<observed revision>"}`,
+  ].join('\n');
+  const worktreeBlocked = checks.some((check) => check.id === 'C-worktree' && !check.pass);
   const result = {
     pass,
     phase,
@@ -256,21 +266,24 @@ export function runGate({ workspace, flags, query = '', planOverride = null, dom
       ? phase === 'verify'
         ? ['ae compound', '/auto-compound']
         : plan?.status === 'planned'
-          ? [
-              `ae plan-update --plan ${plan.path} --file <start-decision.json>`,
-            ]
-          : ['editFiles (scoped)', `ae verify --plan ${plan?.path || '<path>'}`]
+          ? [stdinDecision(workspace, 'start')]
+          : ['editFiles (scoped)', `ae verify --workspace ${quote(path.resolve(workspace))} --plan ${quote(plan?.path || '<path>')}`]
       : plan?.status === 'blocked-capability'
-        ? ['read ensure-capability/SKILL.md']
+        ? ['Read <copilot-home>/skills/ensure-capability/SKILL.md with the host read tool']
         : // Lock the plan before primitive governance: an unlocked plan must
           // recover through /ensure-plan even if primitive checks also fail.
           plan && plan.plan_lock && primitiveGovernanceFailed
           ? [
-              'read ~/.copilot/skills/create-primitive/SKILL.md and follow it',
+              'Read <copilot-home>/skills/create-primitive/SKILL.md with the host read tool. A not-truncated read of that SKILL.md is activation',
               `update ${plan?.path || '<plan>'} with the create-primitive decision and evidence contract`,
               `ae gate --phase implement --plan ${plan?.path || '<plan>'}`,
             ]
-          : ['ae orient', '/ensure-plan'],
+          : worktreeBlocked
+            ? [
+                `ae worktree --slug ${slug} --workspace ${quote(path.resolve(workspace))}`,
+                stdinDecision(isolatedWorktreeDestination(workspace, slug), 'start'),
+              ]
+            : ['ae orient', '/ensure-plan'],
   };
 
   result.diagnostics = recoveryDiagnostics({ source: 'gate', checks, workspace, copilotHome: resolveCopilotHome(flags.copilotHome), home: domainContext?.home || flags.harnessHome || flags.home || harnessGlobalHome(), plan: plan?.path || null, domain: domainContext?.name });
@@ -285,7 +298,7 @@ export function publishGateSession({ workspace, plan = null, result, policy, dry
   }
   const previous = readSession(recordRoot) || {};
   const passed = result.pass && result.exitCode === 0;
-  const snapshot = passed ? configuredCheckSnapshot(workspace) : null;
+  const snapshot = passed ? configuredCheckSnapshot(workspace, { home: planTrustHome(workspace, plan) }) : null;
   if (passed && snapshot.error) throw new Error(snapshot.error);
   const written = writeSession(recordRoot, {
     ...previous,

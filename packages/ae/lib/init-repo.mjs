@@ -9,10 +9,14 @@ import { fileURLToPath } from 'node:url';
 import { plansWriteTarget, projectStoreDir } from './project-layout.mjs';
 import { harnessGlobalHome } from './paths.mjs';
 import { runMigrateLayout } from './migrate-layout.mjs';
+import { loadConfiguredChecks } from './plan-readiness.mjs';
+import { validateCommand } from './checks.mjs';
+import { resolveProjectAuthority, promoteProjectAuthority, PROJECT_AUTHORITY_FILES, assertExternalStateHome } from './project-authority.mjs';
+import { readFileNoFollow, writeFileContained } from './fs-safe.mjs';
 
 const AGENT_CONTEXT_STUB = `# Agent Context
 
-Repository-specific conventions for AI agents. Keep thin — cross-repo learnings belong in global \`knowledge/solutions/\` after compound.
+Repository-specific conventions for AI agents. Keep this file thin. Cross-repo learnings compound into \`~/.copilot/knowledge/solutions/\`.
 
 ## Conventions
 
@@ -20,7 +24,7 @@ _Add project-specific notes here._
 
 ## Related
 
-- Plans: \`.harness/plans/\` (or committed \`docs/plans/\` when git tracks files there)
+- Plans and private context: the project store returned by \`ae init-repo --json\`
 - Run \`ae doctor\` after global ae install.
 `;
 
@@ -33,7 +37,7 @@ checks: {}
 `;
 
 const POLICY_STUB = `version: 1
-enforcement: observe
+enforcement: enforce
 gate_ttl_minutes: 30
 evidence_ttl_hours: 24
 exemptions: []
@@ -41,7 +45,11 @@ waivers: []
 `;
 
 export function runInitRepo({ workspace, flags, log, copilotHome }) {
+  const stateHome = flags.home || harnessGlobalHome();
+  assertExternalStateHome(workspace, stateHome);
+  assertExternalStateHome(workspace, stateHome, projectStoreDir(workspace, { home: stateHome }));
   const stats = { created: [] };
+  if (flags.shared) stats.promotion = promoteProjectAuthority(workspace, { home: flags.home || harnessGlobalHome(), dryRun: Boolean(flags.dryRun) });
   const migrated = runMigrateLayout({
     workspace,
     dryRun: flags.dryRun,
@@ -60,10 +68,23 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
   const plansRel = plansDir;
   const agentCtx = path.join(projectStoreDir(workspace, { home: flags?.home || harnessGlobalHome() }), 'agent-context.md');
   const agentRel = agentCtx;
-  const harnessConfigDir = path.join(workspace, '.github', 'harness');
+  let authority = resolveProjectAuthority(workspace, { home: flags.home, mode: flags.shared && !flags.dryRun ? 'shared' : undefined });
+  if (flags.shared && flags.dryRun) {
+    const directory = path.join(workspace, '.github', 'harness');
+    authority = { ...authority, mode: 'shared', root: workspace, directory, files: Object.fromEntries(Object.keys(authority.files).map(name => [name, path.join(directory, name)])) };
+  }
+  const harnessConfigDir = authority.directory;
+  for (const file of Object.values(authority.files)) {
+    if (fs.lstatSync(file, { throwIfNoEntry: false }) && readFileNoFollow(file, { root: authority.root, maxBytes: 1024 * 1024 }) === null) {
+      throw Object.assign(new Error(`Unsafe or unreadable project configuration: ${file}`), { code: 'E_PROJECT_AUTHORITY', exit: 1 });
+    }
+  }
+  const inventory = PROJECT_AUTHORITY_FILES.filter(name => name !== 'config.yaml' || fs.lstatSync(authority.files[name], { throwIfNoEntry: false }) || stats.promotion?.files.includes(name));
+  stats.authority = { mode: authority.mode, directory: authority.directory, commit: authority.mode === 'shared', files: inventory.map(name => authority.mode === 'shared' ? `.github/harness/${name}` : authority.files[name]) };
+  log(`${authority.mode} configuration: ${authority.directory}; ${authority.mode === 'shared' ? 'review and commit these project files before locking product work' : 'private to this AE home; no product configuration needs committing'}`);
 
   if (!flags.dryRun) {
-    ensureHarnessDir(workspace, false);
+    if (!ensureHarnessDir(workspace, false)) throw Object.assign(new Error('Unsafe or unavailable local runtime state or Git exclude metadata'), { code: 'E_INIT_REPO', exit: 1 });
     fs.mkdirSync(plansDir, { recursive: true });
   } else {
     ensureHarnessDir(workspace, true);
@@ -86,8 +107,8 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
     log(`skip ${agentRel} (exists)`);
   }
 
-  stats.created.push('.harness/.gitignore');
-  log('ensured .harness/ (session + context-pack + local plans)');
+  stats.ignoreMetadata = 'Git-local excludes for .harness/; non-Git workspaces use .harness/.gitignore';
+  log('ensured private .harness/ runtime state');
 
   const runner = writeHarnessRunner(workspace, flags.dryRun);
   if (runner.created) {
@@ -107,11 +128,10 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
     const configPath = path.join(harnessConfigDir, name);
     if (!fs.existsSync(configPath)) {
       if (!flags.dryRun) {
-        fs.mkdirSync(harnessConfigDir, { recursive: true });
-        fs.writeFileSync(configPath, content, 'utf8');
+        if (!writeFileContained(authority.root, path.relative(authority.root, configPath), content, { exclusive: true })) throw Object.assign(new Error(`Could not create project configuration: ${configPath}`), { code: 'E_INIT_REPO', exit: 1 });
       }
-      stats.created.push(`.github/harness/${name}`);
-      log(`created .github/harness/${name}`);
+      stats.created.push(authority.mode === 'shared' ? `.github/harness/${name}` : configPath);
+      log(`created ${configPath}`);
     }
   }
 
@@ -120,20 +140,19 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
     const seed = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config', 'routing.seed.yaml');
     if (fs.existsSync(seed)) {
       if (!flags.dryRun) {
-        fs.mkdirSync(harnessConfigDir, { recursive: true });
-        fs.copyFileSync(seed, routingPath);
+        if (!writeFileContained(authority.root, path.relative(authority.root, routingPath), fs.readFileSync(seed), { exclusive: true })) throw Object.assign(new Error(`Could not create project routing: ${routingPath}`), { code: 'E_INIT_REPO', exit: 1 });
       }
-      stats.created.push('.github/harness/routing.yaml');
-      log('created .github/harness/routing.yaml');
+      stats.created.push(authority.mode === 'shared' ? '.github/harness/routing.yaml' : routingPath);
+      log(`created ${routingPath}`);
     }
   }
 
   // Committed cold-start orientation — advisory: never fail init on it.
   try {
-    const map = writeCodebaseMap({ workspace, dryRun: flags.dryRun });
+    const map = writeCodebaseMap({ workspace, dryRun: flags.dryRun, local: true });
     if (map) {
       stats.created.push(map.path);
-      log(`wrote ${map.path} (committed orientation map, ~${map.tokens} tokens)`);
+      log(`wrote ${map.path} (private orientation map, ~${map.tokens} tokens)`);
     }
   } catch {
     log('skip codebase map (map generation failed)');
@@ -161,5 +180,11 @@ export function runInitRepo({ workspace, flags, log, copilotHome }) {
     log('skip knowledge store arming (failed)');
   }
 
+  const configured = loadConfiguredChecks(workspace, { home: flags.home });
+  if (!Object.entries(configured.checks || {}).some(([name, check]) => !validateCommand(name, check) && check.proof !== 'type-check')) {
+    const message = `Declare at least one real behavioral check in ${authority.files['checks.yaml']}, then have a person review the exact commands and approve project trust before delivery.`;
+    stats.prerequisites = [{ id: 'named-checks', message }];
+    log(message);
+  }
   return stats;
 }

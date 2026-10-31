@@ -1,3 +1,4 @@
+import { resolveProjectAuthority } from './project-authority.mjs';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -62,7 +63,7 @@ export function prepareExperimentAuthority(options) {
   const { binding } = claimExperimentWorkspace({ ...options, dryRun: true });
   const trustHome = planTrustHome(workspace, plan);
   const files = new Set([plan.fullPath, trustStorePath({ copilotHome, home: trustHome }),
-    ...['config.yaml', 'policy.yaml', 'checks.yaml', 'routing.yaml'].map(name => path.join(workspace, '.github/harness', name)),
+    ...Object.values(resolveProjectAuthority(workspace, { home: trustHome }).files),
     ...(acceptedInputs?.dependencies || []).map(file => path.join(workspace, file.path)),
     ...(acceptedInputs?.intent || []).map(file => path.join(workspace, file.path)),
     ...[acceptedInputs?.runtime?.path, acceptedInputs?.evaluator?.path, acceptedInputs?.isolation?.sandbox?.path].filter(Boolean),

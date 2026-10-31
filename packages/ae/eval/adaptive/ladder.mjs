@@ -35,11 +35,13 @@ const SLICE_KEYS = [
   'reviewCoverage',
   'learnings',
   'skills',
+  'procedure',
   'instructions',
   'contacts',
   'index',
   'gateStatus',
   'activePlan',
+  'layout',
 ];
 
 const CLAIM = 'save skips the audit stamp';

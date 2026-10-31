@@ -9,6 +9,7 @@ import { extract } from '../lib/repo-map/lexical-extractor.mjs';
 import { buildRepoMap, writeCodebaseMap } from '../lib/repo-map/index.mjs';
 import { indexStatus } from '../lib/index-status.mjs';
 import { resolveIndexDir } from '../lib/recall-config.mjs';
+import { manifestCorpusContent } from '../lib/knowledge-manifest.mjs';
 import {
   POSTINGS_INDEX_VERSION,
   isIndexStale,
@@ -122,7 +123,10 @@ test('index --status reports drift deterministically', () => {
   const indexDir = resolveIndexDir(home, ws, harnessHome);
   fs.mkdirSync(indexDir, { recursive: true });
   const head = git(['rev-parse', 'HEAD']).stdout.trim();
-  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: head, updated: '2026-01-01', entryCount: 1 }));
+  const manifestContent = 'updated: 2026-01-01\nentries: []\n';
+  fs.writeFileSync(path.join(home, 'knowledge', 'manifest.yaml'), manifestContent);
+  runBuildPostingsIndex({ entries: [], indexDir, manifestUpdated: '2026-01-01', manifestContent: manifestCorpusContent([]), flags: { headSha: head } });
+  const baselineMeta = JSON.parse(fs.readFileSync(path.join(indexDir, 'meta.json'), 'utf8'));
 
   const fresh = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(fresh.indexed, true);
@@ -141,17 +145,17 @@ test('index --status reports drift deterministically', () => {
   assert.match(stale.knowledge.recommendation, /ae index/);
 
   const newerHead = git(['rev-parse', 'HEAD']).stdout.trim();
-  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: newerHead, updated: '2026-01-01', entryCount: 1 }));
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ ...baselineMeta, headSha: newerHead }));
   git(['checkout', '-q', head]);
   const ancestorCheckout = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(ancestorCheckout.stale, true, 'an unequal ancestor checkout cannot reuse a descendant index');
   assert.equal(ancestorCheckout.commitsSince, 0);
 
-  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: 'f'.repeat(40), updated: '2026-01-01', entryCount: 1 }));
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ ...baselineMeta, headSha: 'f'.repeat(40) }));
   const missingBaseline = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(missingBaseline.stale, true, 'an unresolved baseline must fail stale');
 
-  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({ version: POSTINGS_INDEX_VERSION, headSha: head, updated: '2026-01-01', entryCount: 1 }));
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify(baselineMeta));
   fs.renameSync(path.join(ws, '.git'), path.join(ws, '.git-hidden'));
   const unresolvedHead = indexStatus({ workspace: ws, copilotHome: home, home: harnessHome });
   assert.equal(unresolvedHead.stale, true, 'an unreadable current HEAD cannot prove index equivalence');
@@ -174,11 +178,14 @@ test('empty knowledge rebuild writes meta so status is empty not not-built', () 
   fs.mkdirSync(path.join(home, 'knowledge', 'solutions'), { recursive: true });
   const indexDir = resolveIndexDir(home, ws, harnessHome);
   const head = git(['rev-parse', 'HEAD']).stdout.trim();
+  const manifestContent = 'updated: 2026-08-12\nentries: []\n';
+  fs.writeFileSync(path.join(home, 'knowledge', 'manifest.yaml'), manifestContent);
 
   const built = runBuildPostingsIndex({
     entries: [],
     indexDir,
     manifestUpdated: '2026-08-12',
+    manifestContent: manifestCorpusContent([]),
     flags: { headSha: head },
   });
   assert.equal(built.entryCount, 0);

@@ -5,6 +5,7 @@ import { loadPolicy } from './policy.mjs';
 import { validateReview, recordHash, readReviewRecord, publishReviewRecord } from './review.mjs';
 import { validateLearningDecision } from './learning-record.mjs';
 import { experimentProof } from './experiment-authority.mjs';
+import { withGitObservationCache } from './git-observation-cache.mjs';
 
 export function openHardGaps(plan, policy) {
   return (plan.fm.capability_gaps || []).filter(gap => {
@@ -64,12 +65,16 @@ export function completeWork({ workspace, plan, copilotHome, dryRun = false }) {
   return record;
 }
 
-export function validateCompletion({ workspace, plan, copilotHome }) {
+export function validateCompletion(options) {
+  return withGitObservationCache(() => validateCompletionRecord(options));
+}
+
+function validateCompletionRecord({ workspace, plan, copilotHome }) {
   const recordRoot = planRecordRoot(workspace, plan);
   const checked = completionPrerequisites({ workspace, plan, copilotHome });
   if (!checked.pass) return checked;
   const record = readReviewRecord(recordRoot, completionRel(plan));
-  if (!record || record.version !== 2 || record.id !== checked.id || recordHash(record.value) !== record.id) return { pass: false, message: 'No current bound completion record; record a learning decision and submit ae plan-update --file <complete-decision.json> after review and verify' };
-  if (plan.status !== 'done') return { pass: false, message: 'Completion transaction is pending; retry the same ae plan-update --file <complete-decision.json>' };
+  if (!record || record.version !== 2 || record.id !== checked.id || recordHash(record.value) !== record.id) return { pass: false, message: 'No current bound completion record; pipe a complete decision to ae plan-update --file - after review and verify' };
+  if (plan.status !== 'done') return { pass: false, message: 'Completion transaction is pending; retry the same complete decision on ae plan-update --file -' };
   return { pass: true, record: record.id, message: 'Current bound completion record validated' };
 }

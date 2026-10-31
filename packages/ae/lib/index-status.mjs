@@ -3,8 +3,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { resolveIndexDir } from './recall-config.mjs';
 import { structuralIndexDir, readStructuralIndex, structuralIndexIsCurrent } from './repo-map/structural-index.mjs';
-import { POSTINGS_INDEX_VERSION } from './postings-index.mjs';
+import { POSTINGS_INDEX_VERSION, loadPostingsIndex } from './postings-index.mjs';
 import { structuralCurrentness } from './repo-map/working-sources.mjs';
+import { loadManifest } from './recall-rank.mjs';
 
 function git(workspace, args) {
   const r = spawnSync('git', ['-C', workspace, ...args], { encoding: 'utf8', timeout: 10_000 });
@@ -76,7 +77,11 @@ export function knowledgeIndexStatus({ workspace, copilotHome, home }) {
 
   const entryCount = Number.isFinite(meta.entryCount) ? meta.entryCount : null;
   const empty = entryCount === 0;
-  const { head, commitsSince, filesChanged, stale } = driftFromHead(workspace, meta.headSha || null);
+  const { head, commitsSince, filesChanged, stale: headStale } = driftFromHead(workspace, meta.headSha || null);
+  const manifest = loadManifest(copilotHome, workspace, { home });
+  const manifestStale = !loadPostingsIndex(indexDir) || !manifest.sha256 || meta.manifestSha256 !== manifest.sha256;
+  const stale = headStale || manifestStale;
+  const freshnessReason = manifestStale ? 'knowledge manifest changed, unavailable, or not bound to this index' : headStale ? 'repository HEAD changed or unavailable' : null;
 
   if (!meta.headSha) {
     return {
@@ -103,6 +108,9 @@ export function knowledgeIndexStatus({ workspace, copilotHome, home }) {
     recommendation =
       'knowledge index built but empty (0 solutions) — `ae compound` or `ae remember`, then `ae index`';
     next = 'ae compound / ae remember';
+  } else if (manifestStale) {
+    recommendation = `${freshnessReason} — run \`ae index\``;
+    next = 'ae index';
   } else if (stale) {
     recommendation = `${commitsSince ?? '?'} commits / ${filesChanged ?? '?'} files since last knowledge index — run \`ae index\``;
     next = 'ae index';
@@ -123,6 +131,7 @@ export function knowledgeIndexStatus({ workspace, copilotHome, home }) {
     commitsSince,
     filesChanged,
     stale,
+    freshnessReason,
     recommendation,
     next,
   };

@@ -67,6 +67,7 @@ export async function cmdTrust(argv, ctx = {}) {
   } else {
     const keyWidth = keyWidthFor(['project', 'trust', 'pinned', 'store']);
     console.log(ui.line({ state: STATE_STYLE[result.state] || 'warn', key: 'trust', value: result.state, note: result.reason, keyWidth }));
+    if (result.inherited) console.log(ui.line({ key: 'inherited', value: result.inheritedFrom, keyWidth }));
     console.log(ui.line({ key: 'project', value: result.project, keyWidth }));
     console.log(ui.line({ key: 'pinned', value: result.pinned.join(', '), keyWidth }));
     console.log(ui.line({ key: 'store', value: result.store, keyWidth }));

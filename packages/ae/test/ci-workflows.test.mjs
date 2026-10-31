@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import vm from 'node:vm';
 import { test } from 'node:test';
 import YAML from 'yaml';
 
@@ -10,6 +11,26 @@ const root = new URL('../../../', import.meta.url);
 const workflow = name => YAML.parse(fs.readFileSync(new URL(`.github/workflows/${name}.yml`, root), 'utf8'));
 const suite = job => job.steps.find(step => step.name === 'Harness test suite' || step.name === 'Harness test suite (Windows)');
 const upload = job => job.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+
+test('Windows cancellation probe fails when a descendant outlives the runner', () => {
+  const command = workflow('harness-windows').jobs.windows.steps.find(step => step.id === 'cancellation').run;
+  const start = command.indexOf('const failures = [];');
+  const end = command.indexOf("'@", start);
+  assert.ok(start > 0 && end > start);
+  for (const grandchildAlive of [false, true]) {
+    let exitCode = 0;
+    const logs = [];
+    const context = {
+      res: { status: 'cancelled' }, settledMs: 2500, ABORT_AT_MS: 1500, grandchildPid: 42, grandchildAlive,
+      console: { log: message => logs.push(message), error: message => logs.push(message) },
+      process: { kill() {}, exit(code) { exitCode = code; throw new Error('probe-exit'); } },
+    };
+    try { vm.runInNewContext(command.slice(start, end), context); }
+    catch (error) { assert.equal(error.message, 'probe-exit'); }
+    assert.equal(exitCode, grandchildAlive ? 1 : 0, logs.join('\n'));
+    if (grandchildAlive) assert.match(logs.join('\n'), /EXPECTED.*grandchild/);
+  }
+});
 
 test('Windows runs once automatically per PR revision and remains manually runnable', () => {
   const windows = workflow('harness-windows');
@@ -72,7 +93,7 @@ test('Windows consolidation retains the native probes and the final fail-closed 
   assert.match(suite(windows.jobs.tests).run, /Tee-Object -FilePath windows-tests\.log/);
   assert.match(suite(windows.jobs.tests).run, /exit \$LASTEXITCODE/);
   assert.equal(suite(windows.jobs.tests)['continue-on-error'], undefined);
-  for (const name of ['CLI scenarios', 'Redaction on Windows', 'Runner descendant termination via taskkill', 'Environment fingerprint']) {
+  for (const name of ['CLI scenarios', 'Redaction on Windows', 'Runner cancellation terminates the owned process', 'Environment fingerprint']) {
     assert.ok(job.steps.some(step => step.name === name), name);
   }
   const gate = job.steps.at(-1);
@@ -129,6 +150,9 @@ test('package qualification filters its inputs, cancels stale runs and keeps bot
   assert.match(candidate.concurrency.group, /github\.ref/);
   const job = candidate.jobs.package;
   assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest']);
+  assert.deepEqual(job.strategy.matrix.node, ['20', '24']);
+  const runtime = job.steps.find(step => step.uses?.startsWith('actions/setup-node@'));
+  assert.equal(runtime.with['node-version'], '${{ matrix.node }}');
   const release = job.steps.find(step => step.name === 'Validate release contracts');
   assert.match(release.run, /npm run --prefix packages\/ae check:release/);
   assert.match(release.run, /npm run --prefix packages\/ae check:repo/);
@@ -138,4 +162,10 @@ test('package qualification filters its inputs, cancels stale runs and keeps bot
   assert.match(install.run, /--offline/);
   assert.match(install.run, /artifacts\/\$AE_ARCHIVE/);
   assert.match(install.run, /\.ae-bin\/bin\/ae\.mjs/);
+  const delivery = job.steps.find(step => step.name === 'Prove installed delivery lifecycle');
+  assert.match(delivery.run, /--test-name-pattern=.*installed package proves behavior/);
+  assert.equal(delivery.env.AE_TEST_ARCHIVE, '${{ github.workspace }}/artifacts/${{ env.AE_ARCHIVE }}');
+  assert.match(delivery.env.HARNESS_PROOF_LOG, /artifacts\/delivery-transcripts\.jsonl$/);
+  assert.equal(upload(job).if, 'always()');
+  assert.match(upload(job).with.name, /matrix\.node/);
 });

@@ -29,14 +29,14 @@ Installed to `~/.copilot/bin/ae` on every `ae install`. Add to PATH with `ae ins
 
 | Method | Command |
 |--------|---------|
-| Registry | `npm install -g ae-harness@latest` then `ae install` |
-| Local clone | `npm install -g ./packages/ae` or `node packages/ae/bin/ae.mjs install --configure-path` |
+| Checkout | `npm install -g ./packages/ae` from the repository root, then `ae install` |
+| Local clone | `node packages/ae/bin/ae.mjs install --configure-path` |
 
-**Per-repo bootstrap:** `ae init-repo` creates `.harness/run.mjs` (delegates to global harness + sets `--workspace`).
+**Per-repo bootstrap:** `ae init-repo` creates private project configuration in the external AE project store and `.harness/run.mjs` (delegates to the selected installation + sets `--workspace`). `ae init-repo --shared` explicitly publishes team configuration under `.github/harness/`. Review its returned commit inventory before locking product work. Existing shared configuration stays selected; user approval remains private.
 
-- Pin version in product repos: `devDependencies`, a globally installed package, or `.harness-version` (see harness README).
-- If `ae` is not on `PATH`, install from the registry with `npm install -g ae-harness@latest`, then `ae install --configure-path`.
-- Do not use `npx ae-harness` in agent runtime instructions; reserve `npx` for one-off bootstrap or pinned CI when a registry package is available.
+- Select a deliberately installed AE version and inspect `ae --version`. The global runner does not enforce a product dependency pin or read `.harness-version`.
+- If `ae` is not on `PATH`, install from a checkout of this repository with `npm install -g ./packages/ae` at the repository root, then `ae install --configure-path`. The package is not on the npm registry.
+- Do not use `npx ae-harness` in agent runtime instructions. There is no published registry package to execute.
 - Start with `.harness/context-pack.md` after `orient`. Expand missing evidence with `orient --read --context-version 2`; keep source identities and reported limits.
 - Developers use Copilot agents/skills; they do not prompt the CLI directly.
 
@@ -44,9 +44,13 @@ Installed to `~/.copilot/bin/ae` on every `ae install`. Add to PATH with `ae ins
 
 | Code | Meaning |
 |------|---------|
-| `0` | Pass |
-| `1` | Fail — stop before `editFiles` or compound |
-| `2` | Warn — may proceed with Activity log (strict profile: treat as block) |
+| `0` | Command completed; inspect its result |
+| `1` | Failure |
+| `2` | Usage refusal (`E_USAGE`) or command-specific advisory; inspect the result |
+| `3`–`9` | Setup, approval, conflict, doctor, network, timeout, or target failure |
+| `130` | Interrupted or cancelled |
+
+A nonzero exit never establishes mutation or completion authority. Read stdout and stderr, including structured `ok:false` errors, and inspect the command-specific `pass`, `outcome` and advisory checks. An advisory result may be reported as such; `E_USAGE` means the operation was refused. Require the current passed gate and verification records before the corresponding next operation.
 
 **Envelope versioning (Phase 1 workbench, additive).** `--output` is a lane-bearing, opt-in surface, not a blanket capability every command gained — only the commands named below accept it; every other registered command now REJECTS `--output` with a structured `E_USAGE` error (exit 2) naming the lane-bearing commands, instead of silently ignoring it and rendering plain ledger output (fixed post-P1.6; see `lib/registry.mjs`'s `assertLaneSupported`). The lane-bearing set today: `orient`, `learnings`, `status`, and the Phase 2 retrieval commands `search`, `lookup`, `tree`, `recall` and `get` accept `--output json-envelope|agent` (`--output=value` works too) — `json-envelope` wraps the command's result in a versioned `{schema, command, status, ...}` envelope, `agent` renders a budgeted plain-text summary for LLM callers; `verify` additionally accepts `--output jsonl`, streaming row-per-event with a terminal `result` row (no `json-envelope`/`agent` support of its own). `status` in all of these uses one shared vocabulary — `ok\|failed\|cancelled\|timed-out`, plus `blocked` where gate-like semantics already use it. These are opt-in, additive lanes: legacy results documented below (the default ledger render and `--json`) remain **unversioned** — no `schema` field or wrapper. Named-check truncation metadata is additive; retained diagnostics are bounded and sanitized as described below. Recognized secret redaction (Phase 1 AC6) is applied at one shared emission boundary (`lib/redact.mjs#redactedJson`) that every legacy serializer routes through before anything reaches stdout, so a payload that contains a registered secret emits `«redacted:<kind>»` where the credential used to be. Existing core fields remain available; a recognized credential value is redacted. Do not rely on `--output` for a command not named above — it will error, not silently no-op; a command's help (`ae help <command>`) also states whether it supports a lane.
 
@@ -58,7 +62,7 @@ This table tracks only what differs in runtime character across commands — whi
 |---------|------|--------|-------|
 | `install` / `upgrade` | human/CI | none | mutates `~/.copilot/` |
 | `doctor` | human/CI | none | read-only (`--host vscode` runs an isolated hook-lifecycle fixture) |
-| `init-repo` | human/CI | writes¹ | mutates workspace (`.harness/`, `docs/plans/`, `docs/codebase-map.md`) |
+| `init-repo` | human/CI | writes¹ | writes private project configuration, local runtime state and Git-local excludes; `--shared` publishes team configuration |
 | `prepare` | human/CI | none | writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` only when missing |
 | `status` / `uninstall` | human/CI | none | read-only / mutates `~/.copilot/` (uninstall removes hydrated files) |
 | `orient` | agent-runtime | writes | mutates `.harness/` (context-pack, repo-map, session) |
@@ -108,7 +112,7 @@ Context accounting uses existing events and reports. Artifact estimates, runtime
 
 `graph explain <file> <target>` and `graph impact <file>` return bounded observed imports, occurrence citations, method and resolution status. Live CLI/native paths prepare the shipped AST index as needed; `--dry-run` does not publish an index. `--generation <id>` reads only a retained immutable historical generation, with independent table hashes and no fallback to current source. Coverage is bounded Git-tracked inventory rather than semantic completeness. Candidate calls cannot establish runtime behavior.
 
-`orient --read --context-version 2 --question-kind change-impact|dependency-path|lookup|prior-lesson` selects a bounded source packet in `slice.impactContext`. Select up to four explicit `--file` seeds. The packet includes graph relationships, hash-validated occurrence excerpts, applicability-bearing learning records, omissions and advisory verification areas. It grants no check or mutation authority. SessionStart/host adapters retain v2 evidence beside their flat slice. Learning applicability compares selected source bytes; historical proof and governance remain separate. Legacy records remain unknown until explicitly bound. See [Structural evidence](../codebase-context/references/structural-evidence.md).
+`orient --read --context-version 2 --question-kind change-impact|dependency-path|lookup|prior-lesson` selects a bounded source packet in `slice.impactContext`. Select up to four explicit `--file` seeds. The packet includes graph relationships, hash-validated occurrence excerpts, applicability-bearing learning records, omissions and advisory verification areas. It grants no check or mutation authority. SessionStart/host adapters retain v2 evidence beside their flat slice. Learning applicability compares selected source bytes; historical proof and governance remain separate. Legacy records remain unknown until explicitly bound. Read `<copilot-home>/skills/codebase-context/references/structural-evidence.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/codebase-context/references/structural-evidence.md --json` prints the same file.
 
 **index --structural**
 ```json
@@ -199,11 +203,11 @@ For locked plans, both commands enforce criterion-to-check mappings and configur
 }
 ```
 
-Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from `.github/harness/checks.yaml` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
+Allowed outcomes are `passed`, `failed`, and `inconclusive`. Only fresh `passed` evidence bound to the current plan contract, base ref, changed-file set, and workspace contents permits a delivery completion claim or compound. Plan Activity entries are excluded from the contract digest so the append-only ledger can record the returned evidence path. Read-only Answer and Investigate modes do not run delivery verification. Plan frontmatter names checks; executable argv arrays come only from the selected local or shared check source reported by `ae checks list --json` and run without a shell. Approved one-off commands run outside harness through explicit host tool approval and are recorded as external evidence.
 
 Use focused TDD checks during implementation. The Engineer prepares a review packet, dispatches its required judgment, and assembles raw results before running authoritative `ae verify`. Read-only coordinators cannot start CLI commands using `terminalLastCommand`; incomplete coverage remains a verification prerequisite. Under content-v1, selected intent bytes are also bound and changed bytes require an explicit source amendment. Legacy plans retain their declared paths-only guarantee until deliberately migrated.
 
-**Per-check severity (policy v2).** `.github/harness/policy.yaml` may declare `version: 2` with an optional `checks:` map assigning each verify check a severity — the check-level knob is orthogonal to the run-level `enforcement` mode:
+**Per-check severity (policy v2).** The selected project `policy.yaml` may declare `version: 2` with an optional `checks:` map assigning each verify check a severity — the check-level knob is orthogonal to the run-level `enforcement` mode:
 
 | Severity | Effect of a failed check |
 |----------|--------------------------|
@@ -233,7 +237,7 @@ Every check in the `verify` payload carries its effective `severity`; non-passin
 
 **compound**
 
-For delivery completion, submit a publish or explicit no-learning decision with `ae compound --plan <path> --learning-decision <file> --json`; see [learning-operations.md](learning-operations.md). A bare legacy compound call does not record the required decision. Then submit a revision-bound complete decision with `ae plan-update --plan <path> --file <complete-decision.json> --json`; see [plan-operations.md](plan-operations.md). The legacy result shape below remains readable; use the returned decision/publication record for the current operation.
+For delivery completion, submit a publish or explicit no-learning decision with `ae compound --plan <path> --learning-decision <file> --json`; see [learning-operations.md](learning-operations.md). A bare legacy compound call does not record the required decision. Then pipe a revision-bound complete decision to `ae plan-update --plan <path> --file - --json`; see [plan-operations.md](plan-operations.md). The legacy result shape below remains readable; use the returned decision/publication record for the current operation.
 
 ```json
 {
@@ -389,11 +393,13 @@ After orient, start with at most three memory matches and expand the required se
 | Skill | Harness command(s) |
 |-------|-------------------|
 | `@engineer` Deliver mode | proportional `orient` → read pack → start/gate → focused TDD → required review prepare/assemble → `verify [--learnings <ids>]` → `compound --learning-decision` → complete plan-update decision |
-| `@engineer` Answer/Investigate modes | minimal reads → evidence-backed report; no delivery gate, verification, or compound |
+| `@engineer` Answer/Investigate modes | minimal reads → evidence-backed report; no `plan-new`, delivery gate, verification, or compound |
 | `/recall` | `orient` or `recall` (`-c`, `--min-score`) |
 | `/index-memory` | `index` (manifest + BM25 postings) |
 | `/auto-compound` | classify durable learning or no-learning, then publish through `compound --learning-decision`; Engineer records completion |
 | `/code-review` plan-compliance audit | `validate-plan`, `gate` |
+
+Investigate starts with a short list of questions and records findings with file:line refs in chat, or one notes file if long. A large scope splits by repo or area across parallel researchers, one narrow question each. Read the `researcher` line in `~/.cursor/rules/ae-models.mdc` or `~/.claude/rules/ae-models.md`. Pass that model when the host spawn tool takes one. A missing file, a missing line, or `inherit` means omit the model. A plan starts only when the user asks for a change and the mode switches to Deliver.
 
 ## CI examples
 

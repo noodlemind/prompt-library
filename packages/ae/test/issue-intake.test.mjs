@@ -345,7 +345,8 @@ test('ae worktree --slug creates a linked worktree on harness/<slug> and gate ac
   assert.equal(body.isolated, true);
   assert.ok(body.path && fs.existsSync(body.path), 'worktree path exists');
   assert.equal(fs.lstatSync(path.join(body.path, '.git')).isFile(), true, 'linked worktree uses a .git file');
-  assert.match(fs.readFileSync(path.join(ws, '.gitignore'), 'utf8'), /^\.worktrees\/?$/m);
+  assert.equal(fs.existsSync(path.join(ws, '.gitignore')), false);
+  assert.match(fs.readFileSync(path.join(ws, '.git/info/exclude'), 'utf8'), /^\/\.worktrees\/$/m);
 
   for (const rel of ['docs', '.github']) {
     const src = path.join(ws, rel);
@@ -390,12 +391,13 @@ function addWorktree(ws, slug) {
   return body;
 }
 
-test('worktree appends .worktrees to a regular .gitignore and does not follow a symlink', () => {
+test('worktree preserves regular and symlinked product ignore files', () => {
   const ws = planWorkspace();
   withOrigin(ws);
   fs.writeFileSync(path.join(ws, '.gitignore'), 'node_modules');
   const created = addWorktree(ws, 'ignore-regular');
-  assert.equal(fs.readFileSync(path.join(ws, '.gitignore'), 'utf8'), 'node_modules\n.worktrees\n');
+  assert.equal(fs.readFileSync(path.join(ws, '.gitignore'), 'utf8'), 'node_modules');
+  assert.match(fs.readFileSync(path.join(ws, '.git/info/exclude'), 'utf8'), /^\/\.worktrees\/$/m);
   git(ws, ['worktree', 'remove', '--force', created.path]);
 
   const outsideDir = tempDir('outside-ignore-');

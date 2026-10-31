@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
-export const POLICY_RESOLVER_VERSION = 1;
+export const POLICY_RESOLVER_VERSION = 2;
 export const ENFORCEMENT_MODES = Object.freeze(['observe', 'warn', 'enforce']);
 
 export function readPolicySource(file) {
@@ -30,12 +30,13 @@ export function sourceDigest(file) {
   return content ? createHash('sha256').update(content).digest('hex') : fs.existsSync(file) ? 'unreadable' : 'absent';
 }
 
-export function policySourceBinding(workspace, home, environment = process.env.HARNESS_ENFORCEMENT) {
+export function policySourceBinding(workspace, home, environment = process.env.HARNESS_ENFORCEMENT, authority = null) {
   const root = fs.realpathSync(workspace);
   return {
     resolverVersion: POLICY_RESOLVER_VERSION,
     workspace: root,
-    sources: Object.fromEntries(['config.yaml', 'policy.yaml', 'checks.yaml', 'routing.yaml'].map(name => [name, sourceDigest(path.join(root, '.github/harness', name))])),
+    authority: authority ? { mode: authority.mode, directory: authority.directory } : { mode: 'shared', directory: path.join(root, '.github/harness') },
+    sources: Object.fromEntries(['config.yaml', 'policy.yaml', 'checks.yaml', 'routing.yaml'].map(name => [name, sourceDigest(authority?.files[name] || path.join(root, '.github/harness', name))])),
     trustDigest: sourceDigest(path.join(home, 'trust.yaml')),
     environment: ENFORCEMENT_MODES.includes(environment) ? environment : null,
   };

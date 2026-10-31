@@ -176,7 +176,7 @@ export function createDomainPlans({ workspace, home, name, decision, dryRun = fa
     if (!priorAuthority.pass) throw failure(priorAuthority.diagnostics.join(' '));
     const executionRoots = { repos: Object.fromEntries(reservation.repos.map(repo => [repo.id, repo.root])), sources: Object.fromEntries(reservation.initialBinding.bindings.sources.map(source => [source.id, source.root])) };
     for (const repo of reservation.repos) {
-      if (repo.worktree) addIsolatedWorktree({ workspace: repo.primaryRoot, slug: path.basename(repo.root), from: repo.initialHead });
+      if (repo.worktree) addIsolatedWorktree({ workspace: repo.primaryRoot, slug: path.basename(repo.root), from: repo.initialHead, record: false });
     }
     const binding = snapshotDomain(record, { executionRoots });
     const parentDecision = { ...reservation.parentDecision, domain_parent: reservation.parent, domain_binding: binding };

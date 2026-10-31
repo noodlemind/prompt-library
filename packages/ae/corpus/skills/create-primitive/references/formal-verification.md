@@ -16,7 +16,7 @@ Write frontmatter naming the guarded area, activation conditions and exclusions.
 
 Keep normative properties separate from descriptive model transitions. Model an atomic action only when its implementation correspondence is justified. Specify useful progress or reachable successful paths as well as safety, so a model that refuses all useful work cannot obtain an unqualified pass. Never assert unconditional eventual completion when cancellation, unavailable tools or user abandonment are legal.
 
-For a TLC-based check, copy [the standalone runner](../assets/formal-verification/check.mjs) into that property's `scripts/check.mjs`. The copied file uses Node built-ins and an explicitly supplied JAR; it does not require installed AE or any other plugin. In this library's own pilot, a thin wrapper imports the same shipped asset because the library owns it. Other products copy it.
+For a TLC-based check, read the standalone runner at `<copilot-home>/skills/create-primitive/assets/formal-verification/check.mjs` with the host read tool and copy it into that property's `scripts/check.mjs`. Outside the enforce hook, `ae get --reference skills/create-primitive/assets/formal-verification/check.mjs --json` prints the same file. The copied file uses Node built-ins and an explicitly supplied JAR; it does not require installed AE or any other plugin. In this library's own pilot, a thin wrapper imports the same shipped asset because the library owns it. Other products copy it.
 
 Write a concrete `manifest.json` with these fields:
 
@@ -63,6 +63,8 @@ The existing `behavior` category is appropriate only for the combined result req
 6. Preserve the tool/argv/results, source bindings, real counterexample, observations and cleanup evidence.
 
 Treat source correspondence as observed, not a full refinement proof. A shared flow map, three passing files, or a large explored-state count cannot establish completeness. Report any omitted state writers and assumptions that remain untested.
+
+When explaining retained evidence, the Engineer can use `ae diagrams formal --file <workspace-relative formal-verification.json> --model <ExactModule.tla> --json`. This reads recorded stdout and any selected bound graph without running or installing Java/TLC. Preserve the receipt's checker identity, source/model/configuration bindings, negative-control role and currentness. Violating runs retain their ordered counterexample and temporal loop; a positive model can show its exported finite graph. The current starter accepts explicit `--capture-graph` to retain same-run `Module.graph.dot` beside the receipt using only the caller's deliberately configured checker. Keep both files together. Missing or damaged evidence refuses a chart; a positive pass without a graph does not invent one. Output remains `verification: not-verified`. The [diagram reference](../../codebase-context/references/diagrams.md#replay-recorded-formal-evidence) defines limits and provenance. Actual modeled defects still require a real-code repro or conformance check.
 
 ## Generate the companion maintenance skill
 

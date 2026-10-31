@@ -23,19 +23,19 @@
             "type": "command",
             "command": "node guard-critical-files.mjs",
             "cwd": "hooks",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node block-destructive-commands.mjs",
             "cwd": "hooks",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
             "command": "node require-plan-gate.mjs",
             "cwd": "hooks",
-            "timeout": 10
+            "timeout": 40
           }
         ]
       }

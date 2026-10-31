@@ -78,6 +78,7 @@ function catalog(workspace) {
   for (const rel of listed.stdout.toString('utf8').split('\0')) {
     if (!rel) continue;
     const posix = rel.replace(/\\/g, '/');
+    if (posix === '.harness' || posix.startsWith('.harness/')) continue;
     const kind = kindOf(posix);
     if (!kind) continue;
     found.push({ path: posix, kind });

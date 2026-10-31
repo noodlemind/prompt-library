@@ -50,7 +50,7 @@ Do not run on `failed` or `inconclusive`, with open hard gaps, or before require
 | Need for independent expertise | Specialist-agent candidate |
 | External executable capability | Tool/integration candidate |
 
-Supply a learning decision to Harness with an approved private/global publication destination or dormant ship-set proposal. See [learning-operations.md](../references/learning-operations.md). Record recurrence evidence and any candidate_primitive, candidate_name, and recommendation as proposals. Keep the learning outside the work contract:
+Supply a learning decision to Harness with an approved private/global publication destination or dormant ship-set proposal. Read `<copilot-home>/skills/references/learning-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/learning-operations.md --json` prints the same file. Record recurrence evidence and any candidate_primitive, candidate_name, and recommendation as proposals. Keep the learning outside the work contract:
 
 ```json
 {
@@ -82,7 +82,7 @@ ae compound --plan <path> --learning-decision <file> --workspace . --json
 
 The command validates current proof, publishes through the existing writer, and reports the persisted destination and index or dormant proposal result. Never edit learning frontmatter before publication or rerun tests for bookkeeping. Report actual evidence and publication outcomes.
 
-When a successful compound result includes `flowMaintenance`, treat it as advisory context maintenance. It identifies an existing shared model made stale by watched changes on the observed default branch. Read [flow-models.md](../codebase-context/references/flow-models.md), inspect the bound committed sources, and regenerate explicitly through `/codebase-context` within authorized scope. Compound neither merges the default branch nor invokes an agent, rewrites the model, or creates a missing one. Flow maintenance does not replace the learning decision or change delivery completion authority.
+When a successful compound result includes `flowMaintenance`, treat it as advisory context maintenance. It identifies an existing shared model made stale by watched changes on the observed default branch. Read `<copilot-home>/skills/codebase-context/references/flow-models.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/codebase-context/references/flow-models.md --json` prints the same file. Inspect the bound committed sources, and regenerate explicitly through `/codebase-context` within authorized scope. Compound neither merges the default branch nor invokes an agent, rewrites the model, or creates a missing one. Flow maintenance does not replace the learning decision or change delivery completion authority.
 
 ## Debt check (session-end drain)
 

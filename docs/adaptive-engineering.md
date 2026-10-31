@@ -4,6 +4,8 @@ The executable is `ae`, distributed as `ae-harness`. `@engineer` and `/engineer`
 
 You start with two parts. The Engineer decides what to do. The Harness checks the work and keeps the record.
 
+The [native architecture research and implementation record](../.audit/ae-native-architecture-2026-10-29.md) maps pstack's mechanisms and iteration history to AE's own contracts, reassesses PR #104, and records the resulting changes and qualification.
+
 The Engineer is the only entry. It answers a question, investigates a system, delivers a change, or reviews a result. The Harness orients the work, locks a plan, gates edits, runs the named checks, and stores the evidence. A change is done when current verification passes, required review results are collected, and Harness records completion.
 
 The Engineer grows the way a working engineer does. A repeated procedure becomes a skill. A judgment that needs its own reviewer becomes an agent. A rule for one kind of file becomes an instruction. A solved problem becomes a learning. None of these are required on the first day. The Engineer acquires them when the work shows they are needed. Installing the Harness does not require the specialist agents or the domain skills that may already be in this repository.
@@ -12,8 +14,10 @@ Plans for a product repository live in `~/.ae/projects/<repo-id>/plans/`. `--ae-
 
 After `ae verify` passes, compounding records what the task taught. A detail that matters only for this task stays on the plan. A fact worth seeing again becomes a solution episode. A new skill or agent is a proposal. A person approves it before it is installed.
 
+`ae-harness` is not published to the npm registry. From the prompt-library repository root:
+
 ```bash
-npm install -g ae-harness
+npm install -g ./packages/ae
 ae install --configure-vscode
 ```
 
@@ -26,9 +30,39 @@ ae prepare
 
 `ae prepare` writes `docs/specs/overview.md` and `docs/adr/0000-architecture.md` when those paths are missing. Edit them. A later run leaves an existing file alone. Orient lists them as `intentSources`. Plan lock hashes them. If `docs/` is gitignored, prepare writes nothing and orient says to un-ignore those paths. Prepare does not rewrite a spec from the code.
 
+Initialization defaults to personal configuration under
+`~/.ae/projects/<repo-id>/authority/`, with no new product configuration to
+commit. Existing shared `.github/harness/` authority remains selected.
+`ae init-repo --shared` explicitly publishes shared configuration and returns
+the exact commit inventory. Complete that setup change before locking an
+unrelated product plan. Approval is always user-local; cloning team policy does
+not clone a person's execution decision.
+
+The state home must stay outside the product checkout. An in-repository
+`--ae-home`, including a redirected alias or one above a selected subfolder,
+is refused before initialization writes; choose an external directory instead.
+
+Policy, checks, routing, configuration, hooks and evidence resolve one selected
+source. They do not overlay competing local/shared files or fall back from an
+unsafe source. Changing source identity or accepted bytes invalidates approval
+and proof. `ae trust status` names the pinned files.
+
+Runtime `.harness/` state and `.worktrees/` use narrowly scoped Git-local
+excludes; routine setup does not edit the root `.gitignore`. Already-tracked
+runtime artifacts remain visible until explicitly migrated. Initialization
+refreshes a private codebase map rather than rewriting a shared authored map.
+The generated runner is checked by content and ownership, so stale generated
+install guidance is refreshed while custom and newer runners are preserved.
+
+New `init-repo` policy stubs use `enforce`; existing authored policies remain unchanged. Initialization leaves behavioral checks for the project owner to define and reports that prerequisite. A person reviews the exact check commands and pinned policy files before approving trust. Installing AE or passing doctor does not grant that approval or prove a task. Unreadable, redirected, nonregular or oversized pinned sources cannot establish current trust. Ordinary policy changes require a new authority decision; agents manage routine lifecycle recovery within the accepted authority.
+
 Then select `@engineer` in Copilot Chat.
 
-Windows checkouts use one canonical repository ID across long paths, short aliases, casing, and linked worktrees. Existing local storage under a known older spelling remains discoverable. Run `ae knowledge migrate-store` from that spelling to bind it permanently. If the old spelling is unavailable, run `ae knowledge migrate-store --from-id local-<12 hex digits>`. The command preserves knowledge, plans, and their absolute references in place. It refuses a non-empty canonical destination, unsafe paths, and replacement of an existing binding. The CLI and installed hooks share the project-layout resolver.
+Use `ae doctor --target vscode`, `--target cli`, or `--target intellij` to inspect one installed surface and its selected home. Doctor separates customization files, mechanical hook checks and live-host evidence. CLI checks do not require VS Code settings. IntelliJ customization can be healthy while native lifecycle hooks are unavailable; installed agents and instructions do not establish enforced mutation denial there. A mechanical probe is not an observed editor/model trial.
+
+Doctor's proposed installation repairs preserve its selected target and home. Read command-specific outcomes and structured errors: exit 2 can be a usage refusal or an advisory, and supplies no successful mutation/completion authority by itself. The [mainstream reliability audit](../.audit/ae-mainstream-reliability-2026-10-30.md) records the reproduced defects, bounded repairs and the remaining native-user qualification plan.
+
+Every checkout uses one canonical repository ID. A checkout with an origin remote uses that normalized remote. A checkout without one uses the native path of the main worktree, so a subdirectory, a linked worktree, a symlink, and a different path casing share that id. `ae knowledge migrate-store` copies missing knowledge and project files from other ids of the same checkout into that id. The JSON result lists `stableId`, `repo`, and `merges`. Source directories stay in place, a second run reports `unchanged`, and `--dry-run` writes nothing. `--from-id` still binds one existing store in place. That binding preserves knowledge, plans, and their absolute references. It refuses an occupied destination, unsafe paths, and replacement of an existing binding. The CLI and installed hooks share the project-layout resolver. When an origin remote replaces a path-keyed id, the same command copies missing learning files into the current store and leaves the source untouched.
 
 ## How a task runs
 
@@ -36,7 +70,7 @@ Task modes are Answer, Investigate, Deliver, and Review. The Engineer owns the d
 
 Deliver is host-first. The Engineer works in the editor. Kernel-always means orient, plan lock, gate, and verify run in the Harness even when no extra agent is loaded. Orient names in-repo specs as `intentSources` and whether the checkout is isolated. The implement gate fails when those specs are missing from plan `intent_sources`, or when issue work is still on the default branch of the primary checkout. `ae worktree --slug` opens a linked worktree. A plan that exists only as an uncommitted `docs/plans` file or a gitignored `.harness/plans` file is copied into the project store. A later worktree run replaces that copy when the checkout file is newer and no plan-update holds the file, and leaves the store copy when the store file is newer. A worktree with no `origin` remote shares that store, so the same `--plan` still resolves. A checkout created with `git init --separate-git-dir` keeps its own store. `.gitignore` is not followed when it is a symlink. Orient and `plan-new` share one selection for the same text. A non-empty `intent_sources` list is frozen. The implement gate requires those paths and does not rank again. An empty list in a repo that has a spec still fails and names the selection. Plan lock records `{ path, sha256 }` of the file bytes for each readable in-checkout `intent_sources` file on that tip. A symlink or a missing file fails the lock instead of hashing something outside the checkout or saving a path with no hash. `ae prepare` publishes a missing starter with an exclusive create, so a file that appears during the write is left as it is. Under content-v1, a later edit to a selected source invalidates its gate and proof until an explicit amendment accepts the reviewed bytes. Harness records old/new hashes, rationale, declared authority scope, and affected evidence. A relock preserves the frozen selection and cannot silently rehash it. Legacy plans retain their paths-only guarantee until deliberately migrated. If shipped behavior contradicts a locked spec, update that spec in the same PR or a stacked PR. Do not rewrite the spec from the code in silence. Ambiguous specs become `needs-info` questions, not guesses. Agent-optional means a specialist is consulted only when the task needs that judgment. Benchmark-test-only means the unattended agent loop is for a measured eval, not for normal delivery.
 
-The runtime has four postures. Standalone is the Engineer with the Harness and no acquired specialist. Degraded is a missing check or index, reported rather than invented. Governed is a learning that a person has confirmed. Bounded delegation means a specialist receives a narrow question and does not take over the delivery.
+The runtime has four postures. Standalone is the Engineer with the Harness and no acquired specialist. Degraded is a missing check or index, reported rather than invented. Governed is a learning that a person has confirmed. Bounded delegation means a specialist receives a narrow question and does not take over the delivery. A coherent implementation can remain with the Engineer; expertise, isolation or useful parallelism justifies a delegate. Required independent final review remains separate from implementation ownership.
 
 ## Optional headless delivery
 
@@ -103,7 +137,7 @@ reviews:
   critical_open: []
 ```
 
-Product plans list `code-review` in `reviews.required`. A docs plan may leave that list empty. `ae review prepare --plan <path> --base <base> --json` captures the work to review. The host invokes reviewers, then `ae review assemble --plan <path> --packet <id> --file <results.json> --json` validates and stores their results. Reviewer names are declared provenance; they do not authenticate an invocation. `ae verify` fails while collected review coverage is incomplete or critical findings remain. A bare completed string is not review evidence.
+Product plans list `code-review` in `reviews.required`. A docs plan may leave that list empty. `ae review prepare --plan <path> --base <base> --json` captures the work to review. The host invokes reviewers, then `ae review assemble --plan <path> --packet <id> --file <results.json> --json` validates and stores their results. Reviewer names are declared provenance; they do not authenticate an invocation. A recorded host invocation counts when its agent is the specialist and its caller is the engineer or the code-review coordinator. An engineer same-context review does not. `ae verify` fails while collected review coverage is incomplete or critical findings remain. A bare completed string is not review evidence.
 
 The Engineer runs review preparation and assembly. The coordinator receives the prepared packet, dispatches its required judgments, and returns raw results with their actual status. It has no terminal execution authority. Focused TDD checks run during implementation. Required review and authoritative `ae verify` follow the completed change. README edits use a proportional full docs plan and the same gate, proof, learning, and completion authority.
 
@@ -121,9 +155,11 @@ Ordinary evidence uses version 5. Domain evidence uses version 6 to bind shared 
 
 Installed hooks resolve the hydrated CLI directly under `~/.copilot/.ae-bin/`. A global PATH entry is optional. Episode writers publish complete bytes atomically with exclusive creation; interruption before publication leaves the final name absent, and replay reuses an identical published episode. Review records enforce the same 1 MiB limit at write and read boundaries before changing the current coverage pointer.
 
+Workflow activation records bind an actual complete read to the selected installed or bundled source path and SHA-256. A matching filename, a successful partial range, a decoy workspace file or stale bytes cannot satisfy that observation. Supported native envelopes and the existing headless Deliver reader preserve their own evidence; neither authenticates a host transcript. Older unbound activation records require a genuine reread.
+
 `ae status --effective-policy --json` reports the CLI policy authority, rule-specific modes, positive freshness limits, trust binding, and resolver version. Installed hooks refresh that snapshot when source bytes, trust, or environment change. An unavailable or invalid authority fails closed. A command override is scoped to its invocation and is never cached as a hook policy.
 
-Named checks are argv arrays in `.github/harness/checks.yaml`. The Harness runs them without a shell. Policy exemptions and waivers are explicit. A missing check is not a pass.
+Named checks are argv arrays in the selected project `checks.yaml`; `ae checks list --json` reports its exact path. The Harness runs them without a shell. Policy exemptions and waivers are explicit. A missing check is not a pass.
 
 A named check may declare an `artifacts` list of explicit relative JSON filenames. The runner supplies a unique invocation directory under `.harness/evidence/check-artifacts/` through `HARNESS_CHECK_ARTIFACT_DIR`. It accepts at most 16 JSON objects of at most 1 MiB each, then stores redacted bytes and records their paths, byte lengths, and SHA-256 hashes. Missing output, malformed JSON, unsafe paths, symlinks, and nonregular files fail the check. Evidence validation rereads required artifacts and rejects changed or missing bytes. Concurrent invocations cannot overwrite one shared latest file. Artifact presence never replaces the helper's behavioral assertion and exit result. Checks without declarations retain their existing output guarantee.
 
@@ -196,6 +232,8 @@ The catalog-search eval is run after implementation on the completed checkout wi
 `ae inventory show --json` reads the selected Harness home's dated inventory cache. Missing cache creates no files. `ae inventory refresh --editor vscode|cursor|jetbrains --json` collects only the selected editor family and merges its bounded observations into that cache. It does not launch editors, install plugins, change settings or create profiles. Additional path overrides name metadata locations. An existing profile directory ID can narrow the observation; an unknown profile remains unknown. Dry-run collects and writes nothing.
 
 Inventory records source paths and local scope. CLI-selected launcher paths do not identify a running instance. VS Code and Cursor extension enablement remains unknown; JetBrains disabled IDs can establish an explicit disabled observation. Approved settings are overrides with `effective_known: false`. Remote sessions and live capability remain uncollected. The collector avoids editor state databases and histories. A refreshed installation snapshot still requires a separate actual task-operation proof. Inventory is optional and is never scanned during ordinary Deliver orientation.
+
+`ae orient` reports `layout` for the actual bound Git root, its `monorepo` or `product-repo` classification, and `projectStore` from the selected home and existing storage bindings. It does not search saved editor workspaces, probe neighboring repositories or prepare a domain draft. The compatibility fields remain `workspaceType: none`, `workspaceFile: null`, `roots: []` and `domainSuggestion: null`. A multi-repository task selects its actual repositories through explicit workspace/domain operations and task relevance; a folder list does not create scope or mandatory research. See [Workspace binding and task scope](workspace-layout-detection.md).
 
 `ae domain show --name <name> --json` reads `<harness-home>/domains/<name>.yaml` without creating records or repairing drift. It reports expected identity separately from observed Git identity, checkout roots, worktree roots, HEAD, and checks-file presence. Missing or changed identities remain explicit. The original `domain_version: 1` shape remains readable. Its shared references are advisory, and its configuration cannot authorize delivery.
 
@@ -360,12 +398,15 @@ ae diagrams render --file docs/diagrams/architecture.d2 --sources src/orders,con
 ae diagrams render --file docs/diagrams/recovery.mmd --sources src/orders --renderer pele --json
 ae diagrams graph --root src/orders/service.ts --operation deps --depth 2 --limit 40 --json
 ae diagrams flow --flow order-recovery --json
+ae diagrams formal --file evidence/formal-verification.json --model UnsafeDeliveryEvidence.tla --json
 ae diagrams status --receipt .harness/diagrams/<id>/receipt.json --json
 ```
 
 Render accepts a restricted Mermaid/D2 subset with Harness-owned options; imports, remote assets, author-controlled renderer configuration, links, and markup are unsupported. TALA handles architecture layout, with ELK or Dagre available for directional views. TALA is part of the bundled D2 WebAssembly build, so the command does not install a separate layout binary. The returned `id` and `artifacts` identify immutable output under `.harness/diagrams/<id>/`, including `svg`, `html`, `receipt`, and `png` when requested. The text report prints those absolute paths. `--scale` accepts 1 to 4 and defaults to 2. Without `--sources`, authored text remains `diagram-only`; selected files or directories bind the view to worktree bytes and watched inventory, including new files.
 
 Dependency diagrams reuse bounded current-worktree import facts and retain unresolved edges and coverage limits. Flow diagrams render existing committed-default-branch descriptive models without regenerating them; keep their recorded generation and freshness distinct from the worktree. Artifact integrity and source currentness do not prove architecture correctness, complete behavior, accepted intent, or a TLA+ property. [Hand-authored examples](diagrams/README.md) illustrate these limits.
+
+Formal diagrams use AE-owned bounded protocol and graph parsing, informed by Lauren Tan's pstack statechart architecture and semantic safeguards. Recorded TLC values remain exact text. A violating run retains its ordered counterexample and temporal loop; a complete positive run can draw its receipt-bound explored graph with explicit coverage. The existing optional formal-check starter's `--capture-graph` exports DOT from the same deliberately configured checker invocation. Rendering invokes no checker, Java, JAR, tool acquisition or remote service. Expected negative controls, tool identity and source/graph currentness remain explicit. Neither a trace nor an imported explored graph creates fresh verification or advances synchronization. Retained upstream protocol fixtures keep their license notices; the distributed runtime contains no pstack parser subsystem.
 
 ## Recovery ownership
 

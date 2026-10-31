@@ -17,6 +17,17 @@ function fixture(t) {
   for (const entry of fs.readdirSync(path.join(source, 'test'), { withFileTypes: true })) {
     if (entry.isFile() && !entry.name.endsWith('.test.mjs')) fs.copyFileSync(path.join(source, 'test', entry.name), path.join(repo, 'test', entry.name));
   }
+  const copySupport = (from, to) => {
+    fs.mkdirSync(to, { recursive: true });
+    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+      if (entry.name.endsWith('.test.mjs')) continue;
+      const src = path.join(from, entry.name);
+      const dest = path.join(to, entry.name);
+      if (entry.isDirectory()) copySupport(src, dest);
+      else if (entry.isFile()) fs.copyFileSync(src, dest);
+    }
+  };
+  copySupport(path.join(source, 'test', 'helpers'), path.join(repo, 'test', 'helpers'));
   const store = path.join(home, 'trust.yaml');
   const before = 'version: 1\nprojects: {}\n';
   fs.writeFileSync(store, before);

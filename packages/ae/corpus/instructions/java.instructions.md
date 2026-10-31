@@ -46,7 +46,7 @@ applyTo: '**/*.java'
 ## Null Safety
 - Annotate nullable parameters and return types with `@Nullable`. Assume non-null by default.
 - Return `Optional<T>` instead of `null` for methods that may not produce a result.
-- Use `Objects.requireNonNull()` at API boundaries for defensive null checks.
+- Use `Objects.requireNonNull()` at an API boundary that accepts untrusted input.
 - Prefer empty collections (`List.of()`, `Map.of()`) over null collections.
 
 ## Dependency Injection

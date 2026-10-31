@@ -3,14 +3,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import YAML from 'yaml';
 import { applyPlanUpdate, planUpdateLockDir } from '../lib/plan-update.mjs';
+import { tempDir } from './helpers/temp.mjs';
 
 const binPath = path.resolve(import.meta.dirname, '..', 'bin', 'ae.mjs');
+const roots = [];
+after(() => roots.forEach(root => fs.rmSync(root, { recursive: true, force: true })));
+const aeHome = ws => path.join(path.dirname(ws), 'harness-home');
+const copilotHome = ws => path.join(path.dirname(ws), '.copilot-home');
+const runtimeEnv = ws => ({ ...process.env, COPILOT_HOME: copilotHome(ws), AE_HOME: aeHome(ws), HARNESS_HOME: aeHome(ws) });
 
 function workspace() {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-plan-update-'));
+  const root = tempDir('harness-plan-update-');
+  roots.push(root);
+  const ws = path.join(root, 'product');
   fs.mkdirSync(path.join(ws, 'docs', 'plans'), { recursive: true });
   fs.mkdirSync(path.join(ws, '.github', 'harness'), { recursive: true });
   fs.writeFileSync(path.join(ws, '.github', 'harness', 'policy.yaml'), 'version: 1\nenforcement: enforce\ngate_ttl_minutes: 30\nevidence_ttl_hours: 24\n');
@@ -27,12 +35,12 @@ function workspace() {
 }
 
 function harness(ws, args) {
-  const home = path.join(ws, '.copilot-home');
+  const home = copilotHome(ws);
   fs.mkdirSync(home, { recursive: true });
   const result = spawnSync(process.execPath, [binPath, ...args, '--workspace', ws, '--copilot-home', home], {
     cwd: ws,
     encoding: 'utf8',
-    env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') },
+    env: runtimeEnv(ws),
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -52,7 +60,7 @@ function newPlan(ws, type = 'feat') {
 
 test('plan-update refuses a path outside the plan store and does not write it', () => {
   const ws = workspace();
-  const outside = path.join(ws, 'harness-home', 'trust.yaml');
+  const outside = path.join(aeHome(ws), 'trust.yaml');
   fs.mkdirSync(path.dirname(outside), { recursive: true });
   fs.writeFileSync(outside, 'trust: no\n');
   const refused = harness(ws, ['plan-update', '--plan', outside, '--status', 'done', '--json']);
@@ -237,7 +245,7 @@ test('plan-update can lock a plan and record goal, checks, and gap fulfillment',
 test('overlapping plan updates keep both changes', async () => {
   const ws = workspace();
   const plan = newPlan(ws);
-  const home = path.join(ws, '.copilot-home');
+  const home = copilotHome(ws);
   fs.mkdirSync(home, { recursive: true });
   const lock = planUpdateLockDir(plan);
   fs.mkdirSync(lock);
@@ -246,7 +254,7 @@ test('overlapping plan updates keep both changes', async () => {
     '--workspace', ws, '--copilot-home', home,
   ], {
     cwd: ws,
-    env: { ...process.env, COPILOT_HOME: home, HARNESS_HOME: path.join(ws, 'harness-home') },
+    env: runtimeEnv(ws),
   });
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.equal(child.exitCode, null);

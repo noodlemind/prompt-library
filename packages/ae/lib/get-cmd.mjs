@@ -8,8 +8,11 @@ import { assertSourceCurrent, parseSourceReference, sourceContext, sourceHash } 
 import { redactSecrets } from './secret-scan.mjs';
 import { externalPlansDir } from './project-layout.mjs';
 import { domainContextOf, planRecordRoot } from './domain-context.mjs';
+import { installedCorpusHomes, resolveInstalledReference } from './corpus-reference.mjs';
 
 const PACKAGED_REL = /^(skills|agents|instructions)\//;
+// Internal read provenance for the headless adapter; omitted from CLI JSON.
+export const READ_SOURCE = Symbol('ae.readSource');
 
 function resolvePackagedRel(relPath, copilotHome) {
   const normalized = path.posix.normalize(String(relPath).replace(/\\/g, '/'));
@@ -59,7 +62,7 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
   const reference = parseSourceReference(flags.docid || flags.path);
   const documentReference = reference.sha256 && reference.path.startsWith('docid:');
   const docid = documentReference ? reference.path.slice('docid:'.length) : flags.docid ? reference.path : null;
-  const relPath = flags.path && !documentReference ? reference.path : null;
+  let relPath = flags.path && !documentReference ? reference.path : null;
   const maxLines = flags.lines || GET_DEFAULT_LINES;
   const maxBytes = flags.maxBytes || GET_DEFAULT_MAX_BYTES;
   const offset = Math.max(1, Math.floor(flags.offset || 1));
@@ -69,8 +72,17 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
   let fullPath = null;
   let readRoot = null;
 
-  if (docid) {
-    entry = findEntryByDocid(copilotHome, workspace, docid);
+  if (flags.reference) {
+    const found = resolveInstalledReference(flags.reference, installedCorpusHomes({ copilotHome }));
+    if (!found) {
+      throw new Error(`installed reference not found: ${flags.reference}. Pass a path under skills/, agents/, or instructions/ from ae install. Do not search the workspace.`);
+    }
+    fullPath = found.fullPath;
+    readRoot = found.readRoot;
+    relPath = found.rel;
+    entry = { docid: null, path: found.rel, title: path.basename(found.fullPath) };
+  } else if (docid) {
+    entry = findEntryByDocid(copilotHome, workspace, docid, { home: home || flags.home || flags.harnessHome });
     if (!entry) throw new Error(`docid not found in manifest: ${docid}`);
     const resolved = resolveDocPath(copilotHome, workspace, entry, {
       home: home || flags.home,
@@ -91,13 +103,13 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
       if (!fullPath) throw new Error(`path escapes workspace: ${relPath}`);
       readRoot = workspaceResolved;
     }
-    entry = findEntryByDocid(copilotHome, workspace, path.basename(relPath, '.md')) || {
+    entry = findEntryByDocid(copilotHome, workspace, path.basename(relPath, '.md'), { home: home || flags.home || flags.harnessHome }) || {
       docid: null,
       path: relPath,
       title: path.basename(relPath),
     };
   } else {
-    throw new Error('get requires --docid <id> or --path <relative-path>');
+    throw new Error('get requires --docid <id>, --path <relative-path>, or --reference <installed-corpus-path>');
   }
 
   if (!fullPath || !fs.existsSync(fullPath)) {
@@ -122,7 +134,7 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
   const sourceExcerpt = wasRedacted ? selectedText : clipped ? excerpt.split('\n…(truncated)')[0] : excerpt;
   const truncated = clipped || start > 0 || start + lines.length < allLines.length;
 
-  return {
+  const result = {
     docid: entry.docid || entry.id || docid || null,
     path: entry.path || relPath,
     title: entry.title || path.basename(fullPath),
@@ -145,4 +157,6 @@ export function runGet({ workspace, copilotHome, flags, home, authorizedPlan = n
       },
     } : {}),
   };
+  Object.defineProperty(result, READ_SOURCE, { value: fullPath });
+  return result;
 }

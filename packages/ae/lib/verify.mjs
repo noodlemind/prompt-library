@@ -22,7 +22,7 @@ import { validatePlanReadiness } from './plan-readiness.mjs';
 import { STRUCTURAL_CHECK_ID, runStructuralExpectations } from './structural/expectations.mjs';
 import { redactSecrets } from './secret-scan.mjs';
 import { inertLine } from './knowledge/store.mjs';
-import { CHECKS_REL, loadNamedChecks, validateCommand, runNamedCheck } from './checks.mjs';
+import { loadNamedChecks, validateCommand, runNamedCheck } from './checks.mjs';
 import { createRedactor, redactionMarker } from './redact.mjs';
 import { intentSourcesCheck } from './intent-sources.mjs';
 import { experimentProof } from './experiment-authority.mjs';
@@ -431,7 +431,7 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
     copilotHome: resolveCopilotHome(flags.copilotHome),
   });
 
-  const named = loadNamedChecks(workspace);
+  const named = loadNamedChecks(workspace, { home: planTrustHome(workspace, plan) });
   const required = Array.isArray(plan.fm.verification?.required) ? plan.fm.verification.required : [];
     const streamRedactor = onEvent ? createRedactor() : null;
     const namedChecksTrusted = isProjectTrusted({ workspace, copilotHome: resolveCopilotHome(flags.copilotHome), home: planTrustHome(workspace, plan) });
@@ -445,7 +445,7 @@ export async function runVerify({ workspace, flags, signal, onEvent, events = nu
       namedResults.push(resultCheck(
         name,
         'unavailable',
-        `Not run: this project is not trusted, and a named check executes repo-authored commands. A person must read ${CHECKS_REL} and approve the current policy with \`ae trust approve\`; the agent must not grant approval.`,
+        `Not run: this project is not trusted, and a named check executes repo-authored commands. A person must read ${named.source || 'the selected project checks.yaml'} and approve the current policy with \`ae trust approve\`; the agent must not grant approval.`,
       ));
       continue;
     }

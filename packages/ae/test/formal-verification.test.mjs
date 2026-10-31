@@ -7,11 +7,96 @@ import crypto from 'node:crypto';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { TEST_GIT_ENV } from './helpers/store.mjs';
-import { collectCoverage, classifyTlc, validateConfiguration, runFormalVerification } from '../corpus/skills/create-primitive/assets/formal-verification/check.mjs';
+import { collectCoverage, classifyTlc, validateConfiguration, runFormalVerification, tlcModelArguments, publishModelGraph } from '../corpus/skills/create-primitive/assets/formal-verification/check.mjs';
 
 const msg = (id, severity = 0, body = '') => `@!@!@STARTMSG ${id}:${severity} @!@!@\n${body}\n@!@!@ENDMSG ${id} @!@!@\n`;
 const success = msg(2193) + msg(2199, 0, '12 states generated, 8 distinct states found, 0 states left on queue.') + msg(2186);
 const result = (status, stdout) => ({ status, stdout, stderr: '', signal: null });
+
+function graphFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-formal-graph-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sandbox = path.join(root, 'run'), artifactDir = path.join(root, 'evidence');
+  fs.mkdirSync(sandbox); fs.mkdirSync(artifactDir);
+  const model = { module: 'Positive.tla', config: 'Positive.cfg', expect: 'pass' };
+  const file = 'Positive.graph.dot', dot = 'strict digraph DiskGraph {\n-9007199254740993 [label="x = 9007199254740993",style = filled]\n}\n';
+  fs.writeFileSync(path.join(sandbox, file), dot);
+  return { root, sandbox, artifactDir, model, file, dot };
+}
+
+test('graph capture adds a dump to the same fixed TLC invocation only when requested', () => {
+  const model = { module: 'Positive.tla', config: 'Positive.cfg' }, sandbox = path.resolve('owned-run');
+  const original = tlcModelArguments('/configured/tla2tools.jar', model, sandbox);
+  const captured = tlcModelArguments('/configured/tla2tools.jar', model, sandbox, true);
+  assert.equal(original.at(-1), model.module);
+  assert.equal(original.includes('-dump'), false);
+  assert.deepEqual(captured, [...original.slice(0, -1), '-dump', 'dot,actionlabels', path.join(sandbox, 'Positive.graph'), model.module]);
+  assert.deepEqual(captured.slice(0, original.length - 1), original.slice(0, -1), 'same configured model, seed, worker count and metadir');
+});
+
+test('captured graph publication retains exact bytes and binds same-run completion', t => {
+  const f = graphFixture(t);
+  const graph = publishModelGraph({ ...f, execution: result(0, success) });
+  assert.deepEqual(graph, { format: 'tlc-dot', file: f.file, sha256: crypto.createHash('sha256').update(f.dot).digest('hex'), exploration: 'complete' });
+  assert.equal(fs.readFileSync(path.join(f.artifactDir, f.file), 'utf8'), f.dot);
+  assert.throws(() => publishModelGraph({ ...f, execution: result(0, success) }), /exist|occupied/i);
+  assert.equal(fs.readFileSync(path.join(f.artifactDir, f.file), 'utf8'), f.dot, 'an existing artifact cannot be overwritten');
+});
+
+test('negative-control graphs remain partial and incomplete execution cannot export one', t => {
+  const f = graphFixture(t);
+  const execution = result(12, msg(2110, 1, 'Invariant NoDuplicate is violated.') + msg(2121, 1) + msg(2217, 4, 'State 1') + msg(2186));
+  const model = { ...f.model, expect: 'safety-violation', property: 'NoDuplicate' };
+  const graph = publishModelGraph({ ...f, model, execution });
+  assert.equal(graph.exploration, 'partial');
+  for (const incomplete of [result(0, msg(2186)), { ...result(0, success), signal: 'SIGTERM' }, { ...result(0, success), error: { code: 'ETIMEDOUT' } }]) {
+    assert.throws(() => publishModelGraph({ ...f, execution: incomplete }), /completed|expected|capture/i);
+  }
+});
+
+test('requested graph capture refuses missing, nonregular, empty and oversized dumps', t => {
+  const f = graphFixture(t), full = path.join(f.sandbox, f.file);
+  const capture = () => publishModelGraph({ ...f, execution: result(0, success) });
+  fs.rmSync(full);
+  assert.throws(capture, /missing|ENOENT|capture/i);
+  fs.mkdirSync(full);
+  assert.throws(capture, /regular/i);
+  fs.rmdirSync(full);
+  for (const bytes of ['', Buffer.from([0]), Buffer.from([0xff])]) {
+    fs.writeFileSync(full, bytes);
+    assert.throws(capture, /empty|text/i);
+  }
+  fs.writeFileSync(full, Buffer.alloc(1024 * 1024 + 1, 120));
+  assert.throws(capture, /bounded|limit|oversized/i);
+  assert.deepEqual(fs.readdirSync(f.artifactDir), []);
+});
+
+test('graph capture rejects symlink input and artifact ancestors without outside writes', { skip: process.platform === 'win32' }, t => {
+  const f = graphFixture(t), outside = path.join(f.root, 'outside');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, f.file), f.dot);
+  fs.rmSync(path.join(f.sandbox, f.file));
+  fs.symlinkSync(path.join(outside, f.file), path.join(f.sandbox, f.file));
+  assert.throws(() => publishModelGraph({ ...f, execution: result(0, success) }), /symbolic|symlink/i);
+  fs.rmSync(path.join(f.sandbox, f.file));
+  fs.writeFileSync(path.join(f.sandbox, f.file), f.dot);
+  const link = path.join(f.root, 'artifact-link'); fs.symlinkSync(outside, link, 'dir');
+  assert.throws(() => publishModelGraph({ ...f, artifactDir: link, execution: result(0, success) }), /symbolic|symlink/i);
+  assert.deepEqual(fs.readdirSync(outside), [f.file]);
+  assert.equal(fs.readFileSync(path.join(outside, f.file), 'utf8'), f.dot);
+});
+
+test('the actual capture flag retains deliberate tool prerequisites instead of installing tools', t => {
+  const f = manifestFixture(t);
+  const runner = fileURLToPath(new URL('../corpus/skills/create-primitive/assets/formal-verification/check.mjs', import.meta.url));
+  const invocation = spawnSync(process.execPath, [runner, '--workspace', f.root, '--manifest', f.filename, '--maintain', '--rationale', 'Reviewed fixture.', '--capture-graph'], { encoding: 'utf8', env: { ...process.env, AE_TLC_JAR: '', HARNESS_CHECK_ARTIFACT_DIR: path.join(f.root, 'capture-evidence') } });
+  assert.equal(invocation.status, 1);
+  const receipt = JSON.parse(invocation.stdout);
+  assert.equal(receipt.status, 'blocked');
+  assert.match(receipt.reason, /AE_TLC_JAR/);
+  assert.equal(receipt.passed, false);
+  assert.equal(fs.existsSync(path.join(f.root, 'capture-evidence', 'Positive.graph.dot')), false);
+});
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ae-formal-'));
@@ -276,11 +361,17 @@ for (const directive of ['  CONSTRAINT Restrict', '\tSYMMETRY Perms', '  CHECK_D
 test('the actual pinned TLC and implementation controls maintain fresh evidence and reject policy swaps', async t => {
   if (!process.env.AE_TLC_JAR) return t.skip('Explicit external TLC prerequisite absent; no formal result is claimed by this test.');
   const f = manifestFixture(t);
-  const options = { workspace: f.root, manifestPath: f.filename, maintain: true, rationale: 'Reviewed the finite fixture model and exported-value implementation correspondence.' };
+  const options = { workspace: f.root, manifestPath: f.filename, maintain: true, captureGraph: true, rationale: 'Reviewed the finite fixture model and exported-value implementation correspondence.' };
   const first = await runFormalVerification(options);
   assert.equal(first.passed, true, first.reason);
   assert.equal(first.sync.maintained, true);
   assert.equal(first.models[0].states.remaining, 0);
+  for (const model of first.models) {
+    assert.equal(model.graph.exploration, model.expected === 'pass' ? 'complete' : 'partial');
+    const bytes = fs.readFileSync(path.join(path.dirname(first.evidencePath), model.graph.file));
+    assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), model.graph.sha256);
+    assert.match(bytes.toString('utf8'), /strict digraph DiskGraph/);
+  }
   assert.equal(first.conformance[1].observed.detected, true);
   const confirmed = JSON.parse(fs.readFileSync(f.filename, 'utf8'));
   assert.equal(confirmed.coverage.lastSync.sourceKind, 'working-tree-bytes');

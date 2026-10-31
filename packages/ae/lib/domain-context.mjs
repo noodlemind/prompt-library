@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { readDomain } from './domain-contract.mjs';
 import { harnessGlobalHome } from './paths.mjs';
 import { assertNoSymlinkAncestors, canonicalPath } from './fs-safe.mjs';
+import { cachedGitObservation } from './git-observation-cache.mjs';
 
 const contexts = new WeakMap();
 const plans = new WeakMap();
@@ -28,6 +29,10 @@ function directoryIdentity(full) {
 }
 
 function coordinatorIdentity(workspace) {
+  return cachedGitObservation(['coordinator', path.resolve(workspace)], () => readCoordinatorIdentity(workspace));
+}
+
+function readCoordinatorIdentity(workspace) {
   const root = safePath(workspace);
   if (!fs.lstatSync(root).isDirectory()) throw failure('coordinator is not a directory');
   const result = spawnSync('git', ['-c', 'core.fsmonitor=false', 'rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'], { cwd: root, encoding: 'utf8', timeout: 4000, maxBuffer: 16384, env: gitMetadataEnvironment() });

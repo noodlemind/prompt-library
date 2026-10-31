@@ -6,6 +6,8 @@ import { harnessGlobalHome } from './paths.mjs';
 import { writeFileContained, readFileNoFollow } from './fs-safe.mjs';
 import { ENFORCEMENT_MODES, policySourceBinding, snapshotRel } from '../corpus/hooks/lib/policy-snapshot.mjs';
 
+import { projectAuthorityFile, resolveProjectAuthority } from './project-authority.mjs';
+
 const MODES = new Set(['observe', 'warn', 'enforce']);
 
 export const CHECK_SEVERITIES = new Set(['advisory', 'warn', 'enforce']);
@@ -58,7 +60,8 @@ function parseCheckSeverities(policy, policyPath) {
 }
 
 export function loadPolicy(workspace, override = null, { copilotHome = null, home } = {}) {
-  const policyPath = path.join(workspace, '.github', 'harness', 'policy.yaml');
+  const authority = projectAuthorityFile(workspace, 'policy.yaml', { home });
+  const policyPath = authority.path;
   const onDisk = fs.existsSync(policyPath);
   const trusted = copilotHome === null || isProjectTrusted({ workspace, copilotHome, home });
     let parsed = {};
@@ -73,7 +76,7 @@ export function loadPolicy(workspace, override = null, { copilotHome = null, hom
   let bailed = false;
   if (onDisk) {
     try {
-      const content = readFileNoFollow(policyPath, { root: workspace, maxBytes: 1024 * 1024 });
+      const content = readFileNoFollow(policyPath, { root: authority.root, maxBytes: 1024 * 1024 });
       if (content === null) throw new Error('Policy source is unreadable or nonregular');
       parsed = YAML.parse(content, { maxAliasCount: 50 }) || {};
     } catch (error) {
@@ -120,9 +123,9 @@ export function loadPolicy(workspace, override = null, { copilotHome = null, hom
 
 export function publishPolicySnapshot(workspace, { copilotHome = null, override = null } = {}) {
   const home = harnessGlobalHome();
-  const binding = policySourceBinding(workspace, home);
+  const binding = policySourceBinding(workspace, home, process.env.HARNESS_ENFORCEMENT, resolveProjectAuthority(workspace, { home }));
   const policy = loadPolicy(workspace, override, { copilotHome });
-  if (JSON.stringify(binding) !== JSON.stringify(policySourceBinding(workspace, home))) throw new Error('Policy or trust changed during resolution; retry');
+  if (JSON.stringify(binding) !== JSON.stringify(policySourceBinding(workspace, home, process.env.HARNESS_ENFORCEMENT, resolveProjectAuthority(workspace, { home })))) throw new Error('Policy or trust changed during resolution; retry');
   const snapshot = { version: 1, scope: override === null ? 'environment' : 'invocation', binding, policy };
   if (override === null && !writeFileContained(home, snapshotRel(workspace), `${JSON.stringify(snapshot)}\n`)) throw new Error('Could not publish effective policy snapshot');
   return snapshot;

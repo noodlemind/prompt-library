@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
@@ -94,6 +95,37 @@ test('malformed evidence bindings fail closed without crashing validation', () =
 
   assert.equal(result.pass, false);
   assert.match(result.message, /not bound|binding.*invalid/i);
+});
+
+test('passed verification becomes stale after an executable change and cannot reuse a legacy byte-only digest', { skip: process.platform === 'win32' }, t => {
+  const workspace = tempDir('harness-proof-mode-');
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const planPath = writeVersionedPlan(workspace);
+  const command = [process.execPath, '-e', "if (!(require('node:fs').statSync('src/example.js').mode & 0o111)) process.exit(1)"];
+  writeChecks(workspace, { 'unit-tests': { command } });
+  initGit(workspace);
+  const product = path.join(workspace, 'src/example.js');
+  fs.appendFileSync(product, '// Candidate script\n');
+  fs.chmodSync(product, 0o755);
+  const fixtureHomes = tempDir('harness-proof-state-');
+  t.after(() => fs.rmSync(fixtureHomes, { recursive: true, force: true }));
+  const copilotHome = path.join(fixtureHomes, 'copilot'), home = path.join(fixtureHomes, 'home');
+  const args = ['verify', '--plan', planPath, '--base', 'HEAD', '--workspace', workspace, '--copilot-home', copilotHome, '--harness-home', home, '--json'];
+  const verified = runHarness(args);
+  assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+  const plan = loadPlan(workspace, planPath, { home }), proof = readEvidence(workspace, planPath);
+  const validate = evidence => validateEvidence({ workspace, plan, evidence, copilotHome });
+  assert.equal(validate(proof).pass, true);
+  fs.chmodSync(product, 0o644);
+  const stale = validate(proof);
+  assert.equal(stale.pass, false);
+  assert.match(stale.message, /Workspace files changed/);
+  const rerun = runHarness(args);
+  assert.equal(rerun.status, 1, rerun.stdout + rerun.stderr);
+  assert.equal(JSON.parse(rerun.stdout).checks.find(check => check.id === 'unit-tests').status, 'failed');
+  fs.chmodSync(product, 0o755);
+  const legacyDigest = createHash('sha256').update('src/example.js\0file\0').update(fs.readFileSync(product)).update('\0').digest('hex');
+  assert.equal(validate({ ...proof, binding: { ...proof.binding, workspaceDigest: legacyDigest } }).pass, false);
 });
 
 test('evidence binding records the git head and rejects a different or invalid head', () => {

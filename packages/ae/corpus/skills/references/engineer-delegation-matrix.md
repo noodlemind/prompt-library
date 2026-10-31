@@ -1,10 +1,12 @@
 # Engineer Delegation Matrix
 
-Load when delegating from `@engineer`. Every delegation uses `~/.copilot/skills/references/subagent-context-packet.md`.
+Load when delegating from `@engineer`. Read `<copilot-home>/skills/references/subagent-context-packet.md` with the host read tool for every delegation. Outside the enforce hook, `ae get --reference skills/references/subagent-context-packet.md --json` prints the same file.
 
 ## Team Size
 
 Default to **3-5 active agents per workstream**, including the orchestrator/planner, executor, and reviewers or researchers. Use more specialists only by batching them and recording the reason in the plan `## Agent Journal` or `## Activity`.
+
+Read the matching role line in `~/.cursor/rules/ae-models.mdc` or `~/.claude/rules/ae-models.md`. Pass that model when the host spawn tool takes one. A missing file, a missing line, or `inherit` means omit the model. `engineer` is the orchestrator. `specialist` is `code-implementer` and `bug-reproduction-validator`. `researcher` is `repo-research-analyst`, `best-practices-researcher`, `framework-docs-researcher`, and `git-history-analyzer`. `reviewer` is a review specialist.
 
 | Situation | Delegate to | Include in task prompt |
 |-----------|-------------|------------------------|
@@ -22,6 +24,7 @@ Default to **3-5 active agents per workstream**, including the orchestrator/plan
 | Bug reproduction | `bug-reproduction-validator` | Report, steps, environment |
 | Code history | `git-history-analyzer` | Paths, history questions |
 | Full code review | `code-review-coordinator` | Changed files, PR context, project type |
+| One required reviewer | that specialist, including `code-simplicity-reviewer` and `pattern-recognition-specialist` | Packet, persona, findings schema |
 | Splunk / SPL validation (enterprise) | `splunk-reviewer` | Index, query, expected signal |
 | Terraform / IaC review (enterprise) | `terraform-reviewer` | Modules, plan output, conventions |
 

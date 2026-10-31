@@ -256,6 +256,7 @@ export function runInsightCompound({ workspace, copilotHome, flags, log = () => 
       [manifestPath, snapshotFile(manifestPath)],
       [path.join(indexDir, 'postings.json'), snapshotFile(path.join(indexDir, 'postings.json'))],
       [path.join(indexDir, 'meta.json'), snapshotFile(path.join(indexDir, 'meta.json'))],
+      [path.join(indexDir, 'manifest.json'), snapshotFile(path.join(indexDir, 'manifest.json'))],
     ];
     let indexed;
     try {

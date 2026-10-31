@@ -2,11 +2,11 @@
 
 Read this file before the first edit of a Deliver task. Name a principle in the report only after reading its section. The harness does not treat the name as proof.
 
-For code changes, read [performance engineering](../engineer/references/performance-engineering.md) and apply its code principles even when the request does not name performance. Use applicable journey goals and constraints returned by orientation; measure runtime claims through the existing named checks.
+For code changes, read `<copilot-home>/skills/engineer/references/performance-engineering.md` with the host read tool and apply its code principles even when the request does not name performance. Outside the enforce hook, `ae get --reference skills/engineer/references/performance-engineering.md --json` prints the same file. Use applicable journey goals and constraints returned by orientation; measure runtime claims through the existing named checks.
 
 | Name | Rule |
 |---|---|
-| smallest-change | Make the smallest change that solves the problem. |
+| smallest-change | The diff is the smallest change that meets the spec. |
 | prove-with-evidence | A pass is the named check output, not a claim that it passed. |
 | behavior-not-implementation | Tests assert the observed behavior. |
 | bind-before-lock | The routing snapshot on the plan is the contract. |
@@ -29,7 +29,11 @@ For code changes, read [performance engineering](../engineer/references/performa
 
 ## smallest-change
 
-See `AGENTS.md` coding standards. Three similar lines are enough until a fourth appears.
+The diff is the smallest change that meets the spec. Reuse the code that is already there. Do not add a helper, option, dependency, abstraction, or comment unless the plan names it. Validate only at a real boundary. A real boundary is untrusted input, auth, persistence, or a process edge. Three similar lines are enough until a fourth appears.
+
+## review-budget
+
+Review the finished diff once before `ae verify`, not after each task. Cap the default at three. A fix re-dispatches only the files the fix touched. Stop after two rounds. Count a finding only when it names a defect in the spec.
 
 ## prove-with-evidence
 
@@ -45,7 +49,7 @@ Assert what a caller observes. A test that only mirrors the current private stru
 
 ## classify-inputs-only
 
-The host sub-agent returns the classification object. `ae plan-new --classification` validates it. A glob match wins a disagreement.
+The host sub-agent returns the classification object. Copy its `playbook` into the `ae plan-new --file -` creation JSON. `ae plan-new --classification` validates the legacy flag form and cannot be combined with `--file`. A glob match wins a disagreement. The CLI does not choose a playbook.
 
 ## pointers-not-bodies
 
@@ -69,7 +73,7 @@ Delete the unused branch, flag, or copy before introducing a replacement.
 
 ## build-the-lever
 
-When the same edit would be repeated, leave a check or script that a reviewer can run.
+When the same edit has already been repeated, leave a check or script that a reviewer can run.
 
 ## model-the-domain
 

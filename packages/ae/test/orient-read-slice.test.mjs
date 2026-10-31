@@ -27,11 +27,13 @@ const SLICE_KEYS = [
   'reviewCoverage',
   'learnings',
   'skills',
+  'procedure',
   'instructions',
   'contacts',
   'index',
   'gateStatus',
   'activePlan',
+  'layout',
 ];
 
 function git(cwd, args) {
@@ -125,6 +127,12 @@ function assertColdSlice(slice, { contextVersion = 1 } = {}) {
   assert.deepEqual(slice.index, { knowledge: 'missing', structural: 'missing' });
   assert.equal(slice.gateStatus, 'blocked');
   assert.equal(slice.activePlan, null);
+  assert.equal(slice.layout.kind, 'product-repo');
+  assert.equal(slice.layout.workspaceType, 'none');
+  assert.deepEqual(slice.layout.roots, []);
+  assert.equal(slice.layout.domainSuggestion, null);
+  assert.equal(typeof slice.layout.boundRoot, 'string');
+  assert.equal(typeof slice.layout.projectStore, 'string');
   if (contextVersion === 2) {
     const evidence = slice.contextEvidence;
     assert.equal(evidence.schema, 'harness.context.v2');

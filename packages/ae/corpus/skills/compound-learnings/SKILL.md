@@ -13,7 +13,7 @@ Use the verified work and its investigation notes to explain the problem, root c
 
 Choose whether a durable lesson exists, its category and useful search tags, and the approved destination. `private` stays with this product; `global` persists in this machine's shared knowledge; `ship-set-proposal` creates a dormant proposal for a future Harness release. A proposal never activates or modifies the shipped corpus. Check the applicable approval boundary before choosing a wider destination.
 
-Use the structured publication contract in [learning-operations.md](../references/learning-operations.md). With a plan, `ae compound --plan <path> --learning-decision <file> --json` consumes current passed proof and owns the episode path, dates, provenance, publication, index and replay record. Choose `no-learning` with a rationale when the task yielded no reusable lesson. Report the actual returned path and indexing or proposal state.
+Use the structured publication contract. Read `<copilot-home>/skills/references/learning-operations.md` with the host read tool. Outside the enforce hook, `ae get --reference skills/references/learning-operations.md --json` prints the same file. With a plan, `ae compound --plan <path> --learning-decision <file> --json` consumes current passed proof and owns the episode path, dates, provenance, publication, index and replay record. Choose `no-learning` with a rationale when the task yielded no reusable lesson. Report the actual returned path and indexing or proposal state.
 
 Without current passed work, capture an investigation through `ae compound --insight --title <title> --body-file <file> --json`. It remains an insight; never label it a verified fix.
 

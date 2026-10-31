@@ -19,7 +19,7 @@ import { emptySnapshot, routeWorkspace } from './route.mjs';
 import { shortPlanDocument } from './plan-record.mjs';
 import { bindLockedIntentSources, lockIntentSources } from './intent-sources.mjs';
 import { planRevision, scopePaths, applyPlanNotes, renderPlanPhases, planState } from './plan-decisions.mjs';
-import { readFileNoFollow, writeFileContainedExclusive } from './fs-safe.mjs';
+import { readBoundedInput, readFileNoFollow, writeFileContainedExclusive } from './fs-safe.mjs';
 import { locateVerification } from './verification-location.mjs';
 import { authorizeDomainPlan, authorizeProjectPlan, validateDomainContext, domainPlanPath } from './domain-context.mjs';
 import { domainLinkCheck } from './domain-delivery.mjs';
@@ -299,7 +299,10 @@ export async function cmdPlanNew(argv) {
     const a = scan[i];
     const next = () => scan[++i];
     if (a === '--type') opts.type = next();
-    else if (a === '--file') file = next();
+    else if (a === '--file' || a.startsWith('--file=')) {
+      file = a === '--file' ? next() : a.slice('--file='.length);
+      if (!file) throw new Error('plan-new: --file requires a path or - for stdin');
+    }
     else if (a === '--slug') opts.slug = next();
     else if (a === '--title') opts.title = next();
     else if (a === '--intent') opts.intent = next();
@@ -321,7 +324,11 @@ export async function cmdPlanNew(argv) {
     } else if (a === '--from') opts.from = next();
     else if (a === '--classification') opts.classification = next();
     else if (a === '--copilot-home') opts.copilotHome = next();
-    else if (a === '--workspace') workspace = path.resolve(next());
+    else if (a === '--workspace' || a.startsWith('--workspace=')) {
+      const value = a === '--workspace' ? next() : a.slice('--workspace='.length);
+      if (!value || value.startsWith('--')) throw new Error('plan-new: --workspace requires a path');
+      workspace = path.resolve(value);
+    }
     else if (a === '--json') json = true;
     else if (a === '--dry-run') dryRun = true;
     else if (a === '--stdout') toStdout = true;
@@ -329,8 +336,10 @@ export async function cmdPlanNew(argv) {
 
   if (file) {
     if (Object.keys(opts).some(key => !['impacted', 'criteria', 'acceptance', 'constraints', 'intentSources', 'copilotHome'].includes(key)) || [opts.impacted, opts.criteria, opts.acceptance, opts.constraints, opts.intentSources].some(values => values.length)) throw new Error('plan-new: --file cannot be combined with authoring flags');
+    const raw = file === '-' ? readBoundedInput() : readFileNoFollow(path.resolve(workspace, file), { maxBytes: 1024 * 1024 });
+    if (file === '-' && !raw) throw new Error('plan-new: decision on stdin is missing, unreadable, or over 1 MiB');
     let input;
-    try { input = parseExperimentJson(readFileNoFollow(path.resolve(workspace, file), { maxBytes: 1024 * 1024 })); } catch { throw new Error('plan-new: decision file must contain bounded JSON without duplicate keys or nonfinite values'); }
+    try { input = parseExperimentJson(raw); } catch { throw new Error('plan-new: decision file must contain bounded JSON without duplicate keys or nonfinite values'); }
     const keys = ['version', 'format', 'slug', 'type', 'title', 'goal', 'acceptance', 'constraints', 'scope', 'check', 'intentSources', 'risk', 'status', 'notes', 'phases', 'outputs', 'skillsUsed', 'verificationRecipe', 'playbook', 'experiment'];
     if (!input || input.version !== 1 || !['full', 'short'].includes(input.format) || Object.keys(input).some(key => !keys.includes(key))) throw new Error('plan-new: unsupported creation decision schema');
     if (Object.hasOwn(input, 'experiment')) validateExperimentContract(input.experiment, { impactedFiles: input.scope });

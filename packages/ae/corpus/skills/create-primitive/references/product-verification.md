@@ -27,7 +27,7 @@ Fill each section with observed commands and prerequisites from this product. Le
 | `## Cleanup` | Stop processes and remove disposable resources owned by the drive, including after failure or cancellation. Use owned PIDs or handles. Never kill by process name. Confirm that evidence still exists after cleanup. |
 | `## Helpers` | Every helper's executable command, required inputs, output, and named-check ID. Mark platform prerequisites and unsupported paths. |
 
-Register the doctor and drive helpers in `.github/harness/checks.yaml` before the plan requires them. A drive may own its doctor and the rest of the lifecycle in one registered helper. Declare the corresponding check IDs on the accepted plan. Each required check must assert behavior and return a failed status when the assertion fails.
+Register the doctor and drive helpers in the selected check source reported by `ae checks list --json` before the plan requires them. A drive may own its doctor and the rest of the lifecycle in one registered helper. Declare the corresponding check IDs on the accepted plan. Each required check must assert behavior and return a failed status when the assertion fails.
 
 Harness runs configured argv without a shell. Do not run an unknown helper beside the authoritative named-check path. An opaque terminal command still needs its existing gate and trust authority. A standalone audit that cannot register a missing check inside its accepted scope reports that prerequisite gap.
 

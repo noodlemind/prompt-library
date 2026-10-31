@@ -2,14 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { createRequire } from 'module';
 import { fileURLToPath } from 'node:url';
 import { completeWork } from './completion.mjs';
 import { runCompound } from './compound.mjs';
 import { loadPolicy } from './policy.mjs';
 import { resolveIndexDir } from './recall-config.mjs';
 import { isIndexStale } from './postings-index.mjs';
-import { resolveHarnessBin, RUNNER_VERSION } from './resolve-harness-bin.mjs';
+import { loadManifest } from './recall-rank.mjs';
+import { resolveHarnessBin, RUNNER_VERSION, workspaceRunnerStatus } from './resolve-harness-bin.mjs';
 import { globalHarnessShimPath, findHarnessOnPath } from './global-bin.mjs';
 import { readLock } from './lock.mjs';
 import { planDigest } from './evidence.mjs';
@@ -17,10 +17,10 @@ import { loadPlan } from './plan-parse.mjs';
 import { runVerify } from './verify.mjs';
 import { approveProject } from './trust.mjs';
 import { readSession, writeSession } from './session.mjs';
-import { parseVSCodeSettings } from './vscode-settings.mjs';
-import { harnessGlobalHome, resolveVSCodeSettingsPaths } from './paths.mjs';
+import { parseVSCodeSettings, vscodeCustomizationLocations } from './vscode-settings.mjs';
+import { harnessGlobalHome, resolveIntelliJHome, resolveVSCodeSettingsPaths } from './paths.mjs';
 import { loadRetired, findStaleOrphans } from './sync.mjs';
-import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings } from './knowledge/store.mjs';
+import { storeDir, storeDirForId, repoId, localRepoId, workspaceStorageId, listLearnings, readSavedLearningFiles, matchingLocalStoreIds, carriedBytesDiffer } from './knowledge/store.mjs';
 import { storageIdForRepo } from './storage-aliases.mjs';
 import { consolidateStatus } from './knowledge/consolidate.mjs';
 import { loadRoutingPolicy } from './routing-policy.mjs';
@@ -35,23 +35,20 @@ import { assertNoSymlinkAncestors } from './fs-safe.mjs';
 import { leftoverWorkspaceArtifacts } from './migrate-layout.mjs';
 import { planReadDirs } from './project-layout.mjs';
 
-const require = createRequire(import.meta.url);
-
 const MIN_ENRICHED_RATIO = 0.5;
 
-function isEntryEnriched(e) {
-  return Boolean((e.symptom && e.symptom.trim()) || (e.module && e.module.trim()));
+function fieldText(value) {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
-function loadManifestEntries(manifestPath) {
-  if (!fs.existsSync(manifestPath)) return { entries: [], updated: null };
-  try {
-    const yaml = require('yaml');
-    const doc = yaml.parse(fs.readFileSync(manifestPath, 'utf8'));
-    return { entries: doc.entries || [], updated: doc.updated || null };
-  } catch {
-    return { entries: [], updated: null };
-  }
+function isEntryEnriched(entry) {
+  return ['symptom', 'module', 'trigger', 'summary', 'excerpt', 'claim'].some((key) => fieldText(entry?.[key]));
+}
+
+function manifestStamp(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  return null;
 }
 
 function hookCommands(config, event) {
@@ -87,12 +84,14 @@ function loadInstalledHookConfig(hookRoot) {
   }
 }
 
-function vscodeDiscoveryConfigured(settingsPaths) {
+function vscodeDiscoveryConfigured(settingsPaths, copilotHome) {
   for (const settingsPath of settingsPaths) {
     if (!fs.existsSync(settingsPath)) continue;
     try {
       const settings = parseVSCodeSettings(fs.readFileSync(settingsPath, 'utf8'));
-      if (settings['chat.hookFilesLocations']?.['~/.copilot/hooks'] === true) return true;
+      const locations = Object.entries(vscodeCustomizationLocations(copilotHome)).every(([key, location]) => settings[key]?.[location] === true);
+      const nested = settings['chat.subagents.allowInvocationsFromSubagents'] === true;
+      if (locations && nested && settings['chat.useAgentSkills'] === true && settings['chat.customAgentInSubagent.enabled'] === true) return true;
     } catch {
       // A parseable-settings check is represented by this false result.
     }
@@ -342,23 +341,32 @@ export async function runVSCodeHookProbe(hookRoot) {
   }
 }
 
-async function vscodeChecks({ copilotHome, settingsPaths }) {
+async function installedHookChecks({ copilotHome, settingsPaths = [], target }) {
+  const vscode = target === 'vscode', prefix = vscode ? 'V' : 'C', host = vscode ? 'VS Code' : 'Copilot CLI';
   const hookRoot = path.join(copilotHome, 'hooks');
   const installed = fs.existsSync(path.join(hookRoot, 'hooks.json'));
   const loaded = installed ? loadInstalledHookConfig(hookRoot) : { config: null, error: 'Installed hook bundle is missing' };
-  const discovery = vscodeDiscoveryConfigured(settingsPaths);
   const probe = loaded.config ? await runVSCodeHookProbe(hookRoot) : {};
   return [
-    { id: 'V1', name: 'VS Code hook bundle installed', pass: installed, hint: 'Run: ae upgrade --configure-vscode' },
-    { id: 'V2', name: 'VS Code hook configuration and commands resolvable', pass: Boolean(loaded.config), hint: loaded.error || 'Reinstall hooks' },
-    { id: 'V3', name: 'VS Code user hook discovery configured', pass: discovery, hint: 'Run: ae install --configure-vscode' },
-    { id: 'V4', name: 'Known VS Code mutation payload recognized', pass: Boolean(probe.recognized), hint: 'Inspect payload normalization and hook events' },
-    { id: 'V5', name: 'Missing-gate mutation denied', pass: Boolean(probe.missingGateDenied), hint: 'Inspect PreToolUse policy output' },
-    { id: 'V6', name: 'Gated scoped mutation allowed', pass: Boolean(probe.gatedAllowed), hint: 'Inspect plan gate and scope handling' },
-    { id: 'V7', name: 'Successful PostToolUse event recorded', pass: Boolean(probe.postRecorded), hint: 'Inspect record-successful-edit.mjs' },
-    { id: 'V8', name: 'Completion without verification denied', pass: Boolean(probe.unverifiedDenied), hint: 'Inspect Stop hook registration and evidence checks' },
-    { id: 'V9', name: 'Completion after passed verification allowed', pass: Boolean(probe.verifiedAllowed), hint: 'Inspect evidence binding and freshness' },
+    { id: `${prefix}1`, name: `${host} hook bundle installed`, pass: installed, hint: `Run: ae install --target ${target}` },
+    { id: `${prefix}2`, name: `${host} hook configuration and commands resolvable`, pass: Boolean(loaded.config), hint: loaded.error || 'Mechanical compatibility probe; actual native host discovery is unverified' },
+    ...(vscode ? [{ id: 'V3', name: 'VS Code user customization discovery configured', pass: vscodeDiscoveryConfigured(settingsPaths, copilotHome), hint: 'Run: ae install --target vscode --configure-vscode with the selected --copilot-home — sets agents, instructions, skills, chat.hookFilesLocations and chat.subagents.allowInvocationsFromSubagents' }] : []),
+    { id: `${prefix}4`, name: `${host} compatible mutation payload recognized`, pass: Boolean(probe.recognized), hint: 'Inspect payload normalization and hook events' },
+    { id: `${prefix}5`, name: 'Missing-gate mutation denied', pass: Boolean(probe.missingGateDenied), hint: 'Inspect PreToolUse policy output' },
+    { id: `${prefix}6`, name: 'Gated scoped mutation allowed', pass: Boolean(probe.gatedAllowed), hint: 'Inspect plan gate and scope handling' },
+    { id: `${prefix}7`, name: 'Successful PostToolUse event recorded', pass: Boolean(probe.postRecorded), hint: 'Inspect record-successful-edit.mjs' },
+    { id: `${prefix}8`, name: 'Completion without verification denied', pass: Boolean(probe.unverifiedDenied), hint: 'Inspect Stop hook registration and evidence checks' },
+    { id: `${prefix}9`, name: 'Completion after passed verification allowed', pass: Boolean(probe.verifiedAllowed), hint: 'Inspect evidence binding and freshness' },
   ];
+}
+
+function selectedDoctorTarget(flags) {
+  const targets = flags.targetsExplicit ? [...flags.targets] : [];
+  const fail = message => { throw Object.assign(new Error(message), { code: 'E_USAGE', exit: 2 }); };
+  if (flags.targetsExplicit && targets.length !== 1) fail('doctor requires one target: vscode, cli, or intellij');
+  if (targets.length && flags.host && targets[0] !== flags.host) fail('doctor --target conflicts with --host');
+  const target = targets[0] || flags.host || null;
+  return target;
 }
 
 // Knowledge-layer health (design §2, §3, §12). All three are optional/advisory
@@ -423,21 +431,31 @@ function knowledgeChecks({ workspace, copilotHome }) {
     let hint = 'ae knowledge migrate-store';
     if (!hasRemote) {
       const selected = workspaceStorageId(workspace);
-      if (selected !== storageIdForRepo(currentId)) {
+      const currentHome = harnessGlobalHome();
+      const bound = storageIdForRepo(currentId, { home: currentHome });
+      const pending = selected !== bound
+        ? [selected]
+        : matchingLocalStoreIds(workspace, { home: currentHome }).ids.filter((id) => id !== bound && carriedBytesDiffer(currentHome, id, bound));
+      if (pending.length) {
         stranded = true;
-        hint = `saved knowledge or plans use the old Windows path ID ${selected}; preserve the binding with: ae knowledge migrate-store --from-id ${selected}`;
+        hint = `saved knowledge or plans use the old path ID ${pending[0]}; ae knowledge migrate-store copies them into ${bound} and leaves the source in place`;
       }
     } else {
       const legacyDir = storeDirForId(localRepoId(workspace));
       const currentDir = storeDirForId(currentId);
-      const legacyExists = fs.existsSync(path.join(legacyDir, 'consolidated.jsonl'));
-      const currentExists = fs.existsSync(path.join(currentDir, 'consolidated.jsonl'));
-      if (legacyDir !== currentDir && legacyExists && !currentExists) {
+      const legacyFiles = readSavedLearningFiles(legacyDir);
+      const currentFiles = readSavedLearningFiles(currentDir);
+      let missing = 0;
+      let conflict = 0;
+      for (const [rel, text] of legacyFiles) {
+        if (!currentFiles.has(rel)) missing += 1;
+        else if (currentFiles.get(rel) !== text) conflict += 1;
+      }
+      if (legacyDir !== currentDir && (missing || conflict)) {
         stranded = true;
-        hint = `a path-keyed store exists at ${legacyDir} but this workspace now resolves to ${currentDir} — run: ae knowledge migrate-store`;
-      } else if (legacyDir !== currentDir && legacyExists && currentExists) {
-        stranded = true;
-        hint = `both a legacy path-keyed store and the remote-keyed store exist — reconcile manually (migrate-store will refuse a non-empty target); inspect ${legacyDir}`;
+        hint = conflict
+          ? `saved learnings at ${legacyDir} differ from ${currentDir}; the source stays in place. ae knowledge migrate-store copies missing files and does not overwrite either copy`
+          : `saved learnings at ${legacyDir} are missing from ${currentDir} — run: ae knowledge migrate-store`;
       }
     }
     checks.push({
@@ -602,22 +620,50 @@ function routingPolicyCheck(workspace) {
     pass: !invalid,
     optional: true,
     hint: loaded.missing
-      ? 'No .github/harness/routing.yaml — new plans record a skipped snapshot'
+      ? 'No routing.yaml in the selected project configuration — new plans record a skipped snapshot'
       : invalid
         ? loaded.errors.join('; ')
         : 'routing.yaml parsed',
   };
 }
 
+function prerequisiteChecks() {
+  const major = Number(String(process.versions.node).split('.')[0]);
+  const nodeOk = Number.isInteger(major) && major >= 20;
+  const git = spawnSync('git', ['--version'], { encoding: 'utf8', timeout: 5_000 });
+  const gitOk = !git.error && git.status === 0 && Boolean(String(git.stdout || '').trim());
+  return [
+    {
+      id: 'R1',
+      name: 'Node.js',
+      pass: nodeOk,
+      hint: nodeOk ? `Node ${process.versions.node}` : `Node ${process.versions.node} is older than 20`,
+    },
+    {
+      id: 'R2',
+      name: 'git',
+      pass: gitOk,
+      hint: gitOk ? String(git.stdout).trim() : 'git is not installed or not on PATH',
+    },
+  ];
+}
+
 export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscodeSettingsPaths = null, workspace = flags.workspace }) {
-  const checks = [];
+  const target = selectedDoctorTarget(flags);
+  const customizationOnly = target === 'intellij';
+  if (customizationOnly) copilotHome = resolveIntelliJHome();
+  const checks = [...prerequisiteChecks()];
+  if (['vscode', 'cli', 'intellij'].includes(target)) checks.push({
+    id: 'T0', name: `Selected ${target} customization home`, pass: true, target, home: copilotHome,
+    capabilities: { customizations: 'declared', nativeHooks: customizationOnly ? 'unsupported' : 'supported', liveHost: 'unverified' },
+    hint: customizationOnly ? 'Customization files can be inspected; JetBrains native lifecycle hooks are unavailable' : 'Installed hook probes are mechanical checks; native host activation is unverified',
+  });
 
   const manifest = path.join(copilotHome, 'knowledge', 'manifest.yaml');
-  const manifestRepo = path.join(assetsRoot, 'knowledge', 'manifest.yaml');
   checks.push({
     id: 'H1',
     name: 'Global knowledge manifest',
-    pass: fs.existsSync(manifest) || fs.existsSync(manifestRepo),
+    pass: fs.existsSync(manifest),
     hint: 'Run: ae install',
   });
 
@@ -630,11 +676,10 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   });
 
   const engineer = path.join(copilotHome, 'agents', 'engineer.agent.md');
-  const engineerAsset = path.join(assetsRoot, 'agents', 'engineer.agent.md');
   checks.push({
     id: 'H3',
     name: 'Engineer agent',
-    pass: fs.existsSync(engineer) || fs.existsSync(engineerAsset),
+    pass: fs.existsSync(engineer),
     hint: 'Run: ae install',
   });
 
@@ -647,9 +692,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   checks.push({
     id: 'H4',
     name: 'Capture gate reference',
-    pass:
-      fs.existsSync(captureGate) ||
-      fs.existsSync(path.join(assetsRoot, 'skills', 'references', 'capture-gate.md')),
+    pass: fs.existsSync(captureGate),
     hint: 'Re-run install',
   });
 
@@ -668,7 +711,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   checks.push({
     id: 'H6',
     name: 'Enterprise overlay (optional)',
-    pass: fs.existsSync(entReg) || fs.existsSync(path.join(assetsRoot, 'enterprise', 'capability-registry.enterprise.yaml')),
+    pass: fs.existsSync(entReg),
     hint: 'Optional: add enterprise pack or install base harness',
     optional: true,
   });
@@ -678,7 +721,7 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     checks.push({
       id: 'H7',
       name: `Autopilot skill /${skill}`,
-      pass: fs.existsSync(p) || fs.existsSync(path.join(assetsRoot, 'skills', skill, 'SKILL.md')),
+      pass: fs.existsSync(p),
       hint: 'Run: ae upgrade',
     });
   }
@@ -710,56 +753,69 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
     optional: true,
   });
 
-  const manifestPath = fs.existsSync(manifest)
-    ? manifest
-    : fs.existsSync(path.join(flags.workspace, 'knowledge', 'manifest.yaml'))
-      ? path.join(flags.workspace, 'knowledge', 'manifest.yaml')
-      : manifestRepo;
-  const { entries: manifestEntries, updated: manifestUpdated } = loadManifestEntries(manifestPath);
-  const enrichedCount = manifestEntries.filter(isEntryEnriched).length;
-  const hasEnrichedFields =
-    manifestEntries.length === 0 ||
-    enrichedCount / manifestEntries.length >= MIN_ENRICHED_RATIO;
-  checks.push({
-    id: 'H10',
-    name: 'Manifest enriched fields (symptom/module)',
-    pass: hasEnrichedFields,
-    hint: 'Run: ae index — rebuild manifest with symptom/module/excerpt',
-    optional: manifestEntries.length === 0,
-  });
-
+  const { entries: manifestEntries, updated: manifestUpdatedRaw, sha256: manifestSha256, error: manifestError } = loadManifest(copilotHome, flags.workspace, { home: flags.harnessHome || flags.home });
+  const manifestUpdated = manifestStamp(manifestUpdatedRaw);
   const indexDir = resolveIndexDir(copilotHome, flags.workspace, flags.harnessHome || flags.home);
-  const indexFresh =
-    manifestEntries.length === 0 || !fs.existsSync(path.join(indexDir, 'meta.json'))
-      ? false
-      : !isIndexStale(indexDir, manifestUpdated);
-  checks.push({
-    id: 'H11',
-    name: 'BM25 postings index fresh',
-    pass: indexFresh,
-    hint: 'Run: ae index — rebuild the knowledge postings index',
-    optional: manifestEntries.length === 0,
-  });
+  if (manifestError) {
+    checks.push({
+      id: 'H10',
+      name: 'Manifest enriched fields (symptom/module)',
+      pass: false,
+      hint: 'Run: ae index — rebuilds symptom, module, trigger, summary, and excerpt from solution files',
+    });
+    checks.push({
+      id: 'H11',
+      name: 'BM25 postings index fresh',
+      pass: false,
+      hint: 'Run: ae index — rebuild the knowledge postings index',
+    });
+  } else if (manifestEntries.length === 0) {
+    checks.push({
+      id: 'H10',
+      name: 'Manifest enriched fields (symptom/module)',
+      pass: true,
+      status: 'n/a',
+      optional: true,
+      hint: 'n/a — no learnings to enrich',
+    });
+    checks.push({
+      id: 'H11',
+      name: 'BM25 postings index fresh',
+      pass: true,
+      status: 'n/a',
+      optional: true,
+      hint: 'n/a — no learnings to index',
+    });
+  } else {
+    const enrichedCount = manifestEntries.filter(isEntryEnriched).length;
+    checks.push({
+      id: 'H10',
+      name: 'Manifest enriched fields (symptom/module)',
+      pass: enrichedCount / manifestEntries.length >= MIN_ENRICHED_RATIO,
+      hint: 'Run: ae index — rebuilds symptom, module, trigger, summary, and excerpt from solution files',
+    });
+    const indexFresh = fs.existsSync(path.join(indexDir, 'meta.json')) && !isIndexStale(indexDir, manifestUpdated, manifestSha256);
+    checks.push({
+      id: 'H11',
+      name: 'BM25 postings index fresh',
+      pass: indexFresh,
+      hint: 'Run: ae index — rebuild the knowledge postings index',
+    });
+  }
 
   const resolved = resolveHarnessBin({ workspace: flags.workspace, copilotHome });
-  const runnerPath = path.join(flags.workspace, '.harness', 'run.mjs');
   checks.push({
     id: 'H12',
     name: 'Harness CLI resolvable',
-    pass: Boolean(resolved.bin),
-    hint: resolved.bin
+    pass: customizationOnly || Boolean(resolved.bin),
+    ...(customizationOnly ? { status: 'n/a', optional: true } : {}),
+    hint: customizationOnly ? 'n/a — IntelliJ installation provides customizations; use a separately installed CLI for Harness commands' : resolved.bin
       ? `Resolved via ${resolved.source}: ${resolved.bin}`
       : 'Run: ae install, then init-repo (creates .harness/run.mjs)',
   });
-    const runnerExists = fs.existsSync(runnerPath);
-  let runnerCurrent = false;
-  if (runnerExists) {
-    try {
-      runnerCurrent = fs.readFileSync(runnerPath, 'utf8').includes(`@harness-runner-version ${RUNNER_VERSION}`);
-    } catch {
-      // Unreadable — treat as not current; the hint's remedy rewrites it.
-    }
-  }
+  const runnerStatus = workspaceRunnerStatus(flags.workspace);
+  const runnerExists = runnerStatus.state !== 'missing';
+  const runnerCurrent = runnerStatus.state === 'current';
   checks.push({
     id: 'H13',
     name: 'Workspace harness runner',
@@ -768,17 +824,21 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
       ? 'Run: ae init-repo'
       : runnerCurrent
         ? `.harness/run.mjs is current (v${RUNNER_VERSION})`
-        : `.harness/run.mjs predates runner v${RUNNER_VERSION} — regenerate with: ae init-repo (or run ae upgrade from this workspace)`,
+        : runnerStatus.state === 'stale'
+          ? `.harness/run.mjs predates runner v${RUNNER_VERSION} or differs from its generated content — regenerate with: ae init-repo (or run ae upgrade from this workspace)`
+          : runnerStatus.state === 'newer'
+            ? '.harness/run.mjs requires a newer AE installation; upgrade the selected CLI before regenerating'
+            : '.harness/run.mjs is custom, unsafe or unreadable; preserve and inspect it, or use the installed ae command directly',
     optional: true,
   });
 
   const hooksJson = path.join(copilotHome, 'hooks', 'hooks.json');
-  const hooksAsset = path.join(assetsRoot, 'hooks', 'hooks.json');
   checks.push({
     id: 'H14',
     name: 'Lifecycle hooks bundle',
-    pass: fs.existsSync(hooksJson) || fs.existsSync(hooksAsset),
-    hint: 'Re-run ae install to sync hooks/',
+    pass: customizationOnly || fs.existsSync(hooksJson),
+    ...(customizationOnly ? { status: 'n/a' } : {}),
+    hint: customizationOnly ? 'n/a — copied scripts do not establish native IntelliJ hook support' : 'Re-run ae install to sync hooks/',
     optional: true,
   });
 
@@ -787,17 +847,19 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   checks.push({
     id: 'H15',
     name: 'Global ae shim (~/.copilot/bin/ae)',
-    pass: fs.existsSync(shim),
-    hint: 'Run: ae install (creates ~/.copilot/bin/ae)',
-    optional: cliResolvable && !fs.existsSync(shim),
+    pass: customizationOnly || fs.existsSync(shim),
+    ...(customizationOnly ? { status: 'n/a' } : {}),
+    hint: customizationOnly ? 'n/a — IntelliJ customization installation does not install a CLI shim' : 'Run: ae install (creates ~/.copilot/bin/ae)',
+    optional: customizationOnly || cliResolvable && !fs.existsSync(shim),
   });
 
   const onPath = Boolean(findHarnessOnPath());
   checks.push({
     id: 'H16',
     name: 'ae on PATH',
-    pass: onPath,
-    hint: 'Run: ae install --configure-path  (or add ~/.copilot/bin to PATH)',
+    pass: customizationOnly || onPath,
+    ...(customizationOnly ? { status: 'n/a' } : {}),
+    hint: customizationOnly ? 'n/a — the native IntelliJ customization path does not require the CLI on PATH' : 'Run: ae install --configure-path  (or add ~/.copilot/bin to PATH)',
     optional: true,
   });
 
@@ -833,25 +895,44 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
   }
 
   checks.push(routingPolicyCheck(workspace));
-  const effectivePolicy = loadPolicy(workspace, flags.enforcement, { copilotHome });
-  checks.push({ id: 'P0', name: `Installed effective policy: ${effectivePolicy.enforcement}`, pass: true, optional: true, hint: `${effectivePolicy.enforcementSource}; critical=${effectivePolicy.rules.critical}; destructive=${effectivePolicy.rules.destructive}`, policy: effectivePolicy });
+  let effectivePolicy = null;
+  let policyError = null;
+  try {
+    effectivePolicy = loadPolicy(workspace, flags.enforcement, { copilotHome });
+  } catch (error) {
+    policyError = error.message;
+  }
+  const enforced = effectivePolicy?.enforcement === 'enforce';
+  checks.push({
+    id: 'P0',
+    name: effectivePolicy ? `${customizationOnly ? 'Configured CLI' : 'Installed effective'} policy: ${effectivePolicy.enforcement}` : 'Installed effective policy',
+    pass: !policyError && enforced,
+    hint: policyError
+      ? policyError
+      : enforced
+        ? `${effectivePolicy.enforcementSource}; critical=${effectivePolicy.rules.critical}; destructive=${effectivePolicy.rules.destructive}`
+        : `Effective enforcement is ${effectivePolicy.enforcement} (${effectivePolicy.enforcementSource}). Doctor fails until enforcement is enforce.`,
+    ...(effectivePolicy ? { policy: effectivePolicy } : {}),
+    ...(customizationOnly ? { optional: true } : {}),
+  });
   checks.push(...knowledgeChecks({ workspace, copilotHome }));
   checks.push(...structuralChecks({ workspace }));
 
-  if (flags.host === 'vscode') {
+  if (target === 'vscode' || target === 'cli') {
     checks.push(
-      ...(await vscodeChecks({
+      ...(await installedHookChecks({
         copilotHome,
-        settingsPaths: vscodeSettingsPaths || resolveVSCodeSettingsPaths(),
+        target,
+        settingsPaths: target === 'vscode' ? vscodeSettingsPaths || resolveVSCodeSettingsPaths() : [],
       }))
     );
-  } else if (flags.host) {
-    checks.push({
-      id: 'V0',
-      name: `Unsupported doctor host: ${flags.host}`,
-      pass: false,
-      hint: 'Supported host: vscode',
-    });
+  } else if (customizationOnly) {
+    checks.push({ id: 'T1', name: 'IntelliJ native lifecycle enforcement', pass: false, status: 'unavailable', optional: true,
+      hint: 'JetBrains custom agents and skills do not supply native lifecycle hooks. Use the supported CLI or VS Code surface when hook enforcement is required.' });
+    checks.push({ id: 'T2', name: 'IntelliJ global instructions installed', pass: fs.existsSync(path.join(copilotHome, 'global-copilot-instructions.md')),
+      hint: 'Run: ae install --target intellij; enable global customizations in the selected IDE' });
+  } else if (target) {
+    checks.push({ id: 'V0', name: `Unsupported doctor host: ${target}`, pass: false, hint: 'Supported hosts: vscode, cli, intellij' });
   }
 
   if (typeof flags.adapter === 'string' && flags.adapter) {
@@ -867,5 +948,5 @@ export async function runDoctor({ copilotHome, assetsRoot, pkgRoot, flags, vscod
 
   const required = checks.filter((c) => !c.optional);
   const pass = required.every((c) => c.pass);
-  return { checks, pass, diagnostics: recoveryDiagnostics({ source: 'doctor', checks, workspace, copilotHome, home: flags.harnessHome || flags.home || harnessGlobalHome() }) };
+  return { checks, pass, diagnostics: recoveryDiagnostics({ source: 'doctor', checks, workspace, copilotHome, target, home: flags.harnessHome || flags.home || harnessGlobalHome() }) };
 }

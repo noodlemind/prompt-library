@@ -58,7 +58,7 @@ try {
   const owned = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ae-formal-flows-')));
   receipt.lifecycle.resources.push(owned);
   const ws = path.join(owned, 'product'), home = path.join(owned, 'state'), copilot = path.join(owned, 'copilot');
-  const env = { ...process.env, ...GIT_ENV, CI: '', HARNESS_ALLOW_INPLACE: '', AE_HOME: home, HARNESS_HOME: home, COPILOT_HOME: copilot };
+  const env = { ...process.env, ...GIT_ENV, CI: '', HARNESS_ALLOW_INPLACE: '', HOME: owned, USERPROFILE: owned, AE_HOME: home, HARNESS_HOME: home, COPILOT_HOME: copilot };
   const git = async (...args) => (await run(`git-${args[0]}`, ['git', ...args], { cwd: ws, env })).stdout.trim();
   const cli = async (label, args, expected = 0) => {
     const result = await run(label, [process.execPath, bin, ...args, '--workspace', ws, '--copilot-home', copilot, '--ae-home', home, '--json'], { cwd: ws, env, expected });

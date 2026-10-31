@@ -6,6 +6,12 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
+import YAML from 'yaml';
+import { getCorpusRoot } from '../lib/assets.mjs';
+import { loadPlan } from '../lib/plan-parse.mjs';
+import { reviewCoverageFacts } from '../lib/report-facts.mjs';
+import { syncAssetsToTarget } from '../lib/sync.mjs';
+import { mergeVSCodeSettings } from '../lib/vscode-settings.mjs';
 import { initGit, writeVersionedPlan } from './helpers/cli-fixtures.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -82,12 +88,33 @@ test('prepare owns mandatory coverage and brace/comma/glob discovery', t => {
   fs.writeFileSync(path.join(f.ws, '.github/checks/sql.md'), '---\nname: sql-contract\nglobs: "**/*.sql"\n---\nRead SQL.\n');
   const packet = f.prepare();
   assert.equal(packet.version, 2);
-  for (const name of baseline) assert.ok(packet.required.includes(name), name);
+  assert.ok(packet.required.includes('code-simplicity-reviewer'));
+  for (const name of baseline.filter(id => id !== 'code-simplicity-reviewer')) assert.equal(packet.required.includes(name), false, name);
   assert.ok(packet.required.includes('api-contract'));
   assert.ok(!packet.required.includes('sql-contract'));
   assert.equal(packet.preparation.checks.find(c => c.name === 'api-contract').matched, true);
   assert.equal(packet.preparation.coverage.totalFiles, packet.scope.changedFiles.length);
   assert.equal(f.prepare().id, packet.id);
+});
+
+test('the review budget grows for a large diff, a real boundary, and one language', t => {
+  const large = fixture(t);
+  for (let i = 0; i < 8; i += 1) fs.writeFileSync(path.join(large.ws, `src/extra-${i}.js`), `export const extra${i} = ${i};\n`);
+  const largePacket = large.prepare();
+  for (const name of ['code-simplicity-reviewer', 'security-sentinel', 'architecture-strategist']) assert.ok(largePacket.required.includes(name), name);
+  assert.equal(largePacket.required.includes('performance-oracle'), false);
+  const boundary = fixture(t);
+  fs.mkdirSync(path.join(boundary.ws, 'src/auth'), { recursive: true });
+  fs.writeFileSync(path.join(boundary.ws, 'src/auth/session.js'), 'export const session = true;\n');
+  const boundaryPacket = boundary.prepare();
+  assert.ok(boundaryPacket.required.includes('security-sentinel'));
+  assert.equal(boundaryPacket.required.includes('architecture-strategist'), false);
+  const java = fixture(t);
+  fs.writeFileSync(path.join(java.ws, 'src/Order.java'), 'public record Order() {}\n');
+  const javaPacket = java.prepare();
+  assert.ok(javaPacket.required.includes('java-reviewer'));
+  assert.equal(javaPacket.required.includes('python-reviewer'), false);
+  assert.ok(javaPacket.required.filter(id => id.endsWith('reviewer') || id.endsWith('strategist') || id.endsWith('sentinel')).length <= 3);
 });
 
 test('a checks README without frontmatter is documentation; malformed declared checks still block', t => {
@@ -105,7 +132,7 @@ test('a checks README without frontmatter is documentation; malformed declared c
 });
 
 test('assembly is invariant to result order, gates before boosting and only merges exact identities', t => {
-  const f = fixture(t), packet = f.prepare();
+  const f = fixture(t), packet = f.prepare('--reviewer', 'security-sentinel');
   const results = packet.required.map(clean);
   results[0].findings = [finding(), finding({ line: 5 }), finding({ title: 'Weak', confidence: 0.55 }), finding({ title: 'Critical uncertainty', severity: 'P1', confidence: 0.5 })];
   results[1].findings = [finding({ file: 'src\\example.js', confidence: 0.8, evidence: ['Second observation'] }), finding({ title: 'Weak', confidence: 0.55 })];
@@ -127,7 +154,7 @@ test('assembly is invariant to result order, gates before boosting and only merg
 });
 
 test('missing, timed-out and malformed results remain failed coverage with retrievable raw evidence', t => {
-  const f = fixture(t), packet = f.prepare();
+  const f = fixture(t), packet = f.prepare('--reviewer', 'security-sentinel', '--reviewer', 'architecture-strategist');
   const results = packet.required.map(clean);
   results[0].status = 'timed-out';
   results[1].findings = [finding({ line: 1000 })];
@@ -429,7 +456,7 @@ test('ignored documents above the excerpt read limit still bind their actual byt
 });
 
 test('different claims at the same location remain distinct pending judgment', t => {
-  const f = fixture(t), packet = f.prepare(), results = packet.required.map(clean);
+  const f = fixture(t), packet = f.prepare('--reviewer', 'security-sentinel'), results = packet.required.map(clean);
   results[0].findings = [finding()];
   results[1].findings = [finding({ description: 'The caller can bypass account authorization.', suggested_fix: 'Check account ownership.' })];
   const record = f.assemble(packet, results).value;
@@ -477,6 +504,105 @@ test('a surviving overlap accepts a follow-up judgment referencing a prior merge
   assert.equal(a.value.id, b.value.id);
   assert.equal(a.value.findings.length, 2);
   assert.equal(a.value.overlaps.length, 0);
+});
+
+const REVIEW_SPECIALISTS = ['code-simplicity-reviewer', 'pattern-recognition-specialist', 'compounding-typescript-reviewer', 'data-integrity-guardian', 'spec-flow-analyzer'];
+
+function frontmatter(text) {
+  return YAML.parse(text.match(/^---\n([\s\S]*?)\n---/)[1]);
+}
+
+test('installed host profiles let the engineer invoke the review specialists', () => {
+  const corpus = getCorpusRoot();
+  const engineer = frontmatter(fs.readFileSync(path.join(corpus, 'agents/engineer.agent.md'), 'utf8'));
+  const coordinator = frontmatter(fs.readFileSync(path.join(corpus, 'agents/code-review-coordinator.agent.md'), 'utf8'));
+  const registry = YAML.parse(fs.readFileSync(path.join(corpus, 'knowledge/capability-registry.yaml'), 'utf8'));
+  assert.ok(engineer.tools.includes('agent'));
+  assert.ok(coordinator.tools.includes('agent'));
+  for (const id of REVIEW_SPECIALISTS) {
+    assert.ok(engineer.agents.includes(id), `engineer cannot invoke ${id}`);
+    assert.ok(coordinator.agents.includes(id), `coordinator cannot invoke ${id}`);
+  }
+  assert.deepEqual([...engineer.agents].sort(), [...registry.engineer_allowlist].sort());
+  assert.equal(mergeVSCodeSettings({})['chat.subagents.allowInvocationsFromSubagents'], true);
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-hosts-'));
+  try {
+    for (const host of ['vscode', 'cli', 'intellij']) {
+      const home = path.join(rootDir, host);
+      fs.mkdirSync(home);
+      syncAssetsToTarget(corpus, home, { dryRun: false, verbose: false }, () => {});
+      const installed = frontmatter(fs.readFileSync(path.join(home, 'agents/engineer.agent.md'), 'utf8'));
+      for (const id of REVIEW_SPECIALISTS) assert.ok(installed.agents.includes(id), `${host} engineer cannot invoke ${id}`);
+    }
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+function separate(reviewer, via) {
+  return { ...clean(reviewer), provenance: { kind: 'host-invocation', agent: reviewer, via } };
+}
+
+function coverageIdentity(f) {
+  const plan = loadPlan(f.ws, f.plan);
+  return reviewCoverageFacts({ workspace: f.ws, plan, copilotHome: path.join(f.dir, 'copilot') });
+}
+
+test('a direct specialist invocation counts as a separate review', t => {
+  const f = fixture(t);
+  const packet = f.prepare();
+  const assembled = f.assemble(packet, packet.required.map(reviewer => separate(reviewer, 'engineer')));
+  assert.equal(assembled.status, 0, assembled.stderr + assembled.stdout);
+  assert.equal(assembled.value.coverage.complete, true);
+  assert.ok(assembled.value.results.every(result => result.provenance.independence === 'separate-reviewer' && result.provenance.via === 'engineer' && result.provenance.agent === result.reviewer));
+  const facts = coverageIdentity(f);
+  assert.equal(facts.pass, true, facts.message);
+  assert.equal(facts.invocationIdentity, 'separate-reviewer');
+});
+
+test('a coordinator specialist invocation counts as a separate review', t => {
+  const f = fixture(t);
+  const packet = f.prepare();
+  const assembled = f.assemble(packet, packet.required.map(reviewer => separate(reviewer, 'code-review-coordinator')));
+  assert.equal(assembled.status, 0, assembled.stderr + assembled.stdout);
+  assert.equal(assembled.value.coverage.complete, true);
+  assert.ok(assembled.value.results.every(result => result.provenance.independence === 'separate-reviewer' && result.provenance.via === 'code-review-coordinator' && result.provenance.agent === result.reviewer));
+  assert.match(assembled.value.report, /Recorded invocations name a separate reviewer/);
+  const facts = coverageIdentity(f);
+  assert.equal(facts.pass, true, facts.message);
+  assert.equal(facts.invocationIdentity, 'separate-reviewer');
+});
+
+test('the coordinator output example records the required invocation provenance', t => {
+  const f = fixture(t), packet = f.prepare();
+  const instructions = fs.readFileSync(path.join(root, 'corpus/agents/code-review-coordinator.agent.md'), 'utf8');
+  const example = instructions.match(/Return `([^`]+)`\./)?.[1];
+  assert.ok(example);
+  const results = packet.required.map(reviewer => JSON.parse(example.replaceAll('<supplied id>', packet.id).replaceAll('<required id>', reviewer)).results[0]);
+  const assembled = f.assemble(packet, results);
+  assert.equal(assembled.status, 0, assembled.stderr + assembled.stdout);
+  const facts = coverageIdentity(f);
+  assert.equal(facts.pass, true, facts.message);
+  assert.equal(facts.invocationIdentity, 'separate-reviewer');
+});
+
+test('an engineer self-review is not an independent review', t => {
+  const f = fixture(t);
+  const packet = f.prepare('--reviewer', 'security-sentinel', '--reviewer', 'architecture-strategist');
+  const results = packet.required.map(clean);
+  results[0].provenance = { kind: 'same-context', agent: 'engineer' };
+  results[1].provenance = { kind: 'host-invocation', agent: 'engineer', via: 'engineer' };
+  const assembled = f.assemble(packet, results);
+  assert.equal(assembled.status, 0, assembled.stderr + assembled.stdout);
+  assert.equal(assembled.value.coverage.complete, true);
+  const recorded = new Map(assembled.value.results.map(result => [result.reviewer, result.provenance]));
+  assert.equal(recorded.get(results[0].reviewer).independence, 'rejected');
+  assert.equal(recorded.get(results[1].reviewer).independence, 'rejected');
+  assert.equal(recorded.get(results[2].reviewer).independence, 'unverified');
+  assert.match(assembled.value.report, /self-review is not an independent review/);
+  const facts = coverageIdentity(f);
+  assert.equal(facts.pass, true, facts.message);
+  assert.equal(facts.invocationIdentity, 'rejected');
 });
 
 test('contradictory adjudications block coverage without silently deleting findings', t => {
